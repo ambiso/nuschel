@@ -26,6 +26,11 @@ const INDEX_BATCH: i64 = 512;
 pub const MAX_SEARCH_SERVERS: usize = 64;
 /// Records one `store_server` call may write (a server's page has at most 100).
 pub const MAX_STORE_RECORDS: usize = 128;
+/// SQLite's page cache for a history connection, in KiB. Its default, about
+/// 2 MiB, ends up holding most of a long history once it has been scrolled or
+/// searched, as private memory of the worker; pages beyond this come from the
+/// OS's file cache instead (see `History::sqlite`).
+const SQLITE_CACHE_KIB: i64 = 512;
 
 /// A message row: id, server, channel, author, time, body, and a Nuschl
 /// server's seq, edit and deletion times.
@@ -463,11 +468,20 @@ impl History {
         }
     }
 
+    /// Every connection the pool opens (it retires idle ones) gets these
+    /// settings. The page cache is capped (`SQLITE_CACHE_KIB`); memory-mapped
+    /// reads stay off and temporary files stay files (in the sandbox's private
+    /// /tmp), SQLite's defaults, so neither moves into the worker's memory.
     async fn sqlite(options: SqliteConnectOptions) -> Result<Self, Error> {
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
             .acquire_timeout(Duration::from_secs(5))
-            .connect_with(options.foreign_keys(true).pragma("trusted_schema", "OFF"))
+            .connect_with(
+                options
+                    .foreign_keys(true)
+                    .pragma("trusted_schema", "OFF")
+                    .pragma("cache_size", (-SQLITE_CACHE_KIB).to_string()),
+            )
             .await?;
         sqlx::migrate!("./migrations/sqlite").run(&pool).await?;
         Ok(Self {
@@ -1191,6 +1205,54 @@ mod tests {
         Ok(())
     }
     use super::*;
+
+    /// The page cache is capped on every history connection: the first, one
+    /// the pool opens to replace a closed one, after reopening the database,
+    /// and through a URL. Memory-mapped reads and temporary storage keep
+    /// SQLite's defaults (off, files).
+    #[tokio::test]
+    async fn every_history_connection_caps_the_page_cache() -> Result<(), Error> {
+        async fn settings(history: &History) -> Result<(i64, i64, i64), Error> {
+            let Pool::Sqlite(pool) = &history.pool else {
+                unreachable!()
+            };
+            let mut connection = pool.acquire().await?;
+            let mut values = [0; 3];
+            for (value, pragma) in values
+                .iter_mut()
+                .zip(["cache_size", "mmap_size", "temp_store"])
+            {
+                *value = sqlx::query_scalar(sqlx::AssertSqlSafe(format!("PRAGMA {pragma}")))
+                    .fetch_one(&mut *connection)
+                    .await?;
+            }
+            // Changed on this connection only: a connection opened later must
+            // not show it.
+            sqlx::query("PRAGMA cache_size = 7")
+                .execute(&mut *connection)
+                .await?;
+            Ok((values[0], values[1], values[2]))
+        }
+        let capped = (-SQLITE_CACHE_KIB, 0, 0);
+        let directory = tempfile::tempdir().map_err(sqlx::Error::Io)?;
+        let path = directory.path().join("history.sqlite3");
+        let history = History::open(&path).await?;
+        assert_eq!(settings(&history).await?, capped);
+        let Pool::Sqlite(pool) = &history.pool else {
+            unreachable!()
+        };
+        pool.acquire().await?.close().await?;
+        assert_eq!(settings(&history).await?, capped);
+        pool.close().await;
+        drop(history);
+        let history = History::open(&path).await?;
+        assert_eq!(settings(&history).await?, capped);
+        drop(history);
+        let url = format!("sqlite://{}", path.display());
+        let history = History::connect(&url).await?;
+        assert_eq!(settings(&history).await?, capped);
+        Ok(())
+    }
 
     fn message(server: &str, author: &str, body: &str) -> ChatMessage {
         ChatMessage {

@@ -77,6 +77,52 @@ async function viewport(page,width,height){
   await page.waitForFunction(()=>Math.abs(document.querySelector("main").getBoundingClientRect().height-(visualViewport?.height||innerHeight))<=1);
   await page.evaluate(()=>new Promise(requestAnimationFrame));
 }
+// What a user's selection over a typed document copies (the plain text the
+// browser puts on the clipboard for Ctrl+C), read through the DOM, never
+// the host clipboard.
+async function selected(locator){
+  // From the document's start to the end of its last block (as a drag to
+  // the end of the message selects), not its Show more/less control.
+  return locator.evaluate(e=>{const s=getSelection();s.removeAllRanges();const r=document.createRange();r.selectNodeContents(e);const control=e.querySelector(":scope>.more");const last=control?.previousElementSibling;if(last)r.setEnd(last,last.childNodes.length);s.addRange(r);const text=s.toString();s.removeAllRanges();return text;});
+}
+// The line breaks between two parts of a text: \n\n is one blank line.
+function gap(text,before,after){
+  const match=new RegExp(`${before}(\n*)${after}`).exec(text);assert.ok(match,JSON.stringify({before,after,text}));return match[1].length;
+}
+// The breaks of a typed document: their lines, their height, and their one
+// text node of exactly that many line breaks (so a selection copies them).
+async function breaks(locator){
+  return locator.evaluate(e=>[...e.querySelectorAll(".break")].map(b=>({lines:Number(b.style.getPropertyValue("--lines")),height:b.getBoundingClientRect().height,line:parseFloat(getComputedStyle(b).lineHeight),nodes:[...b.childNodes].map(n=>({type:n.nodeType,text:n.nodeType===3?n.data:null}))})));
+}
+function checkBreaks(found,lines){
+  assert.deepEqual(found.map(b=>b.lines),lines,JSON.stringify(found));
+  for(const b of found){
+    assert.ok(Math.abs(b.height-b.lines*b.line)<=1,JSON.stringify(b));
+    assert.deepEqual(b.nodes,[{type:3,text:"\n".repeat(b.lines)}],JSON.stringify(b));
+  }
+}
+// A typed message keeps its lines: blank lines between blocks are drawn as
+// breaks and copied as line breaks, at the edges too (as typed, not trimmed).
+async function messageLines(){
+  const page=await open("lines-browser",1280,1000);
+  const source="\n\nstart\n# Title\n\n\ntext\n\n```\ncodeline\n```\n\nafter\n- first item\n\n- second item\n\n";
+  await page.getByLabel("Message",{exact:true}).fill(source);
+  await page.getByRole("button",{name:"Send",exact:true}).click();
+  const message=page.locator("article").filter({hasText:"Title"});await message.waitFor();
+  const more=message.getByRole("button",{name:"Show more",exact:true});if(await more.count())await more.click();
+  const typed=message.locator(".typed-document");
+  const text=await selected(typed);
+  const gaps={start:gap(text,"^","start"),title:gap(text,"start","Title"),blank_two:gap(text,"Title","text"),before_code:gap(text,"text","Code"),
+    after_code:gap(text,"codeline","after"),list:gap(text,"after","•first item"),loose_list:gap(text,"first item","•second item"),end:gap(text,"second item","$")};
+  assert.deepEqual(gaps,{start:2,title:1,blank_two:3,before_code:2,after_code:2,list:1,loose_list:2,end:2},JSON.stringify(text));
+  const found=await breaks(typed);checkBreaks(found,[2,2,1,1,1,2]);
+  // Rows: one line apart without a break, a blank line apart across one.
+  const rows=await typed.evaluate(e=>{const top=t=>[...e.querySelectorAll(".text")].find(n=>n.textContent.includes(t)).getBoundingClientRect().top;return{after:top("after"),first:top("first item"),second:top("second item")};});
+  const line=found[0].line;
+  assert.ok(Math.abs(rows.first-rows.after-line)<=1&&Math.abs(rows.second-rows.first-2*line)<=1,JSON.stringify({rows,line}));
+  await page.screenshot({path:resolve(output,"message-lines-1280.png")});
+  return{source,selection:text,gaps,breaks:found,rows,line};
+}
 async function fontPreference(){
   const page=await open("font-browser",1280,800);
   await page.getByLabel("Message",{exact:true}).fill("Actual message font preference");
@@ -115,7 +161,11 @@ try{
   assert.ok(await welcome.locator('pre[aria-label="rust code"] span').count()>1);
   const more=welcome.getByRole("button",{name:"Show more",exact:true});if(await more.count())await more.click();
   assert.ok((await welcome.textContent()).includes("Welcome line 34"));
-  assert.ok((await welcome.locator(".typed-document").textContent()).includes("\n\n"));
+  // The welcome's blank line before its code (<br/><br/>) is one break of one
+  // line, and a selection copies it as one blank line.
+  const welcomeDocument=welcome.locator(".typed-document");
+  assert.equal(gap(await selected(welcomeDocument),"literal\\.test</em>","rust"),2);
+  checkBreaks(await breaks(welcomeDocument),[1]);
   const geometries=[];
   for(const [width,height]of [[320,640],[390,844],[1280,800],[900,600]]){
     await viewport(page,width,height);
@@ -181,11 +231,12 @@ try{
   assert.ok(rootFontStress.dismiss.x>=0&&rootFontStress.dismiss.right<=320&&rootFontStress.dismiss.bottom<=rootFontStress.panelBottom);
   await page.screenshot({path:resolve(output,"welcome-root-font-stress-320.png")});
   const fontPreferenceProof=await fontPreference();
+  const messageLinesProof=await messageLines();
   const proof=await page.evaluate(()=>__welcomeProof);assert.equal(proof.documents.length,3);assert.equal(proof.captures,0);assert.deepEqual(proof.violations,[]);
   for(const state of proof.states)for(const server of state)assert.ok(!server.keys.includes("welcome")&&!server.keys.includes("document"));
   assert.deepEqual(errors,[]);assert.deepEqual(canaries,[]);
   assert.ok(requests.every(url=>url.startsWith(origin+"/")||url.startsWith(origin.replace("http:","ws:")+"/")));
-  await writeFile(resolve(output,"proof.json"),JSON.stringify({passed:true,site,csp,geometries,longBounds,preferenceFonts,rootFontStress,fontPreferenceProof,document_deliveries:proof.documents.length,documents:proof.documents,checks:["private stock Murmur→real TLS/WASM SDK→typed App", "bold exact domain and safe explicit link", "escaped tags/newlines/highlighted code", "inert script/remote+same-origin images", "single document delivery per connection", "320/390/900/1280 bounded panel/fixed Dismiss/reachable composer", "keyboard body scroll+Dismiss", "reconnect refresh and stale token refusal", "draft preserved", "no capture/remote requests/CSP violations"]},null,2));
+  await writeFile(resolve(output,"proof.json"),JSON.stringify({passed:true,site,csp,geometries,longBounds,preferenceFonts,rootFontStress,fontPreferenceProof,messageLinesProof,document_deliveries:proof.documents.length,documents:proof.documents,checks:["private stock Murmur→real TLS/WASM SDK→typed App", "bold exact domain and safe explicit link", "escaped tags/newlines/highlighted code", "inert script/remote+same-origin images", "single document delivery per connection", "320/390/900/1280 bounded panel/fixed Dismiss/reachable composer", "keyboard body scroll+Dismiss", "reconnect refresh and stale token refusal", "draft preserved", "no capture/remote requests/CSP violations"]},null,2));
   console.log("Welcome App proof passed");
 }catch(error){await writeFile(resolve(output,"failure.json"),JSON.stringify({error:String(error),errors,canaries,pages:await Promise.all(pages.map(page=>page.evaluate(()=>({body:document.body.textContent,proof:__welcomeProof})).catch(()=>null)))},null,2));throw error;}
 finally{for(const context of contexts)await context.close();await browser.close();for(const socket of tunnels)socket.destroy();await new Promise(done=>server.close(done));}

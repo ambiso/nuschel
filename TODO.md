@@ -44,11 +44,14 @@ works alongside Codex through `~/.cache/nuschl-coordination/to-claude.md` and
 `to-codex.md`, with an active reply-file watcher. Claude owns the received-audio
 attenuation audit, an independent read-only simplification/correctness review,
 the separate volume-slider/VAD-meter implementation, installer authentication
-and poll-design lanes. Claude has frozen isolated Markdown, font, legacy poll,
-Talking UI and image-quality checkpoints with branch-specific proofs awaiting
-integration. A separate read-only RAM audit is running. Codex owns the urgent VAD change,
-independent speech/onset validation, native PipeWire default-source correction
-and queue/integration. Implement
+and poll-design lanes. Font/desktop Markdown are integrated; legacy polls, Talking
+UI, image quality and memory reductions retain separate frozen proofs awaiting
+integration. Claude also owns bitrate controls, web button/image UX, iOS web AEC
+diagnosis and the Windows timing investigation. Codex owns the browser content
+broker and SDK image leases, Flatpak confinement/builds, native Debian/Ubuntu/AUR
+packaging, the VAD correction/validation and final queue integration. The measured
+RAM audit is integrated as documentation, with product reductions still staged.
+Implement
 in isolated jj workspaces with explicit file/function ownership; exchange frozen
 revisions and evidence before integration. This is collaboration, not a handover.
 The watcher maintains `codex-pending.json`, revisioned message acknowledgements
@@ -57,6 +60,44 @@ checkpoints. A background filesystem watcher alone does not advance a session.
 
 Current integration checkpoint (2026-11-12):
 
+- **Windows media service pacing is integrated in `c6380f59`.** A Windows-only
+  4 ms ticker coalesces at most one wakeup, parks without devices and joins on
+  exit; thread-start failure retains the prior timeout fallback. The exact
+  merged native leaves reuse verified cached 92-test/9-ignored evidence, including
+  three ticker tests. All 324 reviewed media/dependency inputs match `83cc58cc`;
+  its 47-file Windows VM evidence manifest and actual worker hash verify.
+  Repeated A/B tests reduce median packet-timing error from about 4.45 to 1.2 ms
+  and p95 from about 13 to 4.5 ms. Capture/render glitches, roughly 3% packet
+  shortfall and longer gaps remain. This is prior exact-source VM evidence,
+  not a newly built merged Windows package or physical-device proof. Evidence:
+  `~/.cache/nuschl-next/windows-pacing-review/handoff.json`.
+- **Web control sizing and processing reports are integrated through
+  `1aa71d69`.** Preserved `595d03c1` and `d3de0fa6` histories add consistent
+  44 px connection/voice/profile hit targets and show the most recent browser
+  microphone-processing reports in Settings. The combined Nix web-client/fmt
+  build passes all 38 bundled JS tests. Actual packaged-App control checks pass
+  desktop, 320/390 px, enlarged text and zoom-equivalent geometry with long names,
+  keyboard focus and no overflow. Actual packaged-App/private-Murmur processing
+  display checks pass real Chromium reports and three simulated report variants;
+  the latter prove rendering only. No host audio, profiles or clipboard are used.
+  These checks are separate from physical acoustic quality; the iOS routing
+  proposal is design only.
+  Evidence: `~/.cache/nuschl-web-controls-integration/`.
+- **Browser Markdown selection keeps blank lines (`246158d9`, merged in
+  `a8518f67`).** The exact combined Nix App passes real private-Murmur welcome
+  and composer checks: source-edge newlines, headings, loose lists and fenced
+  code retain exact selected line counts with bounded text nodes and unchanged
+  spacer geometry. The combined package again passes 38 JS tests and all five
+  control-layout cases. This fixes selection/copy, without claiming broader
+  browser image/identity parity.
+- **Local SQLite history uses a smaller page cache (`9157817a`, merged in
+  `d68c065d`).** Each history connection sets `cache_size=-512`; server databases,
+  imports, schema and SQLite temporary/mmap defaults are unchanged. The preserved
+  merge passes all 24 storage tests with immutable Murmur fixtures; the existing
+  PostgreSQL-only test remains ignored. Separate measurements saved roughly
+  1.3–1.6 MiB private dirty memory with a small search-median tradeoff. This is a
+  suggested SQLite page-cache budget, not a hard bound on worker memory or sort
+  temporary storage. Evidence: `~/.cache/nuschl-memory-staging/handoff.json`.
 - **Desktop rendering and diagnostics are integrated through `1f2b3b38`.**
   Preserved font/Markdown and scrollbar histories combine cleanly with the rail
   badge paint-order correction and receive-side profile statistics. Native default,
@@ -643,24 +684,61 @@ Later (reported):
       history reload, mobile interaction and cancellation; keep unsupported
       original-file transfer/quality parity explicit rather than silently losing
       original bytes. Claude's web-UX lane prepares API/file ownership first.
-- [ ] Enlarge the web reconnect and mute/unmute controls (user, 2026-11-12).
+- [ ] Fix browser TLS control writes above 64 KiB. Actual image markup within
+      the negotiated server limit currently makes `rustls.writer().write_all`
+      hit its bounded send buffer and drops the connection; long text likely
+      shares the defect. The SDK owner is implementing incremental writes with
+      draining, bounded pending output and WebSocket backpressure/error handling.
+      Preserve original admission/destination leases and drafts; partial failure
+      must close that connection rather than reuse a partial control frame.
+      Require large text/image private-relay receipt and pressure/failure controls.
+- [ ] Implement received/own image viewing in the web app and pursue desktop
+      parity (user request relayed by the concurrent Claude session, 2026-11-12).
+      Use the credential-free content broker for validated thumbnail pixels,
+      a larger bounded viewer and exact-original Save; preserve focus, keyboard,
+      mobile hit targets and image aspect ratio while loading/evicted. Bind every
+      async result to SDK-owned message serial/revision/source and conversation
+      lifetime. No external image fetch or encoded-image decode in the SDK/UI.
+      Reuse the broker's global 16 MiB derivative budget; separately account for
+      at most one 6.4 MiB viewer and a transient bounded original download, rather
+      than introducing another 48 MiB timeline cache. Keep ordinary typed document
+      replies at 2 MiB; a full viewer needs a separately validated binary response.
+      Claude owns viewer/TypedDocument UX; Codex owns broker/image leases and
+      bounded codec APIs. Mocked UI proof is not actual SDK/worker integration.
+- [x] Enlarge the web reconnect and mute/unmute controls (user, 2026-11-12).
       Apply consistent control sizing and accessible hit targets, including the
       adjacent deafen action where shared. Verify keyboard focus, long labels,
       320/390 px layouts and browser zoom with no overlap or overflow; preserve
       navigation and microphone-consent behavior. Coordinate composer/button
       hunks with the separate bitrate settings row, without whole-file reformat.
+      The combined packaged source passes the scoped checks above; no physical
+      mobile-browser zoom or iOS audio-quality result is implied.
 - [ ] Investigate weaker web echo cancellation (user, 2026-11-12). Obtain browser/
-      OS and same-device desktop comparison; current capture requests browser
+      version and same-device desktop comparison; the user reports **iOS web**.
+      Current capture requests browser
       AEC/NS/AGC and records applied track settings. Check actual applied effects,
       playback reference/device routing and reconnect/mute recovery before adding
       DSP. Do not double-cancel blindly or keep capture open while muted. Browser
       synthetic constraints/route checks are not physical acoustic-quality proof;
       host microphone/speaker tests require explicit current scope. Coordinate
       audio.js changes with the bitrate owner. Read-only diagnosis is delegated.
+      Settings now exposes actual browser reports with honest unknown values;
+      no capture/playback processing or consent behavior changed. The candidate
+      capture-scoped iOS playback route remains off pending physical-device
+      privacy and acoustic proof.
 - [ ] Investigate laggy Windows audio (user, 2026-11-12). Both input and output
       intermittently stutter/drop out. Reported ping is 82 ms versus other
       participants' 7–20 ms, with zero reported late/lost packets toward the
       server; these observations do not establish incoming loss or its absence.
+      Another game also lags on that machine, so a system-wide scheduling/driver
+      issue is plausible; this is not a confirmed Nuschl regression. Read-only
+      source/simulation led to real same-guest A/B evidence. The integrated
+      bounded ticker improves send pacing only. Verified-active reference
+      playback/capture and stock Mumble have zero measured glitches in this VM;
+      Mumble's control was not encoding/sending. Nuschl's callback threads remain
+      normal priority, whereas Mumble uses MMCSS Pro Audio. A minimal CPAL
+      scheduling/System32-loader mitigation lane is allocated separately, with
+      no buffer, DSP, VAD or Opus retuning authorized in that change.
       Bind the report to an exact build/device/output route.
       Compare Nuschl and stock Mumble using owned private servers and synthetic
       audio. Inspect WASAPI callback/buffer sizes, sample-rate conversion, bounded
@@ -668,6 +746,8 @@ Later (reported):
       reductions. Preserve the VAD fix, microphone consent and mute/deafen epochs;
       VM evidence must not be presented as physical-device proof. Record latency
       and discontinuities before/after any correction.
+      Current merged Windows artifact/runtime and physical-hardware results
+      remain open; stock Mumble used a 60 ms output buffer versus Nuschl's 22 ms.
 - [x] Show packet statistics in both directions in desktop user profiles
       (user, 2026-11-12; `f4073093`, integrated above). Already-parsed `from_server`
       now appears as "Packets to client"; missing counters say "Not reported".
@@ -692,6 +772,19 @@ Later (reported):
       typed failures or follow a safe recovery path, with scoped lint/CI checks
       to prevent regressions. Do not mask invalid state with blanket catch-and-
       continue handling or claim raw match counts prove runtime panic frequency.
+      The exact-source audit classifies 38 explicit runtime sites separately
+      from tests/guarded invariants (`~/.cache/nuschl-panic-audit/report.json`).
+      One concrete extreme-configuration autoban deadline overflow is fixed in
+      `ce6ae327` and staged in `fe54e117`: configuration rejects it, runtime
+      admission checks before bookkeeping, and 137 server tests plus actual CLI/
+      loopback controls pass. The final merged Nix server package and formatting
+      pass; its ELF is byte-identical to the 137-test/loopback checkpoint, and
+      actual packaged startup/check-config reject the extreme value before state
+      creation while accepting the normal control. Evidence:
+      `~/.cache/nuschl-desktop-queue-integration/server-validation/handoff.json`.
+      Remaining ranked work includes fallible server RNG/authoritative-state
+      poison policy, unchecked public SDK positions and ID exhaustion; no blanket
+      panic-free claim follows from this one correction.
 - [ ] Make worker supervision recover safely without crash loops (user,
       2026-11-12). Erlang/Elixir-style worker crashes are acceptable when a safe
       in-process recovery path is unavailable; the main application must survive.
@@ -704,6 +797,41 @@ Later (reported):
       state; retry mutations only with safe idempotency/reconciliation. Test
       injected panics, repeated startup/request failures, stalled teardown,
       recovery after the cause clears and isolation from healthy worker roles.
+      Review found native Media/Transfer drop paths abort child-owning tasks
+      before confirmed reaping; replacement and resource credit must wait for
+      actual exit. Proposed crypto-idle code is held: `Ok(Err(wait))` and a final
+      teardown timeout cannot release containment/credit or authorize a restart.
+      The common lifecycle core is allocated separately from caller adoption.
+      Also cover storage cancellation poisoning/operator-lock restart races,
+      inherited-FD auditing, Windows spawn/contain ordering and the desktop math
+      helper's bare-name fallback; preserve fail-closed executable discovery.
+      The crypto correction now retains unknown exits per handle, but pinned
+      Tokio still signals from `kill_on_drop` during final task/runtime teardown
+      after a wait error. Resolve that stale-PID risk through bounded common
+      quarantine ownership before integration; do not silently leak unbounded
+      SDK-created child handles or disable normal kill-on-drop protection.
+- [ ] Ensure cached crate2nix checks actually execute `harness = false`
+      diagnostics. The IPC exchange leaf currently compiles `exchange.rs` as
+      libtest and reports zero tests, so it does not prove crash/hang/garble/
+      linger recovery. A dedicated pinned-cache diagnostic check is allocated;
+      require real execution and a failing control. Keep explicit Windows VM
+      invocation of `confinement.exe` separate from Linux unit-test claims.
+- [x] Preserve browser selection/copy blank lines between Markdown blocks.
+      Geometry is correct, but empty spacer elements lose those newlines in
+      DOM selection. A scoped fix must preserve exact selected newlines and
+      source edges, bounded text-node counts and existing layout. Correct the
+      welcome fixture using exact selection plus geometry rather than weakening
+      the newline assertion.
+      The preserved fix and exact combined packaged-App proof are recorded above.
+- [ ] Update the stale `tests/web_math.browser.mjs` inline-code assertion after
+      Markdown integration. It expects visible backticks around `$code$` and
+      fails on the unmodified baseline too. Preserve meaningful checks for a
+      real monospace code element, literal dollar-delimited source, absence of
+      formula rendering there and exact selection text; the owner is proposing
+      that scoped fixture correction before editing.
+- [ ] Diagnose `tests/web_voice_ui.mjs`'s "Enable sound" timeout: the receiver
+      toggles deafen twice. It reproduces on both the existing baseline and the
+      processing-display candidate; neither fixture failure proves an AEC fix.
 - [ ] Integrate `andir/nuschl`'s `musicbot` branch (user, 2026-11-12), fetched
       at `c9005e31`: Subsonic playback/queue, browser controls, listener
       subscriptions, NixOS service and private integration tests. Preserve
@@ -714,6 +842,14 @@ Later (reported):
       redirects and file-backed ACL access tokens; avoid putting secrets in
       generated Nix-store settings. Regenerate combined crate2nix inputs and
       check native packages, policy/notices and owned fake-Subsonic/Murmur tests.
+      Independent review holds integration for a macOS sandbox call type error,
+      bounded decode/seek progress (the current 35 s first-reply deadline rejects
+      slow large files/far seeks), and recovered duck-worker failures unnecessarily
+      dropping TLS sessions. Prefer a separate minimal codec-worker binary/crate
+      with enforced dependency ownership over a parent codec allowance; its exact
+      graph/layout proposal is under review. Also retain per-field Subsonic text
+      bounds/shared SSE snapshot cost, parent systemd surface, duplicated framing
+      and JSON PCM cost as follow-ups rather than broad unreviewed rewrites.
 - [x] Disclose LLM assistance in the README (user, 2026-11-12), following
       `../nook/README.md`: warning badge and a short AI-assistance section with
       verification limits, committed at `a598b2d8`.
@@ -2637,6 +2773,64 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
 
 ### Release and other targets
 
+- [ ] Build Linux distribution artifacts from Nix (user, 2026-11-12): Flatpak,
+      Debian/Ubuntu `.deb` packages and AUR packaging. Prefer existing suitable
+      bundlers, but verify real runtime portability and role confinement rather
+      than repacking `/nix/store`-linked binaries. Produce all nine desktop/helper
+      programs, actual source/feature-bound notices, icons, URI registration and
+      package-manager-owned updates. Expose reproducible flake outputs after
+      isolated builders are checked; pin external inputs and keep builds offline.
+      Codex's distro owner has a strict `.deb` validator/source-recipe lane and a
+      bounded cached-Rust final-link prototype against a signed/hash-pinned
+      Debian 13 sysroot; Debian 13/Ubuntu 26.04 are initial targets, not all Linux.
+      Current cached ELF requires GLIBC 2.44, so portability is an actual gate.
+      Audit any redistributed C runtime's licenses/source obligations separately
+      from the Rust bundle. Validate install/launch/worker canaries and uninstall
+      in owned non-Nix distro environments without host profiles or global state.
+      All nine target ELF links and stage audits now pass; runtime proof remains
+      open. In particular distro PipeWire/ALSA need system configuration data
+      currently absent from the media sandbox's read-only library grants. Prove
+      exact required paths with private fixtures before adding narrowly scoped
+      media-only data mounts; zero Nix RPATH alone does not prove portability.
+- [ ] Produce a pinned Flatpak repository/one-click reference and bundle through
+      Nix. Preserve credential-free content/media roles inside Flatpak; a manifest
+      around the current nested bubblewrap launcher is insufficient. The Flatpak
+      owner is inspecting exact signed Freedesktop 26.08 runtime compatibility.
+      A pinned x86_64 bundle now assembles and all nine ELF dependency checks plus
+      `--version` pass without `/nix/store`; this is not yet an install/GUI/audio
+      or worker-confinement result. The portal launcher and real-portal failure
+      matrix remain shipping gates (`~/.cache/nuschl-flatpak/handoff.json`).
+      A parent-owned portal worker manager must retain actual-exit evidence and
+      role credit across cancellation, with fixed FD/env/path/network/device
+      grants and limits inside the child. Portal/proxy loss is not child-exit
+      proof; quarantine rather than release credit or fall back to `--host`.
+      Common supervisor migration must coordinate crypto idle/media retirement.
+      Pinned source review corrects the draft: portal >=3, trusted helpers under
+      `/app/libexec/nuschl`, setup grants bind the canonical host path, and
+      read-only file authority needs a read-only mount. An inherited O_RDONLY
+      file FD can be reopened writable through `/proc/self/fd`; do not pass it
+      as raw data FD 3. Sound permission can expose ALSA devices to media only.
+      WATCH_BUS sends SIGINT and does not guarantee whole-tree exit or add
+      `--die-with-parent`; actual exit/tree, FD/path, owner-loss and cancellation
+      canaries remain gates. Source/counterexample report:
+      `~/.cache/nuschl-flatpak/portal-research/W1-W10.md`.
+- [ ] Prepare Ubuntu PPA publication and a separately signed Debian APT
+      repository (user, 2026-11-12). Nix should build `.deb`, source-package and
+      repository tooling/artifacts; Launchpad itself builds source uploads,
+      rather than accepting the local binary `.deb`. Name and test compatible
+      per-series Rust build dependencies/offline Cargo sources before claiming
+      PPA readiness. Debian 13 backports offers a newer compiler than its base;
+      Ubuntu compiler availability remains a separate source-build gate. Use
+      `Signed-By` scoped repository keyrings, a dedicated local publication key,
+      and no `apt-key`, CI signing secret or reuse of Nuschl's hybrid private pair.
+      Account/repository publication is not performed by the preparation task.
+- [ ] Build and validate AUR `PKGBUILD`/`.SRCINFO` and an appropriate immutable
+      source or `-bin` artifact from Nix. Pin release/source hashes, retain all
+      helpers/licenses and use genuine offline/frozen Cargo preparation for
+      source builds. A `-bin` recipe depends on the audited portable archive;
+      nonexistent future release URLs do not prove a package builds. Test actual
+      install/runtime confinement in an owned clean Arch environment before
+      publishing to AUR; no external AUR write has occurred.
 - [x] Reusable independent Linux/native+web, Windows x86_64 and macOS universal
       build jobs, with separate gated publication. Update v2 requires Ed25519 AND
       ML-DSA-44 in two confined fixed-algorithm processes; raw bytes, full public
@@ -2937,6 +3131,34 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
           the UI, plus paste/attach encoding/send acknowledgement, without parsing
           in the TLS worker or giving the content worker keys/network/storage.
           Keep plaintext/newlines/code source and image/formula fallback accessible.
+          Frozen foundation `4e6b63fc` passes actual packaged-App desktop/mobile
+          live Markdown and phone IndexedDB reload. Basic failure/retry controls,
+          image sending/viewing and combined integration remain open. Preserve
+          original authenticated source/mode going forward: images already
+          replaced with `[image]` in old browser history cannot be reconstructed.
+          Independent frozen-source review found three recovery/accounting gaps:
+          expired work can leave Preparing forever; stale-handle pruning can
+          return plain-preview credit while old inactive timelines retain the
+          derivative; evicted previews advertise reopening but loaded timelines
+          do not reload. Fix bounded receipt-bound failures/retry and retain
+          source format beside original source, including unsaved rows, without
+          automatic render loops or stale-job rebinding. Notification previews
+          and mentions also need an exact rendered-receipt completion hook;
+          `[Preparing message…]` is not the received message's preview.
+    - [ ] Close the source-audited parity gaps before claiming desktop parity:
+          export real SDK unread counts (current badge/jump fixtures inject a
+          field absent from real snapshots); reconnect/backoff and saved-server
+          auto-connect must rejoin muted without reopening capture. Add explicit
+          notification permission, focus/read handling and bounded sounds.
+          Implement per-user volume/local mute, device choice/mic test and stats;
+          VAD/PTT/meter are separate from browser AEC. Honor invite channel paths
+          and in-app `mumble://` links; align Enter/composer settings, navigation
+          and search. Review `navigator.storage.persist()` and Safari eviction.
+          Stable browser identity, negotiated Nuschl history/edits/deletes,
+          moderation/admin, file offers and MLS remain separate protocol work.
+          Plan shared native/browser session logic before extending the reduced
+          browser protocol copy. Current source audit is `7137dfd5`; read-only
+          reconnect/unread allocation plans are underway, not implementations.
   - [x] NixOS module for the web host, share links and tunnel relay
         (`services.nuschl-web`, 2026-11-11: nginx with `enableACME`, optionally a
         subdomain; static files, the landing page, app-link files, the relay over a

@@ -8,6 +8,7 @@ use serde::Deserialize;
 use std::{
     net::{IpAddr, Ipv4Addr, Ipv6Addr},
     path::{Path, PathBuf},
+    time::{Duration, Instant},
 };
 
 /// The oldest TLS version the server accepts.
@@ -664,6 +665,14 @@ impl Config {
         if self.timeout == 0 || self.handshake_timeout == 0 {
             return Err(ConfigError::Invalid("timeouts must be nonzero".into()));
         }
+        if Instant::now()
+            .checked_add(Duration::from_secs(self.autoban.duration))
+            .is_none()
+        {
+            return Err(ConfigError::Invalid(
+                "autoban.duration exceeds the supported monotonic clock range".into(),
+            ));
+        }
         if !crate::share::valid_web_host(&self.share_links.web_host) {
             return Err(ConfigError::Invalid(
                 "share_links.web_host must be a host name".into(),
@@ -831,6 +840,18 @@ pub const EXAMPLE: &str = include_str!("../nuschld.example.toml");
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn autoban_duration_must_fit_the_monotonic_clock() {
+        let config = Config::from_toml("[autoban]\nduration = 9223372036854775807").unwrap();
+        let error = config.settings().unwrap_err().to_string();
+        assert!(error.contains("autoban.duration"), "{error}");
+        assert!(error.contains("monotonic clock range"), "{error}");
+        for duration in [0, 300, 86_400] {
+            let config = Config::from_toml(&format!("[autoban]\nduration = {duration}")).unwrap();
+            assert!(config.settings().is_ok());
+        }
+    }
 
     #[test]
     fn example_parses_with_murmurs_defaults() {
