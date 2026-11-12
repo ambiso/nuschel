@@ -2,7 +2,8 @@
 
 Current focus (user, 2026-11-12): **unmute-to-first-speech latency, stereo receive
 and output fidelity, and hybrid update readiness**. Independent owners now cover
-browser jitter/admission and hash-only document fetch/render. CELT concealment,
+browser playout/credit bounds, hash-only document fetch/render and cross-build
+verifier isolation. CELT concealment,
 Windows profile-preserving updater relaunch and the metadata-refresh procedure
 are integrated with scoped proofs; final browser/device/distribution checks stay open.
 Server reordering and the desktop layout foundation have scoped proofs integrated;
@@ -727,6 +728,11 @@ The media worker uses per-speaker adaptive jitter buffers and Opus loss concealm
       limit cannot admit 16 legitimate 100 packet/s speakers. Verify 48 kHz context,
       variable-duration packets, stream ends/restarts, suspend/resume, privacy and
       actual confined-browser playback under production CSP before closing this.
+      Source activation is integrated with 28 main/Worklet and six actual-WASM
+      worker tests. Review follow-ups remain: setup messages must not discard fresh
+      packets already accepted for the new RX, and rapid TX epochs must not grant
+      new encode credits while old work is unacknowledged. Both are assigned to
+      the browser owner before final integration/runtime proof.
 - [x] Match Mumble's explicit `OPUS_SET_PHASE_INVERSION_DISABLED(1)` receive
       setting. The pinned, minimally patched opus-pure 0.2.3 exposes its existing
       synthesis control with upstream/generic defaults unchanged; only native
@@ -1552,11 +1558,13 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
       Keep notice inventory/vendoring tools distinct from compiled package
       builders. Cache cleanup being complete does not mean this migration is done;
       serialize flake/graph edits with the release-notice and codec owners.
-- [ ] Keep source-dependent notice/runtime postInstall hooks out of Crane's
-      buildDepsOnly cache key. The profile-only fix changed no dependency inputs,
-      yet the unused notice postInstall path invalidated a 954 MiB artifact and
-      would repeat the nine-minute dependency build. Its private proof safely
-      reused identical-input artifacts; the production builder is not fixed.
+- [x] Keep source-dependent notice/runtime postInstall hooks out of Crane's
+      buildDepsOnly cache key. Explicit artifact-only dependency passes exclude
+      final installation hooks while final products retain notice installation.
+      Actual Windows/macOS derivation evaluation proves a source-only edit keeps
+      dependency paths and changes final products; a Windows target-flag edit
+      still changes its dependency path (`tests/build_cache.py`,
+      `docs/build-cache.md`). This is cache-key proof, not a new cross runtime test.
 - [ ] Build official cross updater verifier outputs with separate algorithm
       features, matching the native per-crate policy. `crossCommon` currently
       enables both together: actual fixed-entry-point runtime tests pass, but do
