@@ -619,6 +619,16 @@ impl Desktop {
         })
         .detach();
         cx.on_release(|this, _| this.commit_settings()).detach();
+        // Leaving the window ends a slider edit too: a drag's release (lost
+        // when the compositor takes the pointer, or given elsewhere) and the
+        // next key may never come here. What was heard is saved, and a later
+        // move or release of that drag finds nothing to continue.
+        cx.observe_window_activation(window, |this, window, _| {
+            if !window.is_window_active() {
+                this.commit_settings();
+            }
+        })
+        .detach();
         desktop
     }
     /// Check for an update now (Settings) rather than on the schedule.

@@ -26,7 +26,9 @@ Checks, with a screenshot of each state (look at them):
    with numeric values; the level bar marks the gate's floor (one constant
    in nuschl_core, which the worker's own unit test checks it uses).
 4. A pointer drag over Sensitivity changes the value while held and writes
-   settings.json exactly once, after the release.
+   settings.json exactly once, after the release. A drag whose window is
+   minimised while the button is still held is saved once, at the focus
+   loss; its later moves and release change nothing.
 5. Connected, Ada's menu: the volume slider at 100 %, a pointer drag (the
    menu stays open, one write), a key step and Delete back to 100 %; a drag
    whose menu is closed with Escape mid-drag is saved once and edits nothing
@@ -386,6 +388,36 @@ class Scenes:
               f"written once, {writes.changes[-1] - released:.3f} s after the release; value text "
               f"{self.description(slider)!r}.", flush=True)
         self.shot("07-sensitivity-dragged")
+
+        # The window loses focus mid-drag (minimised by the compositor while
+        # the button is held): what was heard is saved then, once.
+        slider = self.wait_for("slider", "Voice activity sensitivity", "no sensitivity slider")
+        start = time.monotonic()
+        begin, end = self.thumb(slider, 0.8), self.thumb(slider, 0.3)
+        self.shell.move(*begin)
+        time.sleep(0.1)
+        self.press()
+        self.glide(begin, end)
+        time.sleep(0.4)
+        heard = self.value(slider)
+        assert writes.since(start) == 0 and 25 <= heard <= 35, (writes.since(start), heard)
+        self.shell.eval("global.get_window_actors().map(a => a.meta_window).find(w => (w.get_title() || '')"
+                        ".startsWith('Nuschl')).minimize(); 'ok'")
+        minimised = time.monotonic()
+        eventually(lambda: writes.since(start) >= 1 or None, "losing focus mid-drag saved nothing", timeout=3)
+        lag = writes.changes[-1] - minimised
+        stored = saved(settings_path, "audio", "vad_sensitivity")
+        self.glide(end, (end[0] + 150, end[1]))
+        self.release()
+        self.shell.place("Nuschl", 40, 40, WIDTH, HEIGHT)
+        time.sleep(1.5)
+        slider = self.wait_for("slider", "Voice activity sensitivity", "no sensitivity slider")
+        assert writes.since(start) == 1, f"{writes.since(start)} writes for a drag that lost focus"
+        assert abs(stored * 100 - heard) < 0.01 and abs(self.value(slider) - heard) < 0.01, \
+            (stored, heard, self.value(slider))
+        self.shot("07b-after-focus-loss")
+        print(f"Focus lost mid-drag (window minimised, button held): {heard:.1f} saved once, {lag:.3f} s after "
+              "the minimise; moving and releasing afterwards changed nothing.", flush=True)
 
         self.wait_for("push button", "Stop test", "no Stop test button").press()
         eventually(lambda: self.recording() == [] or None, "Stop test left the microphone open", timeout=10)
