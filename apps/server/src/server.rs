@@ -124,6 +124,14 @@ impl Server {
         let config = &self.settings.config;
         let key = prefix(address);
         let now = Instant::now();
+        // Settings validate this at startup. Check again before changing any
+        // admission state: the clock may have advanced towards its limit.
+        let Some(ban_until) = now.checked_add(Duration::from_secs(config.autoban.duration)) else {
+            tracing::error!(
+                "autoban duration is outside the monotonic clock range; refusing admission"
+            );
+            return false;
+        };
         let mut admission = self
             .admission
             .lock()
@@ -148,9 +156,7 @@ impl Server {
             attempts.push_back(now);
             if attempts.len() > config.autoban.attempts as usize {
                 attempts.clear();
-                admission
-                    .banned_until
-                    .insert(key, now + Duration::from_secs(config.autoban.duration));
+                admission.banned_until.insert(key, ban_until);
                 tracing::info!(
                     address = %self.settings.addresses.ip(address),
                     "autoban: too many connection attempts"
@@ -902,6 +908,105 @@ async fn statistics(server: Arc<Server>) {
             whisper_fanout_dropped = delta.fanout_dropped,
             "statistics"
         );
+    }
+}
+
+#[cfg(test)]
+mod admission_tests {
+    use super::*;
+    use crate::{config::Config, storage::MemoryStore};
+    use std::{net::Ipv4Addr, sync::atomic::Ordering};
+    use tokio::{io::AsyncReadExt, net::TcpStream, time::timeout};
+
+    async fn fixture(invalid_runtime_duration: bool) -> (tempfile::TempDir, Running) {
+        let directory = tempfile::tempdir().unwrap();
+        let mut config = Config {
+            bind: vec![Ipv4Addr::LOCALHOST.into()],
+            port: 0,
+            state_directory: directory.path().into(),
+            statistics_interval: 0,
+            ..Config::default()
+        };
+        config.kt.enabled = false;
+        config.autoban.attempts = 1;
+        config.autoban.duration = 300;
+        let mut settings = config.settings().unwrap();
+        if invalid_runtime_duration {
+            // Deliberately bypass startup validation, exercising the runtime
+            // defense independently of the configuration rejection test.
+            settings.config.autoban.duration = u64::MAX;
+        }
+        let running = start(settings, Backend::Memory(MemoryStore::shared()))
+            .await
+            .unwrap();
+        (directory, running)
+    }
+
+    async fn refused(address: SocketAddr) {
+        let mut stream = TcpStream::connect(address).await.unwrap();
+        let mut byte = [0];
+        assert_eq!(
+            timeout(Duration::from_secs(2), stream.read(&mut byte))
+                .await
+                .expect("admission must close the connection without waiting for TLS")
+                .unwrap(),
+            0
+        );
+    }
+
+    async fn accepted(running: &Running, source: Ipv4Addr, count: u64) {
+        let socket = tokio::net::TcpSocket::new_v4().unwrap();
+        socket.bind(SocketAddr::from((source, 0))).unwrap();
+        let stream = socket.connect(running.addresses[0]).await.unwrap();
+        timeout(Duration::from_secs(2), async {
+            while running.server.counters.connections.load(Ordering::Relaxed) != count {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        })
+        .await
+        .expect("the actual accept loop must admit another connection");
+        drop(stream);
+    }
+
+    #[tokio::test]
+    async fn unusable_autoban_deadline_refuses_without_poison_or_accept_loop_loss() {
+        let (_directory, running) = fixture(true).await;
+        for _ in 0..3 {
+            refused(running.addresses[0]).await;
+        }
+        assert_eq!(
+            running.server.counters.connections.load(Ordering::Relaxed),
+            0
+        );
+        assert!(!running.tasks[0].is_finished(), "accept loop exited");
+        assert!(!running.server.admission.is_poisoned());
+        {
+            let admission = running.server.admission.lock().unwrap();
+            assert!(admission.attempts.is_empty());
+            assert!(admission.banned_until.is_empty());
+            assert!(admission.per_prefix.is_empty());
+        }
+        running.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn ordinary_autoban_refuses_its_prefix_but_keeps_accepting_other_peers() {
+        let (_directory, running) = fixture(false).await;
+        accepted(&running, Ipv4Addr::LOCALHOST, 1).await;
+        refused(running.addresses[0]).await;
+        refused(running.addresses[0]).await;
+        {
+            let admission = running.server.admission.lock().unwrap();
+            let deadline = admission.banned_until[&Ipv4Addr::LOCALHOST.into()];
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            assert!(remaining > Duration::from_secs(290));
+            assert!(remaining <= Duration::from_secs(300));
+            assert!(admission.attempts[&Ipv4Addr::LOCALHOST.into()].is_empty());
+        }
+        accepted(&running, Ipv4Addr::new(127, 0, 0, 2), 2).await;
+        assert!(!running.tasks[0].is_finished(), "accept loop exited");
+        assert!(!running.server.admission.is_poisoned());
+        running.shutdown().await;
     }
 }
 
