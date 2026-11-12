@@ -1384,6 +1384,14 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
       expiry/clock recovery. The tag-create workflow is not a refresh procedure;
       no signing cron, publication or production key operation is authorized by
       this backlog row.
+- [ ] Finish the per-crate build migration: the default desktop, web SDK/workers,
+      witness and updater helpers use crate2nix, but `flake.nix` still builds
+      `server`, `rtc-probe`, Windows and Darwin slices with Crane; the explicit
+      `default-crane` fallback also remains. Audit and migrate those production
+      targets without losing Linux-hosted cross builds or platform dependencies.
+      Keep notice inventory/vendoring tools distinct from compiled package
+      builders. Cache cleanup being complete does not mean this migration is done;
+      serialize flake/graph edits with the release-notice and codec owners.
 - [ ] Windows installer (Start menu entry, uninstall); today the zip is portable and
       updates itself where it was unpacked.
 - Deferred (user, 2026-11-11: **no Windows or macOS code signing for now**). The
