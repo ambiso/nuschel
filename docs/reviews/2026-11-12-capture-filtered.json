@@ -1,0 +1,3934 @@
+{
+  "format": 1,
+  "result": "passed",
+  "base": "89806ef27848b8f160a9dd4827e2be6c7bb0cd86",
+  "production_head": "dfc1d3dc738969f0c2c1e435123dbeea04c87b75",
+  "worker": {
+    "path": "/nix/store/vgl5l0s56swkg695kh2r31q4jkr3hi6a-rust_nuschl-media-worker-0.1.0-linked/bin/nuschl-media-worker",
+    "sha256": "ac3b5e5e5b22b752eac59c81318b61ad3e9bd2f13c7e855fd9c120f46756670a"
+  },
+  "test_binary": {
+    "path": "/nix/store/0x50yd3z2zqnsrqgg0c9xwq45vr302gp-rust_nuschl-media-worker-0.1.0-test/tests/nuschl-media-worker",
+    "sha256": "f2225bb0ff119fe34dea5609ddd957c05118e7310a5aeecbdc59abbe1bc4e0f1"
+  },
+  "immutable_crate_source": "/nix/store/93c09gh9gwnc6v3mwp17nqpb4zyksrwl-source",
+  "source_hashes": {
+    "capture.rs": "e84acc32830c03f17b9ab2098dbc03f6d51bcf022eaff26e76d66b703c43be2c",
+    "capture_fixture.rs": "830b90e89512c879f14677666144a2455bc6707752ca94fe716d819d798e6468",
+    "live.rs": "dbefaa3528101231de28646a31b54134400f2eae65755db33ed086309fcf2a02",
+    "main.rs": "4627631d5c16fc35b9d5ef4687ea3db4c2846961cdf7f44762cbef37f902a765"
+  },
+  "baseline": {
+    "report": "docs/reviews/2026-11-12-capture-baseline.json",
+    "exit_code": 1,
+    "passed": false,
+    "original26sources_byte_identical_after_fix": true
+  },
+  "quality_and_clock": {
+    "passed": true,
+    "filtered_clock_gate": true,
+    "source_revision": "dfc1d3dc",
+    "host_devices": false,
+    "network": false,
+    "gain_fitted": false,
+    "delay_fitted": false,
+    "all_output_relative_100db_diagnostics_passed": false,
+    "reference": {
+      "channels": 1,
+      "library": "/nix/store/9mzqdjywmmlb10c06jiql8mgwlk5lw1s-speexdsp-1.2.1/lib/libspeexdsp.so",
+      "sha256": "65f2f6e553a77295dcdfed9d2690f21bb8fe361864fef317d0d5fb6626798698",
+      "quality": 3,
+      "mumble_source": "35dce9e4801fe52b2217f0d9f421d17b0aaf3bb0/src/mumble/AudioInput.cpp:515,587",
+      "scope": "C SRC policy; not full Mumble capture/DSP/encoder or its PCM16 quantization"
+    },
+    "test_binary": {
+      "path": "/nix/store/0x50yd3z2zqnsrqgg0c9xwq45vr302gp-rust_nuschl-media-worker-0.1.0-test/tests/nuschl-media-worker",
+      "sha256": "f2225bb0ff119fe34dea5609ddd957c05118e7310a5aeecbdc59abbe1bc4e0f1"
+    },
+    "cases": [
+      {
+        "rate": 11025,
+        "case": "tone-low",
+        "channels": 1,
+        "source_frequency": 997.0,
+        "frames": 48000,
+        "chunk_bit_exact": true,
+        "full_fixed_gain_reference": {
+          "exact_float_match": false,
+          "fixed_gain_snr_db": 146.29819183345808,
+          "max_abs_error": 2.9802322387695312e-08,
+          "rms_error_dbfs": -163.2972095887293,
+          "reference_peak": 0.19999970495700836,
+          "actual_peak": 0.19999970495700836,
+          "actual_clipped_samples": 0,
+          "active_bin_abs_magnitude_error_p95_db": 8.99603604026062e-06,
+          "bands": [
+            {
+              "hz": [
+                0,
+                300
+              ],
+              "reference_energy": 6.130927319464578e-06,
+              "residual_energy": 7.4949705074124525e-16,
+              "residual_relative_db": -99.12756239464662
+            },
+            {
+              "hz": [
+                300,
+                3400
+              ],
+              "reference_energy": 23.664160208178696,
+              "residual_energy": 7.098727819360118e-15,
+              "residual_relative_db": -155.22910572169852
+            },
+            {
+              "hz": [
+                3400,
+                8000
+              ],
+              "reference_energy": 3.4112748847917065e-07,
+              "residual_energy": 1.0721242011626538e-14,
+              "residual_relative_db": -75.02671617315391
+            },
+            {
+              "hz": [
+                8000,
+                16000
+              ],
+              "reference_energy": 6.011112785571734e-10,
+              "residual_energy": 1.8477235552835543e-14,
+              "residual_relative_db": -45.1231788129505
+            },
+            {
+              "hz": [
+                16000,
+                22050
+              ],
+              "reference_energy": 1.6806133165602925e-12,
+              "residual_energy": 1.3910024826886705e-14,
+              "residual_relative_db": -20.821398952801026
+            }
+          ]
+        },
+        "reference_delay_output_frames": 104,
+        "max_timestamp_error_ns": 0,
+        "passed": true,
+        "first_fragment_queued_frames": 5,
+        "actual_initial_peak": null,
+        "reference_initial_peak": null,
+        "carrier_db": 0.0013477113241245275,
+        "reference_carrier_db": 0.0013477150789088378,
+        "image_or_alias_frequency": 10028.0,
+        "image_or_alias_db": -84.54659377183697,
+        "reference_image_or_alias_db": -84.54660971277418,
+        "quality_gate": {
+          "output_relative_100db_diagnostic": true,
+          "max_abs_error_2e_minus6_gate": true,
+          "input_referenced_snr_db": 146.30750954714222,
+          "passed": true
+        }
+      },
+      {
+        "rate": 11025,
+        "case": "tone-high",
+        "channels": 1,
+        "source_frequency": 3858.7499999999995,
+        "frames": 48000,
+        "chunk_bit_exact": true,
+        "full_fixed_gain_reference": {
+          "exact_float_match": false,
+          "fixed_gain_snr_db": 146.38533061576004,
+          "max_abs_error": 2.9802322387695312e-08,
+          "rms_error_dbfs": -163.38527036683047,
+          "reference_peak": 0.2094200849533081,
+          "actual_peak": 0.2094200998544693,
+          "actual_clipped_samples": 0,
+          "active_bin_abs_magnitude_error_p95_db": 1.0144959382196304e-05,
+          "bands": [
+            {
+              "hz": [
+                0,
+                300
+              ],
+              "reference_energy": 1.3081451933176594e-07,
+              "residual_energy": 6.184638832851289e-16,
+              "residual_relative_db": -83.25341606751364
+            },
+            {
+              "hz": [
+                300,
+                3400
+              ],
+              "reference_energy": 8.3228621435169e-06,
+              "residual_energy": 7.568823166798246e-15,
+              "residual_relative_db": -90.41244342442505
+            },
+            {
+              "hz": [
+                3400,
+                8000
+              ],
+              "reference_energy": 23.66071228090819,
+              "residual_energy": 1.0557432864381727e-14,
+              "residual_relative_db": -153.5046948607825
+            },
+            {
+              "hz": [
+                8000,
+                16000
+              ],
+              "reference_energy": 2.2641412924113425e-08,
+              "residual_energy": 1.6989991922468147e-14,
+              "residual_relative_db": -61.247103528617224
+            },
+            {
+              "hz": [
+                16000,
+                22050
+              ],
+              "reference_energy": 1.4351708606763064e-09,
+              "residual_energy": 1.4147660366523746e-14,
+              "residual_relative_db": -50.06218982542045
+            }
+          ]
+        },
+        "reference_delay_output_frames": 104,
+        "max_timestamp_error_ns": 0,
+        "passed": true,
+        "first_fragment_queued_frames": 5,
+        "actual_initial_peak": null,
+        "reference_initial_peak": null,
+        "carrier_db": -0.0011285910799884154,
+        "reference_carrier_db": -0.001128591537388823,
+        "image_or_alias_frequency": 7166.25,
+        "image_or_alias_db": -76.84078355951668,
+        "reference_image_or_alias_db": -76.84078004262355,
+        "quality_gate": {
+          "output_relative_100db_diagnostic": true,
+          "max_abs_error_2e_minus6_gate": true,
+          "input_referenced_snr_db": 146.39517622613755,
+          "passed": true
+        }
+      },
+      {
+        "rate": 11025,
+        "case": "impulse",
+        "channels": 1,
+        "source_frequency": 0.0,
+        "frames": 48000,
+        "chunk_bit_exact": true,
+        "full_fixed_gain_reference": {
+          "exact_float_match": false,
+          "fixed_gain_snr_db": 149.40637823022973,
+          "max_abs_error": 2.9802322387695312e-08,
+          "rms_error_dbfs": -196.32641857700264,
+          "reference_peak": 0.45517992973327637,
+          "actual_peak": 0.45517995953559875,
+          "actual_clipped_samples": 0,
+          "active_bin_abs_magnitude_error_p95_db": 2.8711658897663534e-07,
+          "bands": [
+            {
+              "hz": [
+                0,
+                300
+              ],
+              "reference_energy": 0.00148246656171361,
+              "residual_energy": 1.9817934681932928e-19,
+              "residual_relative_db": -158.73926513584388
+            },
+            {
+              "hz": [
+                300,
+                3400
+              ],
+              "reference_energy": 0.015318187062990995,
+              "residual_energy": 3.602854042709763e-18,
+              "residual_relative_db": -156.28560700222027
+            },
+            {
+              "hz": [
+                3400,
+                8000
+              ],
+              "reference_energy": 0.007737356670901908,
+              "residual_energy": 6.52817394711941e-18,
+              "residual_relative_db": -150.73800899164894
+            },
+            {
+              "hz": [
+                8000,
+                16000
+              ],
+              "reference_energy": 1.7830185662799948e-11,
+              "residual_energy": 7.971086295973296e-18,
+              "residual_relative_db": -63.496383545545775
+            },
+            {
+              "hz": [
+                16000,
+                22050
+              ],
+              "reference_energy": 1.021436241595807e-12,
+              "residual_energy": 7.489662400339879e-18,
+              "residual_relative_db": -51.34749020866898
+            }
+          ]
+        },
+        "reference_delay_output_frames": 104,
+        "max_timestamp_error_ns": 0,
+        "passed": true,
+        "first_fragment_queued_frames": 5,
+        "actual_initial_peak": 4902,
+        "reference_initial_peak": 4902,
+        "quality_gate": {
+          "output_relative_100db_diagnostic": true,
+          "max_abs_error_2e_minus6_gate": true,
+          "input_referenced_snr_db": 149.88203268232425,
+          "passed": true
+        }
+      },
+      {
+        "rate": 11025,
+        "case": "initial-marker",
+        "channels": 1,
+        "source_frequency": 997.0,
+        "frames": 48000,
+        "chunk_bit_exact": true,
+        "full_fixed_gain_reference": {
+          "exact_float_match": false,
+          "fixed_gain_snr_db": 146.94701907037188,
+          "max_abs_error": 2.9802322387695312e-08,
+          "rms_error_dbfs": -163.9466826532302,
+          "reference_peak": 0.19999921321868896,
+          "actual_peak": 0.19999921321868896,
+          "actual_clipped_samples": 0,
+          "active_bin_abs_magnitude_error_p95_db": 4.58761371958454e-06,
+          "bands": [
+            {
+              "hz": [
+                0,
+                300
+              ],
+              "reference_energy": 0.0001880311328273243,
+              "residual_energy": 3.2706654901440827e-16,
+              "residual_relative_db": -117.59593633948282
+            },
+            {
+              "hz": [
+                300,
+                3400
+              ],
+              "reference_energy": 23.660809395969768,
+              "residual_energy": 7.105094557279316e-15,
+              "residual_relative_db": -155.224597349634
+            },
+            {
+              "hz": [
+                3400,
+                8000
+              ],
+              "reference_energy": 0.0006346555894549804,
+              "residual_energy": 8.65746775431621e-15,
+              "residual_relative_db": -108.65147226617586
+            },
+            {
+              "hz": [
+                8000,
+                16000
+              ],
+              "reference_energy": 3.515107403038241e-09,
+              "residual_energy": 1.684478780432714e-14,
+              "residual_relative_db": -53.19473054798944
+            },
+            {
+              "hz": [
+                16000,
+                22050
+              ],
+              "reference_energy": 1.8461434862345812e-10,
+              "residual_energy": 1.1671483310229923e-14,
+              "residual_relative_db": -41.99139398953945
+            }
+          ]
+        },
+        "reference_delay_output_frames": 104,
+        "max_timestamp_error_ns": 0,
+        "passed": true,
+        "first_fragment_queued_frames": 5,
+        "actual_initial_peak": null,
+        "reference_initial_peak": null,
+        "initial_marker_power_ratio": 14994.448618938724,
+        "following_marker_power_ratio": 272125.9717544177,
+        "quality_gate": {
+          "output_relative_100db_diagnostic": true,
+          "max_abs_error_2e_minus6_gate": true,
+          "input_referenced_snr_db": 146.95662888540198,
+          "passed": true
+        }
+      },
+      {
+        "rate": 11025,
+        "case": "channel-average2",
+        "channels": 2,
+        "source_frequency": 997.0,
+        "frames": 48000,
+        "chunk_bit_exact": true,
+        "full_fixed_gain_reference": {
+          "exact_float_match": false,
+          "fixed_gain_snr_db": 145.19571497434197,
+          "max_abs_error": 2.9802322387695312e-08,
+          "rms_error_dbfs": -164.69350745357508,
+          "reference_peak": 0.14999978244304657,
+          "actual_peak": 0.14999978244304657,
+          "actual_clipped_samples": 0,
+          "active_bin_abs_magnitude_error_p95_db": 9.723285637120612e-06,
+          "bands": [
+            {
+              "hz": [
+                0,
+                300
+              ],
+              "reference_energy": 3.448645282114762e-06,
+              "residual_energy": 5.339291477980935e-16,
+              "residual_relative_db": -98.10164896230631
+            },
+            {
+              "hz": [
+                300,
+                3400
+              ],
+              "reference_energy": 13.311090148838538,
+              "residual_energy": 5.283573655429999e-15,
+              "residual_relative_db": -154.0128585862356
+            },
+            {
+              "hz": [
+                3400,
+                8000
+              ],
+              "reference_energy": 1.9188431623675106e-07,
+              "residual_energy": 7.855100053087685e-15,
+              "residual_relative_db": -73.87887757735189
+            },
+            {
+              "hz": [
+                8000,
+                16000
+              ],
+              "reference_energy": 3.3814429261017986e-10,
+              "residual_energy": 1.3279659550774268e-14,
+              "residual_relative_db": -44.05915120343283
+            },
+            {
+              "hz": [
+                16000,
+                22050
+              ],
+              "reference_energy": 9.60559719231549e-13,
+              "residual_energy": 1.0004884848776828e-14,
+              "residual_relative_db": -19.823122761942432
+            }
+          ]
+        },
+        "reference_delay_output_frames": 104,
+        "max_timestamp_error_ns": 0,
+        "passed": true,
+        "first_fragment_queued_frames": 5,
+        "actual_initial_peak": null,
+        "reference_initial_peak": null,
+        "carrier_db": 0.0013477356949133583,
+        "reference_carrier_db": 0.0013477281823982266,
+        "image_or_alias_frequency": 10028.0,
+        "image_or_alias_db": -84.5465756919217,
+        "reference_image_or_alias_db": -84.5465132683016,
+        "quality_gate": {
+          "output_relative_100db_diagnostic": true,
+          "max_abs_error_2e_minus6_gate": true,
+          "input_referenced_snr_db": 145.20503268587225,
+          "passed": true
+        }
+      },
+      {
+        "rate": 11025,
+        "case": "channel-average6",
+        "channels": 6,
+        "source_frequency": 997.0,
+        "frames": 48000,
+        "chunk_bit_exact": true,
+        "full_fixed_gain_reference": {
+          "exact_float_match": false,
+          "fixed_gain_snr_db": 146.9883859339541,
+          "max_abs_error": 7.450580596923828e-09,
+          "rms_error_dbfs": -174.941450266418,
+          "reference_peak": 0.05666659027338028,
+          "actual_peak": 0.05666659399867058,
+          "actual_clipped_samples": 0,
+          "active_bin_abs_magnitude_error_p95_db": 2.494577266955585e-06,
+          "bands": [
+            {
+              "hz": [
+                0,
+                300
+              ],
+              "reference_energy": 4.921773231489102e-07,
+              "residual_energy": 4.3957507644363705e-17,
+              "residual_relative_db": -100.4908853960415
+            },
+            {
+              "hz": [
+                300,
+                3400
+              ],
+              "reference_energy": 1.8997061962100505,
+              "residual_energy": 4.788460039150242e-16,
+              "residual_relative_db": -155.98490571772888
+            },
+            {
+              "hz": [
+                3400,
+                8000
+              ],
+              "reference_energy": 2.7384947107323504e-08,
+              "residual_energy": 7.274061466538179e-16,
+              "residual_relative_db": -75.75734939881728
+            },
+            {
+              "hz": [
+                8000,
+                16000
+              ],
+              "reference_energy": 4.826510654438293e-11,
+              "residual_energy": 1.2725424075350922e-15,
+              "residual_relative_db": -45.78961005090871
+            },
+            {
+              "hz": [
+                16000,
+                22050
+              ],
+              "reference_energy": 1.3293553687560262e-13,
+              "residual_energy": 9.787965629890357e-16,
+              "residual_relative_db": -21.32948658182061
+            }
+          ]
+        },
+        "reference_delay_output_frames": 104,
+        "max_timestamp_error_ns": 0,
+        "passed": true,
+        "first_fragment_queued_frames": 5,
+        "actual_initial_peak": null,
+        "reference_initial_peak": null,
+        "carrier_db": 0.0013477282394351313,
+        "reference_carrier_db": 0.0013477247875800806,
+        "image_or_alias_frequency": 10028.0,
+        "image_or_alias_db": -84.54656547552433,
+        "reference_image_or_alias_db": -84.54661406263206,
+        "quality_gate": {
+          "output_relative_100db_diagnostic": true,
+          "max_abs_error_2e_minus6_gate": true,
+          "input_referenced_snr_db": 146.9977036460856,
+          "passed": true
+        }
+      },
+      {
+        "rate": 22050,
+        "case": "tone-low",
+        "channels": 1,
+        "source_frequency": 997.0,
+        "frames": 48000,
+        "chunk_bit_exact": true,
+        "full_fixed_gain_reference": {
+          "exact_float_match": false,
+          "fixed_gain_snr_db": 146.27564436469643,
+          "max_abs_error": 2.9802322387695312e-08,
+          "rms_error_dbfs": -163.2699491380506,
+          "reference_peak": 0.1999993920326233,
+          "actual_peak": 0.1999993771314621,
+          "actual_clipped_samples": 0,
+          "active_bin_abs_magnitude_error_p95_db": 8.49373455198564e-06,
+          "bands": [
+            {
+              "hz": [
+                0,
+                300
+              ],
+              "reference_energy": 4.4519148588897846e-07,
+              "residual_energy": 6.09880371750356e-16,
+              "residual_relative_db": -88.63302193683084
+            },
+            {
+              "hz": [
+                300,
+                3400
+              ],
+              "reference_energy": 23.66380766095227,
+              "residual_energy": 7.117397602863854e-15,
+              "residual_relative_db": -155.2176339900671
+            },
+            {
+              "hz": [
+                3400,
+                8000
+              ],
+              "reference_energy": 1.6421535198512832e-08,
+              "residual_energy": 1.0601384924012607e-14,
+              "residual_relative_db": -61.900511520027166
+            },
+            {
+              "hz": [
+                8000,
+                16000
+              ],
+              "reference_energy": 1.3816445603579577e-09,
+              "residual_energy": 1.9089006660826275e-14,
+              "residual_relative_db": -48.596130020153026
+            },
+            {
+              "hz": [
+                16000,
+                22050
+              ],
+              "reference_energy": 2.892701773760321e-10,
+              "residual_energy": 1.3928671686213672e-14,
+              "residual_relative_db": -43.17393960175248
+            }
+          ]
+        },
+        "reference_delay_output_frames": 52,
+        "max_timestamp_error_ns": 0,
+        "passed": true,
+        "first_fragment_queued_frames": 3,
+        "actual_initial_peak": null,
+        "reference_initial_peak": null,
+        "carrier_db": -0.0009509852287358598,
+        "reference_carrier_db": -0.0009509917161857505,
+        "image_or_alias_frequency": 21053.0,
+        "image_or_alias_db": -88.53343287572416,
+        "reference_image_or_alias_db": -88.5334394451781,
+        "quality_gate": {
+          "output_relative_100db_diagnostic": true,
+          "max_abs_error_2e_minus6_gate": true,
+          "input_referenced_snr_db": 146.28024909646354,
+          "passed": true
+        }
+      },
+      {
+        "rate": 22050,
+        "case": "tone-high",
+        "channels": 1,
+        "source_frequency": 7717.499999999999,
+        "frames": 48000,
+        "chunk_bit_exact": true,
+        "full_fixed_gain_reference": {
+          "exact_float_match": false,
+          "fixed_gain_snr_db": 146.3413216632565,
+          "max_abs_error": 2.9802322387695312e-08,
+          "rms_error_dbfs": -163.33655804868786,
+          "reference_peak": 0.2094200849533081,
+          "actual_peak": 0.2094200998544693,
+          "actual_clipped_samples": 0,
+          "active_bin_abs_magnitude_error_p95_db": 7.86780097419251e-06,
+          "bands": [
+            {
+              "hz": [
+                0,
+                300
+              ],
+              "reference_energy": 2.160421326689608e-09,
+              "residual_energy": 5.771506644640856e-16,
+              "residual_relative_db": -65.73249255795294
+            },
+            {
+              "hz": [
+                300,
+                3400
+              ],
+              "reference_energy": 2.831071401377303e-08,
+              "residual_energy": 6.945925900534777e-15,
+              "residual_relative_db": -66.1022067675409
+            },
+            {
+              "hz": [
+                3400,
+                8000
+              ],
+              "reference_energy": 23.660737388315138,
+              "residual_energy": 1.1471727478941868e-14,
+              "residual_relative_db": -153.14399453920916
+            },
+            {
+              "hz": [
+                8000,
+                16000
+              ],
+              "reference_energy": 7.408993505723195e-05,
+              "residual_energy": 1.8325968392286256e-14,
+              "residual_relative_db": -96.06692280925992
+            },
+            {
+              "hz": [
+                16000,
+                22050
+              ],
+              "reference_energy": 3.264648334089136e-11,
+              "residual_energy": 1.3437418825764965e-14,
+              "residual_relative_db": -33.85520552462249
+            }
+          ]
+        },
+        "reference_delay_output_frames": 52,
+        "max_timestamp_error_ns": 0,
+        "passed": true,
+        "first_fragment_queued_frames": 3,
+        "actual_initial_peak": null,
+        "reference_initial_peak": null,
+        "carrier_db": -0.0007040554309461573,
+        "reference_carrier_db": -0.0007040644535684583,
+        "image_or_alias_frequency": 14332.5,
+        "image_or_alias_db": -94.95645429036148,
+        "reference_image_or_alias_db": -94.95627348573181,
+        "quality_gate": {
+          "output_relative_100db_diagnostic": true,
+          "max_abs_error_2e_minus6_gate": true,
+          "input_referenced_snr_db": 146.34685784378462,
+          "passed": true
+        }
+      },
+      {
+        "rate": 22050,
+        "case": "impulse",
+        "channels": 1,
+        "source_frequency": 0.0,
+        "frames": 48000,
+        "chunk_bit_exact": true,
+        "full_fixed_gain_reference": {
+          "exact_float_match": false,
+          "fixed_gain_snr_db": 161.11254899504394,
+          "max_abs_error": 3.725290298461914e-09,
+          "rms_error_dbfs": -211.0427007467655,
+          "reference_peak": 0.45046576857566833,
+          "actual_peak": 0.45046576857566833,
+          "actual_clipped_samples": 0,
+          "active_bin_abs_magnitude_error_p95_db": 7.477363031364584e-08,
+          "bands": [
+            {
+              "hz": [
+                0,
+                300
+              ],
+              "reference_energy": 0.00037059066241223245,
+              "residual_energy": 1.4197135895475457e-22,
+              "residual_relative_db": -184.1669373298376
+            },
+            {
+              "hz": [
+                300,
+                3400
+              ],
+              "reference_energy": 0.003829522313069908,
+              "residual_energy": 1.2953374595214273e-19,
+              "residual_relative_db": -164.70761679370017
+            },
+            {
+              "hz": [
+                3400,
+                8000
+              ],
+              "reference_energy": 0.005682344206761475,
+              "residual_energy": 1.7782204893243613e-19,
+              "residual_relative_db": -165.0454192743479
+            },
+            {
+              "hz": [
+                8000,
+                16000
+              ],
+              "reference_energy": 0.0023556180685724627,
+              "residual_energy": 3.196335252417797e-19,
+              "residual_relative_db": -158.67452552220888
+            },
+            {
+              "hz": [
+                16000,
+                22050
+              ],
+              "reference_energy": 1.071065465779748e-12,
+              "residual_energy": 2.805310977452228e-19,
+              "residual_relative_db": -65.81835005481977
+            }
+          ]
+        },
+        "reference_delay_output_frames": 52,
+        "max_timestamp_error_ns": 0,
+        "passed": true,
+        "first_fragment_queued_frames": 3,
+        "actual_initial_peak": 4852,
+        "reference_initial_peak": 4852,
+        "quality_gate": {
+          "output_relative_100db_diagnostic": true,
+          "max_abs_error_2e_minus6_gate": true,
+          "input_referenced_snr_db": 161.5880148954473,
+          "passed": true
+        }
+      },
+      {
+        "rate": 22050,
+        "case": "initial-marker",
+        "channels": 1,
+        "source_frequency": 997.0,
+        "frames": 48000,
+        "chunk_bit_exact": true,
+        "full_fixed_gain_reference": {
+          "exact_float_match": false,
+          "fixed_gain_snr_db": 146.51772881729147,
+          "max_abs_error": 2.9802322387695312e-08,
+          "rms_error_dbfs": -163.5124043610313,
+          "reference_peak": 0.2060864269733429,
+          "actual_peak": 0.2060864120721817,
+          "actual_clipped_samples": 0,
+          "active_bin_abs_magnitude_error_p95_db": 7.701861992991698e-06,
+          "bands": [
+            {
+              "hz": [
+                0,
+                300
+              ],
+              "reference_energy": 0.00013207217635984183,
+              "residual_energy": 6.55852827075816e-16,
+              "residual_relative_db": -113.04004939524411
+            },
+            {
+              "hz": [
+                300,
+                3400
+              ],
+              "reference_energy": 23.662757951515683,
+              "residual_energy": 6.1422669401579245e-15,
+              "residual_relative_db": -155.8573667455139
+            },
+            {
+              "hz": [
+                3400,
+                8000
+              ],
+              "reference_energy": 0.0009915713410314478,
+              "residual_energy": 1.2410234077220305e-14,
+              "residual_relative_db": -109.02543992969804
+            },
+            {
+              "hz": [
+                8000,
+                16000
+              ],
+              "reference_energy": 3.319077438943492e-05,
+              "residual_energy": 1.578943246959911e-14,
+              "residual_relative_db": -93.22650865109496
+            },
+            {
+              "hz": [
+                16000,
+                22050
+              ],
+              "reference_energy": 8.835045469992446e-10,
+              "residual_energy": 1.3782749624407782e-14,
+              "residual_relative_db": -48.06872922077896
+            }
+          ]
+        },
+        "reference_delay_output_frames": 52,
+        "max_timestamp_error_ns": 0,
+        "passed": true,
+        "first_fragment_queued_frames": 3,
+        "actual_initial_peak": null,
+        "reference_initial_peak": null,
+        "initial_marker_power_ratio": 75351.86819856009,
+        "following_marker_power_ratio": 1302881.6543315942,
+        "quality_gate": {
+          "output_relative_100db_diagnostic": true,
+          "max_abs_error_2e_minus6_gate": true,
+          "input_referenced_snr_db": 146.52255039136352,
+          "passed": true
+        }
+      },
+      {
+        "rate": 22050,
+        "case": "channel-average2",
+        "channels": 2,
+        "source_frequency": 997.0,
+        "frames": 48000,
+        "chunk_bit_exact": true,
+        "full_fixed_gain_reference": {
+          "exact_float_match": false,
+          "fixed_gain_snr_db": 145.1538172070292,
+          "max_abs_error": 2.9802322387695312e-08,
+          "rms_error_dbfs": -164.64689669954228,
+          "reference_peak": 0.14999951422214508,
+          "actual_peak": 0.14999951422214508,
+          "actual_clipped_samples": 0,
+          "active_bin_abs_magnitude_error_p95_db": 1.0902418336171957e-05,
+          "bands": [
+            {
+              "hz": [
+                0,
+                300
+              ],
+              "reference_energy": 2.5042032925705175e-07,
+              "residual_energy": 5.129114250141619e-16,
+              "residual_relative_db": -86.88627209220502
+            },
+            {
+              "hz": [
+                300,
+                3400
+              ],
+              "reference_energy": 13.310891853257141,
+              "residual_energy": 5.1751188146718344e-15,
+              "residual_relative_db": -154.10286829810173
+            },
+            {
+              "hz": [
+                3400,
+                8000
+              ],
+              "reference_energy": 9.237244704919702e-09,
+              "residual_energy": 7.723171156841582e-15,
+              "residual_relative_db": -60.77746789170655
+            },
+            {
+              "hz": [
+                8000,
+                16000
+              ],
+              "reference_energy": 7.77179604272427e-10,
+              "residual_energy": 1.3638161377358097e-14,
+              "residual_relative_db": -47.55765569723729
+            },
+            {
+              "hz": [
+                16000,
+                22050
+              ],
+              "reference_energy": 1.627935574508373e-10,
+              "residual_energy": 1.0299524565745521e-14,
+              "residual_relative_db": -41.988200359160246
+            }
+          ]
+        },
+        "reference_delay_output_frames": 52,
+        "max_timestamp_error_ns": 0,
+        "passed": true,
+        "first_fragment_queued_frames": 3,
+        "actual_initial_peak": null,
+        "reference_initial_peak": null,
+        "carrier_db": -0.0009509780127513178,
+        "reference_carrier_db": -0.0009509800845570092,
+        "image_or_alias_frequency": 21053.0,
+        "image_or_alias_db": -88.53315862324969,
+        "reference_image_or_alias_db": -88.53313963608491,
+        "quality_gate": {
+          "output_relative_100db_diagnostic": true,
+          "max_abs_error_2e_minus6_gate": true,
+          "input_referenced_snr_db": 145.15842193183946,
+          "passed": true
+        }
+      },
+      {
+        "rate": 22050,
+        "case": "channel-average6",
+        "channels": 6,
+        "source_frequency": 997.0,
+        "frames": 48000,
+        "chunk_bit_exact": true,
+        "full_fixed_gain_reference": {
+          "exact_float_match": false,
+          "fixed_gain_snr_db": 146.992737329478,
+          "max_abs_error": 7.450580596923828e-09,
+          "rms_error_dbfs": -174.94108866899492,
+          "reference_peak": 0.05666648969054222,
+          "actual_peak": 0.05666648969054222,
+          "actual_clipped_samples": 0,
+          "active_bin_abs_magnitude_error_p95_db": 2.4885409301049745e-06,
+          "bands": [
+            {
+              "hz": [
+                0,
+                300
+              ],
+              "reference_energy": 3.573897296135402e-08,
+              "residual_energy": 4.223048797475298e-17,
+              "residual_relative_db": -89.2751596819218
+            },
+            {
+              "hz": [
+                300,
+                3400
+              ],
+              "reference_energy": 1.8996778985548617,
+              "residual_energy": 4.866439581494701e-16,
+              "residual_relative_db": -155.91468634206709
+            },
+            {
+              "hz": [
+                3400,
+                8000
+              ],
+              "reference_energy": 1.318290944214096e-09,
+              "residual_energy": 7.491329707688166e-16,
+              "residual_relative_db": -62.45452357153845
+            },
+            {
+              "hz": [
+                8000,
+                16000
+              ],
+              "reference_energy": 1.10915927504254e-10,
+              "residual_energy": 1.2645077094769826e-15,
+              "residual_relative_db": -49.43072433721004
+            },
+            {
+              "hz": [
+                16000,
+                22050
+              ],
+              "reference_energy": 2.321619150181576e-11,
+              "residual_energy": 9.39462828931512e-16,
+              "residual_relative_db": -43.92911376093163
+            }
+          ]
+        },
+        "reference_delay_output_frames": 52,
+        "max_timestamp_error_ns": 0,
+        "passed": true,
+        "first_fragment_queued_frames": 3,
+        "actual_initial_peak": null,
+        "reference_initial_peak": null,
+        "carrier_db": -0.0009509761580240757,
+        "reference_carrier_db": -0.0009509774807796906,
+        "image_or_alias_frequency": 21053.0,
+        "image_or_alias_db": -88.53358832444627,
+        "reference_image_or_alias_db": -88.53358580203943,
+        "quality_gate": {
+          "output_relative_100db_diagnostic": true,
+          "max_abs_error_2e_minus6_gate": true,
+          "input_referenced_snr_db": 146.99734204866252,
+          "passed": true
+        }
+      },
+      {
+        "rate": 44100,
+        "case": "tone-low",
+        "channels": 1,
+        "source_frequency": 997.0,
+        "frames": 48000,
+        "chunk_bit_exact": true,
+        "full_fixed_gain_reference": {
+          "exact_float_match": false,
+          "fixed_gain_snr_db": 146.48706524262838,
+          "max_abs_error": 4.470348358154297e-08,
+          "rms_error_dbfs": -163.4788187671199,
+          "reference_peak": 0.20000436902046204,
+          "actual_peak": 0.20000436902046204,
+          "actual_clipped_samples": 0,
+          "active_bin_abs_magnitude_error_p95_db": 8.766479370427378e-06,
+          "bands": [
+            {
+              "hz": [
+                0,
+                300
+              ],
+              "reference_energy": 4.2722484100503224e-08,
+              "residual_energy": 7.510035220266298e-16,
+              "residual_relative_db": -77.5501452307821
+            },
+            {
+              "hz": [
+                300,
+                3400
+              ],
+              "reference_energy": 23.66541999397401,
+              "residual_energy": 6.858977543917136e-15,
+              "residual_relative_db": -155.37854835371724
+            },
+            {
+              "hz": [
+                3400,
+                8000
+              ],
+              "reference_energy": 1.1433160615508383e-09,
+              "residual_energy": 1.005077902163461e-14,
+              "residual_relative_db": -50.559665799865485
+            },
+            {
+              "hz": [
+                8000,
+                16000
+              ],
+              "reference_energy": 1.1386857251906413e-10,
+              "residual_energy": 1.761953629463559e-14,
+              "residual_relative_db": -38.10409401672853
+            },
+            {
+              "hz": [
+                16000,
+                22050
+              ],
+              "reference_energy": 1.2283010517446071e-11,
+              "residual_energy": 1.3454840321077598e-14,
+              "residual_relative_db": -29.60426275692629
+            }
+          ]
+        },
+        "reference_delay_output_frames": 26,
+        "max_timestamp_error_ns": 0,
+        "passed": true,
+        "first_fragment_queued_frames": 2,
+        "actual_initial_peak": null,
+        "reference_initial_peak": null,
+        "carrier_db": -0.001592419862945491,
+        "reference_carrier_db": -0.0015924226040406047,
+        "image_or_alias_frequency": 4897.0,
+        "image_or_alias_db": -80.93112746186229,
+        "reference_image_or_alias_db": -80.93112243636983,
+        "quality_gate": {
+          "output_relative_100db_diagnostic": true,
+          "max_abs_error_2e_minus6_gate": true,
+          "input_referenced_snr_db": 146.48911872272012,
+          "passed": true
+        }
+      },
+      {
+        "rate": 44100,
+        "case": "tone-high",
+        "channels": 1,
+        "source_frequency": 15434.999999999998,
+        "frames": 48000,
+        "chunk_bit_exact": true,
+        "full_fixed_gain_reference": {
+          "exact_float_match": false,
+          "fixed_gain_snr_db": 146.60909787582293,
+          "max_abs_error": 2.9802322387695312e-08,
+          "rms_error_dbfs": -163.60189752038647,
+          "reference_peak": 0.2094200849533081,
+          "actual_peak": 0.2094200998544693,
+          "actual_clipped_samples": 0,
+          "active_bin_abs_magnitude_error_p95_db": 8.715953679039416e-06,
+          "bands": [
+            {
+              "hz": [
+                0,
+                300
+              ],
+              "reference_energy": 3.430347933552921e-11,
+              "residual_energy": 5.973480155530945e-16,
+              "residual_relative_db": -47.59110746661964
+            },
+            {
+              "hz": [
+                300,
+                3400
+              ],
+              "reference_energy": 2.316475986092505e-08,
+              "residual_energy": 6.41879723585472e-15,
+              "residual_relative_db": -65.5737414549773
+            },
+            {
+              "hz": [
+                3400,
+                8000
+              ],
+              "reference_energy": 9.901537015577998e-10,
+              "residual_energy": 1.0670227468053393e-14,
+              "residual_relative_db": -49.67528937543616
+            },
+            {
+              "hz": [
+                8000,
+                16000
+              ],
+              "reference_energy": 23.66082003232781,
+              "residual_energy": 1.682331908724776e-14,
+              "residual_relative_db": -151.4811810999958
+            },
+            {
+              "hz": [
+                16000,
+                22050
+              ],
+              "reference_energy": 1.388540188237886e-06,
+              "residual_energy": 1.2866892181479187e-14,
+              "residual_relative_db": -80.33084792175603
+            }
+          ]
+        },
+        "reference_delay_output_frames": 26,
+        "max_timestamp_error_ns": 0,
+        "passed": true,
+        "first_fragment_queued_frames": 2,
+        "actual_initial_peak": null,
+        "reference_initial_peak": null,
+        "carrier_db": -0.0007027889078384346,
+        "reference_carrier_db": -0.0007027893462523507,
+        "image_or_alias_frequency": 19335.0,
+        "image_or_alias_db": -94.95742740947888,
+        "reference_image_or_alias_db": -94.95742730987628,
+        "quality_gate": {
+          "output_relative_100db_diagnostic": true,
+          "max_abs_error_2e_minus6_gate": true,
+          "input_referenced_snr_db": 146.61219731548323,
+          "passed": true
+        }
+      },
+      {
+        "rate": 44100,
+        "case": "impulse",
+        "channels": 1,
+        "source_frequency": 0.0,
+        "frames": 48000,
+        "chunk_bit_exact": true,
+        "full_fixed_gain_reference": {
+          "exact_float_match": false,
+          "fixed_gain_snr_db": 159.24065940993162,
+          "max_abs_error": 3.725290298461914e-09,
+          "rms_error_dbfs": -212.18099822235837,
+          "reference_peak": 0.45046576857566833,
+          "actual_peak": 0.45046576857566833,
+          "actual_clipped_samples": 0,
+          "active_bin_abs_magnitude_error_p95_db": 9.329856568649248e-08,
+          "bands": [
+            {
+              "hz": [
+                0,
+                300
+              ],
+              "reference_energy": 9.265478684192935e-05,
+              "residual_energy": 5.953877098911241e-22,
+              "residual_relative_db": -171.92067995661105
+            },
+            {
+              "hz": [
+                300,
+                3400
+              ],
+              "reference_energy": 0.000957460044992155,
+              "residual_energy": 4.664229841141046e-20,
+              "residual_relative_db": -163.123407166361
+            },
+            {
+              "hz": [
+                3400,
+                8000
+              ],
+              "reference_energy": 0.0014206143202414774,
+              "residual_energy": 2.363224315658415e-19,
+              "residual_relative_db": -157.78971241655506
+            },
+            {
+              "hz": [
+                8000,
+                16000
+              ],
+              "reference_energy": 0.0024705100413717467,
+              "residual_energy": 2.526370704253849e-19,
+              "residual_relative_db": -159.90289546793127
+            },
+            {
+              "hz": [
+                16000,
+                22050
+              ],
+              "reference_energy": 0.0011700572907333033,
+              "residual_energy": 7.772321929835745e-20,
+              "residual_relative_db": -161.77656346287313
+            }
+          ]
+        },
+        "reference_delay_output_frames": 26,
+        "max_timestamp_error_ns": 0,
+        "passed": true,
+        "first_fragment_queued_frames": 2,
+        "actual_initial_peak": 4826,
+        "reference_initial_peak": 4826,
+        "quality_gate": {
+          "output_relative_100db_diagnostic": true,
+          "max_abs_error_2e_minus6_gate": true,
+          "input_referenced_snr_db": 159.71601241440035,
+          "passed": true
+        }
+      },
+      {
+        "rate": 44100,
+        "case": "initial-marker",
+        "channels": 1,
+        "source_frequency": 997.0,
+        "frames": 48000,
+        "chunk_bit_exact": true,
+        "full_fixed_gain_reference": {
+          "exact_float_match": false,
+          "fixed_gain_snr_db": 146.7033634839395,
+          "max_abs_error": 2.9802322387695312e-08,
+          "rms_error_dbfs": -163.6953460537183,
+          "reference_peak": 0.204153910279274,
+          "actual_peak": 0.20415392518043518,
+          "actual_clipped_samples": 0,
+          "active_bin_abs_magnitude_error_p95_db": 1.0034454693844617e-05,
+          "bands": [
+            {
+              "hz": [
+                0,
+                300
+              ],
+              "reference_energy": 0.00010173200158111406,
+              "residual_energy": 2.1089257947922447e-16,
+              "residual_relative_db": -116.83396290532238
+            },
+            {
+              "hz": [
+                300,
+                3400
+              ],
+              "reference_energy": 23.66325402277954,
+              "residual_energy": 5.368763873592943e-15,
+              "residual_relative_db": -156.44200162410115
+            },
+            {
+              "hz": [
+                3400,
+                8000
+              ],
+              "reference_energy": 0.001257724956894538,
+              "residual_energy": 1.0807001330405672e-14,
+              "residual_relative_db": -110.65880473726585
+            },
+            {
+              "hz": [
+                8000,
+                16000
+              ],
+              "reference_energy": 0.0001280877210757205,
+              "residual_energy": 1.970114477179904e-14,
+              "residual_relative_db": -98.13016036408507
+            },
+            {
+              "hz": [
+                16000,
+                22050
+              ],
+              "reference_energy": 3.2017154499321955e-05,
+              "residual_energy": 1.0807020652320256e-14,
+              "residual_relative_db": -94.71676750291266
+            }
+          ]
+        },
+        "reference_delay_output_frames": 26,
+        "max_timestamp_error_ns": 0,
+        "passed": true,
+        "first_fragment_queued_frames": 2,
+        "actual_initial_peak": null,
+        "reference_initial_peak": null,
+        "initial_marker_power_ratio": 190718.51354682454,
+        "following_marker_power_ratio": 688753.9801169328,
+        "quality_gate": {
+          "output_relative_100db_diagnostic": true,
+          "max_abs_error_2e_minus6_gate": true,
+          "input_referenced_snr_db": 146.70559105953365,
+          "passed": true
+        }
+      },
+      {
+        "rate": 44100,
+        "case": "channel-average2",
+        "channels": 2,
+        "source_frequency": 997.0,
+        "frames": 48000,
+        "chunk_bit_exact": true,
+        "full_fixed_gain_reference": {
+          "exact_float_match": false,
+          "fixed_gain_snr_db": 145.3224272771614,
+          "max_abs_error": 2.9802322387695312e-08,
+          "rms_error_dbfs": -164.81295551918652,
+          "reference_peak": 0.15000328421592712,
+          "actual_peak": 0.15000328421592712,
+          "actual_clipped_samples": 0,
+          "active_bin_abs_magnitude_error_p95_db": 9.54553020800402e-06,
+          "bands": [
+            {
+              "hz": [
+                0,
+                300
+              ],
+              "reference_energy": 2.4031102813067467e-08,
+              "residual_energy": 4.2338193639241186e-16,
+              "residual_relative_db": -77.54041376613658
+            },
+            {
+              "hz": [
+                300,
+                3400
+              ],
+              "reference_energy": 13.311798795313468,
+              "residual_energy": 4.743288685848282e-15,
+              "residual_relative_db": -154.48157187268177
+            },
+            {
+              "hz": [
+                3400,
+                8000
+              ],
+              "reference_energy": 6.429768751873862e-10,
+              "residual_energy": 7.416689615089465e-15,
+              "residual_relative_db": -49.3798524932732
+            },
+            {
+              "hz": [
+                8000,
+                16000
+              ],
+              "reference_energy": 6.41169769942091e-11,
+              "residual_energy": 1.3169927908820629e-14,
+              "residual_relative_db": -36.87389640249386
+            },
+            {
+              "hz": [
+                16000,
+                22050
+              ],
+              "reference_energy": 6.9141647797695505e-12,
+              "residual_energy": 1.002275084249194e-14,
+              "residual_relative_db": -28.387527912422236
+            }
+          ]
+        },
+        "reference_delay_output_frames": 26,
+        "max_timestamp_error_ns": 0,
+        "passed": true,
+        "first_fragment_queued_frames": 2,
+        "actual_initial_peak": null,
+        "reference_initial_peak": null,
+        "carrier_db": -0.0015924115043064475,
+        "reference_carrier_db": -0.0015924103739199747,
+        "image_or_alias_frequency": 4897.0,
+        "image_or_alias_db": -80.9311224366259,
+        "reference_image_or_alias_db": -80.93112326682906,
+        "quality_gate": {
+          "output_relative_100db_diagnostic": true,
+          "max_abs_error_2e_minus6_gate": true,
+          "input_referenced_snr_db": 145.32448074349003,
+          "passed": true
+        }
+      },
+      {
+        "rate": 44100,
+        "case": "channel-average6",
+        "channels": 6,
+        "source_frequency": 997.0,
+        "frames": 48000,
+        "chunk_bit_exact": true,
+        "full_fixed_gain_reference": {
+          "exact_float_match": false,
+          "fixed_gain_snr_db": 147.14198724740467,
+          "max_abs_error": 7.450580596923828e-09,
+          "rms_error_dbfs": -175.08778735767066,
+          "reference_peak": 0.056667909026145935,
+          "actual_peak": 0.056667909026145935,
+          "actual_clipped_samples": 0,
+          "active_bin_abs_magnitude_error_p95_db": 2.65397875848251e-06,
+          "bands": [
+            {
+              "hz": [
+                0,
+                300
+              ],
+              "reference_energy": 3.4296667147081882e-09,
+              "residual_energy": 4.578636885102111e-17,
+              "residual_relative_db": -78.74515715995355
+            },
+            {
+              "hz": [
+                300,
+                3400
+              ],
+              "reference_energy": 1.8998073250173169,
+              "residual_energy": 4.7053948966254635e-16,
+              "residual_relative_db": -156.06113480713378
+            },
+            {
+              "hz": [
+                3400,
+                8000
+              ],
+              "reference_energy": 9.178298789166254e-11,
+              "residual_energy": 7.032315294418167e-16,
+              "residual_relative_db": -51.15663857425816
+            },
+            {
+              "hz": [
+                8000,
+                16000
+              ],
+              "reference_energy": 9.152237940071525e-12,
+              "residual_energy": 1.2466707563817887e-15,
+              "residual_relative_db": -38.65775530202376
+            },
+            {
+              "hz": [
+                16000,
+                22050
+              ],
+              "reference_energy": 9.846284891986248e-13,
+              "residual_energy": 9.126615479596543e-16,
+              "residual_relative_db": -30.329626441532515
+            }
+          ]
+        },
+        "reference_delay_output_frames": 26,
+        "max_timestamp_error_ns": 0,
+        "passed": true,
+        "first_fragment_queued_frames": 2,
+        "actual_initial_peak": null,
+        "reference_initial_peak": null,
+        "carrier_db": -0.001592436010054004,
+        "reference_carrier_db": -0.0015924291958216332,
+        "image_or_alias_frequency": 4897.0,
+        "image_or_alias_db": -80.93114626972888,
+        "reference_image_or_alias_db": -80.93115176803202,
+        "quality_gate": {
+          "output_relative_100db_diagnostic": true,
+          "max_abs_error_2e_minus6_gate": true,
+          "input_referenced_snr_db": 147.1440407361127,
+          "passed": true
+        }
+      },
+      {
+        "rate": 48000,
+        "case": "tone-low",
+        "channels": 1,
+        "source_frequency": 997.0,
+        "frames": 48000,
+        "chunk_bit_exact": true,
+        "full_fixed_gain_reference": {
+          "exact_float_match": true,
+          "fixed_gain_snr_db": null,
+          "max_abs_error": 0.0,
+          "rms_error_dbfs": -300.0,
+          "reference_peak": 0.20000000298023224,
+          "actual_peak": 0.20000000298023224,
+          "actual_clipped_samples": 0,
+          "active_bin_abs_magnitude_error_p95_db": 0.0,
+          "bands": [
+            {
+              "hz": [
+                0,
+                300
+              ],
+              "reference_energy": 3.029005535782913e-08,
+              "residual_energy": 0.0,
+              "residual_relative_db": -224.81300067046217
+            },
+            {
+              "hz": [
+                300,
+                3400
+              ],
+              "reference_energy": 23.6646506436399,
+              "residual_energy": 0.0,
+              "residual_relative_db": -313.7410009745141
+            },
+            {
+              "hz": [
+                3400,
+                8000
+              ],
+              "reference_energy": 1.839159211715359e-11,
+              "residual_energy": 0.0,
+              "residual_relative_db": -192.64619326723937
+            },
+            {
+              "hz": [
+                8000,
+                16000
+              ],
+              "reference_energy": 1.7595928011639101e-12,
+              "residual_energy": 0.0,
+              "residual_relative_db": -182.45412176525338
+            },
+            {
+              "hz": [
+                16000,
+                22050
+              ],
+              "reference_energy": 7.783370742543269e-14,
+              "residual_energy": 0.0,
+              "residual_relative_db": -168.9116771753678
+            }
+          ]
+        },
+        "reference_delay_output_frames": 0,
+        "max_timestamp_error_ns": 0,
+        "passed": true,
+        "first_fragment_queued_frames": 1,
+        "actual_initial_peak": null,
+        "reference_initial_peak": null,
+        "carrier_db": -0.0021856103568157485,
+        "reference_carrier_db": -0.0021856103568157485,
+        "image_or_alias_frequency": null,
+        "quality_gate": {
+          "output_relative_100db_diagnostic": true,
+          "max_abs_error_2e_minus6_gate": true,
+          "input_referenced_snr_db": 283.01029995613584,
+          "passed": true
+        }
+      },
+      {
+        "rate": 48000,
+        "case": "tone-high",
+        "channels": 1,
+        "source_frequency": 16800.0,
+        "frames": 48000,
+        "chunk_bit_exact": true,
+        "full_fixed_gain_reference": {
+          "exact_float_match": true,
+          "fixed_gain_snr_db": null,
+          "max_abs_error": 0.0,
+          "rms_error_dbfs": -300.0,
+          "reference_peak": 0.20000000298023224,
+          "actual_peak": 0.20000000298023224,
+          "actual_clipped_samples": 0,
+          "active_bin_abs_magnitude_error_p95_db": 0.0,
+          "bands": [
+            {
+              "hz": [
+                0,
+                300
+              ],
+              "reference_energy": 1.2307610896902058e-14,
+              "residual_energy": 0.0,
+              "residual_relative_db": -160.90173757643709
+            },
+            {
+              "hz": [
+                300,
+                3400
+              ],
+              "reference_energy": 1.4907465050970375e-13,
+              "residual_energy": 0.0,
+              "residual_relative_db": -171.734037998599
+            },
+            {
+              "hz": [
+                3400,
+                8000
+              ],
+              "reference_energy": 6.482845414483701e-13,
+              "residual_energy": 0.0,
+              "residual_relative_db": -178.11765665835952
+            },
+            {
+              "hz": [
+                8000,
+                16000
+              ],
+              "reference_energy": 1.2684683355344728e-09,
+              "residual_energy": 0.0,
+              "residual_relative_db": -211.03279630505884
+            },
+            {
+              "hz": [
+                16000,
+                22050
+              ],
+              "reference_energy": 23.664649796279118,
+              "residual_energy": 0.0,
+              "residual_relative_db": -313.74100081900616
+            }
+          ]
+        },
+        "reference_delay_output_frames": 0,
+        "max_timestamp_error_ns": 0,
+        "passed": true,
+        "first_fragment_queued_frames": 1,
+        "actual_initial_peak": null,
+        "reference_initial_peak": null,
+        "carrier_db": -1.6154316183550065e-07,
+        "reference_carrier_db": -1.6154316183550065e-07,
+        "image_or_alias_frequency": null,
+        "quality_gate": {
+          "output_relative_100db_diagnostic": true,
+          "max_abs_error_2e_minus6_gate": true,
+          "input_referenced_snr_db": 283.0102997950967,
+          "passed": true
+        }
+      },
+      {
+        "rate": 48000,
+        "case": "impulse",
+        "channels": 1,
+        "source_frequency": 0.0,
+        "frames": 48000,
+        "chunk_bit_exact": true,
+        "full_fixed_gain_reference": {
+          "exact_float_match": true,
+          "fixed_gain_snr_db": null,
+          "max_abs_error": 0.0,
+          "rms_error_dbfs": -300.0,
+          "reference_peak": 0.5,
+          "actual_peak": 0.5,
+          "actual_clipped_samples": 0,
+          "active_bin_abs_magnitude_error_p95_db": 0.0,
+          "bands": [
+            {
+              "hz": [
+                0,
+                300
+              ],
+              "reference_energy": 7.82025975643614e-05,
+              "residual_energy": 0.0,
+              "residual_relative_db": -258.9322117875208
+            },
+            {
+              "hz": [
+                300,
+                3400
+              ],
+              "reference_energy": 0.0008080935081650678,
+              "residual_energy": 0.0,
+              "residual_relative_db": -269.07461617866693
+            },
+            {
+              "hz": [
+                3400,
+                8000
+              ],
+              "reference_energy": 0.001199106495986875,
+              "residual_energy": 0.0,
+              "residual_relative_db": -270.78857755713994
+            },
+            {
+              "hz": [
+                8000,
+                16000
+              ],
+              "reference_energy": 0.0020854026017163045,
+              "residual_energy": 0.0,
+              "residual_relative_db": -273.19189911024364
+            },
+            {
+              "hz": [
+                16000,
+                22050
+              ],
+              "reference_energy": 0.001577085717547955,
+              "residual_energy": 0.0,
+              "residual_relative_db": -271.9785529868489
+            }
+          ]
+        },
+        "reference_delay_output_frames": 0,
+        "max_timestamp_error_ns": 0,
+        "passed": true,
+        "first_fragment_queued_frames": 1,
+        "actual_initial_peak": 4800,
+        "reference_initial_peak": 4800,
+        "quality_gate": {
+          "output_relative_100db_diagnostic": true,
+          "max_abs_error_2e_minus6_gate": true,
+          "input_referenced_snr_db": 247.1669877129645,
+          "passed": true
+        }
+      },
+      {
+        "rate": 48000,
+        "case": "initial-marker",
+        "channels": 1,
+        "source_frequency": 997.0,
+        "frames": 48000,
+        "chunk_bit_exact": true,
+        "full_fixed_gain_reference": {
+          "exact_float_match": true,
+          "fixed_gain_snr_db": null,
+          "max_abs_error": 0.0,
+          "rms_error_dbfs": -300.0,
+          "reference_peak": 0.20000000298023224,
+          "actual_peak": 0.20000000298023224,
+          "actual_clipped_samples": 0,
+          "active_bin_abs_magnitude_error_p95_db": 0.0,
+          "bands": [
+            {
+              "hz": [
+                0,
+                300
+              ],
+              "reference_energy": 9.927154211242572e-05,
+              "residual_energy": 0.0,
+              "residual_relative_db": -259.96824768386165
+            },
+            {
+              "hz": [
+                300,
+                3400
+              ],
+              "reference_energy": 23.662826805944107,
+              "residual_energy": 0.0,
+              "residual_relative_db": -313.74066625029457
+            },
+            {
+              "hz": [
+                3400,
+                8000
+              ],
+              "reference_energy": 0.0012823881490729217,
+              "residual_energy": 0.0,
+              "residual_relative_db": -271.08019495921246
+            },
+            {
+              "hz": [
+                8000,
+                16000
+              ],
+              "reference_energy": 0.00012979539982551743,
+              "residual_energy": 0.0,
+              "residual_relative_db": -261.13259300586105
+            },
+            {
+              "hz": [
+                16000,
+                22050
+              ],
+              "reference_energy": 4.65571599870706e-05,
+              "residual_energy": 0.0,
+              "residual_relative_db": -256.679864802423
+            }
+          ]
+        },
+        "reference_delay_output_frames": 0,
+        "max_timestamp_error_ns": 0,
+        "passed": true,
+        "first_fragment_queued_frames": 1,
+        "actual_initial_peak": null,
+        "reference_initial_peak": null,
+        "initial_marker_power_ratio": 210774.01077840195,
+        "following_marker_power_ratio": 245596.3792323054,
+        "quality_gate": {
+          "output_relative_100db_diagnostic": true,
+          "max_abs_error_2e_minus6_gate": true,
+          "input_referenced_snr_db": 283.0102530968136,
+          "passed": true
+        }
+      },
+      {
+        "rate": 48000,
+        "case": "channel-average2",
+        "channels": 2,
+        "source_frequency": 997.0,
+        "frames": 48000,
+        "chunk_bit_exact": true,
+        "full_fixed_gain_reference": {
+          "exact_float_match": true,
+          "fixed_gain_snr_db": null,
+          "max_abs_error": 0.0,
+          "rms_error_dbfs": -300.0,
+          "reference_peak": 0.15000000596046448,
+          "actual_peak": 0.15000000596046448,
+          "actual_clipped_samples": 0,
+          "active_bin_abs_magnitude_error_p95_db": 0.0,
+          "bands": [
+            {
+              "hz": [
+                0,
+                300
+              ],
+              "reference_energy": 1.7038185394268306e-08,
+              "residual_energy": 0.0,
+              "residual_relative_db": -222.31423339537463
+            },
+            {
+              "hz": [
+                300,
+                3400
+              ],
+              "reference_energy": 13.311365987441672,
+              "residual_energy": 0.0,
+              "residual_relative_db": -311.2422262424767
+            },
+            {
+              "hz": [
+                3400,
+                8000
+              ],
+              "reference_energy": 1.0347354989853709e-11,
+              "residual_energy": 0.0,
+              "residual_relative_db": -190.14829348815476
+            },
+            {
+              "hz": [
+                8000,
+                16000
+              ],
+              "reference_energy": 9.936846440063486e-13,
+              "residual_energy": 0.0,
+              "residual_relative_db": -179.97248578463723
+            },
+            {
+              "hz": [
+                16000,
+                22050
+              ],
+              "reference_energy": 4.6591846452828805e-14,
+              "residual_energy": 0.0,
+              "residual_relative_db": -166.68309922046944
+            }
+          ]
+        },
+        "reference_delay_output_frames": 0,
+        "max_timestamp_error_ns": 0,
+        "passed": true,
+        "first_fragment_queued_frames": 1,
+        "actual_initial_peak": null,
+        "reference_initial_peak": null,
+        "carrier_db": -0.0021856085051921675,
+        "reference_carrier_db": -0.0021856085051921675,
+        "image_or_alias_frequency": null,
+        "quality_gate": {
+          "output_relative_100db_diagnostic": true,
+          "max_abs_error_2e_minus6_gate": true,
+          "input_referenced_snr_db": 280.5115252242322,
+          "passed": true
+        }
+      },
+      {
+        "rate": 48000,
+        "case": "channel-average6",
+        "channels": 6,
+        "source_frequency": 997.0,
+        "frames": 48000,
+        "chunk_bit_exact": true,
+        "full_fixed_gain_reference": {
+          "exact_float_match": true,
+          "fixed_gain_snr_db": null,
+          "max_abs_error": 0.0,
+          "rms_error_dbfs": -300.0,
+          "reference_peak": 0.05666666850447655,
+          "actual_peak": 0.05666666850447655,
+          "actual_clipped_samples": 0,
+          "active_bin_abs_magnitude_error_p95_db": 0.0,
+          "bands": [
+            {
+              "hz": [
+                0,
+                300
+              ],
+              "reference_energy": 2.431625743367811e-09,
+              "residual_energy": 0.0,
+              "residual_relative_db": -213.85896732567068
+            },
+            {
+              "hz": [
+                300,
+                3400
+              ],
+              "reference_energy": 1.8997455653563826,
+              "residual_energy": 0.0,
+              "residual_relative_db": -302.7869543939438
+            },
+            {
+              "hz": [
+                3400,
+                8000
+              ],
+              "reference_energy": 1.476477542744444e-12,
+              "residual_energy": 0.0,
+              "residual_relative_db": -181.69226845722812
+            },
+            {
+              "hz": [
+                8000,
+                16000
+              ],
+              "reference_energy": 1.413702899488815e-13,
+              "residual_energy": 0.0,
+              "residual_relative_db": -171.5035814873255
+            },
+            {
+              "hz": [
+                16000,
+                22050
+              ],
+              "reference_energy": 6.361017313401917e-15,
+              "residual_energy": 0.0,
+              "residual_relative_db": -158.03526577639838
+            }
+          ]
+        },
+        "reference_delay_output_frames": 0,
+        "max_timestamp_error_ns": 0,
+        "passed": true,
+        "first_fragment_queued_frames": 1,
+        "actual_initial_peak": null,
+        "reference_initial_peak": null,
+        "carrier_db": -0.00218561129293783,
+        "reference_carrier_db": -0.00218561129293783,
+        "image_or_alias_frequency": null,
+        "quality_gate": {
+          "output_relative_100db_diagnostic": true,
+          "max_abs_error_2e_minus6_gate": true,
+          "input_referenced_snr_db": 272.0562533757248,
+          "passed": true
+        }
+      },
+      {
+        "rate": 96000,
+        "case": "tone-low",
+        "channels": 1,
+        "source_frequency": 997.0,
+        "frames": 48000,
+        "chunk_bit_exact": true,
+        "full_fixed_gain_reference": {
+          "exact_float_match": false,
+          "fixed_gain_snr_db": 134.69436441080964,
+          "max_abs_error": 1.4901161193847656e-07,
+          "rms_error_dbfs": -151.68637464920778,
+          "reference_peak": 0.1999969780445099,
+          "actual_peak": 0.19999699294567108,
+          "actual_clipped_samples": 0,
+          "active_bin_abs_magnitude_error_p95_db": 4.0795153561890246e-05,
+          "bands": [
+            {
+              "hz": [
+                0,
+                300
+              ],
+              "reference_energy": 3.7052701577399366e-08,
+              "residual_energy": 1.2139538677468577e-14,
+              "residual_relative_db": -64.84617695496678
+            },
+            {
+              "hz": [
+                300,
+                3400
+              ],
+              "reference_energy": 23.66393294769686,
+              "residual_energy": 1.1297894050920704e-13,
+              "residual_relative_db": -143.2108942836648
+            },
+            {
+              "hz": [
+                3400,
+                8000
+              ],
+              "reference_energy": 5.780906470556062e-10,
+              "residual_energy": 1.5492470408408452e-13,
+              "residual_relative_db": -35.71875267676881
+            },
+            {
+              "hz": [
+                8000,
+                16000
+              ],
+              "reference_energy": 4.094420890832513e-11,
+              "residual_energy": 2.6085679029821547e-13,
+              "residual_relative_db": -21.95790338218427
+            },
+            {
+              "hz": [
+                16000,
+                22050
+              ],
+              "reference_energy": 3.7379907474070585e-12,
+              "residual_energy": 1.9857827092267322e-13,
+              "residual_relative_db": -12.747064971905875
+            }
+          ]
+        },
+        "reference_delay_output_frames": 24,
+        "max_timestamp_error_ns": 0,
+        "passed": true,
+        "first_fragment_queued_frames": 1,
+        "actual_initial_peak": null,
+        "reference_initial_peak": null,
+        "carrier_db": -0.002322348031812494,
+        "reference_carrier_db": -0.0023223369329203594,
+        "image_or_alias_frequency": null,
+        "quality_gate": {
+          "output_relative_100db_diagnostic": true,
+          "max_abs_error_2e_minus6_gate": true,
+          "input_referenced_snr_db": 134.69667460512667,
+          "passed": true
+        }
+      },
+      {
+        "rate": 96000,
+        "case": "tone-high",
+        "channels": 1,
+        "source_frequency": 16800.0,
+        "frames": 48000,
+        "chunk_bit_exact": true,
+        "full_fixed_gain_reference": {
+          "exact_float_match": false,
+          "fixed_gain_snr_db": 139.12468365504805,
+          "max_abs_error": 4.470348358154297e-08,
+          "rms_error_dbfs": -156.1170468238304,
+          "reference_peak": 0.2067330777645111,
+          "actual_peak": 0.2067330777645111,
+          "actual_clipped_samples": 0,
+          "active_bin_abs_magnitude_error_p95_db": 2.112685939604984e-07,
+          "bands": [
+            {
+              "hz": [
+                0,
+                300
+              ],
+              "reference_energy": 5.2818326100524424e-11,
+              "residual_energy": 4.250309053795162e-23,
+              "residual_relative_db": -120.94364123421038
+            },
+            {
+              "hz": [
+                300,
+                3400
+              ],
+              "reference_energy": 5.640737301252227e-10,
+              "residual_energy": 1.744910654692417e-13,
+              "residual_relative_db": -35.09562679839287
+            },
+            {
+              "hz": [
+                3400,
+                8000
+              ],
+              "reference_energy": 1.0885802389089213e-09,
+              "residual_energy": 6.889469261080438e-14,
+              "residual_relative_db": -41.98674679492146
+            },
+            {
+              "hz": [
+                8000,
+                16000
+              ],
+              "reference_energy": 1.8882202668301757e-08,
+              "residual_energy": 2.1019797878630733e-14,
+              "residual_relative_db": -59.534241190938104
+            },
+            {
+              "hz": [
+                16000,
+                22050
+              ],
+              "reference_energy": 23.66208859488773,
+              "residual_energy": 2.502826098559846e-14,
+              "residual_relative_db": -149.7562240110531
+            }
+          ]
+        },
+        "reference_delay_output_frames": 24,
+        "max_timestamp_error_ns": 0,
+        "passed": true,
+        "first_fragment_queued_frames": 1,
+        "actual_initial_peak": null,
+        "reference_initial_peak": null,
+        "carrier_db": -0.0004704156171137482,
+        "reference_carrier_db": -0.0004702043485481157,
+        "image_or_alias_frequency": null,
+        "quality_gate": {
+          "output_relative_100db_diagnostic": true,
+          "max_abs_error_2e_minus6_gate": true,
+          "input_referenced_snr_db": 139.12734679533136,
+          "passed": true
+        }
+      },
+      {
+        "rate": 96000,
+        "case": "tone-alias",
+        "channels": 1,
+        "source_frequency": 36000.0,
+        "frames": 48000,
+        "chunk_bit_exact": true,
+        "full_fixed_gain_reference": {
+          "exact_float_match": false,
+          "fixed_gain_snr_db": 77.98222137391838,
+          "max_abs_error": 2.6542693376541138e-08,
+          "rms_error_dbfs": -156.9775384101552,
+          "reference_peak": 0.023383712396025658,
+          "actual_peak": 0.023383714258670807,
+          "actual_clipped_samples": 0,
+          "active_bin_abs_magnitude_error_p95_db": null,
+          "bands": [
+            {
+              "hz": [
+                0,
+                300
+              ],
+              "reference_energy": 3.4045627021961053e-12,
+              "residual_energy": 2.3314615696872777e-24,
+              "residual_relative_db": -121.64433075817384
+            },
+            {
+              "hz": [
+                300,
+                3400
+              ],
+              "reference_energy": 3.5563391297703553e-11,
+              "residual_energy": 9.885075244317195e-23,
+              "residual_relative_db": -115.56023188788029
+            },
+            {
+              "hz": [
+                3400,
+                8000
+              ],
+              "reference_energy": 5.696473178994985e-11,
+              "residual_energy": 5.683838183632941e-22,
+              "residual_relative_db": -110.00964351649864
+            },
+            {
+              "hz": [
+                8000,
+                16000
+              ],
+              "reference_energy": 5.3644408027413435e-09,
+              "residual_energy": 2.37420037113779e-13,
+              "residual_relative_db": -43.540070886219304
+            },
+            {
+              "hz": [
+                16000,
+                22050
+              ],
+              "reference_energy": 1.577360615834082e-10,
+              "residual_energy": 4.364589933911743e-22,
+              "residual_relative_db": -115.57987546276712
+            }
+          ]
+        },
+        "reference_delay_output_frames": 24,
+        "max_timestamp_error_ns": 0,
+        "passed": true,
+        "first_fragment_queued_frames": 1,
+        "actual_initial_peak": null,
+        "reference_initial_peak": null,
+        "carrier_db": -96.61228201887005,
+        "reference_carrier_db": -96.55731334794993,
+        "image_or_alias_frequency": 12000,
+        "image_or_alias_db": -96.61228201887005,
+        "reference_image_or_alias_db": -96.55731334794993,
+        "quality_gate": {
+          "output_relative_100db_diagnostic": false,
+          "max_abs_error_2e_minus6_gate": true,
+          "input_referenced_snr_db": 139.98783863174575,
+          "input_relative_120db_gate": true,
+          "alias_below_minus90db_gate": true,
+          "alias_no_more_than_C_plus_half_db_gate": true,
+          "passed": true
+        }
+      },
+      {
+        "rate": 96000,
+        "case": "impulse",
+        "channels": 1,
+        "source_frequency": 0.0,
+        "frames": 48000,
+        "chunk_bit_exact": true,
+        "full_fixed_gain_reference": {
+          "exact_float_match": true,
+          "fixed_gain_snr_db": null,
+          "max_abs_error": 0.0,
+          "rms_error_dbfs": -300.0,
+          "reference_peak": 0.22374999523162842,
+          "actual_peak": 0.22374999523162842,
+          "actual_clipped_samples": 0,
+          "active_bin_abs_magnitude_error_p95_db": 0.0,
+          "bands": [
+            {
+              "hz": [
+                0,
+                300
+              ],
+              "reference_energy": 1.955163370156381e-05,
+              "residual_energy": 0.0,
+              "residual_relative_db": -252.91183052163126
+            },
+            {
+              "hz": [
+                300,
+                3400
+              ],
+              "reference_energy": 0.00020202427472489637,
+              "residual_energy": 0.0,
+              "residual_relative_db": -263.05403556306396
+            },
+            {
+              "hz": [
+                3400,
+                8000
+              ],
+              "reference_energy": 0.00029978012877131407,
+              "residual_energy": 0.0,
+              "residual_relative_db": -264.7680284181785
+            },
+            {
+              "hz": [
+                8000,
+                16000
+              ],
+              "reference_energy": 0.0005213573644220774,
+              "residual_energy": 0.0,
+              "residual_relative_db": -267.1713551253749
+            },
+            {
+              "hz": [
+                16000,
+                22050
+              ],
+              "reference_energy": 0.0003249995024254122,
+              "residual_energy": 0.0,
+              "residual_relative_db": -265.11882696074065
+            }
+          ]
+        },
+        "reference_delay_output_frames": 24,
+        "max_timestamp_error_ns": 0,
+        "passed": true,
+        "first_fragment_queued_frames": 1,
+        "actual_initial_peak": 4824,
+        "reference_initial_peak": 4824,
+        "quality_gate": {
+          "output_relative_100db_diagnostic": true,
+          "max_abs_error_2e_minus6_gate": true,
+          "input_referenced_snr_db": 244.1566877563247,
+          "passed": true
+        }
+      },
+      {
+        "rate": 96000,
+        "case": "initial-marker",
+        "channels": 1,
+        "source_frequency": 997.0,
+        "frames": 48000,
+        "chunk_bit_exact": true,
+        "full_fixed_gain_reference": {
+          "exact_float_match": false,
+          "fixed_gain_snr_db": 140.00926544581625,
+          "max_abs_error": 1.043081283569336e-07,
+          "rms_error_dbfs": -157.00129100089373,
+          "reference_peak": 0.208975151181221,
+          "actual_peak": 0.20897512137889862,
+          "actual_clipped_samples": 0,
+          "active_bin_abs_magnitude_error_p95_db": 2.8765860240138156e-05,
+          "bands": [
+            {
+              "hz": [
+                0,
+                300
+              ],
+              "reference_energy": 8.564995264087084e-05,
+              "residual_energy": 1.0469689124724166e-15,
+              "residual_relative_db": -109.12793340749438
+            },
+            {
+              "hz": [
+                300,
+                3400
+              ],
+              "reference_energy": 23.662133690212496,
+              "residual_energy": 9.393397204924055e-14,
+              "residual_relative_db": -144.0123121667511
+            },
+            {
+              "hz": [
+                3400,
+                8000
+              ],
+              "reference_energy": 0.001420097957637987,
+              "residual_energy": 1.1682891409185388e-14,
+              "residual_relative_db": -110.84767962822964
+            },
+            {
+              "hz": [
+                8000,
+                16000
+              ],
+              "reference_energy": 0.00014458174395320881,
+              "residual_energy": 9.894677029522839e-14,
+              "residual_relative_db": -91.64711835886123
+            },
+            {
+              "hz": [
+                16000,
+                22050
+              ],
+              "reference_energy": 3.407621335361748e-05,
+              "residual_energy": 2.1941261796517595e-14,
+              "residual_relative_db": -91.91189729396784
+            }
+          ]
+        },
+        "reference_delay_output_frames": 24,
+        "max_timestamp_error_ns": 0,
+        "passed": true,
+        "first_fragment_queued_frames": 1,
+        "actual_initial_peak": null,
+        "reference_initial_peak": null,
+        "initial_marker_power_ratio": 209926.308040988,
+        "following_marker_power_ratio": 245596.3711265893,
+        "quality_gate": {
+          "output_relative_100db_diagnostic": true,
+          "max_abs_error_2e_minus6_gate": true,
+          "input_referenced_snr_db": 140.01158926076596,
+          "passed": true
+        }
+      },
+      {
+        "rate": 96000,
+        "case": "channel-average2",
+        "channels": 2,
+        "source_frequency": 997.0,
+        "frames": 48000,
+        "chunk_bit_exact": true,
+        "full_fixed_gain_reference": {
+          "exact_float_match": false,
+          "fixed_gain_snr_db": 133.60284124634634,
+          "max_abs_error": 1.341104507446289e-07,
+          "rms_error_dbfs": -153.09362621484829,
+          "reference_peak": 0.14999772608280182,
+          "actual_peak": 0.1499977856874466,
+          "actual_clipped_samples": 0,
+          "active_bin_abs_magnitude_error_p95_db": 3.895682024694887e-05,
+          "bands": [
+            {
+              "hz": [
+                0,
+                300
+              ],
+              "reference_energy": 2.084223852155106e-08,
+              "residual_energy": 7.482118798072069e-15,
+              "residual_relative_db": -64.4491976224713
+            },
+            {
+              "hz": [
+                300,
+                3400
+              ],
+              "reference_energy": 13.310962289395018,
+              "residual_energy": 7.223209976611026e-14,
+              "residual_relative_db": -142.65479213202582
+            },
+            {
+              "hz": [
+                3400,
+                8000
+              ],
+              "reference_energy": 3.2517922511354783e-10,
+              "residual_energy": 1.1022812228558178e-13,
+              "residual_relative_db": -34.698303824658986
+            },
+            {
+              "hz": [
+                8000,
+                16000
+              ],
+              "reference_energy": 2.3037143922955064e-11,
+              "residual_energy": 1.932141248796299e-13,
+              "residual_relative_db": -20.763897632911483
+            },
+            {
+              "hz": [
+                16000,
+                22050
+              ],
+              "reference_energy": 2.1075138938960347e-12,
+              "residual_energy": 1.506434104211415e-13,
+              "residual_relative_db": -11.45820307288383
+            }
+          ]
+        },
+        "reference_delay_output_frames": 24,
+        "max_timestamp_error_ns": 0,
+        "passed": true,
+        "first_fragment_queued_frames": 1,
+        "actual_initial_peak": null,
+        "reference_initial_peak": null,
+        "carrier_db": -0.0023222980775799425,
+        "reference_carrier_db": -0.002322333230040285,
+        "image_or_alias_frequency": null,
+        "quality_gate": {
+          "output_relative_100db_diagnostic": true,
+          "max_abs_error_2e_minus6_gate": true,
+          "input_referenced_snr_db": 133.605151439453,
+          "passed": true
+        }
+      },
+      {
+        "rate": 96000,
+        "case": "channel-average6",
+        "channels": 6,
+        "source_frequency": 997.0,
+        "frames": 48000,
+        "chunk_bit_exact": true,
+        "full_fixed_gain_reference": {
+          "exact_float_match": false,
+          "fixed_gain_snr_db": 135.46192331718447,
+          "max_abs_error": 2.9802322387695312e-08,
+          "rms_error_dbfs": -163.40798013940002,
+          "reference_peak": 0.0566658154129982,
+          "actual_peak": 0.0566658154129982,
+          "actual_clipped_samples": 0,
+          "active_bin_abs_magnitude_error_p95_db": 1.0008893668431938e-05,
+          "bands": [
+            {
+              "hz": [
+                0,
+                300
+              ],
+              "reference_energy": 2.9745349976733027e-09,
+              "residual_energy": 6.400031163513055e-16,
+              "residual_relative_db": -66.67236994408528
+            },
+            {
+              "hz": [
+                300,
+                3400
+              ],
+              "reference_energy": 1.8996879489826146,
+              "residual_energy": 6.8100463631611054e-15,
+              "residual_relative_db": -144.45532199085085
+            },
+            {
+              "hz": [
+                3400,
+                8000
+              ],
+              "reference_energy": 4.640769831172782e-11,
+              "residual_energy": 1.0223169105248907e-14,
+              "residual_relative_db": -36.57004484516006
+            },
+            {
+              "hz": [
+                8000,
+                16000
+              ],
+              "reference_energy": 3.2868021859101065e-12,
+              "residual_energy": 1.8133460817764932e-14,
+              "residual_relative_db": -22.582928689041793
+            },
+            {
+              "hz": [
+                16000,
+                22050
+              ],
+              "reference_energy": 2.9994956553746754e-13,
+              "residual_energy": 1.3841450987405471e-14,
+              "residual_relative_db": -13.358666179949612
+            }
+          ]
+        },
+        "reference_delay_output_frames": 24,
+        "max_timestamp_error_ns": 0,
+        "passed": true,
+        "first_fragment_queued_frames": 1,
+        "actual_initial_peak": null,
+        "reference_initial_peak": null,
+        "carrier_db": -0.0023223314502491643,
+        "reference_carrier_db": -0.0023223394042969797,
+        "image_or_alias_frequency": null,
+        "quality_gate": {
+          "output_relative_100db_diagnostic": true,
+          "max_abs_error_2e_minus6_gate": true,
+          "input_referenced_snr_db": 135.464233516865,
+          "passed": true
+        }
+      }
+    ],
+    "artifacts": {
+      "11025-tone-high.png": {
+        "bytes": 95994,
+        "sha256": "7224b8320a7d06ae887ef3d830b9fc516c274528986c613d8f7ac6487783c19f"
+      },
+      "11025-tone-high-actual.wav": {
+        "bytes": 384044,
+        "sha256": "0dea76632f6ee32099bca3265045e1b7350fd333a0100ad1ec437ca53a4edfb4"
+      },
+      "11025-tone-high-reference.wav": {
+        "bytes": 384044,
+        "sha256": "4b32fec0c0500d17b27a4c024cac1e8d198b416a0e0e8f488eca6fabd616ffa8"
+      },
+      "44100-tone-high.png": {
+        "bytes": 76233,
+        "sha256": "fe5b01bd7f22f02f11e13ea57e2b48edf30a0ef621b49bdebd2fbf8e3433f6c8"
+      },
+      "44100-tone-high-actual.wav": {
+        "bytes": 384044,
+        "sha256": "a82d40b5a1d73ef9f78cac53302264f5d8771855dba0e0dc28c70ea4ada8b459"
+      },
+      "44100-tone-high-reference.wav": {
+        "bytes": 384044,
+        "sha256": "05170cdc174f0add4b10cc87cd48881007e845c853d4f928fab3ebeb199de1ae"
+      },
+      "96000-tone-high.png": {
+        "bytes": 64437,
+        "sha256": "878b3bc7f0b7006f52a9cf2f2daf2243d2319961d65ed3c4dfb96c6f1b82e717"
+      },
+      "96000-tone-high-actual.wav": {
+        "bytes": 384044,
+        "sha256": "5f94db432e4da252620e1232fa40bf778c95a0edac7d2ab457f33a6f12cb5110"
+      },
+      "96000-tone-high-reference.wav": {
+        "bytes": 384044,
+        "sha256": "61522dff2f834a440a44b79a337aa6ef03837520fa8438c23b7d11e2148ec43c"
+      }
+    },
+    "limits": [
+      "Synthetic actual converter only; not microphone startup, native TX or hardware quality",
+      "No fitted alignment; steady carrier/image metrics isolate filter response from whole-PCM group-delay differences"
+    ]
+  },
+  "stopband_policy": {
+    "strict_output_relative_100db_diagnostic": "remains false and retained;77.982dB",
+    "mono_C_checked_against_stereo_C_duplication": "same numerical result",
+    "ordinary_gate": "output-referenced>=100dB and maxabs<=2e-6",
+    "stopband_only_gate": "fixed-input-referenced>=120dB, unchanged maxabs<=2e-6, attenuation<=-90dB and no worse than C+0.5dB",
+    "result": "input139.988dB,attenuation-96.612dB vs C-96.557dB, maxerror2.65e-8, RMSerror-156.98dBFS",
+    "not_a_perceptual_or_bitexact_claim": true
+  },
+  "negative_controls": {
+    "passed": 5,
+    "log": "/home/ambiso/.cache/nuschl-capture-quality/negative-controls-marker.log",
+    "sha256": "e86423f8e750f918d6593c5a3361994cca8210d6e291e25d1395670843f45ed7"
+  },
+  "native_tests": {
+    "passed": 81,
+    "ignored": 8,
+    "new_capture_fixture_actually_invoked": true,
+    "no_callback_allocation": true
+  },
+  "actual_private_unmute": {
+    "passed": true,
+    "host_devices": false,
+    "GUI_timing": false,
+    "rates": [
+      {
+        "capture_rate": 44100,
+        "physical_devices": false,
+        "null_source_sample_spec": "s16le 1ch 44100Hz",
+        "actual_stream_observations": [
+          {
+            "worker_log": "/home/ambiso/.cache/nuschl-capture-quality/unmute-final/44100/baseline/continuous-0.stderr",
+            "actual_capture_sample_specs": [
+              "s16le 1ch 44100Hz"
+            ],
+            "packets": true
+          },
+          {
+            "worker_log": "/home/ambiso/.cache/nuschl-capture-quality/unmute-final/44100/baseline/continuous-1.stderr",
+            "actual_capture_sample_specs": [
+              "s16le 1ch 44100Hz"
+            ],
+            "packets": true
+          },
+          {
+            "worker_log": "/home/ambiso/.cache/nuschl-capture-quality/unmute-final/44100/baseline/push_to_talk-0.stderr",
+            "actual_capture_sample_specs": [
+              "s16le 1ch 44100Hz"
+            ],
+            "packets": true
+          },
+          {
+            "worker_log": "/home/ambiso/.cache/nuschl-capture-quality/unmute-final/44100/baseline/push_to_talk-1.stderr",
+            "actual_capture_sample_specs": [
+              "s16le 1ch 44100Hz"
+            ],
+            "packets": true
+          },
+          {
+            "worker_log": "/home/ambiso/.cache/nuschl-capture-quality/unmute-final/44100/baseline/voice_activity-0.stderr",
+            "actual_capture_sample_specs": [
+              "s16le 1ch 44100Hz"
+            ],
+            "packets": true
+          },
+          {
+            "worker_log": "/home/ambiso/.cache/nuschl-capture-quality/unmute-final/44100/baseline/voice_activity-1.stderr",
+            "actual_capture_sample_specs": [
+              "s16le 1ch 44100Hz"
+            ],
+            "packets": true
+          },
+          {
+            "worker_log": "/home/ambiso/.cache/nuschl-capture-quality/unmute-final/44100/baseline/muted.stderr",
+            "actual_capture_sample_specs": [],
+            "packets": false
+          },
+          {
+            "worker_log": "/home/ambiso/.cache/nuschl-capture-quality/unmute-final/44100/current/continuous-0.stderr",
+            "actual_capture_sample_specs": [
+              "s16le 1ch 44100Hz"
+            ],
+            "packets": true
+          },
+          {
+            "worker_log": "/home/ambiso/.cache/nuschl-capture-quality/unmute-final/44100/current/continuous-1.stderr",
+            "actual_capture_sample_specs": [
+              "s16le 1ch 44100Hz"
+            ],
+            "packets": true
+          },
+          {
+            "worker_log": "/home/ambiso/.cache/nuschl-capture-quality/unmute-final/44100/current/push_to_talk-0.stderr",
+            "actual_capture_sample_specs": [
+              "s16le 1ch 44100Hz"
+            ],
+            "packets": true
+          },
+          {
+            "worker_log": "/home/ambiso/.cache/nuschl-capture-quality/unmute-final/44100/current/push_to_talk-1.stderr",
+            "actual_capture_sample_specs": [
+              "s16le 1ch 44100Hz"
+            ],
+            "packets": true
+          },
+          {
+            "worker_log": "/home/ambiso/.cache/nuschl-capture-quality/unmute-final/44100/current/voice_activity-0.stderr",
+            "actual_capture_sample_specs": [
+              "s16le 1ch 44100Hz"
+            ],
+            "packets": true
+          },
+          {
+            "worker_log": "/home/ambiso/.cache/nuschl-capture-quality/unmute-final/44100/current/voice_activity-1.stderr",
+            "actual_capture_sample_specs": [
+              "s16le 1ch 44100Hz"
+            ],
+            "packets": true
+          },
+          {
+            "worker_log": "/home/ambiso/.cache/nuschl-capture-quality/unmute-final/44100/current/muted.stderr",
+            "actual_capture_sample_specs": [],
+            "packets": false
+          }
+        ],
+        "cases": {
+          "baseline": [
+            {
+              "mode": "continuous",
+              "trial": 0,
+              "first_packet_ms": 1909.8246450303122,
+              "first_private_murmur_echo_ms": null,
+              "first_usable_packet_ms": 1930.6371409911662,
+              "first_usable_private_murmur_echo_ms": null,
+              "first_six_packet_rms": [
+                0.00013934117555400153,
+                0.2535149070786833,
+                0.3223596135034339,
+                0.34379341519200546,
+                0.34546685728122567,
+                0.3182869088893218
+              ],
+              "rms": 0.2906984021641183,
+              "stages_ms": {
+                "worker_start": 0.0,
+                "configure": 7.309,
+                "set_state_unmuted": 7.332,
+                "host_connect_begin": 7.351,
+                "host_connected": 7.947,
+                "devices_listed": 8.656,
+                "capture_create_begin": 8.786,
+                "capture_created": 8.967,
+                "capture_play_ready": 9.064,
+                "graph_inspected": 9.088,
+                "playback_create_begin": 9.191,
+                "playback_created": 9.39,
+                "playback_play_ready": 9.483,
+                "reference_create_begin": 9.497,
+                "reference_play_ready": 10.834,
+                "pipeline_ready": 11.728,
+                "first_capture_callback": 1868.024,
+                "first_processed_pcm": 1878.891,
+                "first_open_gate": 1879.193,
+                "first_packet": 1908.018
+              }
+            },
+            {
+              "mode": "continuous",
+              "trial": 1,
+              "first_packet_ms": 35.269271931611,
+              "first_private_murmur_echo_ms": null,
+              "first_usable_packet_ms": 55.95356598496437,
+              "first_usable_private_murmur_echo_ms": null,
+              "first_six_packet_rms": [
+                7.704133248857129e-05,
+                0.006480008911978519,
+                0.01858078641486964,
+                0.08942872093624,
+                0.186755414237261,
+                0.3239633533191946
+              ],
+              "rms": 0.15717006566333458,
+              "stages_ms": {
+                "worker_start": 0.0,
+                "configure": 7.381,
+                "set_state_unmuted": 7.406,
+                "host_connect_begin": 7.424,
+                "host_connected": 7.906,
+                "devices_listed": 8.762,
+                "capture_create_begin": 8.963,
+                "capture_created": 9.191,
+                "capture_play_ready": 9.307,
+                "graph_inspected": 9.331,
+                "playback_create_begin": 9.478,
+                "playback_created": 9.714,
+                "playback_play_ready": 9.825,
+                "reference_create_begin": 9.842,
+                "reference_play_ready": 11.933,
+                "pipeline_ready": 12.84,
+                "first_capture_callback": 9.631,
+                "first_processed_pcm": 20.971,
+                "first_open_gate": 21.203,
+                "first_packet": 33.596
+              }
+            },
+            {
+              "mode": "push_to_talk",
+              "trial": 0,
+              "first_packet_ms": 34.16031505912542,
+              "first_private_murmur_echo_ms": null,
+              "first_usable_packet_ms": 54.74233801942319,
+              "first_usable_private_murmur_echo_ms": null,
+              "first_six_packet_rms": [
+                0.0006811339871112406,
+                0.2793678173228821,
+                0.2946968308543293,
+                0.2124146845446761,
+                0.12067768376570624,
+                0.05046749416280594
+              ],
+              "rms": 0.1945606730350834,
+              "stages_ms": {
+                "worker_start": 0.0,
+                "configure": 7.058,
+                "set_state_unmuted": 7.081,
+                "host_connect_begin": 7.099,
+                "host_connected": 7.538,
+                "devices_listed": 8.332,
+                "capture_create_begin": 8.444,
+                "capture_created": 8.624,
+                "capture_play_ready": 8.744,
+                "graph_inspected": 8.767,
+                "playback_create_begin": 8.882,
+                "playback_created": 9.113,
+                "playback_play_ready": 9.254,
+                "reference_create_begin": 9.271,
+                "reference_play_ready": 10.646,
+                "pipeline_ready": 11.582,
+                "first_capture_callback": 9.153,
+                "first_processed_pcm": 19.717,
+                "first_open_gate": 19.964,
+                "first_packet": 32.356
+              }
+            },
+            {
+              "mode": "push_to_talk",
+              "trial": 1,
+              "first_packet_ms": 34.305116976611316,
+              "first_private_murmur_echo_ms": null,
+              "first_usable_packet_ms": 54.96804101858288,
+              "first_usable_private_murmur_echo_ms": null,
+              "first_six_packet_rms": [
+                0.0002585007134779913,
+                0.1612724659228332,
+                0.32571495817119867,
+                0.3452635869268185,
+                0.33047293086043406,
+                0.33879314420329665
+              ],
+              "rms": 0.2814543201871693,
+              "stages_ms": {
+                "worker_start": 0.0,
+                "configure": 7.039,
+                "set_state_unmuted": 7.065,
+                "host_connect_begin": 7.083,
+                "host_connected": 7.578,
+                "devices_listed": 8.386,
+                "capture_create_begin": 8.519,
+                "capture_created": 8.699,
+                "capture_play_ready": 8.836,
+                "graph_inspected": 8.857,
+                "playback_create_begin": 8.956,
+                "playback_created": 9.142,
+                "playback_play_ready": 9.241,
+                "reference_create_begin": 9.255,
+                "reference_play_ready": 10.626,
+                "pipeline_ready": 11.583,
+                "first_capture_callback": 9.237,
+                "first_processed_pcm": 19.758,
+                "first_open_gate": 19.968,
+                "first_packet": 32.359
+              }
+            },
+            {
+              "mode": "voice_activity",
+              "trial": 0,
+              "first_packet_ms": 42.62606811244041,
+              "first_private_murmur_echo_ms": null,
+              "first_usable_packet_ms": 63.21470101829618,
+              "first_usable_private_murmur_echo_ms": null,
+              "first_six_packet_rms": [
+                0.0002444124397425047,
+                0.08975426567689525,
+                0.059780381933148274,
+                0.0059499101161784715,
+                0.03359905314050264,
+                0.11889848309729474
+              ],
+              "rms": 0.06699593158528246,
+              "stages_ms": {
+                "worker_start": 0.0,
+                "configure": 7.306,
+                "set_state_unmuted": 7.341,
+                "host_connect_begin": 7.362,
+                "host_connected": 7.845,
+                "devices_listed": 8.717,
+                "capture_create_begin": 8.847,
+                "capture_created": 9.021,
+                "capture_play_ready": 9.255,
+                "graph_inspected": 9.281,
+                "playback_create_begin": 9.431,
+                "playback_created": 9.637,
+                "playback_play_ready": 9.741,
+                "reference_create_begin": 9.762,
+                "reference_play_ready": 11.058,
+                "pipeline_ready": 11.954,
+                "first_capture_callback": 9.574,
+                "first_processed_pcm": 20.115,
+                "first_open_gate": 40.842,
+                "first_packet": 40.981
+              }
+            },
+            {
+              "mode": "voice_activity",
+              "trial": 1,
+              "first_packet_ms": 34.3690289882943,
+              "first_private_murmur_echo_ms": null,
+              "first_usable_packet_ms": 54.99688198324293,
+              "first_usable_private_murmur_echo_ms": null,
+              "first_six_packet_rms": [
+                0.0004000526229023833,
+                0.29567542325465584,
+                0.3358837975515548,
+                0.28644765791438453,
+                0.2217575585213965,
+                0.15757878872990125
+              ],
+              "rms": 0.24368757031636654,
+              "stages_ms": {
+                "worker_start": 0.0,
+                "configure": 7.218,
+                "set_state_unmuted": 7.246,
+                "host_connect_begin": 7.267,
+                "host_connected": 7.704,
+                "devices_listed": 8.517,
+                "capture_create_begin": 8.646,
+                "capture_created": 8.881,
+                "capture_play_ready": 9.025,
+                "graph_inspected": 9.047,
+                "playback_create_begin": 9.173,
+                "playback_created": 9.415,
+                "playback_play_ready": 9.583,
+                "reference_create_begin": 9.606,
+                "reference_play_ready": 10.998,
+                "pipeline_ready": 11.879,
+                "first_capture_callback": 9.45,
+                "first_processed_pcm": 20.017,
+                "first_open_gate": 32.513,
+                "first_packet": 32.658
+              }
+            }
+          ],
+          "current": [
+            {
+              "mode": "continuous",
+              "trial": 0,
+              "first_packet_ms": 35.68805905524641,
+              "first_private_murmur_echo_ms": null,
+              "first_usable_packet_ms": 56.30196200218052,
+              "first_usable_private_murmur_echo_ms": null,
+              "first_six_packet_rms": [
+                0.00027085179923543577,
+                0.21449545638239498,
+                0.32027551919894937,
+                0.23427926657805526,
+                0.14391594610763936,
+                0.06182647839017198
+              ],
+              "rms": 0.1949383962905908,
+              "stages_ms": {
+                "worker_start": 0.0,
+                "configure": 7.197,
+                "set_state_unmuted": 7.222,
+                "host_connect_begin": 7.241,
+                "host_connected": 7.667,
+                "devices_listed": 9.239,
+                "capture_create_begin": 9.371,
+                "capture_created": 9.57,
+                "capture_play_ready": 9.674,
+                "graph_inspected": 9.706,
+                "playback_create_begin": 9.817,
+                "playback_created": 10.034,
+                "playback_play_ready": 10.17,
+                "reference_create_begin": 10.22,
+                "reference_play_ready": 11.876,
+                "pipeline_ready": 12.962,
+                "first_capture_callback": 10.071,
+                "first_processed_pcm": 21.127,
+                "first_open_gate": 21.379,
+                "first_packet": 33.812
+              }
+            },
+            {
+              "mode": "continuous",
+              "trial": 1,
+              "first_packet_ms": 34.59217201452702,
+              "first_private_murmur_echo_ms": null,
+              "first_usable_packet_ms": 55.31299801077694,
+              "first_usable_private_murmur_echo_ms": null,
+              "first_six_packet_rms": [
+                0.00024121641642289388,
+                0.15081021320118845,
+                0.3260103693476904,
+                0.33543871392296143,
+                0.33544662099682476,
+                0.31176266470215225
+              ],
+              "rms": 0.27424625945550873,
+              "stages_ms": {
+                "worker_start": 0.0,
+                "configure": 7.424,
+                "set_state_unmuted": 7.455,
+                "host_connect_begin": 7.473,
+                "host_connected": 7.906,
+                "devices_listed": 8.665,
+                "capture_create_begin": 8.792,
+                "capture_created": 8.992,
+                "capture_play_ready": 9.152,
+                "graph_inspected": 9.172,
+                "playback_create_begin": 9.274,
+                "playback_created": 9.555,
+                "playback_play_ready": 9.656,
+                "reference_create_begin": 9.67,
+                "reference_play_ready": 11.132,
+                "pipeline_ready": 12.044,
+                "first_capture_callback": 9.323,
+                "first_processed_pcm": 20.211,
+                "first_open_gate": 20.501,
+                "first_packet": 32.959
+              }
+            },
+            {
+              "mode": "push_to_talk",
+              "trial": 0,
+              "first_packet_ms": 34.20793602708727,
+              "first_private_murmur_echo_ms": null,
+              "first_usable_packet_ms": 54.93348103482276,
+              "first_usable_private_murmur_echo_ms": null,
+              "first_six_packet_rms": [
+                0.0002707860005553749,
+                0.1051628367055971,
+                0.05974742205927163,
+                0.0064410322168307116,
+                0.033261578534512476,
+                0.1134230280721551
+              ],
+              "rms": 0.06909130769187201,
+              "stages_ms": {
+                "worker_start": 0.0,
+                "configure": 6.993,
+                "set_state_unmuted": 7.014,
+                "host_connect_begin": 7.032,
+                "host_connected": 7.518,
+                "devices_listed": 8.315,
+                "capture_create_begin": 8.459,
+                "capture_created": 8.691,
+                "capture_play_ready": 8.819,
+                "graph_inspected": 8.843,
+                "playback_create_begin": 8.977,
+                "playback_created": 9.193,
+                "playback_play_ready": 9.31,
+                "reference_create_begin": 9.33,
+                "reference_play_ready": 10.631,
+                "pipeline_ready": 11.654,
+                "first_capture_callback": 9.234,
+                "first_processed_pcm": 19.823,
+                "first_open_gate": 20.042,
+                "first_packet": 32.463
+              }
+            },
+            {
+              "mode": "push_to_talk",
+              "trial": 1,
+              "first_packet_ms": 34.7934749443084,
+              "first_private_murmur_echo_ms": null,
+              "first_usable_packet_ms": 55.430887965485454,
+              "first_usable_private_murmur_echo_ms": null,
+              "first_six_packet_rms": [
+                0.000719478729649681,
+                0.2862917563794007,
+                0.33226854650067456,
+                0.2982397832149032,
+                0.2754856462739308,
+                0.19370442769792434
+              ],
+              "rms": 0.2564912569396644,
+              "stages_ms": {
+                "worker_start": 0.0,
+                "configure": 6.936,
+                "set_state_unmuted": 6.961,
+                "host_connect_begin": 6.979,
+                "host_connected": 7.977,
+                "devices_listed": 8.778,
+                "capture_create_begin": 8.899,
+                "capture_created": 9.117,
+                "capture_play_ready": 9.23,
+                "graph_inspected": 9.25,
+                "playback_create_begin": 9.368,
+                "playback_created": 9.59,
+                "playback_play_ready": 9.718,
+                "reference_create_begin": 9.738,
+                "reference_play_ready": 11.149,
+                "pipeline_ready": 12.154,
+                "first_capture_callback": 9.622,
+                "first_processed_pcm": 20.319,
+                "first_open_gate": 20.536,
+                "first_packet": 32.981
+              }
+            },
+            {
+              "mode": "voice_activity",
+              "trial": 0,
+              "first_packet_ms": 31.97130106855184,
+              "first_private_murmur_echo_ms": null,
+              "first_usable_packet_ms": 52.63870500493795,
+              "first_usable_private_murmur_echo_ms": null,
+              "first_six_packet_rms": [
+                4.52829650542235e-05,
+                0.038925408676501426,
+                0.14328672517598914,
+                0.2610869299385249,
+                0.3383287717732919,
+                0.3223851122338048
+              ],
+              "rms": 0.2267932900562354,
+              "stages_ms": {
+                "worker_start": 0.0,
+                "configure": 7.056,
+                "set_state_unmuted": 7.081,
+                "host_connect_begin": 7.099,
+                "host_connected": 7.656,
+                "devices_listed": 8.52,
+                "capture_create_begin": 9.481,
+                "capture_created": 9.686,
+                "capture_play_ready": 9.807,
+                "graph_inspected": 9.828,
+                "playback_create_begin": 9.939,
+                "playback_created": 10.167,
+                "playback_play_ready": 10.293,
+                "reference_create_begin": 10.308,
+                "reference_play_ready": 12.474,
+                "pipeline_ready": 13.437,
+                "first_capture_callback": 10.17,
+                "first_processed_pcm": 21.569,
+                "first_open_gate": 30.119,
+                "first_packet": 30.283
+              }
+            },
+            {
+              "mode": "voice_activity",
+              "trial": 1,
+              "first_packet_ms": 34.99579895287752,
+              "first_private_murmur_echo_ms": null,
+              "first_usable_packet_ms": 34.99579895287752,
+              "first_usable_private_murmur_echo_ms": null,
+              "first_six_packet_rms": [
+                0.0010008644343316706,
+                0.30064927502653177,
+                0.216297132032723,
+                0.12346352910969312,
+                0.033947695865980065,
+                0.0062843404695794745
+              ],
+              "rms": 0.16000553096645492,
+              "stages_ms": {
+                "worker_start": 0.0,
+                "configure": 7.041,
+                "set_state_unmuted": 7.069,
+                "host_connect_begin": 7.088,
+                "host_connected": 7.51,
+                "devices_listed": 8.673,
+                "capture_create_begin": 8.819,
+                "capture_created": 9.436,
+                "capture_play_ready": 9.576,
+                "graph_inspected": 9.598,
+                "playback_create_begin": 9.697,
+                "playback_created": 9.879,
+                "playback_play_ready": 9.961,
+                "reference_create_begin": 9.98,
+                "reference_play_ready": 11.388,
+                "pipeline_ready": 12.378,
+                "first_capture_callback": 10.117,
+                "first_processed_pcm": 20.543,
+                "first_open_gate": 33.089,
+                "first_packet": 33.213
+              }
+            }
+          ]
+        }
+      },
+      {
+        "capture_rate": 96000,
+        "physical_devices": false,
+        "null_source_sample_spec": "s16le 1ch 96000Hz",
+        "actual_stream_observations": [
+          {
+            "worker_log": "/home/ambiso/.cache/nuschl-capture-quality/unmute-final/96000/baseline/continuous-0.stderr",
+            "actual_capture_sample_specs": [
+              "s16le 1ch 96000Hz"
+            ],
+            "packets": true
+          },
+          {
+            "worker_log": "/home/ambiso/.cache/nuschl-capture-quality/unmute-final/96000/baseline/continuous-1.stderr",
+            "actual_capture_sample_specs": [
+              "s16le 1ch 96000Hz"
+            ],
+            "packets": true
+          },
+          {
+            "worker_log": "/home/ambiso/.cache/nuschl-capture-quality/unmute-final/96000/baseline/push_to_talk-0.stderr",
+            "actual_capture_sample_specs": [
+              "s16le 1ch 96000Hz"
+            ],
+            "packets": true
+          },
+          {
+            "worker_log": "/home/ambiso/.cache/nuschl-capture-quality/unmute-final/96000/baseline/push_to_talk-1.stderr",
+            "actual_capture_sample_specs": [
+              "s16le 1ch 96000Hz"
+            ],
+            "packets": true
+          },
+          {
+            "worker_log": "/home/ambiso/.cache/nuschl-capture-quality/unmute-final/96000/baseline/voice_activity-0.stderr",
+            "actual_capture_sample_specs": [
+              "s16le 1ch 96000Hz"
+            ],
+            "packets": true
+          },
+          {
+            "worker_log": "/home/ambiso/.cache/nuschl-capture-quality/unmute-final/96000/baseline/voice_activity-1.stderr",
+            "actual_capture_sample_specs": [
+              "s16le 1ch 96000Hz"
+            ],
+            "packets": true
+          },
+          {
+            "worker_log": "/home/ambiso/.cache/nuschl-capture-quality/unmute-final/96000/baseline/muted.stderr",
+            "actual_capture_sample_specs": [],
+            "packets": false
+          },
+          {
+            "worker_log": "/home/ambiso/.cache/nuschl-capture-quality/unmute-final/96000/current/continuous-0.stderr",
+            "actual_capture_sample_specs": [
+              "s16le 1ch 96000Hz"
+            ],
+            "packets": true
+          },
+          {
+            "worker_log": "/home/ambiso/.cache/nuschl-capture-quality/unmute-final/96000/current/continuous-1.stderr",
+            "actual_capture_sample_specs": [
+              "s16le 1ch 96000Hz"
+            ],
+            "packets": true
+          },
+          {
+            "worker_log": "/home/ambiso/.cache/nuschl-capture-quality/unmute-final/96000/current/push_to_talk-0.stderr",
+            "actual_capture_sample_specs": [
+              "s16le 1ch 96000Hz"
+            ],
+            "packets": true
+          },
+          {
+            "worker_log": "/home/ambiso/.cache/nuschl-capture-quality/unmute-final/96000/current/push_to_talk-1.stderr",
+            "actual_capture_sample_specs": [
+              "s16le 1ch 96000Hz"
+            ],
+            "packets": true
+          },
+          {
+            "worker_log": "/home/ambiso/.cache/nuschl-capture-quality/unmute-final/96000/current/voice_activity-0.stderr",
+            "actual_capture_sample_specs": [
+              "s16le 1ch 96000Hz"
+            ],
+            "packets": true
+          },
+          {
+            "worker_log": "/home/ambiso/.cache/nuschl-capture-quality/unmute-final/96000/current/voice_activity-1.stderr",
+            "actual_capture_sample_specs": [
+              "s16le 1ch 96000Hz"
+            ],
+            "packets": true
+          },
+          {
+            "worker_log": "/home/ambiso/.cache/nuschl-capture-quality/unmute-final/96000/current/muted.stderr",
+            "actual_capture_sample_specs": [],
+            "packets": false
+          }
+        ],
+        "cases": {
+          "baseline": [
+            {
+              "mode": "continuous",
+              "trial": 0,
+              "first_packet_ms": 1767.177457921207,
+              "first_private_murmur_echo_ms": null,
+              "first_usable_packet_ms": 1787.88832295686,
+              "first_usable_private_murmur_echo_ms": null,
+              "first_six_packet_rms": [
+                0.00014427828493798384,
+                0.2538045442522358,
+                0.32235592316449246,
+                0.343125081133624,
+                0.34536238765151656,
+                0.31852865732679725
+              ],
+              "rms": 0.2906316724952351,
+              "stages_ms": {
+                "worker_start": 0.0,
+                "configure": 6.867,
+                "set_state_unmuted": 6.893,
+                "host_connect_begin": 6.911,
+                "host_connected": 7.394,
+                "devices_listed": 8.232,
+                "capture_create_begin": 8.354,
+                "capture_created": 8.549,
+                "capture_play_ready": 9.175,
+                "graph_inspected": 9.212,
+                "playback_create_begin": 9.344,
+                "playback_created": 9.565,
+                "playback_play_ready": 9.67,
+                "reference_create_begin": 9.69,
+                "reference_play_ready": 11.15,
+                "pipeline_ready": 12.024,
+                "first_capture_callback": 1727.608,
+                "first_processed_pcm": 1748.697,
+                "first_open_gate": 1748.968,
+                "first_packet": 1765.508
+              }
+            },
+            {
+              "mode": "continuous",
+              "trial": 1,
+              "first_packet_ms": 34.71677401103079,
+              "first_private_murmur_echo_ms": null,
+              "first_usable_packet_ms": 55.44862896203995,
+              "first_usable_private_murmur_echo_ms": null,
+              "first_six_packet_rms": [
+                1.1284639813806047e-05,
+                0.00420672623883198,
+                0.02038820962881954,
+                0.10414602153045432,
+                0.22802800627768646,
+                0.3325756966730509
+              ],
+              "rms": 0.17023666625711784,
+              "stages_ms": {
+                "worker_start": 0.0,
+                "configure": 7.126,
+                "set_state_unmuted": 7.15,
+                "host_connect_begin": 7.169,
+                "host_connected": 7.678,
+                "devices_listed": 8.828,
+                "capture_create_begin": 9.026,
+                "capture_created": 9.293,
+                "capture_play_ready": 9.405,
+                "graph_inspected": 9.428,
+                "playback_create_begin": 9.583,
+                "playback_created": 9.923,
+                "playback_play_ready": 10.066,
+                "reference_create_begin": 10.08,
+                "reference_play_ready": 11.389,
+                "pipeline_ready": 12.284,
+                "first_capture_callback": 9.628,
+                "first_processed_pcm": 20.41,
+                "first_open_gate": 20.64,
+                "first_packet": 32.994
+              }
+            },
+            {
+              "mode": "push_to_talk",
+              "trial": 0,
+              "first_packet_ms": 31.618134933523834,
+              "first_private_murmur_echo_ms": null,
+              "first_usable_packet_ms": 52.26038792170584,
+              "first_usable_private_murmur_echo_ms": null,
+              "first_six_packet_rms": [
+                0.0008569176931720274,
+                0.2978803543501308,
+                0.2934033952053239,
+                0.21860120736775848,
+                0.12376457694956262,
+                0.05152874861885947
+              ],
+              "rms": 0.20024083934022857,
+              "stages_ms": {
+                "worker_start": 0.0,
+                "configure": 6.757,
+                "set_state_unmuted": 6.782,
+                "host_connect_begin": 6.8,
+                "host_connected": 7.479,
+                "devices_listed": 8.215,
+                "capture_create_begin": 8.342,
+                "capture_created": 8.531,
+                "capture_play_ready": 8.666,
+                "graph_inspected": 8.692,
+                "playback_create_begin": 8.819,
+                "playback_created": 9.029,
+                "playback_play_ready": 9.143,
+                "reference_create_begin": 9.19,
+                "reference_play_ready": 12.101,
+                "pipeline_ready": 13.175,
+                "first_capture_callback": 9.154,
+                "first_processed_pcm": 21.349,
+                "first_open_gate": 21.569,
+                "first_packet": 29.895
+              }
+            },
+            {
+              "mode": "push_to_talk",
+              "trial": 1,
+              "first_packet_ms": 34.73873494658619,
+              "first_private_murmur_echo_ms": null,
+              "first_usable_packet_ms": 55.39199896156788,
+              "first_usable_private_murmur_echo_ms": null,
+              "first_six_packet_rms": [
+                2.2715544651920883e-05,
+                0.1693592549254319,
+                0.3141580065557198,
+                0.33085998426369706,
+                0.31203263770805306,
+                0.3405113346436284
+              ],
+              "rms": 0.2739094972281785,
+              "stages_ms": {
+                "worker_start": 0.0,
+                "configure": 7.311,
+                "set_state_unmuted": 7.349,
+                "host_connect_begin": 7.372,
+                "host_connected": 7.802,
+                "devices_listed": 8.619,
+                "capture_create_begin": 8.831,
+                "capture_created": 9.094,
+                "capture_play_ready": 9.214,
+                "graph_inspected": 9.236,
+                "playback_create_begin": 9.341,
+                "playback_created": 9.582,
+                "playback_play_ready": 9.662,
+                "reference_create_begin": 9.675,
+                "reference_play_ready": 11.054,
+                "pipeline_ready": 12.104,
+                "first_capture_callback": 9.564,
+                "first_processed_pcm": 20.278,
+                "first_open_gate": 20.496,
+                "first_packet": 32.95
+              }
+            },
+            {
+              "mode": "voice_activity",
+              "trial": 0,
+              "first_packet_ms": 33.921652007848024,
+              "first_private_murmur_echo_ms": null,
+              "first_usable_packet_ms": 54.60941605269909,
+              "first_usable_private_murmur_echo_ms": null,
+              "first_six_packet_rms": [
+                0.00048402211777504733,
+                0.15637599697555365,
+                0.07389746816542506,
+                0.015934528916950314,
+                0.01997342241805052,
+                0.09383947048928049
+              ],
+              "rms": 0.08100742306045418,
+              "stages_ms": {
+                "worker_start": 0.0,
+                "configure": 6.634,
+                "set_state_unmuted": 6.666,
+                "host_connect_begin": 6.686,
+                "host_connected": 7.149,
+                "devices_listed": 7.93,
+                "capture_create_begin": 8.131,
+                "capture_created": 8.4,
+                "capture_play_ready": 8.519,
+                "graph_inspected": 8.541,
+                "playback_create_begin": 8.656,
+                "playback_created": 8.881,
+                "playback_play_ready": 9.035,
+                "reference_create_begin": 9.05,
+                "reference_play_ready": 10.388,
+                "pipeline_ready": 11.356,
+                "first_capture_callback": 8.922,
+                "first_processed_pcm": 19.527,
+                "first_open_gate": 32.11,
+                "first_packet": 32.272
+              }
+            },
+            {
+              "mode": "voice_activity",
+              "trial": 1,
+              "first_packet_ms": 34.04790395870805,
+              "first_private_murmur_echo_ms": null,
+              "first_usable_packet_ms": 54.705836926586926,
+              "first_usable_private_murmur_echo_ms": null,
+              "first_six_packet_rms": [
+                0.0005450805061928784,
+                0.20481133281986386,
+                0.34219462125761146,
+                0.31572255080783307,
+                0.27579050856802906,
+                0.20271677845514133
+              ],
+              "rms": 0.25029328262190575,
+              "stages_ms": {
+                "worker_start": 0.0,
+                "configure": 7.013,
+                "set_state_unmuted": 7.048,
+                "host_connect_begin": 7.068,
+                "host_connected": 7.512,
+                "devices_listed": 8.316,
+                "capture_create_begin": 8.449,
+                "capture_created": 8.638,
+                "capture_play_ready": 8.755,
+                "graph_inspected": 8.776,
+                "playback_create_begin": 8.871,
+                "playback_created": 9.094,
+                "playback_play_ready": 9.192,
+                "reference_create_begin": 9.206,
+                "reference_play_ready": 10.484,
+                "pipeline_ready": 11.563,
+                "first_capture_callback": 9.012,
+                "first_processed_pcm": 19.723,
+                "first_open_gate": 32.231,
+                "first_packet": 32.376
+              }
+            }
+          ],
+          "current": [
+            {
+              "mode": "continuous",
+              "trial": 0,
+              "first_packet_ms": 30.68818198516965,
+              "first_private_murmur_echo_ms": null,
+              "first_usable_packet_ms": 51.27413396257907,
+              "first_usable_private_murmur_echo_ms": null,
+              "first_six_packet_rms": [
+                0.000719697476531067,
+                0.28533373960155295,
+                0.32036737930718806,
+                0.27928170568550265,
+                0.20880869225137333,
+                0.1317784337795971
+              ],
+              "rms": 0.23202586613829515,
+              "stages_ms": {
+                "worker_start": 0.0,
+                "configure": 7.14,
+                "set_state_unmuted": 7.179,
+                "host_connect_begin": 7.202,
+                "host_connected": 7.633,
+                "devices_listed": 8.476,
+                "capture_create_begin": 8.622,
+                "capture_created": 8.812,
+                "capture_play_ready": 8.915,
+                "graph_inspected": 8.939,
+                "playback_create_begin": 9.056,
+                "playback_created": 9.395,
+                "playback_play_ready": 9.514,
+                "reference_create_begin": 9.531,
+                "reference_play_ready": 11.271,
+                "pipeline_ready": 12.207,
+                "first_capture_callback": 8.983,
+                "first_processed_pcm": 20.373,
+                "first_open_gate": 20.666,
+                "first_packet": 29.001
+              }
+            },
+            {
+              "mode": "continuous",
+              "trial": 1,
+              "first_packet_ms": 34.36252905521542,
+              "first_private_murmur_echo_ms": null,
+              "first_usable_packet_ms": 55.19243609160185,
+              "first_usable_private_murmur_echo_ms": null,
+              "first_six_packet_rms": [
+                7.923490128153165e-05,
+                0.06413145046256293,
+                0.1888081433277127,
+                0.3129978527213442,
+                0.33457194016674835,
+                0.3180461928251057
+              ],
+              "rms": 0.2418059772934762,
+              "stages_ms": {
+                "worker_start": 0.0,
+                "configure": 7.123,
+                "set_state_unmuted": 7.151,
+                "host_connect_begin": 7.173,
+                "host_connected": 7.61,
+                "devices_listed": 8.315,
+                "capture_create_begin": 8.446,
+                "capture_created": 8.977,
+                "capture_play_ready": 9.117,
+                "graph_inspected": 9.151,
+                "playback_create_begin": 9.28,
+                "playback_created": 9.471,
+                "playback_play_ready": 9.584,
+                "reference_create_begin": 9.603,
+                "reference_play_ready": 11.053,
+                "pipeline_ready": 11.943,
+                "first_capture_callback": 9.109,
+                "first_processed_pcm": 20.108,
+                "first_open_gate": 20.331,
+                "first_packet": 32.737
+              }
+            },
+            {
+              "mode": "push_to_talk",
+              "trial": 0,
+              "first_packet_ms": 34.25837692338973,
+              "first_private_murmur_echo_ms": null,
+              "first_usable_packet_ms": 54.870629915967584,
+              "first_usable_private_murmur_echo_ms": null,
+              "first_six_packet_rms": [
+                0.0006639265414639785,
+                0.29284983619170807,
+                0.19402188401753587,
+                0.08992172641620719,
+                0.016935416727111595,
+                0.01617850075549622
+              ],
+              "rms": 0.1483466817636785,
+              "stages_ms": {
+                "worker_start": 0.0,
+                "configure": 6.891,
+                "set_state_unmuted": 6.916,
+                "host_connect_begin": 6.934,
+                "host_connected": 7.433,
+                "devices_listed": 8.181,
+                "capture_create_begin": 8.327,
+                "capture_created": 8.518,
+                "capture_play_ready": 8.619,
+                "graph_inspected": 8.639,
+                "playback_create_begin": 8.768,
+                "playback_created": 8.972,
+                "playback_play_ready": 9.091,
+                "reference_create_begin": 9.109,
+                "reference_play_ready": 10.643,
+                "pipeline_ready": 11.641,
+                "first_capture_callback": 8.699,
+                "first_processed_pcm": 19.808,
+                "first_open_gate": 20.028,
+                "first_packet": 32.514
+              }
+            },
+            {
+              "mode": "push_to_talk",
+              "trial": 1,
+              "first_packet_ms": 31.107046990655363,
+              "first_private_murmur_echo_ms": null,
+              "first_usable_packet_ms": 51.787702017463744,
+              "first_usable_private_murmur_echo_ms": null,
+              "first_six_packet_rms": [
+                0.0001711191446076609,
+                0.2116595951452245,
+                0.3409699267748523,
+                0.32350334471124703,
+                0.31399694478633683,
+                0.2831879018248154
+              ],
+              "rms": 0.27218381888535953,
+              "stages_ms": {
+                "worker_start": 0.0,
+                "configure": 7.323,
+                "set_state_unmuted": 7.355,
+                "host_connect_begin": 7.374,
+                "host_connected": 7.862,
+                "devices_listed": 8.543,
+                "capture_create_begin": 8.679,
+                "capture_created": 8.897,
+                "capture_play_ready": 9.01,
+                "graph_inspected": 9.032,
+                "playback_create_begin": 9.153,
+                "playback_created": 9.343,
+                "playback_play_ready": 9.431,
+                "reference_create_begin": 9.449,
+                "reference_play_ready": 11.573,
+                "pipeline_ready": 12.558,
+                "first_capture_callback": 9.339,
+                "first_processed_pcm": 20.687,
+                "first_open_gate": 20.955,
+                "first_packet": 29.316
+              }
+            },
+            {
+              "mode": "voice_activity",
+              "trial": 0,
+              "first_packet_ms": 35.202372004278004,
+              "first_private_murmur_echo_ms": null,
+              "first_usable_packet_ms": 55.879364954307675,
+              "first_usable_private_murmur_echo_ms": null,
+              "first_six_packet_rms": [
+                2.459008645150163e-05,
+                0.014180338258638231,
+                0.00790234911518362,
+                0.06876145526492435,
+                0.18973254044610316,
+                0.30777097657001623
+              ],
+              "rms": 0.1503956329000745,
+              "stages_ms": {
+                "worker_start": 0.0,
+                "configure": 7.352,
+                "set_state_unmuted": 7.377,
+                "host_connect_begin": 7.395,
+                "host_connected": 7.85,
+                "devices_listed": 9.349,
+                "capture_create_begin": 9.488,
+                "capture_created": 9.82,
+                "capture_play_ready": 9.97,
+                "graph_inspected": 9.994,
+                "playback_create_begin": 10.121,
+                "playback_created": 10.334,
+                "playback_play_ready": 10.422,
+                "reference_create_begin": 10.437,
+                "reference_play_ready": 11.762,
+                "pipeline_ready": 12.733,
+                "first_capture_callback": 10.187,
+                "first_processed_pcm": 20.864,
+                "first_open_gate": 33.376,
+                "first_packet": 33.508
+              }
+            },
+            {
+              "mode": "voice_activity",
+              "trial": 1,
+              "first_packet_ms": 34.766965080052614,
+              "first_private_murmur_echo_ms": null,
+              "first_usable_packet_ms": 55.42679806239903,
+              "first_usable_private_murmur_echo_ms": null,
+              "first_six_packet_rms": [
+                0.0009315116723903323,
+                0.2930371314767944,
+                0.2786898299563607,
+                0.22826140663525873,
+                0.1342123461288733,
+                0.04963925253019685
+              ],
+              "rms": 0.1983767158982833,
+              "stages_ms": {
+                "worker_start": 0.0,
+                "configure": 7.08,
+                "set_state_unmuted": 7.103,
+                "host_connect_begin": 7.121,
+                "host_connected": 7.576,
+                "devices_listed": 8.441,
+                "capture_create_begin": 8.58,
+                "capture_created": 9.31,
+                "capture_play_ready": 9.439,
+                "graph_inspected": 9.461,
+                "playback_create_begin": 9.569,
+                "playback_created": 9.797,
+                "playback_play_ready": 9.993,
+                "reference_create_begin": 10.012,
+                "reference_play_ready": 11.257,
+                "pipeline_ready": 12.29,
+                "first_capture_callback": 9.736,
+                "first_processed_pcm": 20.461,
+                "first_open_gate": 32.942,
+                "first_packet": 33.07
+              }
+            }
+          ]
+        }
+      }
+    ],
+    "limits": [
+      "Private worker-command timing, not GUI clicks or physical hardware latency",
+      "No network/Mumble server in this fixture; actual codec packets decoded independently",
+      "Original microphone consent/startup/mute assertions retained"
+    ]
+  },
+  "actual_private_non48k_AEC": {
+    "passed": true,
+    "host_devices": false,
+    "rows": [
+      {
+        "rate": 44100,
+        "actual_capture_specs": [
+          "s16le 1ch 44100Hz"
+        ],
+        "mode": "on",
+        "result": {
+          "kind": "echo_test",
+          "echo_db": -32.46943,
+          "reduction_db": 47.187435,
+          "transmitted": 0.0
+        }
+      },
+      {
+        "rate": 44100,
+        "actual_capture_specs": [
+          "s16le 1ch 44100Hz"
+        ],
+        "mode": "on",
+        "result": {
+          "kind": "echo_test",
+          "echo_db": -32.453697,
+          "reduction_db": 45.691246,
+          "transmitted": 0.0
+        }
+      },
+      {
+        "rate": 44100,
+        "actual_capture_specs": [
+          "s16le 1ch 44100Hz"
+        ],
+        "mode": "off",
+        "result": {
+          "kind": "echo_test",
+          "echo_db": -32.473095,
+          "reduction_db": 0.0,
+          "transmitted": 1.0
+        }
+      },
+      {
+        "rate": 96000,
+        "actual_capture_specs": [
+          "s16le 1ch 96000Hz"
+        ],
+        "mode": "on",
+        "result": {
+          "kind": "echo_test",
+          "echo_db": -32.374786,
+          "reduction_db": 42.83093,
+          "transmitted": 0.0
+        }
+      },
+      {
+        "rate": 96000,
+        "actual_capture_specs": [
+          "s16le 1ch 96000Hz"
+        ],
+        "mode": "on",
+        "result": {
+          "kind": "echo_test",
+          "echo_db": -32.358616,
+          "reduction_db": 45.861805,
+          "transmitted": 0.0
+        }
+      },
+      {
+        "rate": 96000,
+        "actual_capture_specs": [
+          "s16le 1ch 96000Hz"
+        ],
+        "mode": "off",
+        "result": {
+          "kind": "echo_test",
+          "echo_db": -32.37073,
+          "reduction_db": 0.0,
+          "transmitted": 1.0
+        }
+      }
+    ],
+    "limits": [
+      "Synthetic private monitor/loopback, not physical devices",
+      "Original two-attempt convergence policy retained; every attempt preserved",
+      "Not a general non48k AEC reliability claim"
+    ]
+  },
+  "original_private_DSP": {
+    "exit_code": 0,
+    "log": "/home/ambiso/.cache/nuschl-capture-quality/private-dsp.log",
+    "sha256": "b79be23428e3ec4488af596cf816d902461b297c14bc32ea3b73bda068d48c18",
+    "echo_reduction_db": 46,
+    "transmitted": 0,
+    "double_talk_delta_db": 2.1,
+    "double_talk_gate_fraction": 1,
+    "effects_lufs": -25,
+    "effects_half_volume_reduction_db": 6,
+    "effects_isolation_dbfs": -92
+  },
+  "build_guard": {
+    "exit_code": 0,
+    "elapsed_seconds": 25.001669618068263,
+    "minimum_tmp_free": 22480367616,
+    "aborted": false,
+    "client_tmpdir": "/home/ambiso/.cache/nuschl-capture-quality/tmp",
+    "daemon_build_dir": "default; not overridden"
+  },
+  "figure_provenance": {
+    "output": "/home/ambiso/.cache/nuschl-capture-quality/summary.png",
+    "sha256": "83fd776b60e63729f881b92affea40152e7bdb5ff92f37b926956629a2f849cd",
+    "input_hashes": {
+      "/home/ambiso/.cache/nuschl-capture-quality/baseline/11025-tone-high-source.f32le": "509c22358b6f96be521269cedb2bd5fd23778f0c153c6e84237374b42eb8b6a2",
+      "/home/ambiso/.cache/nuschl-capture-quality/filtered-marker/11025-tone-high-source.f32le": "509c22358b6f96be521269cedb2bd5fd23778f0c153c6e84237374b42eb8b6a2",
+      "/home/ambiso/.cache/nuschl-capture-quality/baseline/11025-tone-high-whole.f32le": "090d8230e3e6a58b495a5632512d2cd470e41f986af0a0af61ba83d6dec586b7",
+      "/home/ambiso/.cache/nuschl-capture-quality/filtered-marker/11025-tone-high-whole.f32le": "5d945ab9f5d1c4120d0447e00320a0a29030a256bf4be432f74dd323b5c2a6ba",
+      "/home/ambiso/.cache/nuschl-capture-quality/baseline/44100-tone-high-source.f32le": "46b47aa258e24b98c18f8812e75cdd49999b5c62eb159fedd53425e37efaf282",
+      "/home/ambiso/.cache/nuschl-capture-quality/filtered-marker/44100-tone-high-source.f32le": "46b47aa258e24b98c18f8812e75cdd49999b5c62eb159fedd53425e37efaf282",
+      "/home/ambiso/.cache/nuschl-capture-quality/baseline/44100-tone-high-whole.f32le": "029bd046b358d715d7b90c4557fad2167dc7e042a8f5ad69a3ba0d48f9901121",
+      "/home/ambiso/.cache/nuschl-capture-quality/filtered-marker/44100-tone-high-whole.f32le": "fefaf3b29603ded9d9ad403857142cfaf08c037ae3ab755b115530d4b9f0f6d9",
+      "/home/ambiso/.cache/nuschl-capture-quality/baseline/96000-tone-alias-source.f32le": "dce40d9434df8d89b24777dd9b29f74554be26ad10f6d42c48e4f8bcd9959647",
+      "/home/ambiso/.cache/nuschl-capture-quality/filtered-marker/96000-tone-alias-source.f32le": "dce40d9434df8d89b24777dd9b29f74554be26ad10f6d42c48e4f8bcd9959647",
+      "/home/ambiso/.cache/nuschl-capture-quality/baseline/96000-tone-alias-whole.f32le": "377abb9cd7ed6bc87925f18ddc182cbf6fcec6c3ff21c2c70ae39e1dfcc83c09",
+      "/home/ambiso/.cache/nuschl-capture-quality/filtered-marker/96000-tone-alias-whole.f32le": "e3701e8a31731d89ac41d29eee9da12e16c747da3de9d21d185f0fdfa22cbb17"
+    }
+  },
+  "measurement_python": "/nix/store/igcsxi89qpy38gvz7d7qz6qrw9ii5gvw-python3-3.14.8-env/bin/python3",
+  "evidence_directory": "/home/ambiso/.cache/nuschl-capture-quality",
+  "retained_failures": [
+    {
+      "file": "baseline/proof.json",
+      "reason": "untouched actual linear quality failures"
+    },
+    {
+      "file": "filtered/proof.json",
+      "reason": "initial uniform output-relative100dB gate fails near-silent stopband; raw diagnostic retained"
+    },
+    {
+      "file": "unmute.log",
+      "reason": "pactl JSONmodules have noindex; switched owned fixture to exact short-ID lookup"
+    },
+    {
+      "file": "unmute-retry.log",
+      "reason": "feeder BrokenPipe in cleanup; finally-safe cleanup fixed; only exact owned Pulse process group terminated"
+    },
+    {
+      "file": "echo.log",
+      "reason": "observed actual capture48000 disproved requested44.1k assumption; private desired-rate silence stream prevents Pulse idle null-source retune"
+    }
+  ],
+  "limits": [
+    "No physical audio/profile/publicserver/camera used",
+    "No whole native input-DSP-encoder-network-output or perceptual equivalence established",
+    "Linuxx86_64 private runtime proof only; Windows/macOS/hardware remain open",
+    "Original two-attempt AEC policy retained with every result; not general non48k convergence reliability",
+    "Baseline cold virtual source1.8-1.9s versus warm current is not credited as converter improvement",
+    "No playback/mixer/reference/TXfactory/DSPdefaults/IPC/consent/graphselector changes or new dependency"
+  ],
+  "source_scripts": {
+    "tests/capture_quality.py": "4c57a8b9df452806913f2eaad3f0940be4c200048563daedabdf1fd3ce6103bf",
+    "tests/capture_quality_test.py": "3b3acdf652942c17601ca36a6abf1f4c23285b18794905658b1d1d2b18d72787",
+    "tests/capture_unmute.py": "b89a5d00662e87987c413f868dafc2721d050074479a8b5d85527727f38ed1a3",
+    "tests/capture_echo.py": "bc6782c20943b5ee115a056630119c5b298d6c7b0f011785bd0324d5139a03ee",
+    "tests/plot_capture_quality.py": "b043dbf87982b1479a4593af0de76bfd6386bd1cf36816b53716d1d10eba41b8"
+  },
+  "root_combined_gate": {
+    "root_head": "46f6a77d",
+    "handoff": "/home/ambiso/.cache/nuschl-integration-20261112/capture-quality/handoff.json",
+    "reported_by_parent": "all8combined outputs green; both notice readers pass; native1w9z168 worker exactac3b5e5e matches testedvgl5l0; web9runtimefiles unchanged"
+  }
+}

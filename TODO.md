@@ -926,14 +926,26 @@ The media worker uses per-speaker adaptive jitter buffers and Opus loss concealm
       sensitivity. Input/codec lossy error is separate; no native TX/network/device
       listening or full executed-Mumble/perceptual equivalence follows. Actual
       plots/WAV provenance: docs/reviews/2026-11-12-output-spectral.json.
-- [ ] Replace the measured native linear capture SRC gap with filtered mono
-      conversion, preserving exact channel-average/phase/timestamps and callback
-      allocation/privacy semantics. Actual untouched converter fails21/26 C Speex
-      quality3 cases: upper passband−3.65dB, images−14.4dB versus C−76.84…−94.96dB;
-      96k→48k aliases36k→12k near0dB versus C−96.56dB and loses the tested impulse.
-      Freeze baseline before changes: docs/reviews/2026-11-12-capture-baseline.json.
-      Preserve no whole-callback prefill/activation delay, exact capture clock and
-      recorded/fallback AEC correspondence; private DSP/unmute proofs required.
+- [x] Replace actual native linear capture SRC with the existing memory-safe
+      mono Speex quality 3 engine through a narrow capture helper. Preserve finite
+      full-channel average/unit input clamp, rational generated clocks despite ring
+      overflow and capture-side filter/phase timestamp compensation; flush actual
+      input immediately without whole-callback prefill. The original 21/26 failed
+      baseline remains preserved, including dropped 96 kHz impulse and 0 dB alias.
+      Final 31 quality/clock/marker cases and five real-PCM negative controls pass;
+      ordinary output agreement is 133.60–161.11 dB. Stopband raw output-relative
+      100 dB diagnostic remains false (77.98 dB); declared input-relative 139.99 dB,
+      −96.61 dB attenuation and unchanged absolute/C-relative rails pass. Native
+      81 units, observed private 44.1/96 kHz CPAL capture/unmute/privacy/AEC and
+      the whole original DSP suite pass. See docs/capture-quality.md and
+      docs/reviews/2026-11-12-capture-filtered.json; no TX/DSP defaults/selector change.
+- [ ] Expand capture fidelity proof to physical devices and Windows/macOS,
+      matched cold-source timing, multichannel/clock/backend variation and a full
+      input→DSP→encoder→network→output listening comparison. Keep the strict
+      stopband diagnostic and original failures visible; numerical floor handling
+      is not bit-exact or perceptual parity. Two-attempt private AEC convergence
+      results do not establish general reliability; original consent and queue
+      limitations remain open. No physical host audio was used in these proofs.
 - [x] Correct the measured native non-48 kHz clipping/SRC defect together with
       fallback correspondence. Keep f64 mix/mono/FX headroom through the 200 ms
       ring, fixed bounded binary scaling around f32 SRC, then map/clip the device.
