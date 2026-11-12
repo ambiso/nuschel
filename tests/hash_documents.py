@@ -21,9 +21,16 @@ DESCRIPTION = (
     "<a href='https://hash.test/description'>Hash description</a><br>"
     "Description fetched on first channel selection. " + "description filler " * 20
 )
-COMMENT = "https://hash.test/comment <b>Hash comment body</b><br>" + "comment filler " * 20
-REPLACEMENT = "https://hash.test/replacement <b>Replacement body</b><br>" + "replacement filler " * 20
-HIDDEN = "https://hash.test/hidden <b>Hidden replacement</b><br>" + "hidden filler " * 20
+COMMENT = "https://hash.test/comment Hash comment body " + "comment filler " * 20
+REPLACEMENT = "https://hash.test/replacement Replacement body " + "replacement filler " * 20
+HIDDEN = "https://hash.test/hidden Hidden replacement " + "hidden filler " * 20
+
+
+def wire_comment(text):
+    # Each controlled CLI input is plain ASCII with exactly one leading URL;
+    # the native SetComment command linkifies that URL before sending HTML.
+    url, tail = text.split(" ", 1)
+    return f'<a href="{url}">{url}</a> {tail}'
 
 
 def actions(args, root, shell, application, bot, murmur):
@@ -75,8 +82,8 @@ def actions(args, root, shell, application, bot, murmur):
         channel_body = observer.wait(lambda event: event["kind"] == "channel" and
             event["channel"]["id"] == 0 and event["channel"]["description"] == DESCRIPTION)["channel"]
         user_body = eventually(lambda: (value if (value := observer.users.get(bot.session)) and
-            value.get("comment") == COMMENT else None), "observer comment blob missing")
-        for value, field, expected in [(channel_body, "description", DESCRIPTION), (user_body, "comment", COMMENT)]:
+            value.get("comment") == wire_comment(COMMENT) else None), "observer comment blob missing")
+        for value, field, expected in [(channel_body, "description", DESCRIPTION), (user_body, "comment", wire_comment(COMMENT))]:
             assert value[field + "_hash"] == hashlib.sha1(expected.encode()).hexdigest()
         (args.output / "stock-hash-only.json").write_text(json.dumps({
             "initial_channel": initial_channel, "initial_user": initial_user,
@@ -122,7 +129,7 @@ def actions(args, root, shell, application, bot, murmur):
     eventually(lambda: find("Close"), "profile close missing").press()
     bot.send(kind="comment", text=HIDDEN)
     bot.wait(lambda event: event["kind"] == "user" and event["user"]["session"] == bot.session
-             and event["user"].get("comment_hash") == hashlib.sha1(HIDDEN.encode()).hexdigest())
+             and event["user"].get("comment_hash") == hashlib.sha1(wire_comment(HIDDEN).encode()).hexdigest())
     time.sleep(.3)
     assert link("https://hash.test/hidden") is None
     open_profile()
