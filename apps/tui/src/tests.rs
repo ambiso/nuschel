@@ -866,3 +866,98 @@ fn page_up_at_the_top_loads_the_older_page_and_keeps_the_place() {
     );
     assert_eq!(app.timeline.scroll, 0);
 }
+
+#[test]
+fn bitrate_names_requested_effective_and_reason_and_saves_only_offered_choices() {
+    let (mut app, _, _) = connected();
+    app.client.servers[0].limits = Some(nuschl_core::model::ServerLimits {
+        max_bandwidth: Some(72_000),
+        ..Default::default()
+    });
+    let notes = |app: &App| {
+        app.notes
+            .iter()
+            .map(|note| note.text.clone())
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    app.command("bitrate");
+    let shown = notes(&app);
+    assert!(shown.contains("you asked for 128 kb/s"), "{shown}");
+    assert!(
+        shown.contains("  Test: 48 kb/s: this server allows 72 kb/s per user, 24 kb/s"),
+        "{shown}"
+    );
+    let chosen = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    app.bitrate.change = Some(Box::new({
+        let chosen = chosen.clone();
+        move |bitrate| {
+            chosen.borrow_mut().push(bitrate);
+            Ok(bitrate)
+        }
+    }));
+    app.command("bitrate 256k");
+    assert_eq!(*chosen.borrow(), [256_000]);
+    assert_eq!(app.bitrate.requested, 256_000);
+    assert!(notes(&app).contains("you asked for 256 kb/s"));
+    // Only what is offered; the request is unchanged otherwise.
+    for refused in ["384", "510000", "6", "fast", "100"] {
+        app.command(&format!("bitrate {refused}"));
+        assert!(
+            app.notes.back().is_some_and(|note| note
+                .text
+                .contains("Choose a voice bitrate of 64, 96, 128, 192 or 256")),
+            "{refused}"
+        );
+    }
+    assert_eq!(*chosen.borrow(), [256_000]);
+    assert_eq!(app.bitrate.requested, 256_000);
+    // The status line explains the effective rate.
+    app.command("status");
+    assert!(
+        app.notes
+            .back()
+            .is_some_and(|note| note.text.contains("voice 48 of 256 kb/s (server limit)")),
+        "{}",
+        notes(&app)
+    );
+    // A failed save keeps the request; a managed one is not changed here.
+    app.bitrate.change = Some(Box::new(|_| {
+        Err("Could not save the voice bitrate: disk full".into())
+    }));
+    app.command("bitrate 96");
+    assert!(
+        app.notes
+            .back()
+            .is_some_and(|note| note.text.contains("disk full"))
+    );
+    assert_eq!(app.bitrate.requested, 256_000);
+    app.bitrate.managed = true;
+    app.command("bitrate 64");
+    assert!(
+        app.notes
+            .back()
+            .is_some_and(|note| note.text.contains("set by your system configuration"))
+    );
+    assert_eq!(app.bitrate.requested, 256_000);
+}
+
+#[test]
+fn bitrate_arguments_name_one_of_the_offered_choices() {
+    use crate::app::parse_bitrate;
+    for (text, bitrate) in [
+        ("64", Some(64_000)),
+        ("96k", Some(96_000)),
+        ("128 kb/s", Some(128_000)),
+        ("192000", Some(192_000)),
+        ("256K", Some(256_000)),
+        ("80", None),
+        ("384", None),
+        ("0", None),
+        ("-1", None),
+        ("", None),
+        ("4294967295", None),
+    ] {
+        assert_eq!(parse_bitrate(text), bitrate, "{text}");
+    }
+}

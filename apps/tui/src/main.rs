@@ -90,7 +90,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         plain,
         ssh,
     };
-    let mut app = app::App::new(client, Some(profile), options);
+    let mut app = app::App::new(client, Some(profile.clone()), options);
+    app.bitrate = app::Bitrate {
+        requested: loaded.settings.voice_bitrate,
+        managed: loaded.managed.contains("voice_bitrate"),
+        change: Some(Box::new({
+            let driver = driver.clone();
+            move |bitrate| {
+                // Only the bitrate's own file is written (settings.json stays
+                // as it is), over the newest settings on disk: another Nuschl
+                // may share the profile.
+                let current = profile.load();
+                profile
+                    .save_voice_bitrate(bitrate, &current.managed)
+                    .map_err(|error| format!("Could not save the voice bitrate: {error}"))?;
+                let mut settings = current.settings;
+                settings.voice_bitrate = bitrate;
+                let settings = current.managed.apply(settings.sanitized());
+                let applied = settings.voice_bitrate;
+                driver.apply_settings(settings);
+                Ok(applied)
+            }
+        })),
+    };
     for problem in loaded.problems {
         app.warn(problem);
     }

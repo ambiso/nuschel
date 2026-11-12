@@ -631,6 +631,9 @@ fn draw_status(frame: &mut Frame, app: &App, note_area: Rect, state_area: Rect) 
                 state.push_str(" (voice off)");
             } else if !server.deafened {
                 state.push_str(&format!(", {}", clean(&server.audio_status)));
+                if let Some(bitrate) = app.voice_bitrate(index) {
+                    state.push_str(&format!(", voice {}", bitrate.summary()));
+                }
             }
         }
         if let Some(notice) = &server.notice {
