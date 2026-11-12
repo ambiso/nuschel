@@ -53,13 +53,15 @@ Every configuration key is optional; names and defaults follow murmur.ini
   (`services.nuschl.kt.signingKeyFile`, `vrfSecretFile`, …) and refuses Nix store
   paths.
 - **Certificate.** Without `certificate`/`private_key`, a self-signed ECDSA
-  certificate is generated once in `state_directory` (key file 0600). Clients pin
-  the server certificate, so keep that directory. SIGHUP loads the certificate and
+  certificate is generated once in `state_directory` (key file 0600). Clients
+  explicitly pin a self-signed certificate, so keep that directory. An unpinned
+  client instead requires a valid CA chain for its configured hostname; normal
+  CA leaf renewal neither creates a pin nor needs another confirmation. SIGHUP loads the certificate and
   key again (a renewed ACME certificate, say): new handshakes use them, connected
   clients keep their session, and if they do not load (unreadable, malformed, a key
   that does not belong to the certificate) the current one stays and the error is
   logged. A generated certificate is re-read, never generated again. Under the
-  NixOS module, `tls.certificateFile` and `keyFile` are credentials copied at
+  NixOS module, manual `tls.certificateFile` and `keyFile` are credentials copied at
   start, so a renewal there needs a restart.
 - **TLS versions.** 1.2 and 1.3 by default; `minimum_tls_version = "1.3"` refuses
   TLS 1.2, which keeps client certificates (stable identities) off the wire in the
@@ -174,6 +176,86 @@ from `settings` (never secrets), runs a database preflight under the operator lo
 hardens the unit
 (DynamicUser, a private state directory, no capabilities, system call filter,
 `SocketBindAllow` for the server port only).
+
+### Reusing an ACME certificate
+
+For a hostname already served by nginx (or `services.nuschl-web`) with
+`enableACME = true`, select the existing certificate entry explicitly:
+
+```nix
+services.nuschl = {
+  enable = true;
+  hostName = "voice.example.org";
+  tls.useACMEHost = "voice.example.org";
+};
+```
+
+This selects `security.acme.certs."voice.example.org"` and its `fullchain.pem`
+and `key.pem`. It does not change that entry's group or add the server to the
+broad `acme`/nginx group. A differently named entry or SAN certificate can be
+reused with `tls.useACMEHost = "shared.example.org"` and an explicit covered
+`hostName`; wildcard entries also require a concrete connection hostname.
+Clients must connect using that hostname, not an IP address or uncovered alias.
+
+To have the server module select a certificate for its own configured hostname:
+
+```nix
+services.nuschl = {
+  enable = true;
+  hostName = "voice.example.org";
+  tls.enableACME = true;
+};
+security.acme = {
+  acceptTerms = true;
+  defaults.email = "operator@example.org";
+  # Configure the normal NixOS HTTP/DNS challenge, e.g. defaults.dnsProvider,
+  # with runtime credentials, or an existing nginx ACME webroot.
+};
+```
+
+`tls.enableACME` requires `hostName` and an ordinary working NixOS ACME challenge
+configuration. Choose it or `tls.useACMEHost`; neither combines with manual
+`certificateFile`/`keyFile`. No certificate key or credential value belongs in a
+Nix string or the Nix store.
+
+The module waits for certificate provisioning. A dedicated, unprivileged
+`nuschl-tls` service receives only the selected full chain and key through fresh
+systemd credentials. Its networkless, resource-limited helper validates the
+chain, hostname, expiry and key pair with OpenSSL, then atomically publishes one
+private runtime generation under `/run/nuschl-tls`. The helper owns that directory;
+`nuschld` has read-only group access to this selected pair, not other ACME keys.
+The fixed privileged post-step sends SIGHUP only to an already running server.
+Normal renewal never restarts it or disconnects existing clients. Invalid or
+incomplete updates retain the last published pair; `nuschld` also keeps its active
+in-memory certificate if reloading fails. A five-minute timer retries a missed
+renewal hook or a temporarily incomplete source pair. The helper refuses to
+publish an untrusted ACME bootstrap/self-signed certificate, rather than exposing
+an unexpected trust prompt while issuance is incomplete.
+
+The helper's trust bundle is NixOS `security.pki.caBundle`. Clients still enforce
+their own WebPKI roots; a custom/private server CA is not automatically imported
+into clients. The helper parser handles private keys only in its separate service,
+with no network/home access, a 30-second start timeout, 128 MiB memory limit and
+bounded credential sizes. The server service's broad sandbox remains in force.
+Manual `tls.certificateFile`/`keyFile` retain their original startup-credential
+behavior; a source-file change requires a service restart to refresh those copies.
+
+Existing client pins are deliberately preserved, including pins saved by older
+versions that automatically pinned a valid CA leaf. Such a bookmark remains
+strict and will ask when that exact certificate changes. To choose normal CA
+renewal, explicitly clear that bookmark's fingerprint and reconnect using its
+correct DNS name. This is a trust-policy choice, never an automatic pin removal.
+Unpinned local history uses the configured WebPKI origin, so routine CA renewal
+keeps its history; pinned history retains its original certificate namespace.
+Changing from an old pin to CA trust does not delete the old namespace's rows or
+silently merge them into another authority's history.
+
+Private validation is in `tests/server_pki.py` / `tests/server_pki.nix` (module
+configuration and exact runtime publisher with a generated local CA), and the
+native/browser TLS tests (full chain, renewal, wrong hostname, expiry, untrusted
+issuer, missing intermediate and strict pins). These fixtures do not contact a
+public ACME service or change host trust/configuration. The module fixture alone
+does not execute systemd lifecycle/UID mounts; those require a NixOS VM.
 
 ## Importing a Murmur server
 

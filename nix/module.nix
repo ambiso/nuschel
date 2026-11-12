@@ -9,6 +9,17 @@ let
   cfg = config.services.nuschl;
   toml = pkgs.formats.toml { };
   stateDirectory = "/var/lib/nuschl";
+  acmeHost = if cfg.tls.enableACME then cfg.hostName else cfg.tls.useACMEHost;
+  useACME = acmeHost != null;
+  tlsHost =
+    if cfg.hostName != null then
+      cfg.hostName
+    else if useACME then
+      config.security.acme.certs.${acmeHost}.domain
+    else
+      null;
+  acmeDirectory = if useACME then config.security.acme.certs.${acmeHost}.directory else "";
+  tlsRuntime = "/run/nuschl-tls";
   localPostgres = cfg.database.type == "postgresql" && cfg.database.createLocally;
   databaseUrlFile =
     if localPostgres then
@@ -51,12 +62,21 @@ let
         "--database-url-file"
         "%d/database-url"
       ];
-  tlsArguments = lib.optionals (cfg.tls.certificateFile != null && cfg.tls.keyFile != null) [
-    "--tls-certificate-file"
-    "%d/tls-certificate"
-    "--tls-key-file"
-    "%d/tls-key"
-  ];
+  tlsArguments =
+    if useACME then
+      [
+        "--tls-certificate-file"
+        "${tlsRuntime}/current/fullchain.pem"
+        "--tls-key-file"
+        "${tlsRuntime}/current/key.pem"
+      ]
+    else
+      lib.optionals (cfg.tls.certificateFile != null && cfg.tls.keyFile != null) [
+        "--tls-certificate-file"
+        "%d/tls-certificate"
+        "--tls-key-file"
+        "%d/tls-key"
+      ];
   secretArguments =
     lib.optionals (cfg.passwordFile != null) [
       "--password-file"
@@ -117,6 +137,63 @@ let
       "~@privileged"
     ];
   };
+  # PID 1 reads only the selected ACME pair into this helper's credentials.
+  # The server never joins the broad ACME group or sees that directory.
+  refreshTLS = pkgs.writeShellScript "nuschl-refresh-tls" ''
+    set -euo pipefail
+    tlsCurrent=$(${pkgs.coreutils}/bin/readlink "$RUNTIME_DIRECTORY/current" || true)
+    # Recover safely from a killed helper without accumulating staged keys.
+    for tlsEntry in "$RUNTIME_DIRECTORY"/.staging.* "$RUNTIME_DIRECTORY"/generation.*; do
+      [ -d "$tlsEntry" ] || continue
+      [ "$tlsEntry" = "$tlsCurrent" ] || ${pkgs.coreutils}/bin/rm -rf -- "$tlsEntry"
+    done
+    tlsStage=$(${pkgs.coreutils}/bin/mktemp -d "$RUNTIME_DIRECTORY/.staging.XXXXXXXXXX")
+    trap '${pkgs.coreutils}/bin/rm -rf -- "$tlsStage"' EXIT
+    ${pkgs.coreutils}/bin/install -m 0440 "$CREDENTIALS_DIRECTORY/fullchain" "$tlsStage/fullchain.pem"
+    ${pkgs.coreutils}/bin/install -m 0440 "$CREDENTIALS_DIRECTORY/key" "$tlsStage/key.pem"
+    if [ "$(${pkgs.coreutils}/bin/stat -c %s "$tlsStage/fullchain.pem")" -gt 262144 ] \
+      || [ "$(${pkgs.coreutils}/bin/stat -c %s "$tlsStage/key.pem")" -gt 65536 ]; then
+      echo "Refusing oversized TLS credentials; previous certificate retained." >&2
+      exit 1
+    fi
+    # No private bytes or decoder diagnostics are printed to the journal.
+    if ! ${pkgs.openssl}/bin/openssl verify -purpose sslserver \
+      -verify_hostname ${lib.escapeShellArg (if tlsHost == null then "" else tlsHost)} \
+      -CAfile ${config.security.pki.caBundle} \
+      -untrusted "$tlsStage/fullchain.pem" "$tlsStage/fullchain.pem" >/dev/null 2>&1; then
+      echo "Refusing an untrusted, expired or wrong-hostname TLS chain; previous certificate retained." >&2
+      exit 1
+    fi
+    if ! ${pkgs.openssl}/bin/openssl x509 -in "$tlsStage/fullchain.pem" -pubkey -noout 2>/dev/null \
+      | ${pkgs.openssl}/bin/openssl pkey -pubin -outform DER -out "$tlsStage/certificate-public.der" 2>/dev/null \
+      || ! ${pkgs.openssl}/bin/openssl pkey -in "$tlsStage/key.pem" -pubout -outform DER -out "$tlsStage/key-public.der" 2>/dev/null \
+      || ! ${pkgs.diffutils}/bin/cmp -s "$tlsStage/certificate-public.der" "$tlsStage/key-public.der"; then
+      echo "Refusing an invalid or mismatching TLS key; previous certificate retained." >&2
+      exit 1
+    fi
+    ${pkgs.coreutils}/bin/rm -- "$tlsStage/certificate-public.der" "$tlsStage/key-public.der"
+    ${pkgs.coreutils}/bin/chmod 0750 "$tlsStage"
+    tlsOld=$(${pkgs.coreutils}/bin/readlink "$RUNTIME_DIRECTORY/current" || true)
+    tlsGeneration="$RUNTIME_DIRECTORY/generation.''${tlsStage##*.staging.}"
+    ${pkgs.coreutils}/bin/mv -T -- "$tlsStage" "$tlsGeneration"
+    ${pkgs.coreutils}/bin/rm -f -- "$RUNTIME_DIRECTORY/.next"
+    ${pkgs.coreutils}/bin/ln -s -- "$tlsGeneration" "$RUNTIME_DIRECTORY/.next"
+    ${pkgs.coreutils}/bin/mv -Tf -- "$RUNTIME_DIRECTORY/.next" "$RUNTIME_DIRECTORY/current"
+    # Only names previously published by this helper can be removed.
+    tlsOldName="''${tlsOld##*/}"
+    if [ "$tlsOld" = "$RUNTIME_DIRECTORY/$tlsOldName" ]; then
+      case "$tlsOldName" in generation.*)
+        [ "$tlsOld" = "$tlsGeneration" ] || ${pkgs.coreutils}/bin/rm -rf -- "$tlsOld"
+        ;;
+      esac
+    fi
+  '';
+  signalTLS = pkgs.writeShellScript "nuschl-signal-tls" ''
+    set -eu
+    if ${pkgs.systemd}/bin/systemctl is-active --quiet nuschl.service; then
+      ${pkgs.systemd}/bin/systemctl kill --kill-whom=main --signal=HUP nuschl.service
+    fi
+  '';
   # A Murmur database imported once before the first start (docs/server.md):
   # root copies it in for the dynamic user, the service imports it; the
   # marker keeps later starts from trying again.
@@ -172,6 +249,12 @@ in
         "::"
       ];
       description = "Addresses for TCP and UDP; IPv6 sockets are IPv6-only.";
+    };
+    hostName = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      example = "voice.example.org";
+      description = "Public DNS hostname clients connect to; required for tls.enableACME and used to validate the selected certificate.";
     };
     port = lib.mkOption {
       type = lib.types.port;
@@ -319,6 +402,13 @@ in
       '';
     };
     tls = {
+      enableACME = lib.mkEnableOption "an ACME certificate for hostName (configure security.acme's challenge and account defaults)";
+      useACMEHost = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        example = "voice.example.org";
+        description = "Reuse this security.acme.certs entry, including one provisioned by nginx enableACME. The connection hostname defaults to that entry's domain; set hostName explicitly for a wildcard or a different covered SAN.";
+      };
       certificateFile = lib.mkOption {
         type = lib.types.nullOr lib.types.str;
         default = null;
@@ -345,6 +435,24 @@ in
       {
         assertion = !cfg.database.createLocally || cfg.database.urlFile == null;
         message = "Choose local peer authentication or database.urlFile, not both.";
+      }
+      {
+        assertion = !cfg.tls.enableACME || cfg.hostName != null;
+        message = "Nuschl tls.enableACME requires hostName.";
+      }
+      {
+        assertion = !(cfg.tls.enableACME && cfg.tls.useACMEHost != null);
+        message = "Choose Nuschl tls.enableACME or tls.useACMEHost, not both.";
+      }
+      {
+        assertion = !useACME || (cfg.tls.certificateFile == null && cfg.tls.keyFile == null);
+        message = "Nuschl ACME TLS cannot be combined with explicit certificateFile/keyFile.";
+      }
+      {
+        assertion =
+          !useACME
+          || (tlsHost != "" && builtins.match "[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?" tlsHost != null);
+        message = "Nuschl ACME TLS requires a concrete DNS hostName (set it explicitly for a wildcard or differently named ACME entry).";
       }
       {
         assertion = (cfg.tls.certificateFile == null) == (cfg.tls.keyFile == null);
@@ -374,6 +482,73 @@ in
         message = "Use services.nuschl.passwordFile / superUserPasswordFile instead of secrets in settings.";
       }
     ];
+    security.acme.certs = lib.mkIf useACME {
+      ${acmeHost}.postRun = lib.mkAfter ''
+        ${pkgs.systemd}/bin/systemctl --no-block start nuschl-tls-refresh.service
+      '';
+    };
+    users.groups.nuschl-tls = lib.mkIf useACME { };
+    users.users.nuschl-tls = lib.mkIf useACME {
+      isSystemUser = true;
+      group = "nuschl-tls";
+      description = "Nuschl selected TLS credential publisher";
+    };
+    systemd.services.nuschl-tls-refresh = lib.mkIf useACME {
+      description = "Validate and privately publish Nuschl's selected ACME TLS pair";
+      after = [ "acme-finished-${acmeHost}.target" ];
+      requires = [ "acme-finished-${acmeHost}.target" ];
+      serviceConfig = {
+        Type = "oneshot";
+        TimeoutStartSec = "30s";
+        MemoryMax = "128M";
+        TasksMax = 16;
+        User = "nuschl-tls";
+        Group = "nuschl-tls";
+        UMask = "0077";
+        RuntimeDirectory = "nuschl-tls";
+        RuntimeDirectoryMode = "0750";
+        RuntimeDirectoryPreserve = "yes";
+        LoadCredential = [
+          "fullchain:${acmeDirectory}/fullchain.pem"
+          "key:${acmeDirectory}/key.pem"
+        ];
+        ExecStart = refreshTLS;
+        # This fixed command is the only privileged step; it never reads keys.
+        ExecStartPost = "+${signalTLS}";
+        NoNewPrivileges = true;
+        PrivateTmp = true;
+        PrivateDevices = true;
+        PrivateNetwork = true;
+        PrivateIPC = true;
+        ProtectSystem = "strict";
+        ProtectHome = true;
+        ProtectKernelTunables = true;
+        ProtectKernelModules = true;
+        ProtectControlGroups = true;
+        ProtectProc = "invisible";
+        RestrictAddressFamilies = [ "AF_UNIX" ];
+        RestrictNamespaces = true;
+        RestrictSUIDSGID = true;
+        LockPersonality = true;
+        MemoryDenyWriteExecute = true;
+        CapabilityBoundingSet = "";
+        SystemCallArchitectures = "native";
+        SystemCallFilter = [
+          "@system-service"
+          "~@privileged"
+        ];
+      };
+    };
+    # A renewal hook can coincide with an already-running refresh. This bounded
+    # retry also recovers after a temporarily incomplete/invalid source pair.
+    systemd.timers.nuschl-tls-refresh = lib.mkIf useACME {
+      wantedBy = [ "timers.target" ];
+      timerConfig = {
+        OnBootSec = "5min";
+        OnUnitInactiveSec = "5min";
+        Unit = "nuschl-tls-refresh.service";
+      };
+    };
     networking.firewall = lib.mkIf cfg.openFirewall {
       allowedTCPPorts = [ cfg.port ];
       allowedUDPPorts = [ cfg.port ];
@@ -391,8 +566,13 @@ in
     systemd.services.nuschl = {
       description = "Nuschl Mumble-compatible server";
       wantedBy = [ "multi-user.target" ];
-      after = [ "network.target" ] ++ lib.optional localPostgres "postgresql.target";
-      requires = lib.optional localPostgres "postgresql.target";
+      after = [
+        "network.target"
+      ]
+      ++ lib.optional localPostgres "postgresql.target"
+      ++ lib.optional useACME "nuschl-tls-refresh.service";
+      requires =
+        lib.optional localPostgres "postgresql.target" ++ lib.optional useACME "nuschl-tls-refresh.service";
       restartTriggers = [ configFile ];
       serviceConfig = {
         Type = "simple";
@@ -402,6 +582,8 @@ in
         StateDirectoryMode = "0700";
         WorkingDirectory = stateDirectory;
         UMask = "0077";
+        SupplementaryGroups = lib.optional useACME "nuschl-tls";
+        ReadOnlyPaths = lib.optional useACME tlsRuntime;
         LoadCredential =
           lib.optional (databaseUrlFile != null) "database-url:${databaseUrlFile}"
           ++ lib.optional (cfg.tls.certificateFile != null) "tls-certificate:${cfg.tls.certificateFile}"
