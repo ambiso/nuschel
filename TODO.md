@@ -509,6 +509,16 @@ Reported while testing (2026-11-10/11):
 
 Later (reported):
 
+- [ ] Polls in chat, like the requested Signal-style feature (user,
+      2026-11-12). Provide creation, voting and readable results; persist poll
+      definitions/votes on Nuschl servers and reconcile reconnects, concurrent
+      devices and duplicate events using stable identities. Define single/multiple
+      choice, changing votes, closing/deleting and moderation permissions. Keep
+      native/web presentation accessible and bounded. Preserve MLS confidentiality
+      where enabled; legacy Mumble clients need an honest readable fallback, with
+      no unsupported claim of authoritative legacy voting. Claude Code is
+      investigating the smallest shared model/transport slice in a separate
+      workspace; implementation ownership is pending review.
 - [x] Typing indicators on Nuschl servers (`typing/1`, 2026-11-11): "Ada is typing…"
       in the composer's footer line (no layout shift), a polite live region; Settings →
       Privacy turns sending off. Stock Mumble servers: none (`PluginDataTransmission`
@@ -530,7 +540,9 @@ Later (reported):
       arbitrary original fits legacy Mumble's inline-image limit. Retain legacy
       file-offer fallback and peer/relay privacy policy. For clipboard inputs,
       preserve the supplied representation without claiming it is an unavailable
-      source file. Queue with the attachment/file implementation; not yet started.
+      source file. Assigned to an isolated attachment/transfer lane; native-first
+      scope and safe preview/save authority are being reviewed. Web attachments
+      and modern persistent/resumable file delivery remain separately open.
 - [ ] Large file transfers peer to peer, not stored on the server: the server only
       relays (perhaps a small chunk cache, content-defined chunking); resumable
       across restarts and lost connections; clearly shown while still uploading.
