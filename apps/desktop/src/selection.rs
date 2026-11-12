@@ -752,7 +752,8 @@ fn styled_text(
     if monospace.is_empty() {
         styled
     } else {
-        let family = crate::theme::mono_font();
+        // A monospace face even when the configured code font is missing.
+        let family = crate::document::code_font();
         styled.with_font_family_overrides(
             monospace
                 .iter()

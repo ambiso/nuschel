@@ -3522,6 +3522,8 @@ fn blocks(
     cx: &mut Context<Desktop>,
 ) -> Vec<AnyElement> {
     crate::math::prepare(this, cx);
+    // Code asks for a monospace face when the configured code font is missing.
+    let code_font = crate::document::resolve_code_font(cx);
     // The height of one line of message text (GPUI's default line height).
     let line = px((this.settings.appearance.text_size * 1.618_034).round());
     let last = document.blocks.len().saturating_sub(1);
@@ -3688,7 +3690,7 @@ fn blocks(
                     .bg(color(APP))
                     .border_1()
                     .border_color(color(BORDER))
-                    .font_family(theme::mono_font())
+                    .font_family(code_font.clone())
                     .text_sm()
                     .flex()
                     .flex_col()

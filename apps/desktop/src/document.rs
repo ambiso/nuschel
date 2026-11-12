@@ -145,6 +145,55 @@ pub struct Document {
     pub(crate) lease: Arc<()>,
 }
 
+/// The family code in messages is drawn in: the configured code font when
+/// the text system has it, else the `monospace` generic family (the
+/// platform's monospace face). GPUI picks a missing family's fallback by its
+/// name, so a missing code font without a mono-sounding name (Iosevka, Hack)
+/// would be drawn in a proportional face; code asks for monospace instead.
+pub fn code_family(configured: &str, available: &[String]) -> SharedString {
+    let generic = ["monospace", "mono", "ui-monospace"]
+        .iter()
+        .any(|name| configured.eq_ignore_ascii_case(name));
+    let installed = available
+        .iter()
+        .any(|family| family.eq_ignore_ascii_case(configured));
+    if generic || installed {
+        SharedString::from(configured.to_owned())
+    } else {
+        SharedString::from("monospace")
+    }
+}
+
+thread_local! {
+    /// The configured code font and the family it resolved to.
+    static CODE_FONT: std::cell::RefCell<Option<(SharedString, SharedString)>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// [`code_family`] for the configured code font, looked up in the text system
+/// once per configured font (documents call this before laying out code).
+pub fn resolve_code_font(cx: &gpui_kit::App) -> SharedString {
+    let configured = theme::mono_font();
+    CODE_FONT.with_borrow_mut(|cached| match cached {
+        Some((name, family)) if *name == configured => family.clone(),
+        _ => {
+            let family = code_family(&configured, &cx.text_system().all_font_names());
+            *cached = Some((configured, family.clone()));
+            family
+        }
+    })
+}
+
+/// The code font as last resolved ([`resolve_code_font`]), or the configured
+/// one when it changed since.
+pub fn code_font() -> SharedString {
+    let configured = theme::mono_font();
+    CODE_FONT.with_borrow(|cached| match cached {
+        Some((name, family)) if *name == configured => family.clone(),
+        _ => configured,
+    })
+}
+
 /// Build a GPUI image from worker RGBA pixels (GPUI expects BGRA).
 pub fn render_image(width: u32, height: u32, rgba: &str) -> Option<Arc<RenderImage>> {
     if width == 0 || height == 0 || width > 4096 || height > 4096 {
@@ -468,6 +517,28 @@ mod tests {
     use super::{Block, Document, render_image};
     use base64::Engine as _;
     use nuschl_core::{CodeRun, ContentBlock, MessageDocument, Span, Style, TextRole};
+
+    #[test]
+    fn code_asks_for_monospace_when_its_font_is_missing() {
+        let installed = ["Adwaita Mono".to_owned(), "DejaVu Sans".to_owned()];
+        // A missing family without a mono-sounding name, and any other.
+        assert_eq!(
+            super::code_family("Iosevka", &installed).as_ref(),
+            "monospace"
+        );
+        assert_eq!(super::code_family("Hack", &installed).as_ref(), "monospace");
+        assert_eq!(super::code_family("Fira Code", &[]).as_ref(), "monospace");
+        // An installed one, in any case, and the generic families, stay.
+        assert_eq!(
+            super::code_family("adwaita mono", &installed).as_ref(),
+            "adwaita mono"
+        );
+        assert_eq!(super::code_family("monospace", &[]).as_ref(), "monospace");
+        assert_eq!(
+            super::code_family("ui-monospace", &[]).as_ref(),
+            "ui-monospace"
+        );
+    }
 
     #[test]
     fn saved_images_keep_their_bytes_and_type() {

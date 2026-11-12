@@ -20,6 +20,11 @@ message is cropped by its accessible bounds and measured:
 - code blocks: the pitch between the six glyphs of "iiiiii" and of "MMMMMM";
 - geometry: each row's ink top, bottom and the pitch between rows.
 
+Code must be monospace whatever the configured code font: the code spans and
+code blocks are checked for equal advances too (run with `--mono-font
+Iosevka`, a family that is not installed, for a code font the desktop has to
+replace with a monospace face).
+
 The desktop user also types Markdown (docs/desktop.md, "Markdown"), and the
 typed messages are checked, live and restored: `**Wordmark Wordmark**` over
 the same words plain has a bold/regular ink ratio of at least 1.3; the code
@@ -286,6 +291,16 @@ def checks(results):
         widths = summary.get("typed_inline_code_widths")
         verdicts[f"{stage}: typed code spans equally wide ({widths})"] = (
             widths is not None and abs(widths[0] - widths[1]) <= 2)
+        # Code is monospace whatever the code font: equal advances, even when
+        # the configured family is missing (`--mono-font Iosevka`).
+        ratio = summary.get("inline_code_M_over_i")
+        verdicts[f"{stage}: <code> spans equally wide (M/i {ratio})"] = (
+            ratio is not None and abs(ratio - 1) <= 0.05)
+        for block in ("block", "typed block"):
+            pitch = summary.get(f"{block}_pitch")
+            verdicts[f"{stage}: {block} glyphs at equal advances ({pitch})"] = (
+                pitch is not None and None not in pitch.values()
+                and abs(pitch["iiiiii"] - pitch["MMMMMM"]) <= 0.5)
         pitches = summary.get("typed_row_pitch", {})
         for spaced, tight, lines in LINE_PAIRS:
             if spaced in pitches and tight in pitches:
