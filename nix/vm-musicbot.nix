@@ -80,6 +80,10 @@ pkgs.testers.runNixOSTest {
         pkgs.python3
         pkgs.curl
       ];
+      # The fixture needs only its own guest loopback services, never Internet.
+      virtualisation.restrictNetwork = true;
+      services.timesyncd.enable = false;
+      networking.timeServers = [ ];
       virtualisation.memorySize = 2048;
       virtualisation.cores = 2;
     };

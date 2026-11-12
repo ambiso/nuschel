@@ -363,6 +363,10 @@ def service(args):
             resumed = watcher.mark()
             command(link, "resume")
             heard = audio_from(listener, dj, 20)
+            if len(heard) < 280:
+                print(json.dumps({"service_errors": [
+                    {"name": player["name"], "error": player["error"]}
+                    for player in api(link)["players"]]}), file=sys.stderr)
             assert len(heard) >= 280 and heard[-1]["end"], len(heard)
             watcher.wait(lambda state: state["players"][0]["current"] is None
                          and not state["players"][0]["queue"], after=resumed)
