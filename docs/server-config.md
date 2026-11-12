@@ -1,72 +1,97 @@
-# Sparse server configuration and browser send limits
+# Server configuration and send limits
 
-`ServerConfig` optional fields merge into the current connection's values. The
-session adapters emit a complete `ServerLimits` snapshot when a limit field is
-present, because the shared client replaces that snapshot. A welcome-only or
-empty configuration does not emit Limits or change audio policy.
+`nuschl_core::model::ServerLimits` owns the connection defaults and sparse merge
+policy. `LimitsUpdate` has optional domain fields, without a protocol dependency.
+Both session adapters translate `ServerConfig` into it and publish complete
+snapshots. Omitted fields keep their prior values; explicit zero and false remain
+meaningful. A welcome-only or empty update emits no Limits or audio-policy change.
 
-| Field | Fresh connection / initial value | Explicit update |
+| Field | Fresh connection | Explicit update |
 | --- | --- | --- |
-| HTML | true | Preserve false until an explicit true |
-| Message length | 5000 | Zero means unlimited, bounded by the application's 256 KiB ceiling |
-| Image length | 131072 | Zero means unlimited, bounded by the application's 1 MiB ceiling |
+| HTML | true | Preserve false until explicit true |
+| Text length | 5000 UTF-16 code units | Zero removes the server's text-component limit |
+| Total HTML/image length | 131072 UTF-16 code units | Zero removes the server's whole-HTML limit |
 | Maximum users | Unknown | Preserve the supplied number, including zero |
-| Recording | Allowed | Preserve false until an explicit true |
-| Bandwidth | Effective ServerSync value, existing 72000 bit/s fallback | Preserve the supplied value across unrelated updates |
+| Recording | Allowed | Preserve false until explicit true |
+| Bandwidth | ServerSync value, or 72000 bit/s fallback | Preserve it across unrelated updates, including explicit zero |
 
-Fresh session instances reset all fields. Native/default message and image lengths
-match the pinned Mumble source (`35dce9e4801fe52b2217f0d9f421d17b0aaf3bb0`,
-`Global.cpp:119` and `MainWindow.cpp:3589`). Its `Messages.cpp::msgServerConfig`
-changes only present fields. `Server.cpp::isTextAllowed` treats zero as unlimited.
-The bounded application ceilings above retain Nuschl's existing zero semantics.
+Raw server limits are retained, including `u32::MAX`; application byte ceilings
+are not disguised as server values. A successful explicit `Client::connect` and
+current-generation `Input::Reconnecting` clear the shared/displayed limits.
+ServerSync publishes the full initial snapshot even when no ServerConfig follows.
+Stale-generation events cannot restore the previous connection's values.
+Negotiated Opus availability is a separate optional fact: it stays unknown until
+an actual CodecVersion arrives and resets with the connection. A private routing
+default of true is not evidence that a server negotiated Opus.
 
-Browser text now checks the UTF-8 bytes of the actual escaped `TextMessage.message`
-value before TLS submission or outgoing/Sent events. The envelope/header is not
-part of this count. Escapes and newline markup count toward the cap; plain text
-uses its UTF-8 bytes. This matches the existing native enforcement policy, not a
-claim of identical stock-Mumble Unicode/HTML acceptance thresholds: Qt uses
-QString units and may inspect parsed HTML content. Nuschl's wire-byte policy is
-more conservative. Existing native/browser formatting choices are unchanged.
-The browser retains image limits without adding an image-send API.
+The defaults and optional-field behavior follow the pinned Mumble source
+`35dce9e4801fe52b2217f0d9f421d17b0aaf3bb0` (`Global.cpp`,
+`MainWindow.cpp`, `Messages.cpp`). Its `Server.cpp::isTextAllowed`, and nuschld's
+`apps/server/src/text.rs`, count Qt/UTF-16 units. One `é` or `漢` counts as one unit;
+`🙂` counts as two. Notices call these characters, rather than UTF-8 bytes.
 
-Scoped checks pass: 82 native session tests (one existing ignored), 29 browser-SDK
-tests and six local relay integrations. Unit cases cover all retained fields,
-explicit zero/false, changes, conservative defaults, reconnects and UTF-8/markup
-expansion. The actual compiled App/SDK passes `tests/web_server_config.py` under
-production CSP with an owned loopback TLS endpoint and independently encoded
-protobuf changes. A private file coordinator changes server fields while the
-browser keeps its draft; no App state or worker result is injected. Independent
-received string-value lengths are exactly 129,17,4,5001,5000 bytes, covering sparse
-bandwidth/max-user updates, raised caps, HTML versus plain newlines, zero and
-reconnect defaults. Rejected drafts stay editable; successful legacy Sent keeps
-its existing transport semantics, and the fixture independently confirms wire
-receipt. No host capture or external server is used.
+For ordinary text, both clients use the existing first-party `legacy_body`
+formatter: literal markup is escaped, newlines become `<br/>` in HTML mode, links
+become anchors, and an opening code fence gets a leading newline. The same
+formatted wire string is checked by the shared SDK and the session adapter before
+submission. Escapes, anchors and newline markup count. For example, `<&>` followed
+by a newline becomes `&lt;&amp;&gt;<br/>`, 18 UTF-16 units.
 
-The original live-welcome `--check-send-cap` diagnostic now passes. Its earlier
-129/128 failure remains at `~/.cache/nuschl-live-welcome/browser-final/`. Exact
-artifacts, source hashes, commands and current proofs are recorded in
-`~/.cache/nuschl-server-config/handoff.json`. These checks do not claim new GPUI,
-physical audio/device or broad browser parity verification.
+HTML mode always enforces the total HTML/image limit, even when the text limit
+is zero or larger than the image limit. Ordinary text contains no inline images,
+so it must fit both nonzero caps. With HTML disabled only the text cap applies.
+Both server caps can be zero while Nuschl's independent `MAX_CONTENT_BYTES`
+ceiling still bounds the raw text and formatted message to 256 KiB of UTF-8.
+Refusals identify the actual server character cap or the local byte ceiling.
+Avatar binary payloads retain their separate existing 1 MiB local bound.
 
-## Precise browser refusal messages
+Inline-image preparation has a finite byte budget from
+`inline_image_byte_budget()`: ASCII image markup is bounded by the nonzero image
+cap and the existing 256 KiB message envelope, or just that local envelope when
+the server declares zero. Raw `SendHtml` also checks the total image cap; it no
+longer substitutes `max(text,image)`. It does **not** apply the text cap to the
+entire base64 image. Full rich-text parity remains queued: Murmur checks an
+XML-normalized message with image `src` values removed against the text cap.
+HTML-disabled XML filtering can also change the server's accepted text. This
+scalar shared helper does not claim to implement either XML transformation.
 
-The separate browser-wrapper correction preserves the core's refusal categories.
-Nothing-to-send/pending and global-too-long return distinct fixed reasons. Only
-Refused may read the fresh notice assigned by that synchronous core attempt,
-and only for the same selected server ID and generation. It never substitutes
-an old limit notice for an empty, oversized-global or disconnected attempt.
-No core API, App or SDK Worker behavior changed.
+`SendError::Refused(String)` returns its precise reason directly. The browser and
+TUI do not scrape the current notice or rely on an unreachable selected-ID guard.
+Every synchronous Refused gets an owned notice that expires after ten seconds.
+All production `ServerState` notice writers use its setter/dismissal helpers,
+which invalidate the prior ownership revision even for identical text. A matching
+own `Input::Sent` clears only the old refusal captured by that send, never a newer
+unrelated notice. Explicit dismissal, expiry and stale/mismatched Sent events are
+covered separately. Empty/pending and raw-body-too-long keep distinct variants.
 
-The real App fixture checks the exact 128/16/5000-byte reasons, their visible
-alert, and retained editable drafts. It also checks empty, global 256 KiB and
-disconnected diagnostics after an earlier limit notice. Both this fixture and
-the original live-welcome diagnostic pass on the precise-error artifact.
-`~/.cache/nuschl-server-config/precise-final/cap-refusal-390.png` was visually
-reviewed; `precise-handoff.json` records exact source/artifact/test identity.
+The App has the same small ownership rule for its global error, scoped to the
+conversation. A successful `send_text` command clears only its captured prior
+send error. This is **local acceptance**, not a delivery acknowledgement. Legacy
+Sent itself reports local submission; Mumble provides no message-delivery ACK.
+The fixture holds the owned server's reply until the alert/status/draft clear,
+then releases it and independently verifies actual wire receipt. Its async helper
+tests cover newer identical errors, unrelated errors and different conversations.
 
-A separate shared-model edge remains source-audited: Client::connect does not
-clear `ServerState.limits`. If a fresh server connection never sends ServerConfig,
-the adapter correctly enforces its fresh defaults but the shared/displayed
-limits can remain from the previous connection. Resetting or initially
-republishing that model needs a generation-aware regression; no shared-client
-source was changed in this work.
+One pre-existing native attribution gap remains separate: generic actor
+Notice/PermissionDenied events can clear a pending send, and are not correlated
+to a particular target/body. That includes a limit shrinking after SDK enqueue.
+This change preserves that generic behavior; it does not claim a complete
+correlated refusal/attachment-recovery protocol. See the tracked follow-ups in
+[TODO.md](../TODO.md).
+
+Scoped checks pass: 35 core tests, 95 native session tests, 114 shared-client tests,
+31 browser-SDK tests plus six private TLS relay integrations, 87 desktop tests and
+27 TUI tests. Session/client each retain one existing ignored test. The compiled
+WASM/Svelte/notices package passes [web_server_config.py](../tests/web_server_config.py)
+under production CSP with an independently encoded loopback TLS endpoint. It
+checks sparse updates, refusal/draft preservation, raised-cap success clearing,
+UTF-16 Unicode boundaries, HTML total with unlimited text, independent local byte
+ceilings, exact link/fence wire formatting and reconnect defaults. Received
+UTF-8-byte/UTF-16-unit pairs are independently recorded; no App state or worker
+result is injected. Private browser profiles and denied capture avoid host
+devices and external servers.
+
+The earlier failing diagnostics and prior proofs remain preserved in
+`~/.cache/nuschl-live-welcome/browser-final/` and `~/.cache/nuschl-server-config/`.
+Current source identities, package, commands, proof limits and retained build/test
+failures are recorded in `~/.cache/nuschl-next/server-limits/handoff.json`.

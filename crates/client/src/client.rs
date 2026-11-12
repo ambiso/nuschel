@@ -256,7 +256,7 @@ pub struct Notification {
 pub enum SendError {
     /// Nothing to send, or the previous message is still on its way.
     Nothing,
-    /// Longer than any server takes.
+    /// Longer than the local raw-body byte ceiling.
     TooLong,
     /// Not sent; the precise reason is also shown as a temporary notice.
     Refused(String),
