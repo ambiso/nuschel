@@ -10,7 +10,7 @@ export CARGO = /usr/bin/cargo
 	dh $@
 
 override_dh_auto_build:
-	$(CARGO) build --release --frozen -p nuschl -p nuschl-content-worker -p nuschl-crypto-worker -p nuschl-math-worker -p nuschl-media-worker -p nuschl-storage-worker -p nuschl-transfer-worker
+	for package in nuschl nuschl-content-worker nuschl-crypto-worker nuschl-math-worker nuschl-media-worker nuschl-storage-worker nuschl-transfer-worker; do $(CARGO) build --release --frozen -p "$$package"; done
 	$(CARGO) build --release --frozen -p nuschl-update-worker --no-default-features --features ed25519 --bin nuschl-update-verify-ed25519
 	$(CARGO) build --release --frozen -p nuschl-update-worker --no-default-features --features mldsa44 --bin nuschl-update-verify-mldsa44
 
