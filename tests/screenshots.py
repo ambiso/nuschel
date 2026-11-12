@@ -315,7 +315,7 @@ def main():
     parser.add_argument("--gnome-shell", type=Path)
     parser.add_argument("--size", default="1280x800")
     parser.add_argument("--settle", type=float, default=4.0)
-    parser.add_argument("--scenes", default="all", help="comma-separated: select,multiline,links,rich,friends,runs,unread,dialog,settings,shortcuts,server,menus,long,search,finder,emoji,toggles,clipping,viewer,notify,scroll,paste,attach,transfer,appearance,maximize; not in all: layout (long migration paths/voice names and zoom matrix, needs --at-spi), layout-controls (dialog/nested-control focus), layout-performance (matched frame timings), rail-layout (first/last paint gutters and animated contours, needs --at-spi), resize (measures resizing), managed, math (formulas; run it with --theme light and --zoom 1.25 too), devices (wheel over Settings' device lists, checked over AT-SPI; needs --pulse-bin and --at-spi), notice-zoom (real Mumble failures and Dismiss bounds at 100–200%%, needs --at-spi)")
+    parser.add_argument("--scenes", default="all", help="comma-separated: select,multiline,links,rich,friends,runs,unread,dialog,settings,shortcuts,server,menus,long,search,finder,emoji,toggles,clipping,viewer,notify,scroll,paste,attach,transfer,appearance,maximize; not in all: layout (long migration paths/voice names and zoom matrix, needs --at-spi), layout-controls (dialog/nested-control focus), layout-performance (matched frame timings), native-spacing (rail bottom/footer gaps; requires --pulse-bin and --at-spi), rail-layout (first/last paint gutters and animated contours, needs --at-spi), resize (measures resizing), managed, math (formulas; run it with --theme light and --zoom 1.25 too), devices (wheel over Settings' device lists, checked over AT-SPI; needs --pulse-bin and --at-spi), notice-zoom (real Mumble failures and Dismiss bounds at 100–200%%, needs --at-spi)")
     parser.add_argument("--dragon-drop", type=Path, help="dragon-drop, to drop files on the conversation (attach scene)")
     # Dark by default, as the scenes were drawn; the private shell has no
     # settings portal, so "system" means GPUI's fallback (light).
@@ -333,6 +333,8 @@ def main():
                              "the shortcuts scene then binds through the real GlobalShortcuts portal")
     parser.add_argument("--zenity", type=Path, help="zenity, for another focused window in the shortcuts scene")
     args = parser.parse_args()
+    if "native-spacing" in args.scenes.split(",") and (not args.pulse_bin or not args.at_spi):
+        parser.error("native-spacing requires --pulse-bin and --at-spi")
     args.output.mkdir(parents=True, exist_ok=True)
     width, height = map(int, args.size.split("x"))
     with tempfile.TemporaryDirectory(prefix="nuschl-screens-") as temporary:
@@ -348,7 +350,7 @@ def main():
             murmur.ini.write_text(murmur.ini.read_text() + "messagelimit=1000\nmessageburst=1000\n")
             bot_options = ["--message-limit", "1000", "--message-burst", "1000"]
         murmur.seed()
-        rail_scene = bool({"rail-layout", "server-order"} & set(args.scenes.split(",")))
+        rail_scene = bool({"rail-layout", "server-order", "native-spacing"} & set(args.scenes.split(",")))
         layout_scene = bool({"layout", "layout-controls", "layout-performance"} & set(args.scenes.split(",")))
         if layout_scene:
             murmur.ini.write_text(murmur.ini.read_text() + "suggestPushToTalk=true\n")
@@ -461,6 +463,9 @@ def main():
             env = shell.app_environment() | {"RUST_LOG": os.environ.get("NUSCHL_SCREENSHOT_LOG", "nuschl=info")}
             # AccessKit honours NO_AT_BRIDGE (NixOS sets it where at-spi2-core is off).
             env.pop("NO_AT_BRIDGE", None)
+            if "native-spacing" in args.scenes.split(","):
+                env["NUSCHL_AUDIO_BACKEND"] = "pulse"
+                env["PULSE_SERVER"] = "unix:" + str(socket_dir / "native")
             if wormhole:
                 env |= wormhole.environment()
             if resizing or layout_scene or rail_scene:
@@ -546,6 +551,9 @@ def main():
             if {"layout", "layout-controls"} & scenes:
                 from layout_regression import run as run_layout
                 run_layout(args, root, shell, registry, bots, profile, port, pin, shot)
+            if "native-spacing" in scenes:
+                from native_spacing import run as run_spacing
+                run_spacing(args, shell, registry, bots, profile, shot)
             if "server-order" in scenes:
                 from server_order import run as run_order
                 run_order(args, root, shell, registry, bots, profile, port, pin, shot, app)
