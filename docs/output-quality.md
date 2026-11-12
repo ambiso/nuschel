@@ -575,3 +575,65 @@ as instantaneous local mute/volume control: queued encoded/decoded/device audio
 needs its own explicit semantics and control lane. The following correction is
 limited to carrying each forwarded packet's already-sampled bounded gain through
 the native jitter queue, matching the browser's typed-payload precedent.
+
+### Native gain ownership correction
+
+`EncodedPacket { opus, gain }` now passes through the native Instant adapter's
+existing generic shared jitter buffer. No jitter target, clock, resource limit or
+capture/device behavior changes. A successfully decoded real packet supplies
+its own finite clamped gain; missing packets use the preceding known gain,
+never the unrelated future packet's control. The same raw finite PCM plus
+frozen per-frame gain enters the existing f64 mix and final clamp. There is no
+second gain map or new per-sample lookup.
+
+The actual Nix-built codec/shared-core dependencies and production Mixer pass
+nine independent native fixtures at fixed gain and unfitted delay:
+
+| Fixture | Baseline SNR | Corrected SNR |
+| --- | ---: | ---: |
+| Ordered changing gain with FEC enabled | 4.63 dB | 326.50 dB |
+| Reorder, real FEC/PLC, end/restart | 3.74 dB | 324.93 dB |
+| Constant gain, all 10–120 ms durations | 140.91 dB | 140.91 dB |
+| 120 ms then 10 ms loss | −4.66 dB | 84.42 dB |
+| 120 ms then 20 ms loss | −5.25 dB | 81.12 dB |
+| Malformed packet before valid queued audio | 2.25 dB | 73.36 dB |
+| Unrelated gain in stale/duplicate packets | −0.33 dB | 322.52 dB |
+| Negative/extreme finite controls, rejected NaN/Inf | −1.32 dB | 327.89 dB |
+| Constant-gain control | 323.78 dB | 323.78 dB |
+
+The unchanged 35 dB gate is strict in `tests/native_gain.py`. The frozen original
+and expanded failures remain separate from final results under
+`~/.cache/nuschl-native-gain/{baseline,baseline-expanded,nix-baseline-expanded}/`;
+final actual-Nix dependency proof is `final/proof.json`.
+
+The scoped native Nix leaf passes 70 tests, with five pre-existing diagnostic
+cases ignored. These include zero allocations in actual device callback
+converters and the existing wide-sum/headroom check. The exact linked worker
+`/nix/store/xadifrf9vvkc3m5pppv6zp1ibh49fx64-rust_nuschl-media-worker-0.1.0-linked/bin/nuschl-media-worker`
+also passes the full original private DSP suite: echo 46 dB/0% sent, double-talk
+0.8 dB/100% gate, system AEC routing, jitter, clipping detection and sound isolation
+with 6 dB half-volume reduction. Negotiated private stereo output at 22050/44100/
+96000 Hz retains fixed-gain carrier errors within 0.004 dB and approximately 72 dB
+channel separation. This rate run excludes the optional 44.1 kHz AEC test; older
+AEC reliability limits and failures remain open.
+
+Three matched device-free repeats use the same compiler, codec and shared-core
+rlibs for baseline/correction. Median p95 mix+clamp costs were 28.2/27.1 µs ordered,
+31.5/30.1 µs loss/reorder and 112.5/108.9 µs variable-duration. Corrected maximum
+was 201.3 µs; component-process peak RSS was 3940 KiB versus 3896 KiB baseline.
+These short one-speaker fixtures include cached/idle pulls and OS noise; they
+are scoped regression observations, not statistical or hardware deadline claims.
+The encoded queue still caps 64 packets/speaker and 128 speakers. Payload ownership
+adds one f32 plus layout padding per existing packet; payload/decoded/callback
+buffers and their bounds remain unchanged. All codec work runs outside the
+allocation-free device callback. See `timing-final.json` and `build-guard.json`;
+client TMPDIR was disk-backed, daemon scratch remained default, and the observed
+minimum `/tmp` headroom stayed above 20 GiB.
+
+Local gain/per-user mute changes for already queued audio remain a separate
+unchecked TODO. The producer samples local factors on forwarding, and drops
+locally muted users upstream; this patch does not add a live update or per-user
+flush IPC. In particular, it does not promise immediate suppression of previously
+queued PCM or concealment. Stream deafen/disconnect behavior and microphone
+consent/startup are untouched. No physical audio, public server, full perceptual
+Mumble-equivalence or general AEC reliability claim follows from these fixtures.

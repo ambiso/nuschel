@@ -812,19 +812,18 @@ The media worker uses per-speaker adaptive jitter buffers and Opus loss concealm
       limits, zero native mix allocations, bounded persistent browser scratch;
       measured CPU/memory cost is documented in `docs/output-quality.md`.
       Full reference-Mumble multispeaker/loss/device parity remains open.
-- [ ] Audit native receive gain across encoded-packet reordering and FEC/PLC.
-      `Mixer::push` currently updates one `speaker.volume` on arrival, while the
-      jitter queue stores only Opus bytes; `Speaker::fill` freezes that latest
-      arrival's gain when decoding any queued packet or concealment. A later
-      packet's control can therefore affect earlier buffered audio. Browser
-      `VoicePlayout` already retains gain with each encoded packet and uses the
-      preceding known gain for loss. Establish independent reordered/variable-gain
-      native fixtures and define local volume-change semantics before aligning
-      the native path. Independent actual-Mixer/libopus PCM baseline now confirms
-      corruption: ordered4.63dB, reorder/FEC/PLC3.74dB, long-to-short loss−4.66/
-      −5.25dB and stale-control−.33dB, versus constant-gain323.78dB. The35dB
-      fixed-gain/unfitted-delay gate is unchanged. Preserve baseline evidence;
-      correction is active, not yet integrated/verified.
+- [ ] Integrate verified native encoded-packet gain ownership (`acf7fc66`,
+      `d2e7631f`; browser/audio owner). Typed native jitter payload retains each
+      sampled gain through reorder; FEC/PLC keeps the preceding known gain.
+      The shared jitter policy, decoded-frame/f64 mix, limits and callbacks are
+      unchanged. Nine strict independent actual-Mixer/libopus fixtures pass:
+      ordered 4.63→326.50dB, loss/reorder 3.74→324.93dB, stale-controls −0.33→322.52dB,
+      long-to-short loss 84.42/81.12dB; constant-gain controls remain unchanged.
+      All 70 native tests pass (5 diagnostic ignores), including zero callback
+      allocations; original private DSP and 22050/44100/96000 stereo SRC pass.
+      Preserve failed baselines and scoped timing/RSS observations. This does
+      not close live local mute/gain semantics or general quality/AEC parity.
+      See `docs/output-quality.md` and `~/.cache/nuschl-native-gain/handoff.json`.
 - [ ] Define native live local gain/per-user mute behavior for already queued
       audio. Current IPC carries a product sampled per forwarded packet; local
       mute drops future packets upstream, but no per-user flush/live-gain worker
