@@ -1704,8 +1704,9 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
       str0m/dimpl/RustCrypto closure. Add accurate standalone native scopes and
       source-pinned original notice bytes; keep the bundle gate closed on any
       unresolved upstream attribution instead of relabeling desktop notices.
-      Initial real inventory: the patched str0m-rust-crypto0.7.0 package omits
-      license files; recover its inherited monorepo grant from exact revision
+      Initial real 98-package inventory: is0.12.0, str0m-proto0.8.0 and patched
+      str0m-rust-crypto0.7.0 omit license files; recover their inherited monorepo
+      grants from exact revision
       5f2183ce7c67117cd1960dfeb11bed11fc188b66, not generic substitute text.
 - [ ] Review the server-mode storage worker's blast-radius boundary separately:
       it is a direct child with cleared environment, with NixOS service hardening
