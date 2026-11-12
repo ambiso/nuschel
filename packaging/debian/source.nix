@@ -85,4 +85,6 @@ pkgs.runCommand "nuschl-debian-source-${version}-${debianRevision}"
     test -s "$out/nuschl_${version}.orig.tar.xz"
     cd "$out"
     sha256sum *.dsc *.tar.* *_source.changes > SHA256SUMS
+    timeout 180 python3 ${./validate-source.py} --root "$out" --version ${pkgs.lib.escapeShellArg version} \
+      --debian-revision ${pkgs.lib.escapeShellArg debianRevision} --output "$out/validation.json"
   ''
