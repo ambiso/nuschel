@@ -66,6 +66,7 @@ let
         export NUSCHL_SYSROOT="$out"
         python3 - <<'PY'
         import os
+        import re
         from pathlib import Path
         root = Path(os.environ['NUSCHL_SYSROOT'])
         for path in root.rglob('*'):
@@ -74,6 +75,19 @@ let
                 if target.startswith('/'):
                     path.unlink()
                     path.symlink_to(os.path.relpath(root / target.lstrip('/'), path.parent))
+        # Anchor trusted GNU ld scripts to this immutable build sysroot.
+        # Final shared-library SONAMEs remain unchanged.
+        for path in (root / 'usr/lib').rglob('*.so'):
+            if path.is_symlink() or not path.is_file():
+                continue
+            with path.open('rb') as stream:
+                marker = stream.read(32)
+            if marker.startswith(b'/* GNU ld script'):
+                if path.stat().st_size > 65536:
+                    raise ValueError('oversized linker script')
+                text = path.read_text()
+                text = re.sub(r'(?<![A-Za-z0-9_])/(?:usr/)?lib(?:64)?/', lambda match: str(root) + match[0], text)
+                path.write_text(text)
         PY
       '';
   linker = pkgs.writeShellScriptBin "nuschl-fhs-cc" ''
