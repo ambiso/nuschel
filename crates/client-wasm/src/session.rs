@@ -56,18 +56,13 @@ pub struct Login {
 #[derive(Clone, Debug)]
 pub enum Event {
     /// The relay reached the server (`udp`: datagrams can go over UDP).
-    Opened {
-        udp: bool,
-    },
+    Opened { udp: bool },
     /// What the SDK models.
     Server(ServerEvent),
     /// Bounded legacy welcome markup; rendered only in the SDK worker.
     Welcome(String),
     /// The certificate is neither pinned nor vouched for: the user decides.
-    Certificate {
-        sha256: String,
-        changed: bool,
-    },
+    Certificate { sha256: String, changed: bool },
     /// Bounded legacy text. The platform renders and persists it before
     /// reporting a Message to the shared SDK; the relay never sees plaintext.
     Text {
@@ -79,23 +74,97 @@ pub enum Event {
         body: String,
         html: bool,
         outgoing: bool,
+        /// Last complete TLS tunnel-record boundary for a local send.
+        transport: Option<u64>,
     },
     /// Bounded encoded Opus; decoding belongs to the separate audio worker.
     Voice(nuschl_protocol::voice::VoicePacket),
     Sent {
         target: TextTarget,
         body: String,
+        transport: u64,
     },
     /// The connection is over.
-    Closed {
-        reason: String,
-    },
+    Closed { reason: String },
+}
+
+#[cfg(any(test, all(target_arch = "wasm32", target_os = "unknown")))]
+impl Event {
+    pub(crate) fn transport_admitted(&self, boundary: u64) -> bool {
+        match self {
+            Self::Sent { transport, .. } => *transport <= boundary,
+            Self::Text {
+                outgoing: true,
+                transport,
+                ..
+            } => transport.is_some_and(|transport| transport <= boundary),
+            _ => true,
+        }
+    }
 }
 
 /// Mumble's server drops a client that is silent for 30 seconds.
 const PING_MS: f64 = 10_000.0;
 /// Plaintext waiting to be framed; a server sending more is cut off.
 const MAX_BUFFER: usize = 16 * 1024 * 1024;
+pub(crate) const MAX_OUTGOING_BYTES: usize = 2 * 1024 * 1024;
+const MAX_OUTGOING_FRAMES: usize = 512;
+
+/// One bounded browser transport batch. Returns the last actually enqueued
+/// record even on a later partial failure, so independent peer events and
+/// earlier complete local frames retain their own admission semantics.
+#[cfg(any(test, all(target_arch = "wasm32", target_os = "unknown")))]
+pub(crate) fn enqueue_outgoing(
+    before: u64,
+    frames: &[Vec<u8>],
+    buffered: usize,
+    mut send: impl FnMut(&[u8]) -> Result<(), ()>,
+) -> (u64, Option<&'static str>) {
+    let total = frames
+        .iter()
+        .try_fold(buffered, |total, frame| total.checked_add(frame.len()));
+    if frames.len() > MAX_OUTGOING_FRAMES
+        || total.is_none_or(|total| total > MAX_OUTGOING_BYTES)
+        || before.checked_add(frames.len() as u64).is_none()
+    {
+        return (
+            before,
+            Some(
+                "The browser transport is full. The connection closed; keep your draft and reconnect.",
+            ),
+        );
+    }
+    let mut admitted = before;
+    for frame in frames {
+        if send(frame).is_err() {
+            return (
+                admitted,
+                Some(
+                    "The browser transport could not enqueue this message. The connection closed; keep your draft and reconnect.",
+                ),
+            );
+        }
+        admitted += 1; // entire batch's checked bound above excludes wrap
+    }
+    (admitted, None)
+}
+
+/// At most one tunnel-sized allocation, independent of TLS advertised output.
+struct TlsChunk {
+    bytes: Vec<u8>,
+    limit: usize,
+}
+impl Write for TlsChunk {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        let count = bytes.len().min(self.limit.saturating_sub(self.bytes.len()));
+        self.bytes.extend_from_slice(&bytes[..count]);
+        Ok(count)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
 const MAX_EVENTS: usize = 512;
 // Stock Murmur shares a burst-5, sustained-1/s bucket across self-state,
 // Version and text. Rejected controls are silently discarded, so retry the
@@ -201,6 +270,8 @@ pub struct Session {
     verifier: Arc<Verifier>,
     plaintext: BytesMut,
     outgoing: Vec<Vec<u8>>,
+    outgoing_bytes: usize,
+    transport_queued: u64,
     events: VecDeque<Event>,
     channels: BTreeMap<u32, Channel>,
     users: BTreeMap<u32, User>,
@@ -276,6 +347,8 @@ impl Session {
             tls,
             verifier,
             plaintext: BytesMut::new(),
+            outgoing_bytes: open.len(),
+            transport_queued: 1,
             outgoing: vec![open],
             events: VecDeque::new(),
             channels: BTreeMap::new(),
@@ -301,7 +374,18 @@ impl Session {
 
     /// WebSocket messages to send, in order.
     pub fn take_outgoing(&mut self) -> Vec<Vec<u8>> {
+        self.outgoing_bytes = 0;
         std::mem::take(&mut self.outgoing)
+    }
+
+    /// Boundary preceding this exact drained batch. The legacy native helper
+    /// above remains unchanged; browser admission records each actual WS write.
+    pub fn take_outgoing_batch(&mut self) -> (u64, Vec<Vec<u8>>) {
+        let before = self
+            .transport_queued
+            .checked_sub(self.outgoing.len() as u64)
+            .expect("queued transport counter covers retained records");
+        (before, self.take_outgoing())
     }
 
     pub fn take_events(&mut self) -> Vec<Event> {
@@ -451,11 +535,7 @@ impl Session {
         let bytes = nuschl_protocol::voice::encode_voice(self.voice_version, 0, &packet)
             .map_err(|_| "Invalid or oversized voice packet.")?;
         let frame = nuschl_protocol::encode_tunnel(&bytes);
-        if self.tls.writer().write_all(&frame).is_err() {
-            self.close("TLS failed.".into());
-            return Err("TLS failed.".into());
-        }
-        self.flush_tls();
+        self.send_frame(&frame)?;
         Ok(())
     }
 
@@ -491,7 +571,7 @@ impl Session {
         self.limits
             .check_text_wire(&wire.message)
             .map_err(|reason| reason.to_string())?;
-        self.send(kind::TEXT_MESSAGE, &wire);
+        self.send_control(kind::TEXT_MESSAGE, &wire)?;
         if self.is_closed() {
             return Err("TLS failed while sending.".into());
         }
@@ -511,8 +591,13 @@ impl Session {
             body: body.clone(),
             html: false,
             outgoing: true,
+            transport: Some(self.transport_queued),
         });
-        self.events.push_back(Event::Sent { target, body });
+        self.events.push_back(Event::Sent {
+            target,
+            body,
+            transport: self.transport_queued,
+        });
         Ok(())
     }
 
@@ -544,19 +629,8 @@ impl Session {
             TextTarget::Direct(id) if self.users.get(id).is_some_and(|user| Some(user.instance) == expected_peer) => wire.session.push(*id),
             _ => return Err("This image recipient changed. Keep the attachment and select its destination again.".into()),
         }
-        let caption_wire = nuschl_legacy_html::legacy_body(caption, true);
-        self.limits
-            .check_text_wire(&caption_wire)
-            .map_err(|error| error.to_string())?;
-        wire.message = image.to_owned();
-        if !caption.is_empty() {
-            wire.message.push_str("<br/>");
-            wire.message.push_str(&caption_wire);
-        }
-        self.limits
-            .check_html_total(&wire.message)
-            .map_err(|error| error.to_string())?;
-        self.send(kind::TEXT_MESSAGE, &wire);
+        wire.message = crate::image::compose(image, caption, &self.limits)?;
+        self.send_control(kind::TEXT_MESSAGE, &wire)?;
         if self.is_closed() {
             return Err("TLS failed while sending the image.".into());
         }
@@ -572,10 +646,12 @@ impl Session {
             body: wire.message,
             html: true,
             outgoing: true,
+            transport: Some(self.transport_queued),
         });
         self.events.push_back(Event::Sent {
             target,
             body: caption.into(),
+            transport: self.transport_queued,
         });
         Ok(())
     }
@@ -729,27 +805,111 @@ impl Session {
     }
 
     fn send(&mut self, kind: u16, message: &impl prost::Message) {
-        let Some(frame) = encode_control(kind, message) else {
-            return;
-        };
-        if self.tls.writer().write_all(&frame).is_err() {
-            return self.close("TLS failed.".into());
+        if let Err(reason) = self.send_control(kind, message) {
+            self.fail_transport(reason);
         }
-        self.flush_tls();
+    }
+
+    fn send_control(&mut self, kind: u16, message: &impl prost::Message) -> Result<(), String> {
+        let frame = encode_control(kind, message)
+            .ok_or("The outgoing control message exceeds its protocol limit.")?;
+        self.send_frame(&frame)
+    }
+
+    /// Serialize one complete control/voice frame synchronously. rustls keeps
+    /// its default 64 KiB buffer; drain records between partial plaintext writes.
+    /// No other frame can interleave with a partially consumed plaintext frame.
+    fn send_frame(&mut self, frame: &[u8]) -> Result<(), String> {
+        if self.is_closed() {
+            return Err("This connection is closed.".into());
+        }
+        if let Err(reason) = self.flush_tls_checked() {
+            self.fail_transport(reason.clone());
+            return Err(reason);
+        }
+        // Reserve conservative TLS/tunnel overhead before consuming ANY byte.
+        // A temporary full transport refuses this send without closing or
+        // emitting a partial frame. Other complete pending frames stay intact.
+        let records = frame.len().div_ceil(16 * 1024);
+        let reserve = frame
+            .len()
+            .saturating_add(records.saturating_mul(128))
+            .saturating_add(4096);
+        if reserve > MAX_OUTGOING_BYTES.saturating_sub(self.outgoing_bytes)
+            || self
+                .outgoing
+                .len()
+                .saturating_add(records)
+                .saturating_add(4)
+                > MAX_OUTGOING_FRAMES
+        {
+            return Err("The outgoing transport is busy. Keep the message and retry after pending traffic is sent.".into());
+        }
+        let mut remaining = frame;
+        while !remaining.is_empty() {
+            let count = match self.tls.writer().write(remaining) {
+                Ok(count) => count,
+                Err(_) => {
+                    self.fail_transport("TLS failed while writing an outgoing frame.".into());
+                    return Err("TLS failed while writing an outgoing frame.".into());
+                }
+            };
+            if count == 0 {
+                // Zero progress after a drain cannot be repaired by spinning or
+                // acknowledging a partial application frame as a successful send.
+                self.fail_transport("TLS made no progress while writing an outgoing frame.".into());
+                return Err("TLS made no progress while writing an outgoing frame.".into());
+            }
+            remaining = &remaining[count..];
+            if let Err(reason) = self.flush_tls_checked() {
+                self.fail_transport(reason.clone());
+                return Err(reason);
+            }
+        }
+        Ok(())
+    }
+
+    fn fail_transport(&mut self, reason: String) {
+        // Never release a truncated application frame to the WebSocket pump.
+        self.outgoing.clear();
+        self.outgoing_bytes = 0;
+        self.close(reason);
     }
 
     fn flush_tls(&mut self) {
-        while self.tls.wants_write() {
-            let mut bytes = Vec::new();
-            if self.tls.write_tls(&mut bytes).is_err() {
-                return self.close("TLS failed.".into());
-            }
-            for chunk in bytes.chunks(tunnel::MAX_STREAM) {
-                if let Some(frame) = tunnel::encode(&Frame::Stream(chunk)) {
-                    self.outgoing.push(frame);
-                }
-            }
+        if let Err(reason) = self.flush_tls_checked() {
+            self.fail_transport(reason);
         }
+    }
+
+    fn flush_tls_checked(&mut self) -> Result<(), String> {
+        while self.tls.wants_write() {
+            if self.outgoing_bytes >= MAX_OUTGOING_BYTES
+                || self.outgoing.len() >= MAX_OUTGOING_FRAMES
+            {
+                return Err("The outgoing TLS transport exceeds its bounded queue.".into());
+            }
+            let mut bytes = TlsChunk {
+                bytes: Vec::new(),
+                limit: tunnel::MAX_STREAM.min(MAX_OUTGOING_BYTES - self.outgoing_bytes - 1),
+            };
+            let written = self
+                .tls
+                .write_tls(&mut bytes)
+                .map_err(|_| "TLS failed while draining an outgoing frame.")?;
+            if written == 0 || bytes.bytes.is_empty() {
+                return Err("TLS made no progress while draining an outgoing frame.".into());
+            }
+            let frame = tunnel::encode(&Frame::Stream(&bytes.bytes))
+                .ok_or("Invalid outgoing TLS stream chunk.")?;
+            self.transport_queued = self
+                .transport_queued
+                .checked_add(1)
+                .ok_or("Outgoing transport sequence exhausted.")?;
+            self.outgoing_bytes += frame.len();
+            self.outgoing.push(frame);
+        }
+        Ok(())
     }
 
     fn frames(&mut self) {
@@ -967,6 +1127,7 @@ impl Session {
                         body: message.message.clone(),
                         html: self.limits.allow_html,
                         outgoing: false,
+                        transport: None,
                     });
                 }
             }
@@ -1059,6 +1220,92 @@ fn webpki_roots() -> impl Iterator<Item = rustls::pki_types::TrustAnchor<'static
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn transport_pressure_is_refused_before_any_send_and_partial_failure_keeps_exact_receipts() {
+        let frames = vec![vec![0; 20]; 6];
+        let mut calls = 0;
+        let result = enqueue_outgoing(10, &frames, MAX_OUTGOING_BYTES, |_| {
+            calls += 1;
+            Ok(())
+        });
+        assert!(result.1.is_some());
+        assert_eq!(result.0, 10);
+        assert_eq!(calls, 0);
+        assert!(
+            enqueue_outgoing(u64::MAX, &frames, 0, |_| panic!(
+                "overflow must be refused before send"
+            ))
+            .1
+            .is_some()
+        );
+        let result = enqueue_outgoing(10, &frames, 0, |_| {
+            calls += 1;
+            if calls == 4 { Err(()) } else { Ok(()) }
+        });
+        assert_eq!(result.0, 13);
+        assert!(result.1.is_some());
+        assert_eq!(calls, 4);
+        assert!(
+            Event::Sent {
+                target: TextTarget::Channel(0),
+                body: "first complete frame".into(),
+                transport: 12
+            }
+            .transport_admitted(result.0)
+        );
+        assert!(
+            !Event::Sent {
+                target: TextTarget::Channel(0),
+                body: "second incomplete frame".into(),
+                transport: 16
+            }
+            .transport_admitted(result.0)
+        );
+        let peer = Event::Text {
+            target: TextTarget::Channel(0),
+            channel_instance: Some(7),
+            peer: None,
+            author: "peer".into(),
+            body: "independently received".into(),
+            html: false,
+            outgoing: false,
+            transport: None,
+        };
+        assert!(peer.transport_admitted(result.0));
+        let own = Event::Text {
+            target: TextTarget::Channel(0),
+            channel_instance: Some(7),
+            peer: None,
+            author: "own".into(),
+            body: "not fully enqueued".into(),
+            html: false,
+            outgoing: true,
+            transport: Some(16),
+        };
+        assert!(!own.transport_admitted(result.0));
+    }
+
+    #[test]
+    fn tls_chunks_bound_allocations_and_zero_progress_does_not_spin_or_ack() {
+        let mut chunk = TlsChunk {
+            bytes: Vec::new(),
+            limit: 3,
+        };
+        assert_eq!(chunk.write(b"abcdef").unwrap(), 3);
+        assert_eq!(chunk.write(b"more").unwrap(), 0);
+        assert_eq!(chunk.bytes, b"abc");
+        let mut session = session();
+        // Before handshake, rustls can buffer only its default plaintext limit.
+        // Draining cannot encrypt it yet: fail closed instead of spinning.
+        assert!(session.send_frame(&vec![0; 200_000]).is_err());
+        assert!(session.is_closed());
+        assert!(session.take_outgoing().is_empty());
+        assert!(session.take_events().iter().all(|event| !matches!(
+            event,
+            Event::Sent { .. } | Event::Text { outgoing: true, .. }
+        )));
+    }
 
     #[test]
     fn sync_publishes_limits_but_only_codec_version_publishes_negotiated_support() {

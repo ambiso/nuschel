@@ -7,7 +7,7 @@ import {MAX_REPLY, textBytes, validateDocument} from "./content-protocol.js";
 export const DOCUMENT_BYTES = 16 * 1024 * 1024;
 export const DOCUMENT_COUNT = 256;
 const listeners = new Set();
-let version = 0, active;
+let version = 0, active, consumed = false;
 export const documents = {subscribe(run) { listeners.add(run); run(version); return () => listeners.delete(run); }};
 function changed() { version++; for (const run of listeners) run(version); }
 function minimumCharge(document) {
@@ -44,24 +44,38 @@ export class DocumentCache {
 
 const cache = new DocumentCache();
 export function contentDocument(token) { return cache.get(token); }
-export function contentFailed(token) { return cache.entries.get(token)?.failed ?? false; }
-export function retryContent(token) { active?.command("content_request",token).catch(()=>{}); }
-export function retainDocument(token) {
+export function contentFailed(token) { return Boolean(cache.entries.get(token)?.failed || active?.denied.has(token)); }
+export function contentUnavailable() { return !active || active.service.retired === true; }
+export function retryContent(token) { active?.retry(token); }
+export function retainDocument(token,failed=false) {
   if(typeof token!=="string")return()=>{};
+  const owner=active;
   const release=cache.pin(token);
-  if(!release)active?.rehydrate(token);
-  return release??(()=>{});
+  if(!release&&!failed)owner?.rehydrate(token);
+  // UI dedupe metadata follows the mounted lease. Removing it neither cancels
+  // background SDK work nor releases any codec/transport concurrency credit.
+  return()=>{release?.();owner?.missing.delete(token);};
 }
 
 export class ContentBridge {
   constructor(command,{service=new ContentService()}={}) {
-    if(active)throw new Error("The content bridge already has an owner.");
-    this.command=command;this.service=service;this.pending=new Map();this.missing=new Set();this.welcomes=new Map();this.disposed=false;active=this;
+    if(consumed)throw new Error("The content bridge already consumed its page-lifetime owner. Reload to reconnect.");
+    consumed=true;
+    this.command=command;this.service=service;this.pending=new Map();this.missing=new Set();this.denied=new Set();this.welcomes=new Map();this.disposed=false;active=this;
   }
   rehydrate(token) {
-    if(this.disposed||this.missing.has(token)||this.missing.size>=128)return;
+    if(this.disposed||this.service.retired||this.denied.has(token)||this.missing.has(token))return;
+    if(this.missing.size>=128){this.deny(token);return;}
     this.missing.add(token);
     this.command("content_request",token).catch(()=>{});
+  }
+  deny(token) {
+    if(this.denied.size>=512)this.denied.delete(this.denied.values().next().value);
+    this.denied.add(token);changed();
+  }
+  retry(token) {
+    if(this.disposed||this.service.retired)return;
+    this.command("content_request",token).catch(()=>this.deny(token));
   }
   handle(data) {
     if(data?.kind!=="content_work")return false;
@@ -86,8 +100,11 @@ export class ContentBridge {
       if(this.disposed)return;
       textBytes(raw,MAX_REPLY);
       const accepted=JSON.parse(raw);
-      if(accepted&&Object.keys(accepted).length===4&&typeof accepted.failed==="boolean"&&cache.insert(accepted.token,accepted.document,accepted.charge,accepted.failed))changed();
-    } catch { /* Original source remains in the SDK for explicit retry. */ }
+      if(accepted&&Object.keys(accepted).length===4&&typeof accepted.failed==="boolean") {
+        if(cache.insert(accepted.token,accepted.document,accepted.charge,accepted.failed))changed();
+        else this.deny(accepted.token); // never turn pinned-cache pressure into a re-render loop
+      }
+    } catch { this.deny(id); /* Original source remains in the SDK for explicit retry. */ }
     finally { this.pending.delete(id); }
   }
   state(servers,updates) {
@@ -106,6 +123,10 @@ export class ContentBridge {
     if(this.disposed)return;this.disposed=true;
     for(const controller of this.pending.values())controller.abort();
     for(const entry of this.welcomes.values())entry.release();
-    this.service.dispose();this.pending.clear();this.missing.clear();this.welcomes.clear();cache.clear();if(active===this)active=null;changed();
+    this.service.dispose();this.pending.clear();this.missing.clear();this.denied.clear();this.welcomes.clear();
+    // Retained views/canvases may outlive this callback. Keep their cache charge
+    // and permanently consume this page owner; disposal is not an exit ACK or
+    // permission to manufacture another 16 MiB of derivative capacity.
+    if(active===this)active=null;
   }
 }

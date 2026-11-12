@@ -74,32 +74,46 @@ impl Shared {
     }
 
     /// Send what the session queued, and report what it said.
-    fn pump(&self, server: &str, generation: u64, socket: &WebSocket, session: &RefCell<Session>) {
-        let (outgoing, events) = {
-            let mut session = session.borrow_mut();
-            // A timer can run while DNS/TLS/WebSocket setup is still pending.
-            // Keep the initial Open (and any later queued records) until the
-            // transport is actually writable instead of silently dropping it.
-            let outgoing = if socket.ready_state() == WebSocket::OPEN {
-                session.take_outgoing()
-            } else {
-                Vec::new()
-            };
-            (outgoing, session.take_events())
+    fn pump(
+        &self,
+        server: &str,
+        generation: u64,
+        socket: &WebSocket,
+        session: &RefCell<Session>,
+    ) -> Result<(), String> {
+        let (before, outgoing) = if socket.ready_state() == WebSocket::OPEN {
+            session.borrow_mut().take_outgoing_batch()
+        } else {
+            (0, Vec::new())
         };
+        let mut admitted = before;
+        let mut failure = None;
         if socket.ready_state() == WebSocket::OPEN {
-            for message in outgoing {
-                let _ = socket.send_with_u8_array(&message);
-            }
+            (admitted, failure) = crate::session::enqueue_outgoing(
+                before,
+                &outgoing,
+                socket.buffered_amount() as usize,
+                |message| socket.send_with_u8_array(message).map_err(|_| ()),
+            );
+        } else if matches!(socket.ready_state(), WebSocket::CLOSING | WebSocket::CLOSED) {
+            failure = Some("The browser transport is closed. Keep your draft and reconnect.");
         }
+        if failure.is_some() {
+            session.borrow_mut().disconnected();
+            let _ = socket.close();
+        }
+        let events = session.borrow_mut().take_events();
         if events.is_empty() {
-            return;
+            return failure.map_or(Ok(()), |reason| Err(reason.into()));
         }
         let mut inputs = self.inputs.borrow_mut();
         let old_inputs = inputs.len();
         let mut audio_changed = false;
         let mut storage_changed = false;
         for event in events {
+            if !event.transport_admitted(admitted) {
+                continue;
+            }
             let server = server.to_owned();
             inputs.push_back(match event {
                 Event::Opened { .. } => continue,
@@ -193,6 +207,7 @@ impl Shared {
                     body,
                     html,
                     outgoing,
+                    transport: _,
                 } => {
                     let Some(identity) = session.borrow().history_identity() else {
                         continue;
@@ -261,7 +276,11 @@ impl Shared {
                     }
                     continue;
                 }
-                Event::Sent { target, body } => Input::Sent {
+                Event::Sent {
+                    target,
+                    body,
+                    transport: _,
+                } => Input::Sent {
                     server,
                     generation,
                     target,
@@ -288,6 +307,7 @@ impl Shared {
                 let _ = callback.call0(&JsValue::NULL);
             }
         }
+        failure.map_or(Ok(()), |reason| Err(reason.into()))
     }
 }
 
@@ -327,7 +347,7 @@ impl Platform for BrowserPlatform {
                 session.clone(),
             );
             Closure::<dyn FnMut(web_sys::Event)>::new(move |_| {
-                shared.pump(&server, generation, &socket, &session);
+                let _ = shared.pump(&server, generation, &socket, &session);
             })
         };
         let on_message = {
@@ -349,7 +369,7 @@ impl Platform for BrowserPlatform {
                 } else {
                     session.borrow_mut().disconnected();
                 }
-                shared.pump(&server, generation, &socket, &session);
+                let _ = shared.pump(&server, generation, &socket, &session);
             })
         };
         let on_close = {
@@ -361,7 +381,7 @@ impl Platform for BrowserPlatform {
             );
             Closure::<dyn FnMut(CloseEvent)>::new(move |_| {
                 session.borrow_mut().disconnected();
-                shared.pump(&server, generation, &socket, &session);
+                let _ = shared.pump(&server, generation, &socket, &session);
             })
         };
         socket.set_onopen(Some(on_open.as_ref().unchecked_ref()));
@@ -432,8 +452,7 @@ impl Platform for BrowserPlatform {
         let (shared, generation) = (self.0.clone(), connection.generation);
         let (socket, session) = (connection.socket.clone(), connection.session.clone());
         drop(connections);
-        shared.pump(server, generation, &socket, &session);
-        Ok(())
+        shared.pump(server, generation, &socket, &session)
     }
 
     fn local_history(
@@ -725,7 +744,7 @@ impl WebClient {
             connection.generation,
             &connection.socket,
             &connection.session,
-        );
+        )?;
         Ok(())
     }
 
@@ -897,7 +916,7 @@ impl WebClient {
             destination.generation,
             &connection.socket,
             &connection.session,
-        );
+        )?;
         drop(connections);
         self.shared.images.borrow_mut().cancel(&captured.ticket);
         serde_json::to_string(&ImageAdmission {
@@ -987,41 +1006,7 @@ impl WebClient {
         let Some(completed) = completed else {
             return Ok("null".into());
         };
-        for origin in &completed.evicted {
-            if let Origin::Message {
-                server,
-                generation,
-                channel,
-                instance,
-                serial,
-                revision,
-            } = origin
-            {
-                if let Some(message) = self
-                    .client
-                    .servers
-                    .iter_mut()
-                    .find(|state| &state.id == server && state.generation == *generation)
-                    .and_then(|state| {
-                        state
-                            .channels
-                            .iter_mut()
-                            .find(|state| state.id == *channel && state.instance == *instance)
-                    })
-                    .and_then(|state| {
-                        state.timeline.messages.iter_mut().find(|message| {
-                            message.serial == *serial && message.revision == *revision
-                        })
-                    })
-                {
-                    message.document = MessageDocument {
-                        blocks: vec![ContentBlock::text(
-                            "[Preview evicted; reopen this conversation to reload its history.]",
-                        )],
-                    };
-                }
-            }
-        }
+        self.clear_evicted(&completed.evicted);
         let token = completed.token;
         match &completed.origin {
             Origin::Message {
@@ -1084,7 +1069,7 @@ impl WebClient {
     }
 
     pub fn content_request(&mut self, token: String) -> Result<(), String> {
-        let (origin, mode) = self
+        let (origin, mode, digest) = self
             .shared
             .jobs
             .borrow()
@@ -1092,6 +1077,10 @@ impl WebClient {
             .ok_or("Content is no longer available.")?;
         let source = content_source(&self.client, &self.shared, &origin)
             .ok_or("Content is no longer available.")?;
+        use sha2::Digest;
+        if <[u8; 32]>::from(sha2::Sha256::digest(source.as_bytes())) != digest {
+            return Err("This content source changed.".into());
+        }
         self.shared
             .jobs
             .borrow_mut()
@@ -1129,8 +1118,9 @@ impl WebClient {
                         serial: message.serial.parse().unwrap_or(u64::MAX),
                         revision: message.revision,
                     };
-                    message.content_token =
-                        self.shared.jobs.borrow().token(&origin).map(str::to_owned);
+                    let jobs = self.shared.jobs.borrow();
+                    message.content_token = jobs.token(&origin).map(str::to_owned);
+                    message.content_failed = jobs.is_failed(&origin);
                 }
             }
         }
@@ -1201,7 +1191,7 @@ impl WebClient {
             .collect();
         for (server, generation, socket, session) in connections {
             session.borrow_mut().tick(now_ms);
-            self.shared.pump(&server, generation, &socket, &session);
+            let _ = self.shared.pump(&server, generation, &socket, &session);
         }
         let changed = self.client.set_time(now_ms.max(0.0) as u64);
         let now = js_sys::Date::now();
@@ -1323,6 +1313,43 @@ impl WebClient {
 
 // Non-exported helpers keep browser devices outside the SDK/session boundary.
 impl WebClient {
+    fn clear_evicted(&mut self, origins: &[Origin]) {
+        for origin in origins {
+            if let Some(message) = content_message_mut(&mut self.client, origin) {
+                message.document = MessageDocument {
+                    blocks: vec![ContentBlock::text(
+                        "[Preview evicted; reopen this conversation to reload its history.]",
+                    )],
+                };
+            }
+        }
+    }
+
+    fn schedule_source(&mut self, origin: Origin, source: &str, mode: SourceMode) {
+        if self
+            .shared
+            .jobs
+            .borrow_mut()
+            .request(origin.clone(), source, mode, now_ms())
+            .is_err()
+        {
+            let evicted = self
+                .shared
+                .jobs
+                .borrow_mut()
+                .failed(origin.clone(), source, mode)
+                .unwrap_or_default();
+            self.clear_evicted(&evicted);
+            if let Some(message) = content_message_mut(&mut self.client, &origin) {
+                message.document = MessageDocument {
+                    blocks: vec![ContentBlock::text(
+                        "[Content processing is busy. Retry this message preview when pending work finishes.]",
+                    )],
+                };
+            }
+        }
+    }
+
     fn admit_delivery(&mut self, delivery: RawCompletion) {
         for input in delivery.inputs {
             match input {
@@ -1365,11 +1392,10 @@ impl WebClient {
                             serial: receipt.serial,
                             revision: receipt.revision,
                         };
-                        let _ = self.shared.jobs.borrow_mut().request(
+                        self.schedule_source(
                             origin,
                             &source,
                             delivery.live_mode.unwrap_or(SourceMode::Marked),
-                            now_ms(),
                         );
                     }
                 }
@@ -1392,6 +1418,7 @@ impl WebClient {
                         messages,
                         next_before,
                     });
+                    let mut sources = Vec::new();
                     if let Some(server) =
                         self.client.servers.iter().find(|state| state.id == server)
                         && let Some(channel) = server
@@ -1414,13 +1441,13 @@ impl WebClient {
                                     serial: message.serial,
                                     revision: message.revision,
                                 };
-                                let _ = self.shared.jobs.borrow_mut().request(
-                                    origin,
-                                    &message.source,
-                                    mode,
-                                    now_ms(),
-                                );
+                                sources.push((origin, mode));
                             }
+                        }
+                    }
+                    for (origin, mode) in sources {
+                        if let Some(source) = content_source(&self.client, &self.shared, &origin) {
+                            self.schedule_source(origin, &source, mode);
                         }
                     }
                 }
@@ -1642,4 +1669,38 @@ fn selected_lifetime(client: &Client) -> Option<(String, u64, u32, u64)> {
         channel.id,
         channel.instance,
     ))
+}
+
+fn content_message_mut<'a>(
+    client: &'a mut Client,
+    origin: &Origin,
+) -> Option<&'a mut nuschl_client::timeline::Message> {
+    let Origin::Message {
+        server,
+        generation,
+        channel,
+        instance,
+        serial,
+        revision,
+    } = origin
+    else {
+        return None;
+    };
+    client
+        .servers
+        .iter_mut()
+        .find(|state| &state.id == server && state.generation == *generation)
+        .and_then(|state| {
+            state
+                .channels
+                .iter_mut()
+                .find(|state| state.id == *channel && state.instance == *instance)
+        })
+        .and_then(|state| {
+            state
+                .timeline
+                .messages
+                .iter_mut()
+                .find(|message| message.serial == *serial && message.revision == *revision)
+        })
 }

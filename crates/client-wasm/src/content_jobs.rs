@@ -7,6 +7,7 @@ use crate::content_broker::{
     validate_render,
 };
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
 const DEADLINE_MS: u64 = 24_000;
@@ -58,6 +59,8 @@ struct Handle {
     token: String,
     plain_bytes: usize,
     mode: SourceMode,
+    source_digest: [u8; 32],
+    failed: bool,
 }
 
 pub struct Completion {
@@ -195,29 +198,13 @@ impl Jobs {
             retained_bytes: 1024,
         });
         let token = request.to_owned();
-        // Keep only opaque handles and bounded plain derivatives in the SDK.
-        // UI document/pixel retention has its own single global LRU.
-        if let Some(previous) = self.handles.remove(&job.origin) {
-            self.plain_bytes -= previous.plain_bytes;
-        }
-        let mut evicted = Vec::new();
-        while self.handles.len() >= MAX_HANDLES
-            || self.plain_bytes.saturating_add(rendered.plain_text.len()) > MAX_PLAIN_BYTES
-        {
-            let Some((origin, old)) = self.handles.pop_first() else {
-                break;
-            };
-            self.plain_bytes -= old.plain_bytes;
-            evicted.push(origin);
-        }
-        self.plain_bytes += rendered.plain_text.len();
-        self.handles.insert(
+        let evicted = self.install(
             job.origin.clone(),
-            Handle {
-                token: token.clone(),
-                plain_bytes: rendered.plain_text.len(),
-                mode: job.mode,
-            },
+            &job.source,
+            job.mode,
+            token.clone(),
+            rendered.plain_text.len(),
+            failed,
         );
         Ok(Some(Completion {
             origin: job.origin,
@@ -229,11 +216,67 @@ impl Jobs {
         }))
     }
 
-    pub fn origin(&self, token: &str) -> Option<(Origin, SourceMode)> {
+    fn install(
+        &mut self,
+        origin: Origin,
+        source: &str,
+        mode: SourceMode,
+        token: String,
+        plain_bytes: usize,
+        failed: bool,
+    ) -> Vec<Origin> {
+        if let Some(previous) = self.handles.remove(&origin) {
+            self.plain_bytes -= previous.plain_bytes;
+        }
+        let mut evicted = Vec::new();
+        while self.handles.len() >= MAX_HANDLES
+            || self.plain_bytes.saturating_add(plain_bytes) > MAX_PLAIN_BYTES
+        {
+            let Some((old_origin, old)) = self.handles.pop_first() else {
+                break;
+            };
+            self.plain_bytes -= old.plain_bytes;
+            evicted.push(old_origin);
+        }
+        self.plain_bytes += plain_bytes;
+        self.handles.insert(
+            origin,
+            Handle {
+                token,
+                plain_bytes,
+                mode,
+                source_digest: Sha256::digest(source.as_bytes()).into(),
+                failed,
+            },
+        );
+        evicted
+    }
+
+    /// A refused queue admission stores only bounded metadata and the original
+    /// source digest. Explicit retry can rehydrate from the SDK's retained row;
+    /// no additional source copy, background retry or worker credit is created.
+    pub fn failed(
+        &mut self,
+        origin: Origin,
+        source: &str,
+        mode: SourceMode,
+    ) -> Result<Vec<Origin>, &'static str> {
+        self.next = self
+            .next
+            .checked_add(1)
+            .ok_or("Content ticket counter exhausted.")?;
+        Ok(self.install(origin, source, mode, self.next.to_string(), 0, true))
+    }
+
+    pub fn is_failed(&self, origin: &Origin) -> bool {
+        self.handles.get(origin).is_some_and(|handle| handle.failed)
+    }
+
+    pub fn origin(&self, token: &str) -> Option<(Origin, SourceMode, [u8; 32])> {
         self.handles
             .iter()
             .find(|(_, handle)| handle.token == token)
-            .map(|(origin, handle)| (origin.clone(), handle.mode))
+            .map(|(origin, handle)| (origin.clone(), handle.mode, handle.source_digest))
     }
 
     pub fn token(&self, origin: &Origin) -> Option<&str> {
@@ -355,5 +398,33 @@ mod tests {
                 .failed
         );
         assert_eq!(jobs.token(&origin(999)), Some("129"));
+    }
+
+    #[test]
+    fn queue_refusal_retains_only_bounded_retry_metadata_and_original_digest() {
+        let mut jobs = Jobs::default();
+        for serial in 0..MAX_PENDING_JOBS {
+            jobs.request(origin(serial as u64), "", SourceMode::Plain, 0)
+                .unwrap();
+        }
+        let bytes = jobs.pending_bytes;
+        assert!(
+            jobs.request(origin(999), "original", SourceMode::Legacy, 0)
+                .is_err()
+        );
+        assert!(
+            jobs.failed(origin(999), "original", SourceMode::Legacy)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(jobs.pending.len(), MAX_PENDING_JOBS);
+        assert_eq!(jobs.pending_bytes, bytes);
+        assert!(jobs.is_failed(&origin(999)));
+        let token = jobs.token(&origin(999)).unwrap();
+        let (observed, mode, digest) = jobs.origin(token).unwrap();
+        assert_eq!(observed, origin(999));
+        assert_eq!(mode, SourceMode::Legacy);
+        assert_eq!(digest, <[u8; 32]>::from(Sha256::digest(b"original")));
+        assert_ne!(digest, <[u8; 32]>::from(Sha256::digest(b"replacement")));
     }
 }

@@ -46,5 +46,6 @@ test("only the SDK accepted reply becomes visible, with no credential metadata i
     assert.deepEqual(contentDocument("7"),document);
     const release=retainDocument("7");release();
   } finally {bridge.dispose();}
-  assert.equal(contentDocument("7"),null);
+  assert.deepEqual(contentDocument("7"),document);
+  assert.throws(()=>new ContentBridge(()=>{}, {service}),/page-lifetime/);
 });
