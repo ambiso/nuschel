@@ -233,7 +233,7 @@ class ReleaseCommand(unittest.TestCase):
             front.execute(True, confirm=lambda details: False)
         self.assertFalse(self.remote_calls)
         front.execute(True, confirm=lambda details: True)
-        self.assertEqual(self.remote_calls[0], ['git', '-C', str(self.repo), 'push', 'origin',
+        self.assertEqual(self.remote_calls[0], ['git', '-C', str(self.repo), 'push', '--no-follow-tags', 'origin',
                                              'refs/tags/v0.1.0:refs/tags/v0.1.0'])
         self.assertNotIn('--force', self.remote_calls[0])
 
@@ -258,8 +258,39 @@ class ReleaseCommand(unittest.TestCase):
         self.prepare()
         self.assertFalse(self.pointer()['created_local_tag'])
         front.execute(True, confirm=lambda details: True)
-        self.assertEqual(self.remote_calls[0], ['git', '-C', str(self.repo), 'push', 'origin',
+        self.assertEqual(self.remote_calls[0], ['git', '-C', str(self.repo), 'push', '--no-follow-tags', 'origin',
                                              'refs/tags/v0.1.0:refs/tags/v0.1.0'])
+
+    def test_exact_tag_push_ignores_follow_tags_configuration_with_actual_local_bare_remote(self):
+        self.git('-c', 'user.name=fixture', '-c', 'user.email=fixture@example.invalid',
+                 'tag', '-a', 'unrelated-annotated', '-m', 'must remain local')
+        self.git('config', 'push.followTags', 'true')
+        bare = self.area / 'owned-bare.git'
+        subprocess.run(['git', 'init', '--bare', '-q', str(bare)], check=True, capture_output=True)
+        # Keep the public origin URL for inference; only this fixture's local Git
+        # configuration rewrites it to an owned disk-only bare repository.
+        self.git('config', 'url.' + bare.as_uri() + '.insteadOf', 'git@github.com:fixture/project.git')
+        self.prepare()
+        previous = self.local.run
+        def with_actual_disk_push(args, **kwargs):
+            args = list(map(str, args))
+            if args[0] == 'git' and 'push' in args:
+                self.remote_calls.append(args)
+                return subprocess.run(args, check=True, capture_output=True, text=True, timeout=30).stdout
+            return previous(args, **kwargs)
+        with patch.object(self.local, 'run', side_effect=with_actual_disk_push):
+            front.execute(True, confirm=lambda details: True)
+        refs = subprocess.run(['git', '--git-dir', str(bare), 'for-each-ref', '--format=%(refname)'],
+                              check=True, capture_output=True, text=True).stdout.splitlines()
+        self.assertEqual(refs, ['refs/tags/v0.1.0'])
+        # Discriminating control: the ordinary explicit refspec DOES follow the
+        # unrelated annotated tag under the same push.followTags configuration.
+        control = self.area / 'control-bare.git'
+        subprocess.run(['git', 'init', '--bare', '-q', str(control)], check=True, capture_output=True)
+        self.git('push', str(control), 'refs/tags/v0.1.0:refs/tags/v0.1.0')
+        control_refs = subprocess.run(['git', '--git-dir', str(control), 'for-each-ref', '--format=%(refname)'],
+                                      check=True, capture_output=True, text=True).stdout.splitlines()
+        self.assertEqual(control_refs, ['refs/tags/unrelated-annotated', 'refs/tags/v0.1.0'])
 
     def test_cache_refuses_ram_or_symlink_staging_and_command_lock_is_exclusive(self):
         with patch.dict(os.environ, {'XDG_CACHE_HOME': '/tmp'}):
@@ -284,7 +315,7 @@ class TerminalAndArgv(unittest.TestCase):
                 front.confirm_modal(['fixture'])
 
     def test_actual_terminal_modal_defaults_no_and_requires_deliberate_yes(self):
-        for keys, expected in ((b'\n', 'False'), (b'\t\n', 'True'), (b'\x1b', 'False')):
+        for keys, expected in ((b'\n', 'False'), (b'\t\n', 'True'), (b'\x1b', 'False'), (b'\x04', 'False')):
             with self.subTest(keys=keys):
                 master, slave = pty.openpty()
                 fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 24, 80, 0, 0))

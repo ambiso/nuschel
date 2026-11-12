@@ -186,7 +186,7 @@ def confirm_modal(details):
                 offset += available if key == curses.KEY_NPAGE else 1
             elif key in (10, 13, curses.KEY_ENTER):
                 return selected
-            elif key in (-1, 27, ord('q'), ord('n')):
+            elif key in (-1, 4, 27, ord('q'), ord('n')):
                 return False
     return curses.wrapper(dialog)
 
@@ -272,7 +272,7 @@ def execute(publish=False, *, confirm=None):
                 require(infer(ROOT, publish=True) == selection, 'Source or origin changed during confirmation.')
                 require(record['identity'] == signed_identity(stage), 'Signed release changed during confirmation.')
                 verify_stage(stage, signer)
-                backend.run(['git', '-C', ROOT, 'push', 'origin',
+                backend.run(['git', '-C', ROOT, 'push', '--no-follow-tags', 'origin',
                              'refs/tags/' + selection['tag'] + ':refs/tags/' + selection['tag']], timeout=300)
                 backend.publish(argparse.Namespace(stage=stage, signer=signer, gh='gh'))
             record['published'] = True
