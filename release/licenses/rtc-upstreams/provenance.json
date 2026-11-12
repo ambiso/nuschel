@@ -1,0 +1,113 @@
+{
+  "schema_version": 1,
+  "scope": "Only these three exact runtime packages omit license texts in their published archives. Their exact pinned monorepo supplies the original MIT grant and each manifest explicitly declares MIT OR Apache-2.0. Select MIT and retain its original copyright and the package/author declarations. The Apache text under src/packet is not misrepresented as a blanket monorepo grant. No generic SPDX fallback or legal-completeness claim.",
+  "packages": [
+    {
+      "name": "is",
+      "version": "0.12.0",
+      "declared_license": "MIT OR Apache-2.0",
+      "selected_license": "MIT",
+      "authors": [
+        "Martin Algesten <martin@algesten.se>",
+        "Thomas Eizinger <thomas@eizinger.io>"
+      ],
+      "repository": "https://github.com/algesten/str0m",
+      "revision": "5f2183ce7c67117cd1960dfeb11bed11fc188b66",
+      "path_in_vcs": "crates/is",
+      "status": "resolved",
+      "revision_source": "Exact published .cargo_vcs_info.json; patched adapter retains same original VCS metadata",
+      "evidence_kind": "pinned-upstream-monorepo-license",
+      "files": [
+        {
+          "local": "str0m/5f2183ce7c67117cd1960dfeb11bed11fc188b66/LICENSE-MIT.txt",
+          "upstream_path": "LICENSE-MIT.txt",
+          "url": "https://raw.githubusercontent.com/algesten/str0m/5f2183ce7c67117cd1960dfeb11bed11fc188b66/LICENSE-MIT.txt",
+          "sha256": "5b460f37be48ac4cf2181596181cc6cae432fc2caae05944873f380730829a4b"
+        },
+        {
+          "local": "str0m/5f2183ce7c67117cd1960dfeb11bed11fc188b66/Cargo.toml",
+          "upstream_path": "Cargo.toml",
+          "url": "https://raw.githubusercontent.com/algesten/str0m/5f2183ce7c67117cd1960dfeb11bed11fc188b66/Cargo.toml",
+          "sha256": "c31b2d5f6fbe082fa9131d0609cae4971753fe3423ee52fb945cc8f950276473"
+        },
+        {
+          "local": "str0m/5f2183ce7c67117cd1960dfeb11bed11fc188b66/crates/is/Cargo.toml",
+          "upstream_path": "crates/is/Cargo.toml",
+          "url": "https://raw.githubusercontent.com/algesten/str0m/5f2183ce7c67117cd1960dfeb11bed11fc188b66/crates/is/Cargo.toml",
+          "sha256": "7b24d612c46afbd29bedac7dfa00c21c971405c87d056a400a2b2832007d031a"
+        }
+      ]
+    },
+    {
+      "name": "str0m-proto",
+      "version": "0.8.0",
+      "declared_license": "MIT OR Apache-2.0",
+      "selected_license": "MIT",
+      "authors": [
+        "Martin Algesten <martin@algesten.se>"
+      ],
+      "repository": "https://github.com/algesten/str0m",
+      "revision": "5f2183ce7c67117cd1960dfeb11bed11fc188b66",
+      "path_in_vcs": "crates/proto",
+      "status": "resolved",
+      "revision_source": "Exact published .cargo_vcs_info.json; patched adapter retains same original VCS metadata",
+      "evidence_kind": "pinned-upstream-monorepo-license",
+      "files": [
+        {
+          "local": "str0m/5f2183ce7c67117cd1960dfeb11bed11fc188b66/LICENSE-MIT.txt",
+          "upstream_path": "LICENSE-MIT.txt",
+          "url": "https://raw.githubusercontent.com/algesten/str0m/5f2183ce7c67117cd1960dfeb11bed11fc188b66/LICENSE-MIT.txt",
+          "sha256": "5b460f37be48ac4cf2181596181cc6cae432fc2caae05944873f380730829a4b"
+        },
+        {
+          "local": "str0m/5f2183ce7c67117cd1960dfeb11bed11fc188b66/Cargo.toml",
+          "upstream_path": "Cargo.toml",
+          "url": "https://raw.githubusercontent.com/algesten/str0m/5f2183ce7c67117cd1960dfeb11bed11fc188b66/Cargo.toml",
+          "sha256": "c31b2d5f6fbe082fa9131d0609cae4971753fe3423ee52fb945cc8f950276473"
+        },
+        {
+          "local": "str0m/5f2183ce7c67117cd1960dfeb11bed11fc188b66/crates/proto/Cargo.toml",
+          "upstream_path": "crates/proto/Cargo.toml",
+          "url": "https://raw.githubusercontent.com/algesten/str0m/5f2183ce7c67117cd1960dfeb11bed11fc188b66/crates/proto/Cargo.toml",
+          "sha256": "87b75ab98d94cf35cb823cccec04ae3a4c513337cfe9a6bd6f46bd47341b97e6"
+        }
+      ]
+    },
+    {
+      "name": "str0m-rust-crypto",
+      "version": "0.7.0",
+      "declared_license": "MIT OR Apache-2.0",
+      "selected_license": "MIT",
+      "authors": [
+        "Martin Algesten <martin@algesten.se>"
+      ],
+      "repository": "https://github.com/algesten/str0m",
+      "revision": "5f2183ce7c67117cd1960dfeb11bed11fc188b66",
+      "path_in_vcs": "crypto/rust-crypto",
+      "status": "resolved",
+      "revision_source": "Exact published .cargo_vcs_info.json; patched adapter retains same original VCS metadata",
+      "evidence_kind": "pinned-upstream-monorepo-license",
+      "files": [
+        {
+          "local": "str0m/5f2183ce7c67117cd1960dfeb11bed11fc188b66/LICENSE-MIT.txt",
+          "upstream_path": "LICENSE-MIT.txt",
+          "url": "https://raw.githubusercontent.com/algesten/str0m/5f2183ce7c67117cd1960dfeb11bed11fc188b66/LICENSE-MIT.txt",
+          "sha256": "5b460f37be48ac4cf2181596181cc6cae432fc2caae05944873f380730829a4b"
+        },
+        {
+          "local": "str0m/5f2183ce7c67117cd1960dfeb11bed11fc188b66/Cargo.toml",
+          "upstream_path": "Cargo.toml",
+          "url": "https://raw.githubusercontent.com/algesten/str0m/5f2183ce7c67117cd1960dfeb11bed11fc188b66/Cargo.toml",
+          "sha256": "c31b2d5f6fbe082fa9131d0609cae4971753fe3423ee52fb945cc8f950276473"
+        },
+        {
+          "local": "str0m/5f2183ce7c67117cd1960dfeb11bed11fc188b66/crypto/rust-crypto/Cargo.toml",
+          "upstream_path": "crypto/rust-crypto/Cargo.toml",
+          "url": "https://raw.githubusercontent.com/algesten/str0m/5f2183ce7c67117cd1960dfeb11bed11fc188b66/crypto/rust-crypto/Cargo.toml",
+          "sha256": "eab23151740cc3a80cc12498a61737b67d7e4c2abe15a4be6abad3199c65f002"
+        }
+      ]
+    }
+  ],
+  "unresolved": []
+}
