@@ -33,7 +33,8 @@ class ContentOwner {
   start() {
     this.phase="starting";this.startDeadline=performance.now()+this.startupMs;
     try {
-      const factory=this.factory,worker=factory();this.worker=worker;
+      const factory=this.factory;this.factory=null;
+      const worker=factory();this.worker=worker;
       worker.onmessage=({data})=>{if(this.worker===worker&&this.phase!=="retired")this.message(data);};
       worker.onerror=event=>{if(this.worker===worker){event?.preventDefault?.();this.retire("The content worker failed. Reload to try again.");}};
       worker.onmessageerror=worker.onerror;
