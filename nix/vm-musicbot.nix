@@ -107,6 +107,10 @@ pkgs.testers.runNixOSTest {
     # Inspect actual child capabilities under DynamicUser + the outer syscall
     # and namespace restrictions, after the service has encoded real music.
     machine.succeed("python3 ${../tests}/musicbot_service_isolation.py")
+    # Recovered faults of the service's own positively identified duck worker
+    # (stopped past its deadline, then killed mid-request) keep the same TLS
+    # session: no reconnection, music heard, !web answered, worker reaped.
+    print(machine.succeed("python3 ${../tests}/musicbot_duck_faults.py ${binaries}/bin 64738 --service --espeak ${pkgs.espeak-ng}/bin/espeak-ng --opus-library ${pkgs.libopus}/lib/libopus.so"))
     # The program on its own: two channels, shared and separate queues, and
     # ducking for real speech (espeak-ng, encoded by reference libopus).
     machine.succeed("python3 ${../tests}/with_local_murmur.py ${pkgs.murmur}/bin/mumble-server ${../tests}/musicbot.py ${binaries}/bin PORT --espeak ${pkgs.espeak-ng}/bin/espeak-ng --opus-library ${pkgs.libopus}/lib/libopus.so")
