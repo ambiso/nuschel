@@ -38,6 +38,10 @@
       ...
     }:
     {
+      lib.distroLinux = {
+        mkVersion = import ./packaging/linux/version.nix;
+        mkPackages = import ./packaging/linux/default.nix;
+      };
       nixosModules.default = import ./nix/module.nix { inherit self; };
       # The web host: web client, share links and the tunnel relay (docs/web.md).
       nixosModules.web = import ./nix/web-module.nix { inherit self; };
@@ -208,6 +212,16 @@
           else
             "linux-nix";
         nativeNoticeBundle = (releaseNotices.forScope nativeNoticeScope).bundle;
+        # Omit unsupported artifact names without evaluating a Linux builder
+        # (or forcing pkgs for platforms that nixpkgs no longer supports).
+        distroOutput = name: if system == "x86_64-linux" then name else null;
+        linuxDistro = self.lib.distroLinux.mkPackages {
+          inherit pkgs toolchain craneLib;
+          sourceInfo = self.sourceInfo;
+          nativeNotices = releaseNotices.linux.bundle;
+          desktopFiles = (import ./nix/desktop-files.nix { inherit pkgs; }).linux;
+          appstreamXML = ./packaging/flatpak/org.nuschl.Nuschl.metainfo.xml;
+        };
         installNativeNotices = ''
           mkdir -p "$out/share/licenses/nuschl"
           cp -R ${nativeNoticeBundle}/share/licenses/nuschl/. "$out/share/licenses/nuschl/"
@@ -543,6 +557,11 @@
       in
       {
         packages.default = package;
+        packages.${distroOutput "linux-native-stage"} = linuxDistro.nativeStage;
+        packages.${distroOutput "deb"} = linuxDistro.deb;
+        packages.${distroOutput "arch-bin"} = linuxDistro.archBin;
+        packages.${distroOutput "deb-source"} = linuxDistro.debSource;
+        packages.${distroOutput "deb-source-check"} = linuxDistro.debSourceCheck;
         legacyPackages.crate2nixInputs = crate2nixInputs;
         packages.default-crane = cranePackage;
         packages.server = serverPackage;
@@ -616,6 +635,8 @@
             meta.description = "Nuschl in a terminal";
           };
         checks = {
+          ${distroOutput "distro-metadata"} = linuxDistro.metadataTests;
+          ${distroOutput "distro-source-assets"} = linuxDistro.assetBinding;
           build = package;
           server-build = serverPackage;
           rtc-build = rtcPackage;

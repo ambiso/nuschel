@@ -29,7 +29,7 @@ No role uses `--host`, grants the whole profile, or receives the parent D-Bus so
 | Content, math, update verifier | No network, user files, display, audio or devices |
 | Storage | No network; selected history directory only |
 | Crypto | No network; selected keys directory only |
-| Media | No network; explicit audio-service capability only |
+| Media | No network; explicit sound capability, including ALSA devices if present |
 | Transfer | Network for the configured transfer policy; one offered file read-only |
 
 The media prototype targets PulseAudio's Flatpak sound capability
@@ -38,6 +38,17 @@ requires separate explicit socket and runtime proof; sound access is not evidenc
 of that parity. Existing microphone consent, epochs and relay-only policy remain
 mandatory. Linux builds already disable in-app binary replacement; Flatpak owns
 package updates.
+
+The portal sound flag can expose PulseAudio and `/dev/snd`; it is not a
+PulseAudio-only grant. No other role receives it. `--watch-bus` sends a signal
+on owner loss and does not guarantee whole-tree exit. Keep actual worker/tree
+exit proof and quarantine unknown outcomes rather than releasing credit when a
+proxy or portal disappears.
+
+Read-only data authority must use a read-only mount at the portal's validated
+canonical path. An inherited `O_RDONLY` file descriptor can be reopened writable
+through `/proc/self/fd`; do not pass it as a data FD. Setup descriptors must not
+reach worker code: role workers receive only stdin, stdout and stderr.
 
 ## Acceptance checks
 
