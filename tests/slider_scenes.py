@@ -468,21 +468,36 @@ class Scenes:
             labels = [self.wait_for(None, label, "missing sensitivity direction")
                       for label in ["0 %: stricter", "100 %: more sensitive"]]
             bounds = [list(node.extents()) for node in [slider, *labels]]
-            self.shot(f"zoom-{width}-{zoom}")
+            initial = bounds
             window = self.shell.window("Nuschl")
             parent = list(dialog.extents())
+            # Hints below a focused control are ordinary scrollable content.
+            # Record that state, then prove they can actually be brought into
+            # view using the Settings wheel, rather than accepting AT bounds
+            # for clipped/inaccessible labels as visual proof.
+            scrolls = 0
+            while any(y + h > min(window["height"], parent[1] + parent[3]) - 8
+                      for x, y, w, h in bounds) and scrolls < 4:
+                x, y, w, h = bounds[0]
+                self.shell.wheel(*self.screen(x + w // 2, min(y, 650)), 1)
+                time.sleep(0.2)
+                scrolls += 1
+                bounds = [list(node.extents()) for node in [slider, *labels]]
+            self.shot(f"zoom-{width}-{zoom}")
             for x, y, w, h in bounds:
                 assert w > 0 and h > 0 and x >= 0 and y >= 0, bounds
                 assert x + w <= window["width"] + 1 and y + h <= window["height"] + 1, (width, zoom, window, bounds)
                 assert x >= parent[0] - 1 and x + w <= parent[0] + parent[2] + 1, (parent, bounds)
+                assert y >= parent[1] - 1 and y + h <= parent[1] + parent[3] + 1, (parent, bounds)
             left, right = bounds[1:]
             assert left[0] + left[2] <= right[0] + 1, ("direction labels overlap", bounds)
-            records.append({"width": width, "zoom": zoom, "dialog": parent, "controls": bounds})
+            records.append({"width": width, "zoom": zoom, "dialog": parent,
+                            "initial_after_focus": initial, "wheel_steps": scrolls, "controls": bounds})
             self.close_settings()
         self.shell.chord("Control_L", "0")
         self.shell.place("Nuschl", 40, 40, WIDTH, HEIGHT)
         (self.out / "zoom-geometry.json").write_text(json.dumps(records, indent=2) + "\n")
-        print("Actual sensitivity direction/slider geometry:1280/100,900/100,900/200 contained.", flush=True)
+        print("Actual sensitivity direction/slider geometry:1280/100,900/100,900/200 reachable and contained.", flush=True)
 
     def menu(self, writes, settings_path):
         # Ada's row; right-click until her menu (with a volume slider) opens.
