@@ -3,6 +3,7 @@
   import { artUrl } from '../api.js';
   import { loadCover, MAX_EDGE } from '../cover-pixels.js';
   import Icon from './Icon.svelte';
+  import { store } from '../store.svelte.js';
 
   let { library, art, size = 300, px = null, round = false } = $props();
   const bound = $derived(Math.max(32, Math.min(MAX_EDGE, Math.trunc(size))));
@@ -20,14 +21,19 @@
   });
   $effect(() => {
     const target = canvas, url = src, maximum = bound, shown = visible;
+    const namespace = store.browseKey, namespaceSignal = store.browseSignal;
+    const allowed = store.connection === 'open' && !store.invalid;
     if (!target) return;
     ready = false;
     target.width = 0; target.height = 0;
-    if (!url || !shown) return;
+    if (!url || !shown || !namespace || !allowed || namespaceSignal?.aborted) return;
     const request = new AbortController();
     let current = true;
-    loadCover(url, maximum, request.signal).then(value => {
-      if (!current || request.signal.aborted) return;
+    const invalidate = () => { current = false; request.abort(); ready = false; target.width = 0; target.height = 0; };
+    namespaceSignal?.addEventListener('abort', invalidate, { once: true });
+    loadCover(url, maximum, request.signal, namespace).then(value => {
+      if (!current || request.signal.aborted || src !== url || canvas !== target || bound !== maximum
+          || !visible || store.browseKey !== namespace || store.connection !== 'open' || store.invalid) return;
       const context = target.getContext('2d');
       if (!context) return;
       target.width = value.width; target.height = value.height;
@@ -35,8 +41,8 @@
       ready = true;
     }).catch(() => { /* Keep the decorative placeholder; never decode an encoded fallback. */ });
     return () => {
-      current = false; request.abort(); ready = false;
-      target.width = 0; target.height = 0;
+      namespaceSignal?.removeEventListener('abort', invalidate);
+      invalidate();
     };
   });
 </script>

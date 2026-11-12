@@ -43,37 +43,34 @@ async function fetchPixels(url, maximum, signal) {
   const declared = response.headers.get('content-length');
   if (declared && (!/^\d+$/.test(declared) || Number(declared) > limit)) throw Error('Cover response too large');
   if (!response.body) throw Error('Cover response missing');
-  const reader = response.body.getReader(), chunks = [];
-  let size = 0;
+  const reader = response.body.getReader(), bytes = new Uint8Array(limit);
+  let size = 0, chunks = 0;
   try {
     for (;;) {
       const part = await reader.read();
       if (part.done) break;
-      size += part.value.byteLength;
-      if (size > limit) throw Error('Cover response too large');
-      chunks.push(part.value);
+      if (!(part.value instanceof Uint8Array) || part.value.byteLength === 0 || ++chunks > 4096
+          || size + part.value.byteLength > limit) throw Error('Cover response too large');
+      bytes.set(part.value, size); size += part.value.byteLength;
     }
   } catch (error) {
     await reader.cancel().catch(() => {});
     throw error;
   } finally { reader.releaseLock(); }
-  const bytes = new Uint8Array(size);
-  let offset = 0;
-  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
-  return validatePixels(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)), maximum);
+  return validatePixels(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes.subarray(0, size))), maximum);
 }
 
 function pump() {
   while (active < MAX_ACTIVE && queue.length) {
     const job = queue.shift();
     if (job.settled) continue;
-    const stored = cache.get(job.url);
+    const stored = cache.get(job.key);
     if (stored && stored.value.width <= job.maximum && stored.value.height <= job.maximum) {
       job.finish(null, copy(stored.value)); job.cleanup(); continue;
     }
     job.active = true; active++;
     fetchPixels(job.url, job.maximum, job.controller.signal).then(value => {
-      if (!job.settled) { remembered(job.url, value); job.finish(null, copy(value)); }
+      if (!job.settled) { remembered(job.key, value); job.finish(null, copy(value)); }
     }, error => job.finish(error)).finally(() => {
       // Only the real fetch/body completion releases network capacity. An
       // abort/deadline settles its consumer but cannot manufacture new slots.
@@ -82,12 +79,13 @@ function pump() {
   }
 }
 
-export function loadCover(url, maximum = MAX_EDGE, signal) {
+export function loadCover(url, maximum = MAX_EDGE, signal, namespace) {
   if (typeof url !== 'string' || url.length > 4096 || !url.startsWith('art/')
-      || !Number.isInteger(maximum) || maximum < 1 || maximum > MAX_EDGE) return Promise.reject(Error('Invalid cover request'));
+      || !Number.isInteger(maximum) || maximum < 1 || maximum > MAX_EDGE
+      || typeof namespace !== 'string' || !namespace || namespace.length > 128) return Promise.reject(Error('Invalid cover request'));
   if (signal?.aborted) return Promise.reject(aborted());
   return new Promise((resolve, reject) => {
-    const job = { url, maximum, controller: new AbortController(), active: false, settled: false };
+    const job = { url, key: namespace + '\0' + url, maximum, controller: new AbortController(), active: false, settled: false };
     job.finish = (error, value) => {
       if (job.settled) return;
       job.settled = true;

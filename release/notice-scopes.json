@@ -111,21 +111,21 @@
   "musicbot-x86_64-unknown-linux-gnu": {
     "targets": ["x86_64-unknown-linux-gnu"],
     "root_group": "musicbot",
-    "external_components": ["rust-standard-library", "musicbot-web-runtime-assets"]
+    "external_components": ["rust-standard-library", "musicbot-web-runtime-assets", "syntect-default-assets"]
   },
   "musicbot-aarch64-unknown-linux-gnu": {
     "targets": ["aarch64-unknown-linux-gnu"],
     "root_group": "musicbot",
-    "external_components": ["rust-standard-library", "musicbot-web-runtime-assets"]
+    "external_components": ["rust-standard-library", "musicbot-web-runtime-assets", "syntect-default-assets"]
   },
   "musicbot-x86_64-apple-darwin": {
     "targets": ["x86_64-apple-darwin"],
     "root_group": "musicbot",
-    "external_components": ["rust-standard-library", "musicbot-web-runtime-assets"]
+    "external_components": ["rust-standard-library", "musicbot-web-runtime-assets", "syntect-default-assets"]
   },
   "musicbot-aarch64-apple-darwin": {
     "targets": ["aarch64-apple-darwin"],
     "root_group": "musicbot",
-    "external_components": ["rust-standard-library", "musicbot-web-runtime-assets"]
+    "external_components": ["rust-standard-library", "musicbot-web-runtime-assets", "syntect-default-assets"]
   }
 }

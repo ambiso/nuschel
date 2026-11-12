@@ -48,8 +48,8 @@ def main():
     assert len(bot_scopes) == 4
     for scope in bot_scopes:
         selected, external = authority["notice_scope"](policy, scope)
-        assert selected == [{"target": scopes[scope]["targets"][0], "packages": ["nuschl-musicbot"], "features": []}]
-        assert external == {"rust-standard-library", "musicbot-web-runtime-assets"}
+        assert selected == [{"target": scopes[scope]["targets"][0], "packages": ["nuschl-musicbot", "nuschl-content-worker"], "features": []}]
+        assert external == {"rust-standard-library", "musicbot-web-runtime-assets", "syntect-default-assets"}
     if args.musicbot_notices:
         bot_report = json.loads((args.musicbot_notices / "THIRD-PARTY.json").read_bytes())
         bot_scope = bot_report["bundle_scope"]

@@ -11,6 +11,7 @@ deployment with reordered configuration are checked through observable APIs
 and the audio received by real Mumble listeners.
 """
 import argparse
+import base64
 from collections import Counter, deque
 import html
 import ctypes
@@ -189,8 +190,11 @@ def browse(link):
         assert [song["id"] for song in playlist["songs"]] == ["s2", "s1"], playlist
         cover = "art/" + str(library) + "/" + urllib.parse.quote(album["album"]["cover_art"], safe="")
         with urllib.request.urlopen(link + cover + "?size=300", timeout=HTTP_TIMEOUT) as response:
-            assert response.read() == COVER_PNG
-            assert response.headers.get_content_type() == "image/png", dict(response.headers)
+            pixels = json.load(response)
+            assert set(pixels) == {"width", "height", "rgba"}, pixels
+            assert pixels["width"] == pixels["height"] == 1, pixels
+            assert base64.b64decode(pixels["rgba"], validate=True) == bytes([200, 80, 40, 255]), pixels
+            assert response.headers.get_content_type() == "application/json", dict(response.headers)
             assert response.headers["Cache-Control"].startswith("private"), dict(response.headers)
         expect_error(link + f"art/{library}/missing", 404)
     results = api(link, "search", q="sine")["results"]
