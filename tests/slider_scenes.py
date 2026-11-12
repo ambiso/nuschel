@@ -21,8 +21,8 @@ Checks, with a screenshot of each state (look at them):
    later; Delete resets it.
 3. The meter above Sensitivity while the test runs, fed by a private null
    microphone: silence, then a speech-like signal (dsp.rs' `speech_like`),
-   then silence again: "Not transmitting", "Transmitting", "Not
-   transmitting". The input level and speech probability are progress bars
+   then silence again: "Speech gate closed", "Speech gate open", "Speech
+   gate closed". The processed input level and speech probability are progress bars
    with numeric values; the level bar marks the gate's floor (one constant
    in nuschl_core, which the worker's own unit test checks it uses).
 4. A pointer drag over Sensitivity changes the value while held and writes
@@ -302,7 +302,7 @@ class Scenes:
         slider = self.wait_for("slider", "Voice activity sensitivity", "no sensitivity slider")
         assert self.value(slider) == 50.0 and self.maximum(slider) == 100.0, (self.value(slider), self.maximum(slider))
         assert self.description(slider) == "50 % · opens above 60 % speech probability", self.description(slider)
-        assert self.find("progress bar", "Input level") is None, "the meter shows without the microphone test"
+        assert self.find("progress bar", "Processed input level") is None, "the meter shows without the microphone test"
         self.shot("01-settings-voice")
         print(f"Sensitivity slider: value {self.value(slider)} of {self.maximum(slider)}, "
               f"value text {self.description(slider)!r}; no meter.", flush=True)
@@ -332,34 +332,34 @@ class Scenes:
         self.wait_for("push button", "Test microphone", "no Test microphone button").press()
         eventually(lambda: "microphone.monitor" in self.recording() or None,
                    "Test microphone did not open the microphone", timeout=20)
-        level = self.wait_for("progress bar", "Input level", "the meter did not appear")
+        level = self.wait_for("progress bar", "Processed input level", "the meter did not appear")
         probability = self.wait_for("progress bar", "Speech probability", "no speech probability bar")
-        eventually(lambda: self.find(None, "Not transmitting"), "the gate state did not read Not transmitting",
+        eventually(lambda: self.find(None, "Speech gate closed"), "the gate state did not read Speech gate closed",
                    timeout=10)
         time.sleep(1.5)
         assert re.search(r"Marked: -[0-9]+ dBFS", self.description(level)), self.description(level)
         silence = (self.value(level), self.description(level), self.value(probability), self.description(probability))
         self.shot("03-meter-silence")
         print(f"Microphone test, silence: level {silence[0]} ({silence[1]!r}); speech {silence[2]} "
-              f"({silence[3]!r}); Not transmitting. Recording: {self.recording()}.", flush=True)
+              f"({silence[3]!r}); Speech gate closed. Recording: {self.recording()}.", flush=True)
         feeder = self.feed(8)
         try:
-            eventually(lambda: self.find(None, "Transmitting"), "speech did not open the gate", timeout=10)
+            eventually(lambda: self.find(None, "Speech gate open"), "speech did not open the gate", timeout=10)
             time.sleep(0.6)
             speech = (self.value(level), self.description(level), self.value(probability),
                       self.description(probability))
             self.shot("04-meter-speech")
             print(f"Speech-like signal: level {speech[0]} ({speech[1]!r}); speech {speech[2]} ({speech[3]!r}); "
-                  "Transmitting.", flush=True)
+                  "Speech gate open.", flush=True)
         finally:
             os.killpg(feeder.pid, signal.SIGTERM)
             feeder.wait(timeout=5)
-        eventually(lambda: self.find(None, "Not transmitting"), "the gate did not close after the speech",
+        eventually(lambda: self.find(None, "Speech gate closed"), "the gate did not close after the speech",
                    timeout=10)
         time.sleep(1.0)
         after = (self.value(level), self.value(probability))
         self.shot("05-meter-silence-again")
-        print(f"Silence again: level {after[0]}, speech {after[1]}; Not transmitting.", flush=True)
+        print(f"Silence again: level {after[0]}, speech {after[1]}; Speech gate closed.", flush=True)
 
         # A pointer drag: heard while held, one write after the release.
         slider = self.wait_for("slider", "Voice activity sensitivity", "no sensitivity slider")
@@ -389,7 +389,7 @@ class Scenes:
 
         self.wait_for("push button", "Stop test", "no Stop test button").press()
         eventually(lambda: self.recording() == [] or None, "Stop test left the microphone open", timeout=10)
-        assert self.find("progress bar", "Input level") is None, "the meter stayed after the test stopped"
+        assert self.find("progress bar", "Processed input level") is None, "the meter stayed after the test stopped"
         self.shell.key("Escape")
         eventually(lambda: self.find("dialog", "Settings") is None or None, "Settings did not close")
         time.sleep(1.0)

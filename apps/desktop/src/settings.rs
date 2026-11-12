@@ -286,10 +286,12 @@ fn meter_row(
         .into_any_element()
 }
 
-/// What the microphone test measures, above Sensitivity: the input level
-/// (dBFS) against the gate's level floor, the speech probability against
-/// the gate's thresholds for `sensitivity`, and whether the gate is open.
-/// "—" when there is no current reading.
+/// What the local microphone test measures, above Sensitivity: the level of
+/// the processed input (the RMS, in dBFS, of what echo cancellation, noise
+/// suppression and gain leave, as the worker's `level_db`) against the gate's
+/// floor, the speech probability against the thresholds `sensitivity` gives,
+/// and whether the speech gate is open. Nothing is sent: these are not a
+/// call's transmissions. "—" when there is no current reading.
 fn meter(preview: &PreviewView, sensitivity: f32, transmit: TransmitMode) -> AnyElement {
     let reading = preview.reading;
     let voice_activity = transmit == TransmitMode::VoiceActivity;
@@ -298,7 +300,7 @@ fn meter(preview: &PreviewView, sensitivity: f32, transmit: TransmitMode) -> Any
     let level_at = |db: f32| (db - METER_MIN_DB) / -METER_MIN_DB;
     let level = meter_row(
         "input-level",
-        "Input level",
+        "Processed input level",
         reading.map_or_else(
             || "—".into(),
             |reading| {
@@ -321,7 +323,7 @@ fn meter(preview: &PreviewView, sensitivity: f32, transmit: TransmitMode) -> Any
             &[(level_at(floor), TEXT)],
         ),
         format!(
-            "Marked: {floor:.0} dBFS, below which the voice gate stays closed however speech-like it sounds."
+            "After echo cancellation, noise suppression and gain. Marked: {floor:.0} dBFS, below which the speech gate stays closed."
         ),
         reading.map(|reading| {
             (
@@ -355,7 +357,7 @@ fn meter(preview: &PreviewView, sensitivity: f32, transmit: TransmitMode) -> Any
         ),
         if voice_activity {
             format!(
-                "Marked: the gate opens above {:.0} % and, once open, stays open down to {:.0} %. Not a loudness.",
+                "Marked from your sensitivity: the gate opens above {:.0} % and, once open, stays open down to {:.0} %. In calls, echo protection can raise these. Not a loudness.",
                 thresholds.open * 100.,
                 thresholds.close * 100.
             )
@@ -369,14 +371,18 @@ fn meter(preview: &PreviewView, sensitivity: f32, transmit: TransmitMode) -> Any
             "Push to talk: you transmit while you hold its key".to_string(),
             TEXT_FAINT,
         ),
+        (TransmitMode::Continuous, _) => (
+            "Continuous: no speech gate, everything you say is sent in calls".to_string(),
+            TEXT_FAINT,
+        ),
         (_, None) => ("—".to_string(), TEXT_FAINT),
-        (_, Some(reading)) if reading.transmitting => ("Transmitting".to_string(), SUCCESS),
-        (_, Some(_)) => ("Not transmitting".to_string(), TEXT_FAINT),
+        (_, Some(reading)) if reading.transmitting => ("Speech gate open".to_string(), SUCCESS),
+        (_, Some(_)) => ("Speech gate closed".to_string(), TEXT_FAINT),
     };
     div()
         .id("microphone-activity")
         .role(Role::Group)
-        .aria_label("Microphone activity")
+        .aria_label("Microphone test")
         .flex()
         .flex_col()
         .gap_3()
@@ -405,7 +411,7 @@ fn meter(preview: &PreviewView, sensitivity: f32, transmit: TransmitMode) -> Any
                         .text_xs()
                         .text_color(color(TEXT_FAINT))
                         .child(
-                            text!("· nothing is sent while testing").with_id("gate-state-note"),
+                            text!("· a local test, nothing is sent").with_id("gate-state-note"),
                         ),
                 ),
         )
