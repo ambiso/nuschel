@@ -398,6 +398,13 @@ viewports (`tests/web_responsive.mjs`). These are layout/interaction tests with 
 synthetic SDK and disabled device access; they do not certify a physical mobile
 browser, on-screen keyboard, Safari or Firefox.
 
+Interactive controls share one sizing policy (`--control-target`, 44 CSS px, in
+`app.css`): no layout shrinks a control's hit target below it, and text controls
+grow with the text size. `tests/web_controls.mjs` measures the connection, voice,
+profile and composer controls at desktop, 390 and 320 px, a 200% browser-zoom
+equivalent viewport and the largest text size, with long server, user and channel
+names, and checks keyboard focus visibility and overflow (same synthetic SDK).
+
 `tests/web_voice_transport_real.py` runs actual packaged WASM through a private
 relay and stock Murmur (1.4 legacy and 1.5 protobuf voice framing). Its optional
 `--site`, `--wrapper` and `--output` run `tests/web_voice_ui.mjs` against the exact
