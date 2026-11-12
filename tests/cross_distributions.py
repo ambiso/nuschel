@@ -18,6 +18,7 @@ import subprocess
 import tarfile
 import tomllib
 from urllib.parse import parse_qs, unquote, urlsplit
+from cross_macho import verify_adhoc
 
 PROGRAMS = ["nuschl", "nuschl-content-worker", "nuschl-crypto-worker",
             "nuschl-math-worker", "nuschl-media-worker", "nuschl-storage-worker",
@@ -159,13 +160,28 @@ def main():
     for program in PROGRAMS:
         binary = macos / "Contents/MacOS" / program
         run([products["llvm"] + "/llvm-lipo", str(binary), "-verify_arch", "x86_64", "arm64"])
-        report = run([products["codesign"], "verify", "--config-file", "/dev/null", str(binary)])
-        (out / (program + "-signature.log")).write_text(report)
+        verification = subprocess.run([products["codesign"], "verify", "--config-file", "/dev/null", str(binary)],
+                                      capture_output=True, text=True)
+        (out / (program + "-signature.log")).write_text(verification.stdout + verification.stderr)
+        expected_error = [f"@{index}: CMS error: missing further values (at position 0)" for index in range(2)]
+        known_empty_cms_bug = (verification.returncode != 0 and
+                               verification.stdout.strip().splitlines() == expected_error and
+                               "verify command is known to be buggy" in verification.stderr)
+        if verification.returncode and not known_empty_cms_bug:
+            raise RuntimeError("Unexpected rcodesign failure: " + verification.stdout + verification.stderr)
+        # An independently bounded test-only check supplements the known buggy
+        # tool. Its failure and the native Apple gate stay explicit in evidence.
+        directory = verify_adhoc(binary.read_bytes(), "org.nuschl.Nuschl" if program == "nuschl" else program,
+            info=(macos / "Contents/Info.plist").read_bytes() if program == "nuschl" else None,
+            resources=(macos / "Contents/_CodeSignature/CodeResources").read_bytes() if program == "nuschl" else None)
         info = run([products["codesign"], "print-signature-info", "--config-file", "/dev/null", str(binary)])
         flags = re.findall(r"flags: CodeSignatureFlags\(([^\n]+)\)", info)
         assert len(flags) == 2 and all("ADHOC" in flag for flag in flags)
         (out / (program + "-signature-info.log")).write_text(info)
-        proof["files"]["macos/" + program] = {"sha256": sha(binary), "ad_hoc_signature_verified": True}
+        proof["files"]["macos/" + program] = {"sha256": sha(binary),
+            "code_directory_integrity": directory, "rcodesign_verify_exit": verification.returncode,
+            "rcodesign_known_empty_cms_failure": known_empty_cms_bug,
+            "native_apple_signature_verification": "not run"}
     resources = plistlib.loads((macos / "Contents/_CodeSignature/CodeResources").read_bytes())
     checked_resources = set()
     for name, entry in resources.get("files2", {}).items():
@@ -218,13 +234,15 @@ def main():
         target = out / f"nuschl-{version}-{platform}.zip"
         run([products["zip"], "-qr", str(target), member], cwd=cwd)
         proof[platform]["zip_sha256"] = sha(target)
-    proof["result"] = "pass"
+    proof["result"] = "scoped_archive_checks_passed"
     proof["limits"] = ["local build evidence is not a GitHub CI run", "no native macOS execution",
+                        "rcodesign0.29 generic verifier reports its known empty-CMS bug; raw failures retained",
+                        "independent CodeDirectory integrity is not Apple codesign/Gatekeeper acceptance or publisher identity",
                         "final macOS signing changes signature bytes; exact helper copies verified in slices and pre-sign universal",
                         "unsigned update preparation exercises the real producer but grants no client acceptance",
                         "production trust remains unenrolled; GUI fixture is a separately recorded public-trust-only build"]
     (out / "proof.json").write_text(json.dumps(proof, indent=2) + "\n")
-    print(json.dumps({"result": "pass", "proof": str(out / "proof.json")}))
+    print(json.dumps({"result": proof["result"], "proof": str(out / "proof.json")}))
 
 
 if __name__ == "__main__":
