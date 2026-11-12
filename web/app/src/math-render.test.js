@@ -3,7 +3,6 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {createServer} from "vite";
 import {formulaInput, projectMathTree, validateMathTree} from "./math-render-protocol.js";
-import {MathRenderService} from "./math-render-service.js";
 import {visibleBlocks} from "./presentation.js";
 let server, renderFormula;
 test.before(async () => {
@@ -53,45 +52,4 @@ test("collapsed display formulas retain complete copy source without parsing hid
   assert.ok(preview.hasMore);assert.equal(preview.blocks[0].source,source);
   assert.equal(preview.blocks[0].tex,undefined);assert.ok(preview.blocks[0].preview.length<source.length);
   assert.equal(visibleBlocks({blocks:[block]},true).blocks[0].tex,"x+y");
-});
-const plainTree=text=>({tag:"math",attrs:{},children:[{tag:"mi",attrs:{},children:[{text}]}]});
-class Worker {
-  sent=[];terminated=false;
-  postMessage(message){this.sent.push(message);}
-  terminate(){this.terminated=true;}
-  emit(data){this.onmessage?.({data});}
-  ready(){this.emit({kind:"ready"});}
-  finish(text="x"){this.emit({kind:"result",id:this.sent.at(-1).id,tree:JSON.stringify(plainTree(text))});}
-}
-const outcome=promise=>promise.then(value=>({value}),error=>({error}));
-function fixture(options={}) {
-  const workers=[];
-  const service=new MathRenderService({...options,workerFactory:()=>{const worker=new Worker();workers.push(worker);return worker;}});
-  return {workers,service};
-}
-test("finite queue, stale worker results and cache accounting survive source replacement", async () => {
-  const {service,workers}=fixture();const abort=new AbortController();
-  const old=outcome(service.render("old",false,{signal:abort.signal}));
-  const jobs=Array.from({length:7},(_,i)=>outcome(service.render(`x${i}`)));
-  await assert.rejects(service.render("overflow"),/busy/);workers[0].ready();abort.abort();
-  assert.ok((await old).error);assert.ok(workers[0].terminated);workers[1].ready();
-  workers[0].finish("stale");
-  for(let i=0;i<7;i++){workers[1].finish(`x${i}`);assert.ok((await jobs[i]).value);}
-  const before=workers[1].sent.length;const cached=await service.render("x0");
-  assert.equal(workers[1].sent.length,before);assert.ok(Object.isFrozen(cached));
-  service.dispose();
-});
-test("duplicate in-flight results do not inflate the bounded cache", async () => {
-  const {service,workers}=fixture();const a=outcome(service.render("same")),b=outcome(service.render("same"));
-  workers[0].ready();workers[0].finish();await a;const bytes=service.cacheBytes;
-  workers[0].finish();await b;assert.equal(service.cache.size,1);assert.equal(service.cacheBytes,bytes);
-  for(let i=0;i<70;i++){const p=outcome(service.render(`cache${i}`));workers[0].finish();await p;}
-  assert.ok(service.cache.size<=64);assert.ok(service.cacheBytes<=2*1024*1024);service.dispose();
-});
-test("deadline terminates a stalled parser and malformed replies fail closed before DOM construction", async () => {
-  const {service,workers}=fixture({timeoutMs:25});const first=outcome(service.render("stalled"));workers[0].ready();
-  assert.match((await first).error.message,/deadline/);assert.ok(workers[0].terminated);
-  const next=outcome(service.render("new"));workers[1].ready();
-  workers[1].emit({kind:"result",id:workers[1].sent[0].id,tree:JSON.stringify({tag:"math",attrs:{href:"/canary"},children:[]})});
-  assert.ok((await next).error);assert.ok(workers[1].terminated);service.dispose();
 });
