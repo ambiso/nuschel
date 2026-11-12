@@ -228,7 +228,7 @@ def run(args, root, shell, registry, bots, profile, second_port, second_pin, sho
     fixture=AvailabilityServer(wire_root)
     try:
         find("Add a server").press(); find("Add or connect to a Mumble server","dialog")
-        for field,value in [("Hostname or IP address","127.0.0.1"),("Port",str(fixture.port)),("Server name","Private codec fixture"),("Username","fixture-user")]:
+        for field,value in [("Server address","127.0.0.1"),("Port",str(fixture.port)),("Server name","Private codec fixture"),("Username","fixture-user")]:
             entry=find(field,"entry"); entry.call("Component","GrabFocus")
             shell.chord("Control_L","a"); shell.type(value)
         find("Add and connect").press()
