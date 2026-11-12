@@ -20,6 +20,10 @@ let
       null;
   acmeDirectory = if useACME then config.security.acme.certs.${acmeHost}.directory else "";
   tlsRuntime = "/run/nuschl-tls";
+  useHTTP01 = cfg.tls.nginxHTTP01 && cfg.tls.enableACME && cfg.hostName != null;
+  http01Host = if cfg.hostName == null then "invalid-nuschl-http01.invalid" else cfg.hostName;
+  http01Webroot = "/var/lib/nuschl-acme-challenge";
+  http01Vhost = config.services.nginx.virtualHosts.${http01Host};
   localPostgres = cfg.database.type == "postgresql" && cfg.database.createLocally;
   databaseUrlFile =
     if localPostgres then
@@ -410,6 +414,14 @@ in
     };
     tls = {
       enableACME = lib.mkEnableOption "an ACME certificate for hostName (configure security.acme's challenge and account defaults)";
+      nginxHTTP01 = lib.mkEnableOption ''
+        an HTTP-01-only nginx host for this server's own ACME certificate.
+        Requires tls.enableACME and hostName. Serves challenge tokens on port 80,
+        refuses other HTTP paths and creates no HTTPS host. The certificate/key
+        stay private to ACME and the selected-pair publisher, not nginx. Configure
+        the ACME account and inbound port 80 separately. Other challenge methods
+        remain available without nginx when this option is false
+      '';
       useACMEHost = lib.mkOption {
         type = lib.types.nullOr lib.types.str;
         default = null;
@@ -446,6 +458,28 @@ in
       {
         assertion = !cfg.tls.enableACME || cfg.hostName != null;
         message = "Nuschl tls.enableACME requires hostName.";
+      }
+      {
+        assertion = !cfg.tls.nginxHTTP01 || (cfg.tls.enableACME && cfg.hostName != null);
+        message = "Nuschl tls.nginxHTTP01 requires tls.enableACME and hostName.";
+      }
+      {
+        assertion =
+          !useHTTP01
+          || (
+            !http01Vhost.enableACME
+            && http01Vhost.useACMEHost == null
+            && !http01Vhost.addSSL
+            && !http01Vhost.onlySSL
+            && !http01Vhost.forceSSL
+            && !http01Vhost.rejectSSL
+            && lib.all (listen: listen.port == 80 && !listen.ssl) http01Vhost.listen
+          );
+        message = "Nuschl tls.nginxHTTP01 needs a dedicated HTTP-only host; do not merge HTTPS/certificate settings into that nginx virtual host.";
+      }
+      {
+        assertion = !useHTTP01 || config.security.acme.certs.${http01Host}.group == "nuschl-acme";
+        message = "Nuschl's HTTP-01-only certificate must retain its private nuschl-acme group, not the nginx/server group.";
       }
       {
         assertion = !(cfg.tls.enableACME && cfg.tls.useACMEHost != null);
@@ -490,9 +524,69 @@ in
       }
     ];
     security.acme.certs = lib.mkIf useACME {
-      ${acmeHost}.postRun = lib.mkAfter ''
-        ${pkgs.systemd}/bin/systemctl --no-block start nuschl-tls-refresh.service
-      '';
+      ${acmeHost} = {
+        postRun = lib.mkAfter ''
+          ${pkgs.systemd}/bin/systemctl --no-block start nuschl-tls-refresh.service
+        '';
+      }
+      // lib.optionalAttrs useHTTP01 {
+        webroot = http01Webroot;
+        # Override inherited challenge defaults only for this selected cert.
+        # Explicit incompatible per-cert definitions conflict rather than being
+        # silently discarded with mkForce. Other certificates are untouched.
+        dnsProvider = null;
+        listenHTTP = null;
+        s3Bucket = null;
+        group = "nuschl-acme";
+      };
+    };
+    users.groups.nuschl-acme = lib.mkIf useHTTP01 { };
+    services.nginx = lib.mkIf useHTTP01 {
+      enable = true;
+      virtualHosts.${http01Host} = {
+        listen = [
+          {
+            addr = "0.0.0.0";
+            port = 80;
+          }
+        ]
+        ++ lib.optional config.networking.enableIPv6 {
+          addr = "[::]";
+          port = 80;
+        };
+        # Do NOT enable nginx's ACME integration: it grants certificate access
+        # to nginx and collects the cert into HTTPS service dependencies.
+        locations."^~ /.well-known/acme-challenge/" = {
+          root = http01Webroot;
+          tryFiles = "$uri =404";
+          extraConfig = ''
+            auth_basic off;
+            auth_request off;
+            limit_except GET { deny all; }
+          '';
+        };
+        # A server-level return would also reject the challenge location.
+        locations."/".return = "404";
+      };
+    };
+    # The stable certificate setup unit precedes issuance on both old and split
+    # order/renew layouts. This host is NOT an nginx SSL dependency, so waiting
+    # for nginx here does not create a certificate/startup cycle.
+    systemd.services."acme-${http01Host}" = lib.mkIf useHTTP01 {
+      wants = [
+        "nginx.service"
+      ]
+      ++ lib.optional config.services.nginx.enableReload "nginx-config-reload.service";
+      after = [
+        "nginx.service"
+      ]
+      ++ lib.optional config.services.nginx.enableReload "nginx-config-reload.service";
+    };
+    systemd.services.nginx = lib.mkIf useHTTP01 {
+      serviceConfig.InaccessiblePaths = [
+        "-${acmeDirectory}"
+        "-${tlsRuntime}"
+      ];
     };
     users.groups.nuschl-tls = lib.mkIf useACME { };
     users.users.nuschl-tls = lib.mkIf useACME {
@@ -601,6 +695,7 @@ in
         UMask = "0077";
         SupplementaryGroups = lib.optional useACME "nuschl-tls";
         ReadOnlyPaths = lib.optional useACME tlsRuntime;
+        InaccessiblePaths = lib.optional useHTTP01 "-${acmeDirectory}";
         LoadCredential =
           lib.optional (databaseUrlFile != null) "database-url:${databaseUrlFile}"
           ++ lib.optional (cfg.tls.certificateFile != null) "tls-certificate:${cfg.tls.certificateFile}"
