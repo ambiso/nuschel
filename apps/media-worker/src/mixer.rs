@@ -239,8 +239,9 @@ impl Mixer {
 
 /// All voice/local effects and mono mapping are combined at f64 precision.
 /// Device-rate SRC runs before the only unit-amplitude clip in playback.rs.
-/// 128 speakers × gain4 plus local effects fit within this finite safety budget;
-/// it is a representational guard, not full-scale audio clipping.
+/// At most128 speakers × gain4, six local sound voices × gain1, one
+/// loopback frame and one echo probe fit below1024 times finite f32::MAX.
+/// This is a representational guard, not full-scale audio clipping.
 pub(crate) const MAX_MIX_SAMPLE: f64 = f32::MAX as f64 * 1024.;
 
 fn finite_mix(sample: f64) -> f64 {

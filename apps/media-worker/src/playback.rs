@@ -508,4 +508,32 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn a_reopened_playback_stream_starts_without_old_filter_tail_or_reference_phase() {
+        for rate in [11_025, 44_100, 96_000] {
+            let (mut source, mut input) = RingBuffer::new(4096);
+            source.push_entire_slice(&[[4., -3.]; 4096]).unwrap();
+            let (mut played, _reference) = RingBuffer::new(16384);
+            let mut old = PlaybackConverter::new(2, rate);
+            let initial_delay = old.reference_delay();
+            old.pull(&mut [0_f32; 254], &mut input, &mut played);
+            // Device re-open constructs a new converter; old rings/state drop.
+            drop((old, source, input, played));
+            let (mut source, mut input) = RingBuffer::new(4096);
+            source.push_entire_slice(&[[0.; 2]; 4096]).unwrap();
+            let (mut played, mut reference) = RingBuffer::new(16384);
+            let mut fresh = PlaybackConverter::new(2, rate);
+            assert_eq!(fresh.reference_delay(), initial_delay);
+            let mut output = [1_f32; 512];
+            let allocations = allocation_counter::measure(|| {
+                fresh.pull(&mut output, &mut input, &mut played);
+            });
+            assert_eq!(allocations.count_total, 0);
+            assert!(output.iter().all(|value| *value == 0.));
+            while let Ok(value) = reference.pop() {
+                assert_eq!(value, 0.);
+            }
+        }
+    }
 }
