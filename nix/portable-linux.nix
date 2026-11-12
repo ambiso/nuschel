@@ -104,9 +104,11 @@ let
     name: options:
     (crates.project.workspaceMembers.${name}.build.override options).overrideAttrs (old: {
       preBuild = (old.preBuild or "") + ''
-        mkdir -p "$out/nix-support"
-        export NUSCHL_LINK_REPORT="$out/nix-support/native-link.json"
+        export NUSCHL_LINK_REPORT="$PWD/native-link.json"
         export EXTRA_RUSTC_FLAGS="''${EXTRA_RUSTC_FLAGS:-} -C linker=${linker}/bin/nuschl-fhs-cc"
+      '';
+      postInstall = (old.postInstall or "") + ''
+        install -Dm644 "$NUSCHL_LINK_REPORT" "$out/nix-support/native-link.json"
       '';
       dontFixup = true;
     });
