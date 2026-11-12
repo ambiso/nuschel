@@ -2,7 +2,8 @@
 
 Current focus (user, 2026-11-12): **unmute-to-first-speech latency, stereo receive
 and output fidelity, and hybrid update readiness**. Independent owners now cover
-capture SRC fidelity, web welcome documents and the native ACL/group editor.
+iOS environment/archive verification, web welcome documents and the native
+ACL/group editor.
 The relay DNS/kernel checks and explicit-deny correction are integrated.
 The measured playback clipping correction and SuperUser bootstrap guide
 are integrated. Transmit quality evidence and the exact native welcome-domain
@@ -31,6 +32,18 @@ outside the current task's scope.
 
 Current integration checkpoint (2026-11-12):
 
+- **Filtered native capture is integrated through `ff695f9e`.** The actual
+  converter now uses the existing memory-safe mono Speex engine with rational
+  clocks and capture-side timestamp compensation. All 31 quality/clock/initial
+  marker cases, 81 native units and actual private 44.1/96 kHz capture/unmute/AEC
+  tests pass, alongside the original DSP suite. The raw stopband-relative
+  diagnostic and justified fixed-input acceptance rails remain explicit in
+  docs/capture-quality.md. All eight combined build/check outputs at `46f6a77d`
+  and both actual bundled notice readers pass; the packaged worker matches the
+  tested worker byte for byte. Browser runtime assets are unchanged from the
+  actual App-tested product. Physical/platform/full-pipeline listening and
+  matched cold-source timing remain open. Root evidence:
+  `~/.cache/nuschl-integration-20261112/capture-quality/handoff.json`.
 - **Relay DNS and explicit-deny verification is integrated through `aaff9293`.**
   Six real module configurations/eight invariant categories, nine unit tests,
   seven integration tests and both private NixOS VM cases pass. The VM verifies
