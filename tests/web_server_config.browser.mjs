@@ -80,19 +80,29 @@ async function viewport(page,width,height){
   await page.evaluate(()=>new Promise(requestAnimationFrame));
 }
 try{
-  const page=await open("config-browser",390,844),composer=page.getByLabel("Message",{exact:true});let seq=0,acks=0;const refusals=[];
+  const page=await open("config-browser",390,844),composer=page.getByLabel("Message",{exact:true});let seq=0,acks=0;const refusals=[];let localAcceptanceWithoutAck=false;
   async function configure(fields){
     const temporary=resolve(output,"next-control.json");await writeFile(temporary,JSON.stringify({seq:++seq,fields}));await rename(temporary,resolve(output,"control.json"));
     await page.locator("article").filter({hasText:`config-applied:${seq}`}).waitFor();
   }
-  async function send(body,allowed){
+  async function send(body,allowed,holdAck=false){
     await composer.fill(body);const count=await page.evaluate(()=>__welcomeProof.allResults.length);
     await page.getByRole("button",{name:"Send",exact:true}).click();await page.waitForFunction(n=>__welcomeProof.allResults.length>n,count);
     const reply=await page.evaluate(()=>__welcomeProof.allResults.at(-1));assert.equal(!reply.error,allowed);
-    if(allowed){await page.locator("article").filter({hasText:`wire-ack:${++acks}`}).waitFor();await page.waitForFunction(()=>document.querySelector("#message").value==="");}
+    if(allowed){
+      const acknowledgement=page.locator("article").filter({hasText:`wire-ack:${++acks}`});
+      await page.waitForFunction(()=>document.querySelector("#message").value==="");
+      await page.waitForFunction(()=>!Array.from(document.querySelectorAll('[role="alert"],[role="status"]')).some(node=>/Message exceeds (this server's|the .*client)/.test(node.textContent)));
+      if(holdAck){
+        assert.equal(await acknowledgement.count(),0,"owned server ACK escaped the private hold");
+        await unlink(resolve(output,"hold-wire-ack"));
+        localAcceptanceWithoutAck=true;
+      }
+      await acknowledgement.waitFor();
+    }
     else {
       assert.equal(await composer.inputValue(),body,"rejection erased draft");assert.ok(await composer.isEditable());
-      assert.match(reply.error,/Message exceeds this server's \d+-byte limit/);
+      assert.match(reply.error,/Message exceeds this server's \d+-character (text|total HTML) limit/);
       await page.getByRole("alert").filter({hasText:reply.error}).waitFor();
       refusals.push({reason:reply.error,source_bytes:new TextEncoder().encode(body).length,editable:await composer.isEditable()});
     }
@@ -111,16 +121,28 @@ try{
   assert.equal(await composer.inputValue(),"x".repeat(129));
 
   await configure({1:24_000,6:24});assert.equal(await composer.inputValue(),"x".repeat(129));await send("x".repeat(129),false);
-  await configure({4:256});assert.equal(await composer.inputValue(),"x".repeat(129));await send("x".repeat(129),true);
-  await configure({4:16});await send("<&>\n",false);
-  await configure({4:17});assert.equal(await composer.inputValue(),"<&>\n");await send("<&>\n",true);
+  await writeFile(resolve(output,"hold-wire-ack"),"hold one original server response");
+  await configure({4:256});assert.equal(await composer.inputValue(),"x".repeat(129));await send("x".repeat(129),true,true);
+  assert.equal(await page.getByRole("alert").count(),0,"old128-character alert survived raised cap and successful send");
+  await configure({4:17});await send("<&>\n",false);
+  await configure({4:18});assert.equal(await composer.inputValue(),"<&>\n");await send("<&>\n",true);
   await configure({3:0,4:4});await send("<&>\n",true);
+  await configure({4:1});await send("é",true);await send("🙂",false);
+  await configure({4:2});await send("🙂",true);await send("漢字",true);
+  await configure({3:1,4:2});await send("🙂",true);
+  await configure({4:0,5:128});await send("x".repeat(129),false);await send("x".repeat(128),true);
   await configure({4:0,5:0,6:0});await send("x".repeat(5001),true);
+  assert.match(await diagnostic("fixture-expanded","&".repeat(60_000)),/256 KiB client limit/);
+  const linkBody="see https://example.test/",linkWire='see <a href="https://example.test/">https://example.test/</a>';
+  await configure({4:linkWire.length-1});await send(linkBody,false);
+  await configure({4:linkWire.length});await send(linkBody,true);
+  const fenceBody="```\nx\n```",fenceWire="<br/>```<br/>x<br/>```";
+  await configure({4:fenceWire.length});await send(fenceBody,true);
   await unlink(resolve(output,"control.json"));
   await nav(page,async()=>{await page.getByRole("button",{name:"Disconnect",exact:true}).click();assert.match(await diagnostic("fixture-disconnected","inactive"),/Connect before sending/);await page.getByRole("button",{name:"Connect",exact:true}).click();await page.waitForFunction(()=>document.querySelector(".server-connection .status")?.textContent==="Connected");});
   await send("x".repeat(5001),false);await send("x".repeat(5000),true);
   const proof=await page.evaluate(()=>__welcomeProof);assert.equal(proof.captures,0);assert.deepEqual(proof.violations,[]);assert.deepEqual(errors,[]);assert.deepEqual(canaries,[]);
   await page.screenshot({path:resolve(output,"configuration-390.png")});
-  await writeFile(resolve(output,"proof.json"),JSON.stringify({passed:true,site,csp,diagnostics,refusals,wire_acknowledgements:acks,checks:["independent private TLS/protobuf configuration", "actual App rejected128+1-byte body", "sparse bandwidth/max-user update preserves cap", "draft survives rejection and asynchronous cap increase", "escaped HTML/newline wire17-byte boundary", "plain UTF-8 wire4-byte boundary", "explicit zero enables above 5000 within app ceiling", "reconnect resets conservative5000 default", "no capture/CSP/canary"]},null,2));console.log("Configuration App proof passed");
+  await writeFile(resolve(output,"proof.json"),JSON.stringify({passed:true,site,csp,diagnostics,refusals,wire_acknowledgements:acks,local_acceptance_cleared_before_server_ack:localAcceptanceWithoutAck,checks:["independent private TLS/protobuf configuration", "actual App rejected128+1 UTF16 units", "sparse bandwidth/max-user update preserves cap", "draft survives rejection and asynchronous cap increase", "shared legacy HTML/newline wire18-unit boundary", "UTF16 CJK/emoji and plain newline boundaries", "unlimited text still respects HTML total; explicit both-zero remains locally bounded", "reconnect resets conservative5000 default", "shared link/fence formatter exact wire", "old alert and server status clear after owned success", "no capture/CSP/canary"]},null,2));console.log("Configuration App proof passed");
 }catch(error){await writeFile(resolve(output,"failure.json"),JSON.stringify({error:String(error),errors,canaries,pages:await Promise.all(pages.map(page=>page.evaluate(()=>({body:document.body.textContent,proof:__welcomeProof})).catch(()=>null)))},null,2));throw error;}
 finally{for(const context of contexts)await context.close();await browser.close();for(const socket of tunnels)socket.destroy();await new Promise(done=>server.close(done));}

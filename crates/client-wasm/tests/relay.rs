@@ -296,7 +296,7 @@ async fn legacy_text_preserves_newlines_and_escapes_html_across_tls_relay() {
                     assert!(sent);
                     assert_eq!(
                         body,
-                        "fixture received: literal &lt;script&gt;<br><br>```rust<br>fn main() {}<br>```"
+                        "fixture received: literal &lt;script&gt;<br/><br/>```rust<br/>fn main() {}<br/>```"
                     );
                     return;
                 }
