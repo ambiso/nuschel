@@ -27,9 +27,10 @@ Windows profile-preserving updater relaunch and the metadata-refresh procedure
 are integrated with scoped proofs; final browser/device/distribution checks stay open.
 Server reordering and the desktop layout foundation have scoped proofs integrated;
 web image attachments, modern identity/archive flows and full parity remain open.
-The rename/build-cache cleanup is complete. Release publication remains behind
-signing, notice and packaging gates. The initial user-requested push was `1cbb5103`; the integration checkpoints
-below identify later checked source. None is a tagged-release claim.
+The rename/build-cache cleanup is complete. The user published experimental
+`v0.1.0` at `ab843f7a` on 2026-11-12; later queue fixes are not included in that
+immutable tag. The initial user-requested push was `1cbb5103`; the integration
+checkpoints below identify later checked source with their own evidence scopes.
 
 Queue policy (user, 2026-11-12): record every reported or discovered issue here
 when it cannot be fixed immediately. Delegation does not close an issue: retain
@@ -360,12 +361,15 @@ Current integration checkpoint (2026-11-12):
   products. Current-head cross archives and macOS execution remain separate gates;
   see `docs/windows-hybrid-update.md`. The dedicated production public pair was
   enrolled on 2026-11-12; historical fixture proofs retain their original scope.
-- **Release remains gated.** Independent Linux, Windows, universal macOS and web
-  artifacts, hybrid update verification, exact notices and final packaging must
-  pass. Production public-key enrollment is complete. The user chose local
-  signing and publication; keep the private pair off GitHub runners and retain
-  protected backups. Local publication tooling and actual final archives remain
-  gates. Do not publish unsigned updates.
+- **Experimental `v0.1.0` is published at `ab843f7a`.** Exact-tag local Nix
+  preparation/archive validation passed before the user's local signing and
+  publication. Downloaded public metadata verifies with both enrolled hybrid
+  components; all 33 updater payloads and 39 ledger payloads match GitHub's
+  reported sizes/digests. This audit downloaded metadata, not every binary.
+  macOS explicitly records `native_macos_verified=false`; physical-platform
+  audio and later-source distribution checks remain open. Keep the private pair
+  off GitHub runners and retain protected backups. Evidence:
+  `~/.cache/nuschl-release-published-audit/report.json`.
 - Knocking is integrated through `1f979943` (134 source-branch tests); SDK/UI
   consumers remain. MLS admission is refused. RTC RustCrypto certificates and
   bounded four-track transport are integrated (five signaling and 12 transport
@@ -611,9 +615,9 @@ Reported while testing (2026-11-10/11):
 
 Later (reported):
 
-- [ ] Investigate laggy Windows audio (user, 2026-11-12). Clarify whether this
-      means delayed incoming speech, delayed microphone transmission or choppy
-      playback, and bind the report to an exact build/device/output route.
+- [ ] Investigate laggy Windows audio (user, 2026-11-12). Both input and output
+      are intermittently affected. Clarify delayed/catching-up audio versus
+      stuttering/dropouts, and bind the report to an exact build/device/output route.
       Compare Nuschl and stock Mumble using owned private servers and synthetic
       audio. Inspect WASAPI callback/buffer sizes, sample-rate conversion, bounded
       capture/playback queues, underruns and drift rather than guessing at buffer
@@ -916,8 +920,16 @@ Later (reported):
       or image buffers, unnecessary eager workers and allocation churn; prioritize
       simple measured reductions without sacrificing isolation, paging, audio
       latency, accessibility or image correctness. Use owned fixtures and preserve
-      before/after evidence. A read-only Claude lane has started on isolated
-      fixtures; product changes remain behind the urgent VAD fix.
+      before/after evidence. Claude's frozen audit `e0a92b16` measures GPU/driver,
+      document/image and history retention costs; separate Vulkan-first,
+      compact-document and bounded-history checkpoints await integration. Before
+      integrating history `3f4295d3`, close the source-review gaps: inactive
+      loading timelines must keep their in-flight cursors, and the desktop's
+      following path must not bypass saved/pending/loading guards with direct
+      trimming. Prove combined document/image retention across scroll-away,
+      reload, edit and Save. Message/document count targets have pending/selection
+      exceptions; do not describe them as hard aggregate byte budgets. Crypto-idle
+      lifecycle and desktop SQLite-cache measurements are separately allocated.
 - [ ] With a screen reader, 1000 loaded messages cost about 4–5 ms per frame (labels
       plus AccessKit work); still 60 fps.
 - [x] Friends and local nicknames by certificate hash (heart marker, nickname shown
@@ -2583,25 +2595,30 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
       strict signer/artifact regressions and workflow syntax are tested. Native
       Windows hybrid verifier/LPAC/library-install and desktop update/restart proof
       now pass on reviewed fixture sources. macOS native proof, final integrated
-      distribution/archive checks and an actual release remain.
+      distribution/archive checks remain required for later sources; the first
+      experimental release is published as recorded below.
 - [x] Enroll the production public pair in `crates/update/update-trust.json`
       (2026-11-12, source `5b8d5f53`). The private pair was generated with the
       reviewed operator tool outside the repository; only the exact public
       JSON is committed. Fourteen updater tests and the final native package
       pass. This protects updates independently of OS code signing below.
-- [ ] Finish local release preparation/signing/publication (user, 2026-11-12).
-      Keep protected backups of the private pair locally; do not provision a
-      GitHub signing secret. Accept exact-tag local Nix outputs with explicit
-      provenance, revalidate actual store products and complete archive/notice
-      hashes before signing and publishing. The user accepts an experimental Mac
-      artifact without Developer ID/notarization or mandatory native Mac testing:
-      retain local ad-hoc signature, code-page and bundle-integrity checks, and
-      explicitly record native Mac verification as absent unless actually run.
-      Key-free CI can still supply additional build/native verification evidence.
-      Preserve the immutable `v0.1.0` tag at `ab843f7a`; its automatic publish
-      run was cancelled when the user chose local signing. The separate manual
-      test build continues. Local publisher fixtures/review are in progress;
-      actual signed distribution and public release are not yet completed.
+- [x] Local release preparation/signing/publication (user, 2026-11-12).
+      `just release` and `just release --publish` infer parameters, ask through a
+      default-No modal, preserve a private disk-backed staging directory for
+      testing, and publish the same verified signed bytes. The user published
+      `v0.1.0` at immutable `ab843f7a` at 19:34:08 UTC (GitHub release443415766).
+      Exact-tag local products and canonical archives/notices were validated;
+      root independently verifies the downloaded hybrid metadata and manifest/
+      ledger bindings to remote sizes/digests. No signing key went to CI. The
+      experimental Mac archive retains checked ad-hoc integrity and explicitly
+      records `native_macos_verified=false`; no native runtime claim follows.
+      Release-note download links were improved without altering signed assets.
+      Evidence: `~/.cache/nuschl-release-published-audit/report.json`,
+      `~/.cache/nuschl-release-validation/readonly-staging/`, and
+      [the release](https://github.com/ambiso/nuschl/releases/tag/v0.1.0).
+- [ ] Confirm protected offline backups of the local hybrid private pair. The
+      production pair exists outside the repository; no backup proof has been
+      supplied. Never put it in a GitHub signing secret or published evidence.
 - [x] Source-scoped runtime notice producer/publisher gates and lossless compact
       packaging for native/cross/web artifacts. Known platform mappings select
       authoritative roots/features; Mac requires both slices, native builds do
