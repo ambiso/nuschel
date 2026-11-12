@@ -552,8 +552,13 @@ Later (reported):
       do not prove messages are displayed correctly. The user confirms native
       desktop, observed this morning and not yet retested; it may
       already be corrected. Check the current combined product before editing.
-      A separate read-only diagnosis is being delegated
-      before allocating edits alongside image quality and chat scrolling.
+      Source review finds `ContentRenderer::render` deliberately treats ordinary
+      text literally and handles only fenced code/math, so general emphasis,
+      inline code, links and block Markdown may be missing behavior rather than
+      a new regression. Claude's separate private-GNOME typed/received/restored
+      diagnosis is active before allocating shared renderer edits alongside
+      image quality and chat scrolling. Preserve outbound legacy formatting and
+      the shared send-budget work unless explicitly coordinating a later change.
 - [ ] Add a visible chat-history scrollbar, matching the existing channel-list
       affordance (user, 2026-11-12). Bind it to the retained virtualized timeline
       scroll state; dragging, wheel and keyboard movement must preserve message
