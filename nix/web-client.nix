@@ -55,6 +55,14 @@ let
                 // lib.optionalAttrs (args.crateName == "nuschl-protocol") {
                   buildDependencies = native.project.workspaceMembers.nuschl-protocol.build.buildDependencies;
                 }
+                // lib.optionalAttrs (isWasm && args.crateName == "nuschl-content-wasm") {
+                  # The content worker has no native process rlimit. Bound its
+                  # actual linear memory, in addition to decoder/job limits.
+                  extraRustcOpts = (args.extraRustcOpts or [ ]) ++ [
+                    "-C"
+                    "link-arg=--max-memory=268435456"
+                  ];
+                }
               );
         in
         crate.overrideAttrs (
@@ -100,6 +108,11 @@ let
     moduleName = "nuschl_audio_wasm";
     name = "nuschl-web-audio-codec";
   };
+  contentWasm = bindings {
+    packageId = "nuschl-content-wasm";
+    moduleName = "nuschl_content_wasm";
+    name = "nuschl-web-content-codec";
+  };
   app = pkgs.buildNpmPackage {
     pname = "nuschl-web-app";
     version = "0.1.0";
@@ -112,13 +125,15 @@ let
           "dist"
           "sdk"
           "audio-codec"
+          "content-codec"
         ]);
     };
     npmDepsHash = "sha256-zDYMAXXhJzcB09V/CnuclOqngsob7YP2cMFiGL1J5SE=";
     postPatch = ''
-      mkdir -p src/sdk src/audio-codec
+      mkdir -p src/sdk src/audio-codec src/content-codec
       cp ${wasm}/* src/sdk/
       cp ${audioWasm}/* src/audio-codec/
+      cp ${contentWasm}/* src/content-codec/
     '';
     npmBuildFlags = [
       "--"
@@ -133,5 +148,5 @@ let
   };
 in
 {
-  inherit app wasm audioWasm;
+  inherit app wasm audioWasm contentWasm;
 }

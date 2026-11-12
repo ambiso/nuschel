@@ -58,7 +58,11 @@ impl ContentProcessor {
             "legacy" => self.renderer.legacy_plain_text(source).map_err(error)?,
             _ => return Err("Unsupported content mode.".into()),
         };
-        let plain_text = marked_text.split(EMBED).step_by(2).collect();
+        let plain_text = if mode == "plain" {
+            source.to_owned()
+        } else {
+            marked_text.split(EMBED).step_by(2).collect()
+        };
         let mut document = self.renderer.render(&marked_text).map_err(error)?;
         constrain_document(&mut document)?;
         json(&Rendered {
