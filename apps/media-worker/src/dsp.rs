@@ -394,6 +394,50 @@ mod tests {
     }
 
     #[test]
+    fn identical_owned_pcm_has_identical_gate_decisions_with_and_without_prefix_storage() {
+        let Some(path) = std::env::var_os("NUSCHL_NOISE_REPLAY") else {
+            return;
+        };
+        let bytes = std::fs::read(path).unwrap();
+        assert!(!bytes.is_empty() && bytes.len() <= 1_000_000 && bytes.len() % (FRAME * 4) == 0);
+        let samples: Vec<f32> = bytes
+            .chunks_exact(4)
+            .map(|v| f32::from_le_bytes(v.try_into().unwrap()))
+            .collect();
+        assert!(samples.iter().all(|v| v.is_finite() && v.abs() <= 1.));
+        let mut reports = Vec::new();
+        for echo in [false, true] {
+            let settings = AudioSettings::default();
+            let mut before = CapturePipeline::with_reference(&settings, echo, 2);
+            let mut after = CapturePipeline::with_reference(&settings, echo, 2);
+            before.set_delay_hint(30);
+            after.set_delay_hint(30);
+            let mut prefix = crate::capture_queue::CaptureQueue::default();
+            let mut probabilities = Vec::new();
+            let mut admitted = Vec::new();
+            for (index, raw) in samples.chunks_exact(FRAME).enumerate() {
+                let mut a: [f32; FRAME] = raw.try_into().unwrap();
+                let mut b = a;
+                before.render(&[0.; 2 * FRAME]);
+                after.render(&[0.; 2 * FRAME]);
+                let old = before.process(&mut a, false, false);
+                let new = after.process(&mut b, false, false);
+                assert_eq!(old, new, "prefix changed the gate at frame {index}");
+                assert_eq!(a, b, "prefix changed processed PCM at frame {index}");
+                prefix.push(b, new.transmit, true);
+                probabilities.push(new.voice);
+                if new.transmit {
+                    admitted.push(index);
+                }
+            }
+            reports.push(serde_json::json!({"echo":echo,"admitted_frames":admitted,"voice_probabilities":probabilities}));
+        }
+        if let Some(output) = std::env::var_os("NUSCHL_NOISE_REPLAY_OUTPUT") {
+            std::fs::write(output,serde_json::to_vec(&serde_json::json!({"source_sha256":nuschl_core::bookmark::fingerprint(&bytes),"frames":samples.len()/FRAME,"frame_samples":FRAME,"identical_gate_decisions":true,"reports":reports})).unwrap()).unwrap();
+        }
+    }
+
+    #[test]
     fn voice_activity_opens_for_speech_and_stays_closed_for_steady_noise() {
         let settings = AudioSettings::default();
         let mut pipeline = CapturePipeline::new(&settings, false);

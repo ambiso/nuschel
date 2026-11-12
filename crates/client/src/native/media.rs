@@ -226,6 +226,7 @@ async fn run_with_start(
                     }
                     other => other,
                 };
+                let had_capture = streams.values().any(|stream| speaking_to(&stream.link));
                 let capture_changed = match &message {
                     Control::Attach { server, link, .. } => speaking_to(link)
                         || streams.get(server).is_some_and(|old| speaking_to(&old.link)),
@@ -279,10 +280,17 @@ async fn run_with_start(
                 }
                 // A first explicitly authorized microphone needs no debounce.
                 // Moving an active voice still settles both server changes.
-                let opening = !planned.capture && plan(streams.values().map(|stream| &stream.link)).capture;
-                #[cfg(test)] { last_wait = if opening { std::time::Duration::ZERO } else { SETTLE }; }
-                if opening { settle = Some(Instant::now()); }
-                else { settle.get_or_insert_with(|| Instant::now() + SETTLE); }
+                let now = Instant::now();
+                let opening = !planned.capture && !had_capture && streams.values().any(|stream| speaking_to(&stream.link));
+                if opening {
+                    settle = Some(now);
+                    #[cfg(test)] { last_wait = std::time::Duration::ZERO; }
+                } else if (had_capture && capture_changed && settle.is_some_and(|deadline| deadline <= now)) || settle.is_none() {
+                    // A second destination/revision may arrive before that
+                    // first worker starts: do not inherit its zero deadline.
+                    settle = Some(now + SETTLE);
+                    #[cfg(test)] { last_wait = SETTLE; }
+                }
             },
             _ = tokio::time::sleep_until(settle.unwrap_or_else(Instant::now)), if settle.is_some() => {
                 settle = None;
@@ -606,6 +614,48 @@ mod tests {
             })
             .unwrap();
         assert_eq!(inspect(&control).await.2, SETTLE);
+        task.abort();
+        let _ = task.await;
+    }
+
+    #[tokio::test]
+    async fn queued_destinations_do_not_inherit_a_pending_first_routes_zero_deadline() {
+        let (control, input) = mpsc::unbounded_channel();
+        let (_playback, playback) = mpsc::channel(4);
+        let (events, _events) = mpsc::channel(64);
+        let (_settings, settings) = watch::channel(ClientSettings::default());
+        let (_keys, keys) = watch::channel(VoiceKeys::default());
+        let task = tokio::spawn(run_with_start(
+            (input, playback),
+            events,
+            (settings, keys),
+            || Err(nuschl_session::Error::Worker("synthetic worker".into())),
+        ));
+        let (one, _one) = mpsc::channel(4);
+        let (two, _two) = mpsc::channel(4);
+        // Enqueue both before yielding. Whether the first deadline already ran
+        // or is still pending, another destination must use the move debounce.
+        control
+            .send(Control::Attach {
+                server: "one".into(),
+                generation: 1,
+                link: link(false, false, 128_000, 1),
+                voice: one,
+            })
+            .unwrap();
+        control
+            .send(Control::Attach {
+                server: "two".into(),
+                generation: 1,
+                link: link(false, false, 128_000, 1),
+                voice: two,
+            })
+            .unwrap();
+        let (reply, result) = tokio::sync::oneshot::channel();
+        control.send(Control::Inspect(reply)).unwrap();
+        let (_, capture, wait) = result.await.unwrap();
+        assert!(capture);
+        assert_eq!(wait, SETTLE);
         task.abort();
         let _ = task.await;
     }
