@@ -394,6 +394,40 @@ impl Library {
             .ok_or_else(|| missing("song"))
     }
 
+    /// Reads the configured account's current rating; never use a queued snapshot.
+    pub fn rating(&self, id: &str) -> Result<u8, Error> {
+        let reply = self.call(self.get("getSong").query("id", id))?;
+        let rating = reply
+            .song
+            .ok_or_else(|| missing("song"))?
+            .user_rating
+            .unwrap_or(0);
+        u8::try_from(rating)
+            .ok()
+            .filter(|rating| *rating <= 5)
+            .ok_or_else(|| {
+                Error::Json(<serde_json::Error as serde::de::Error>::custom(
+                    "song rating is outside 0..5",
+                ))
+            })
+    }
+
+    /// Writes the shared account's rating, with zero removing it. No retries.
+    pub fn set_rating(&self, id: &str, rating: u8) -> Result<(), Error> {
+        if rating > 5 {
+            return Err(Error::Api {
+                code: 0,
+                message: "rating must be between 0 and 5".into(),
+            });
+        }
+        self.call(
+            self.get("setRating")
+                .query("id", id)
+                .query("rating", rating.to_string()),
+        )?;
+        Ok(())
+    }
+
     pub fn album(&self, id: &str) -> Result<(Album, Vec<Track>), Error> {
         let reply = self.call(self.get("getAlbum").query("id", id))?;
         let album = reply.album.ok_or_else(|| missing("album"))?;
@@ -781,6 +815,7 @@ struct Song {
     track: Option<u32>,
     suffix: Option<String>,
     content_type: Option<String>,
+    user_rating: Option<i64>,
     #[serde(default, deserialize_with = "optional_identifier")]
     cover_art: Option<String>,
 }

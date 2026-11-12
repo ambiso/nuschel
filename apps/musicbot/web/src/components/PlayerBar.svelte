@@ -7,6 +7,7 @@
   import Icon from "./Icon.svelte";
   import Progress from "./Progress.svelte";
   import DuckingPanel from "./DuckingPanel.svelte";
+  import SongRating from "./SongRating.svelte";
 
   const index = $derived(store.selected);
   const player = $derived(store.player);
@@ -116,6 +117,7 @@
       </label>
       <DuckingPanel player={index} />
     {/if}
+    {#if track}<SongRating library={track.library} songId={track.id} title={track.title} namespace={store.browseKey} placement="above" />{/if}
   </div>
 </footer>
 
@@ -152,7 +154,7 @@
   }
   .play:disabled { opacity: 0.4; cursor: default; }
   .status { min-width: 0; overflow-wrap: anywhere; font-size: 0.8rem; color: var(--muted); }
-  .side { display: flex; align-items: center; justify-content: flex-end; gap: 0.5rem; min-width: 0; }
+  .side { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 0.5rem; min-width: 0; }
   .queue-select select { max-width: 10rem; }
   .volume { display: flex; align-items: center; gap: 0.35rem; color: var(--muted); }
   .volume input { width: 7rem; }
@@ -166,7 +168,7 @@
     }
     .song { grid-area: song; }
     .center { grid-area: center; }
-    .side { grid-area: side; justify-content: flex-end; flex-wrap: wrap; }
+    .side { grid-area: side; }
     .status { white-space: normal; }
     .volume input { width: 5rem; }
     .queue-select select { max-width: 8rem; }

@@ -853,6 +853,7 @@ certificate_sha256 = "{pin}"
                 tokens: Tokens::load(directory.join("tokens.json")).unwrap(),
                 changes,
                 persistence: Mutex::new(()),
+                rating_revision: std::sync::atomic::AtomicU64::new(0),
                 config,
             })
         }

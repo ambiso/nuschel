@@ -18,7 +18,7 @@ use player::{Changes, Player};
 use std::{
     path::PathBuf,
     process::ExitCode,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, atomic::AtomicU64},
 };
 use subsonic::Library;
 use tokens::Tokens;
@@ -58,6 +58,8 @@ pub struct Bot {
     pub tokens: Tokens,
     /// What the web page's viewers watch to learn of any change.
     pub changes: Changes,
+    /// Ephemeral invalidation for live, backend-owned song ratings.
+    pub rating_revision: AtomicU64,
     /// Serializes checkpoints with the final shutdown save.
     pub persistence: Mutex<()>,
 }
@@ -159,6 +161,7 @@ async fn run(arguments: Arguments) -> Result<(), String> {
         connections,
         tokens,
         changes,
+        rating_revision: AtomicU64::new(0),
         persistence: Mutex::new(()),
         config,
     });

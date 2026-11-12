@@ -45,6 +45,9 @@ bot in Mumble. It works with any Mumble server, stock Murmur as well as `nuschld
 - **Library history.** Playback also appears in the configured Subsonic account's
   history and play counts. Shared channels count as one play; independent queues
   count separately. The submission rules are described below.
+- **Ratings.** Use **Rate** on the playing song, a library track or a History
+  entry to save one to five stars, or clear its rating. Listeners share the
+  configured library account; the latest saved rating replaces the previous one.
 - **Ducking.** While somebody in a channel speaks, the queue playing there gets
   quieter (by default to 30 % of its volume) and comes back 0.8 s after the last
   speech. It fades down in about 60 ms and up in about half a second, so nothing
@@ -331,7 +334,8 @@ Those gates are absent from release code; ordinary real-worker confinement and
 service fault checks remain separate evidence.
 
 Rust tests cover queue ordering, seek boundaries, history lifecycle and retention,
-durable state, library identity across reordering/removal, gain ramps, and VAD.
+durable state, library identity across reordering/removal, gain ramps, VAD,
+and authenticated rating reads/writes, bounds, failures and live revisions.
 Frontend tests cover progress interpolation, scrubbing, drag indices, route
 encoding, shortcuts, and history pagination during live refreshes.
 `tests/musicbot.py` drives the JSON API and two SSE viewers against stock Murmur
@@ -361,6 +365,30 @@ python3 tests/with_local_murmur.py "$(nix build --inputs-from . nixpkgs#murmur -
 
 `nix build .#checks.x86_64-linux.vm-musicbot` runs the bot under its NixOS module
 against Murmur in a VM, then the same script.
+
+## Song ratings
+
+Open **Rate**, choose one to five stars and press **Save rating**. **Clear rating**
+removes the rating using the standard Subsonic
+[`setRating`](https://opensubsonic.netlify.app/docs/endpoints/setrating) value 0.
+Controls are available in the player bar, library song lists and playback History.
+
+Navidrome stores ratings per account. The bot uses the configured library account,
+including the account associated with an API key. All listeners and queues using
+that account share its rating; the latest saved choice wins. Ratings remain in
+the library server across bot restarts.
+
+An open control reads the current backend rating and follows changes from other
+listeners. Reopening it also picks up edits made directly in Navidrome. Reads are
+on demand, so unopened song rows and playback progress do not cause rating calls.
+Reconnecting closes stale controls; tracks from a removed library cannot be rated.
+A failed write shows an error and requires **Reload rating** before another try.
+
+Verified against real Navidrome 0.64.2 with two independent browser listeners:
+all five ratings and clearing, player/library/history controls, live updates,
+unchanged request counts during playback, failed writes and explicit recovery,
+and retained backend ratings after a bot restart. Narrow-screen controls were
+also exercised in Chromium.
 
 ## Backend playback history
 
@@ -456,6 +484,18 @@ A missing library has `entry.track.library: null`; backend URLs and credentials
 are never returned. State/SSE snapshots include only each player's
 `history_revision`, so open history views refresh when a record is added without
 receiving the entire retained history every playback tick.
+
+`GET rating?library=N&id=ID` reads the configured account's current song rating
+and returns `{"rating":N}`. `POST rating` accepts JSON
+`{"library":N,"id":"ID","rating":N}` and returns 204 after a successful backend
+write. Ratings must be integers from 0 to 5; 0 clears the rating. These endpoints
+require a valid viewer link and use the same bounded, authenticated library
+requests as browsing. They are independent of queue selection.
+
+State/SSE includes `rating_revision`, advanced only after a successful backend
+write. Open controls use it to reload the authoritative rating. The counter is
+local to a bot run; ratings are fetched from the library rather than queue or
+history snapshots. After a failed write, reload the current rating before trying again.
 
 `POST command` accepts JSON tagged by `command`: `pause`, `resume`, `skip`,
 `clear`, `seek` (`position_ms`), `volume`, `ducking`, `remove`, `move`, `add`, and
