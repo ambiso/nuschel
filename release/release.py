@@ -172,7 +172,7 @@ def confirm_modal(details):
                 box.addstr(row, 3, line)
             box.addstr(height - 3, 3, '[ Yes ]' if selected else '  Yes  ', curses.A_REVERSE if selected else 0)
             box.addstr(height - 3, 15, '  No   ' if selected else '[ No ]', 0 if selected else curses.A_REVERSE)
-            box.addstr(height - 2, 3, 'Tab/Left/Right: choose  Enter: confirm  PgUp/PgDn: details')
+            box.addstr(height - 2, 3, 'Tab: choose  Enter: confirm  PgUp/PgDn: scroll')
             box.refresh()
             key = box.getch()
             if key in (ord('\t'), curses.KEY_LEFT, curses.KEY_RIGHT):
@@ -316,6 +316,9 @@ def main():
     args = parser.parse_args()
     try:
         execute(args.publish)
+    except KeyboardInterrupt:
+        print('Release cancelled; any existing signed release is unchanged.', file=sys.stderr)
+        return 1
     except (ValueError, OSError, subprocess.SubprocessError, curses.error, KeyError) as error:
         # Never print captured child output: signer diagnostics may contain sensitive data.
         print('Release stopped: ' + str(error), file=sys.stderr)
