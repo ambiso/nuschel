@@ -45,8 +45,10 @@ export class SdkRpc {
       if(notify)this.onClose("The browser worker could not be closed. Reload this page.");
       return;
     }
-    // These callbacks may release BrowserAudio's global two-send credits, so
-    // they run only after termination and synchronous route/consent revocation.
+    // terminate() is a shutdown request, not a synchronous physical-exit ACK.
+    // This owner stays permanently closed (no auto-restart), so its inbox can
+    // never acquire more work while native shutdown finishes. Only now revoke
+    // the route/consent and synthetically settle its bounded pending promises.
     try {if(notify)this.onClose(reason);}
     finally {
       const error=new SdkUnavailableError(reason);
