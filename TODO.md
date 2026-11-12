@@ -2,8 +2,8 @@
 
 Current focus (user, 2026-11-12): **unmute-to-first-speech latency, stereo receive
 and output fidelity, and hybrid update readiness**. Independent owners now cover
-browser jitter/PLC, shared desktop document-link interaction and native Windows
-hybrid updater proof. Remaining capture/device latency checks stay open below.
+browser jitter/PLC, shared desktop document-link interaction and the Windows
+desktop updater harness. Remaining capture/device latency checks stay open below.
 Server reordering and the desktop layout foundation have scoped proofs integrated;
 web image attachments, modern identity/archive flows and full parity remain open.
 The rename/build-cache cleanup is complete. Publication remains behind signing,
@@ -74,26 +74,26 @@ Current integration checkpoint (2026-11-12):
   intentional manual stop. The issuer command is offline; public ACME challenge
   providers remain outside this proof. Trust and history identity checks remain
   independent of server ordering.
-- **Audio corrections are integrated through `2e25ef54`.** Receive stereo,
-  gain-before-clipping, complete 120 ms packets, filtered playback/reference
-  conversion, Pulse capture startup and bounded VAD onset retention are present.
-  The combined media-worker checkpoint passed 64 tests (four explicit/baseline
-  diagnostics ignored); the unmute client checkpoint passed 91 (one baseline
-  ignored). The exact combined worker passed the original private DSP suite,
-  including 46 dB echo removal and double-talk preservation; a separate private
-  44.1 kHz render/48 kHz capture check passed with 45 dB removal and 0% echo
-  admission in the probe. These are scoped synthetic checks, with earlier failed AEC
-  trials retained. Full distribution checks for this combination remain pending.
-  Physical-device latency and complete Mumble output parity stay open
-  below. The requested transmit default is 128 kbit/s subject to server budgets;
-  UserStats bandwidth now converts bytes/s to bits/s correctly. Configurable
-  bitrate controls remain queued.
-- **Hybrid update verification is integrated through `d1480f2c`.** The earlier
-  `933bca05` Linux distribution built with both algorithm-specific helpers and
-  passed the real packaged-worker sandbox, corruption, timeout and install
-  fixture. This does not enroll production keys or prove native Windows/macOS
-  execution; complete scoped notices and cross-platform checks remain release
-  gates. Later audio corrections still need a fresh distribution build.
+- **Audio corrections are packaged through `abe83021`.** Native/browser stereo,
+  wide final mixing, actual mono-device folding, Mumble's receive phase setting,
+  complete 120 ms packets, filtered playback/reference conversion, Pulse capture
+  startup and bounded VAD onset retention have scoped proofs. The mono source
+  checkpoint passed 68 media tests (five diagnostic/baseline ignored); welcome
+  client tests passed 93 (one baseline ignored). Actual private PCM/DSP checks
+  passed; earlier failed AEC trials remain documented. The shared jitter-core
+  refactor `76ef6af6` additionally passed native/shared tests and 19,881 exact
+  frozen-native trace comparisons; browser activation is still in progress.
+  Physical-device latency, complete Mumble output parity, browser recovery and
+  remaining conversion/clip-order work stay open below. The requested transmit
+  default is 128 kbit/s subject to server budgets; UserStats bandwidth now converts
+  bytes/s to bits/s correctly. Configurable bitrate controls remain queued.
+- **Hybrid update verification has Linux and Windows VM proofs.** Actual
+  packaged Linux helpers passed sandbox/corruption/timeout/install checks.
+  `c262ef1b` adds native Windows fixed-engine, LPAC, forged-reply, deadline and
+  library download/apply/cleanup evidence. Windows network probing specifically
+  observed denied/unavailable Winsock initialization. The full desktop GUI
+  update/restart flow, exact final cross archives and macOS execution remain
+  separate gates; see `docs/windows-hybrid-update.md`. Production trust stays empty.
 - **Release remains gated.** Independent Linux, Windows, universal macOS and web
   artifacts, hybrid update verification, exact notices and final packaging must
   pass. Production public-key enrollment and CI secret provisioning remain
