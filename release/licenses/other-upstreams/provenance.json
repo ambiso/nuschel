@@ -1148,16 +1148,5 @@
       "version": "0.2.54"
     }
   ],
-  "unresolved": [
-    {
-      "declared_license": "MIT",
-      "files": [],
-      "name": "seahash",
-      "path_in_vcs": null,
-      "repository": "https://gitlab.redox-os.org/redox-os/seahash",
-      "revision": "94b632aeac099031c373599313d5b5f0acbbaec0",
-      "status": "unresolved",
-      "version": "4.1.0"
-    }
-  ]
+  "unresolved": []
 }

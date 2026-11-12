@@ -1,0 +1,438 @@
+{
+  "published_revision": "94b632aeac099031c373599313d5b5f0acbbaec0",
+  "archive_revision_url": "https://archive.softwareheritage.org/api/1/revision/94b632aeac099031c373599313d5b5f0acbbaec0/",
+  "published_vcs_info": {
+    "git": {
+      "sha1": "94b632aeac099031c373599313d5b5f0acbbaec0"
+    }
+  },
+  "history": [
+    {
+      "revision": "94b632aeac099031c373599313d5b5f0acbbaec0",
+      "parents": [
+        {
+          "id": "f920cfa9d445ed9be3627b6b8df0ce5ea1cfab0b",
+          "url": "https://archive.softwareheritage.org/api/1/revision/f920cfa9d445ed9be3627b6b8df0ce5ea1cfab0b/"
+        }
+      ],
+      "directory": "0903f041ae9759df8be982b638be18bd3790df63"
+    },
+    {
+      "revision": "f920cfa9d445ed9be3627b6b8df0ce5ea1cfab0b",
+      "parents": [
+        {
+          "id": "506a0e8066c8755a9ed8a6093c148811a52f8d74",
+          "url": "https://archive.softwareheritage.org/api/1/revision/506a0e8066c8755a9ed8a6093c148811a52f8d74/"
+        }
+      ],
+      "directory": "2f558293d4026686f8576d512ddc73b0a92f012b"
+    },
+    {
+      "revision": "506a0e8066c8755a9ed8a6093c148811a52f8d74",
+      "parents": [
+        {
+          "id": "1d067e51f2f465d16550789dcaa28ea2a61e9b77",
+          "url": "https://archive.softwareheritage.org/api/1/revision/1d067e51f2f465d16550789dcaa28ea2a61e9b77/"
+        }
+      ],
+      "directory": "32e33cfb54b85ab8f512669bfab2097eb5d9bdd7"
+    },
+    {
+      "revision": "1d067e51f2f465d16550789dcaa28ea2a61e9b77",
+      "parents": [
+        {
+          "id": "db70930578af5b34df467090ad1251d602e2b3b0",
+          "url": "https://archive.softwareheritage.org/api/1/revision/db70930578af5b34df467090ad1251d602e2b3b0/"
+        },
+        {
+          "id": "27ec8280237487d659287b5010860a242985f52c",
+          "url": "https://archive.softwareheritage.org/api/1/revision/27ec8280237487d659287b5010860a242985f52c/"
+        }
+      ],
+      "directory": "dc5b03f612ac2356b3de7e964e62ed2fc879aedc"
+    },
+    {
+      "revision": "db70930578af5b34df467090ad1251d602e2b3b0",
+      "parents": [
+        {
+          "id": "e365d5436083ac6de9932841a5916dbdf23d9977",
+          "url": "https://archive.softwareheritage.org/api/1/revision/e365d5436083ac6de9932841a5916dbdf23d9977/"
+        },
+        {
+          "id": "994214b34b2e8825a58cfb7dbe8173a9bef55790",
+          "url": "https://archive.softwareheritage.org/api/1/revision/994214b34b2e8825a58cfb7dbe8173a9bef55790/"
+        }
+      ],
+      "directory": "af5dc9c795ffb6d9c54fdf5ef2612bed1e2a73c1"
+    },
+    {
+      "revision": "e365d5436083ac6de9932841a5916dbdf23d9977",
+      "parents": [
+        {
+          "id": "a39dd378a7310dd1485a2c779e952b21e4a095f4",
+          "url": "https://archive.softwareheritage.org/api/1/revision/a39dd378a7310dd1485a2c779e952b21e4a095f4/"
+        },
+        {
+          "id": "90751ff1a0cb9c702c0a9aa637d8f0e324dbd655",
+          "url": "https://archive.softwareheritage.org/api/1/revision/90751ff1a0cb9c702c0a9aa637d8f0e324dbd655/"
+        }
+      ],
+      "directory": "ea5cbb30bd32985a7c7f70b8d0e0da3f2e513cd4"
+    },
+    {
+      "revision": "a39dd378a7310dd1485a2c779e952b21e4a095f4",
+      "parents": [
+        {
+          "id": "ecee17f1cb0cbbad6cb7aa57e658758f64492a4f",
+          "url": "https://archive.softwareheritage.org/api/1/revision/ecee17f1cb0cbbad6cb7aa57e658758f64492a4f/"
+        }
+      ],
+      "directory": "7fdfee86ecb7bbdae36d579c521f18e73a057173"
+    },
+    {
+      "revision": "ecee17f1cb0cbbad6cb7aa57e658758f64492a4f",
+      "parents": [
+        {
+          "id": "e018b387eba49f17a0ff8172905cc6437ad88c45",
+          "url": "https://archive.softwareheritage.org/api/1/revision/e018b387eba49f17a0ff8172905cc6437ad88c45/"
+        },
+        {
+          "id": "d930564343095c9d2c700983ba240b1fd955e2f1",
+          "url": "https://archive.softwareheritage.org/api/1/revision/d930564343095c9d2c700983ba240b1fd955e2f1/"
+        }
+      ],
+      "directory": "0d94afc42634528f66b14910f1994cf4ad937924"
+    },
+    {
+      "revision": "e018b387eba49f17a0ff8172905cc6437ad88c45",
+      "parents": [
+        {
+          "id": "b82dcef07759de59cb3bb30ec123c3752bdcb6e2",
+          "url": "https://archive.softwareheritage.org/api/1/revision/b82dcef07759de59cb3bb30ec123c3752bdcb6e2/"
+        }
+      ],
+      "directory": "34ff2916c2fa149171895e5053da2487465be36f"
+    },
+    {
+      "revision": "b82dcef07759de59cb3bb30ec123c3752bdcb6e2",
+      "parents": [
+        {
+          "id": "c1cf7cff4e88e123301c4f32fcf8c8c7a105da66",
+          "url": "https://archive.softwareheritage.org/api/1/revision/c1cf7cff4e88e123301c4f32fcf8c8c7a105da66/"
+        },
+        {
+          "id": "703e3f06de6e6b61c5a5ad05a4438b0e07634774",
+          "url": "https://archive.softwareheritage.org/api/1/revision/703e3f06de6e6b61c5a5ad05a4438b0e07634774/"
+        }
+      ],
+      "directory": "f04ec8012f096997b25054d9f7656a2a2fba14a9"
+    },
+    {
+      "revision": "c1cf7cff4e88e123301c4f32fcf8c8c7a105da66",
+      "parents": [
+        {
+          "id": "2ff599ad7f97de0dd5769027027bf1b5ac6463d7",
+          "url": "https://archive.softwareheritage.org/api/1/revision/2ff599ad7f97de0dd5769027027bf1b5ac6463d7/"
+        }
+      ],
+      "directory": "0cedcd893c77a771d83c0b0bb6d1601de388eb7d"
+    },
+    {
+      "revision": "2ff599ad7f97de0dd5769027027bf1b5ac6463d7",
+      "parents": [
+        {
+          "id": "5fdb98237b84f8198db951f2e92ee31c269deef2",
+          "url": "https://archive.softwareheritage.org/api/1/revision/5fdb98237b84f8198db951f2e92ee31c269deef2/"
+        }
+      ],
+      "directory": "e57abf4aa3fc0992191bdda55b253b44697af6e5"
+    },
+    {
+      "revision": "5fdb98237b84f8198db951f2e92ee31c269deef2",
+      "parents": [
+        {
+          "id": "df5c7c531295f81258bf5dc1c5f28000515d05c7",
+          "url": "https://archive.softwareheritage.org/api/1/revision/df5c7c531295f81258bf5dc1c5f28000515d05c7/"
+        }
+      ],
+      "directory": "fdaa7ce4646f1e26c11f9683372ce112583ada57"
+    },
+    {
+      "revision": "df5c7c531295f81258bf5dc1c5f28000515d05c7",
+      "parents": [
+        {
+          "id": "74faa301050d7801684181e585d11ae93ddafe44",
+          "url": "https://archive.softwareheritage.org/api/1/revision/74faa301050d7801684181e585d11ae93ddafe44/"
+        },
+        {
+          "id": "8f0cfcf9337b2fe9e39a8b962108a87855694103",
+          "url": "https://archive.softwareheritage.org/api/1/revision/8f0cfcf9337b2fe9e39a8b962108a87855694103/"
+        }
+      ],
+      "directory": "4773b8bdb690101a93b6eb8ba34ee7112a9b1e2c"
+    },
+    {
+      "revision": "74faa301050d7801684181e585d11ae93ddafe44",
+      "parents": [
+        {
+          "id": "6f829126ab7d5f3592bfca823a691a5d45862b56",
+          "url": "https://archive.softwareheritage.org/api/1/revision/6f829126ab7d5f3592bfca823a691a5d45862b56/"
+        }
+      ],
+      "directory": "c860bba2ceee03125dfd98f41b74e1ed69949ba4"
+    },
+    {
+      "revision": "6f829126ab7d5f3592bfca823a691a5d45862b56",
+      "parents": [
+        {
+          "id": "88cb7851dcfde2926ba0b0354ac11633ddff5eae",
+          "url": "https://archive.softwareheritage.org/api/1/revision/88cb7851dcfde2926ba0b0354ac11633ddff5eae/"
+        }
+      ],
+      "directory": "41b07626d3410bcf152aa2f1ab2adc34f344607d"
+    },
+    {
+      "revision": "88cb7851dcfde2926ba0b0354ac11633ddff5eae",
+      "parents": [],
+      "directory": "9d90608ff61147d35c2e6e72d3a97977fed3fd52"
+    },
+    {
+      "revision": "8f0cfcf9337b2fe9e39a8b962108a87855694103",
+      "parents": [
+        {
+          "id": "e6549443be9133d655d309cca426fb7364bdc8c3",
+          "url": "https://archive.softwareheritage.org/api/1/revision/e6549443be9133d655d309cca426fb7364bdc8c3/"
+        }
+      ],
+      "directory": "4773b8bdb690101a93b6eb8ba34ee7112a9b1e2c"
+    },
+    {
+      "revision": "e6549443be9133d655d309cca426fb7364bdc8c3",
+      "parents": [
+        {
+          "id": "669326034cb05d2631ba45af29c99ae0d7939a95",
+          "url": "https://archive.softwareheritage.org/api/1/revision/669326034cb05d2631ba45af29c99ae0d7939a95/"
+        }
+      ],
+      "directory": "c06765cb91d138f5703dca87d9c3fc57e2a5f6ad"
+    },
+    {
+      "revision": "669326034cb05d2631ba45af29c99ae0d7939a95",
+      "parents": [
+        {
+          "id": "74faa301050d7801684181e585d11ae93ddafe44",
+          "url": "https://archive.softwareheritage.org/api/1/revision/74faa301050d7801684181e585d11ae93ddafe44/"
+        }
+      ],
+      "directory": "fcb4fc0b1f6a36b4eece0c444292d801de325f34"
+    },
+    {
+      "revision": "703e3f06de6e6b61c5a5ad05a4438b0e07634774",
+      "parents": [
+        {
+          "id": "d52d115a223a0e81d1600bd8a5e73cb4b24a38c0",
+          "url": "https://archive.softwareheritage.org/api/1/revision/d52d115a223a0e81d1600bd8a5e73cb4b24a38c0/"
+        }
+      ],
+      "directory": "f04ec8012f096997b25054d9f7656a2a2fba14a9"
+    },
+    {
+      "revision": "d52d115a223a0e81d1600bd8a5e73cb4b24a38c0",
+      "parents": [
+        {
+          "id": "c1cf7cff4e88e123301c4f32fcf8c8c7a105da66",
+          "url": "https://archive.softwareheritage.org/api/1/revision/c1cf7cff4e88e123301c4f32fcf8c8c7a105da66/"
+        }
+      ],
+      "directory": "3c1e0538d803285996ea97cec9252f2fe5ca2e77"
+    },
+    {
+      "revision": "d930564343095c9d2c700983ba240b1fd955e2f1",
+      "parents": [
+        {
+          "id": "572ffc402911f3330dd866089ce603dba066759e",
+          "url": "https://archive.softwareheritage.org/api/1/revision/572ffc402911f3330dd866089ce603dba066759e/"
+        }
+      ],
+      "directory": "0d94afc42634528f66b14910f1994cf4ad937924"
+    },
+    {
+      "revision": "572ffc402911f3330dd866089ce603dba066759e",
+      "parents": [
+        {
+          "id": "523cf29abe0f587d400afd5ff8bc4432211fff83",
+          "url": "https://archive.softwareheritage.org/api/1/revision/523cf29abe0f587d400afd5ff8bc4432211fff83/"
+        }
+      ],
+      "directory": "bf35bb981e255c27d0ccec39d53d6f81a0456e9b"
+    },
+    {
+      "revision": "523cf29abe0f587d400afd5ff8bc4432211fff83",
+      "parents": [
+        {
+          "id": "425d391c499bc2434126b1b17369c9f806a6ff30",
+          "url": "https://archive.softwareheritage.org/api/1/revision/425d391c499bc2434126b1b17369c9f806a6ff30/"
+        }
+      ],
+      "directory": "88e89fafbf344421c09d8826237458466fae24b0"
+    },
+    {
+      "revision": "425d391c499bc2434126b1b17369c9f806a6ff30",
+      "parents": [
+        {
+          "id": "e50f13558c8e6382a5ce54f726ea9c8e8753258b",
+          "url": "https://archive.softwareheritage.org/api/1/revision/e50f13558c8e6382a5ce54f726ea9c8e8753258b/"
+        }
+      ],
+      "directory": "1d0e76c5c351d9c083f725b1cf7f3bb7a53e1dc5"
+    },
+    {
+      "revision": "e50f13558c8e6382a5ce54f726ea9c8e8753258b",
+      "parents": [
+        {
+          "id": "eb008c0ff1fc6f75098e7e4baa993ba2f2b346fd",
+          "url": "https://archive.softwareheritage.org/api/1/revision/eb008c0ff1fc6f75098e7e4baa993ba2f2b346fd/"
+        }
+      ],
+      "directory": "1b9f91e027de7772970d6bee093bc190ec7c858a"
+    },
+    {
+      "revision": "eb008c0ff1fc6f75098e7e4baa993ba2f2b346fd",
+      "parents": [
+        {
+          "id": "e018b387eba49f17a0ff8172905cc6437ad88c45",
+          "url": "https://archive.softwareheritage.org/api/1/revision/e018b387eba49f17a0ff8172905cc6437ad88c45/"
+        }
+      ],
+      "directory": "9339e1ace1a8f199abcef3886f0de85bf4117e20"
+    },
+    {
+      "revision": "90751ff1a0cb9c702c0a9aa637d8f0e324dbd655",
+      "parents": [
+        {
+          "id": "a39dd378a7310dd1485a2c779e952b21e4a095f4",
+          "url": "https://archive.softwareheritage.org/api/1/revision/a39dd378a7310dd1485a2c779e952b21e4a095f4/"
+        }
+      ],
+      "directory": "ea5cbb30bd32985a7c7f70b8d0e0da3f2e513cd4"
+    },
+    {
+      "revision": "994214b34b2e8825a58cfb7dbe8173a9bef55790",
+      "parents": [
+        {
+          "id": "53808f9827cc6b2bcd02215487bdd36d3a1263ba",
+          "url": "https://archive.softwareheritage.org/api/1/revision/53808f9827cc6b2bcd02215487bdd36d3a1263ba/"
+        }
+      ],
+      "directory": "af5dc9c795ffb6d9c54fdf5ef2612bed1e2a73c1"
+    },
+    {
+      "revision": "53808f9827cc6b2bcd02215487bdd36d3a1263ba",
+      "parents": [
+        {
+          "id": "4dd48795bbe89b18ed97cf607a9ca240b54aae07",
+          "url": "https://archive.softwareheritage.org/api/1/revision/4dd48795bbe89b18ed97cf607a9ca240b54aae07/"
+        }
+      ],
+      "directory": "42f72692adb5d81bb556051fe9551445269c33e4"
+    },
+    {
+      "revision": "4dd48795bbe89b18ed97cf607a9ca240b54aae07",
+      "parents": [
+        {
+          "id": "6346f57f756b1507d338d38af77d896b8d30f78c",
+          "url": "https://archive.softwareheritage.org/api/1/revision/6346f57f756b1507d338d38af77d896b8d30f78c/"
+        }
+      ],
+      "directory": "0aeac2a17f24491a4168e0ef78e059e8707a9808"
+    },
+    {
+      "revision": "6346f57f756b1507d338d38af77d896b8d30f78c",
+      "parents": [
+        {
+          "id": "d8a835a553477c8331b02f13065aca1c096f5b8f",
+          "url": "https://archive.softwareheritage.org/api/1/revision/d8a835a553477c8331b02f13065aca1c096f5b8f/"
+        }
+      ],
+      "directory": "76f2ba648c3408bf5914b6d7ac4718442c4b9d42"
+    },
+    {
+      "revision": "d8a835a553477c8331b02f13065aca1c096f5b8f",
+      "parents": [
+        {
+          "id": "0fcfbe286b8115ed7f6380b175378adbd54418e3",
+          "url": "https://archive.softwareheritage.org/api/1/revision/0fcfbe286b8115ed7f6380b175378adbd54418e3/"
+        }
+      ],
+      "directory": "ec0a0314056d4e2e204faee729bddb8a11499f6c"
+    },
+    {
+      "revision": "0fcfbe286b8115ed7f6380b175378adbd54418e3",
+      "parents": [
+        {
+          "id": "69c55c3227a3857cb6144a9b7cbcf76b29b7281c",
+          "url": "https://archive.softwareheritage.org/api/1/revision/69c55c3227a3857cb6144a9b7cbcf76b29b7281c/"
+        }
+      ],
+      "directory": "e4510dab084c66363a6c17b835055c61731d3118"
+    },
+    {
+      "revision": "69c55c3227a3857cb6144a9b7cbcf76b29b7281c",
+      "parents": [
+        {
+          "id": "e365d5436083ac6de9932841a5916dbdf23d9977",
+          "url": "https://archive.softwareheritage.org/api/1/revision/e365d5436083ac6de9932841a5916dbdf23d9977/"
+        }
+      ],
+      "directory": "2480577fe02caaaaeb0c58371cf3ac7fef9f1297"
+    },
+    {
+      "revision": "27ec8280237487d659287b5010860a242985f52c",
+      "parents": [
+        {
+          "id": "e365d5436083ac6de9932841a5916dbdf23d9977",
+          "url": "https://archive.softwareheritage.org/api/1/revision/e365d5436083ac6de9932841a5916dbdf23d9977/"
+        }
+      ],
+      "directory": "94b5b3ec4fc78d0c0fe40a8596bccd5da081b47e"
+    }
+  ],
+  "initial_revision": "88cb7851dcfde2926ba0b0354ac11633ddff5eae",
+  "initial_src_tree": "2f59d6b47605d8d884c0adc950a0a514a8fc247a",
+  "original_tfs_commit": "344ce0f56dee996f098d239ccc3515df0f6bb8ad",
+  "original_tfs_src_tree": "2f59d6b47605d8d884c0adc950a0a514a8fc247a",
+  "original_tfs_tree_url": "https://api.github.com/repos/redox-os/tfs/git/trees/344ce0f56dee996f098d239ccc3515df0f6bb8ad?recursive=1",
+  "published_source_headers": [
+    {
+      "path": "src/buffer.rs",
+      "sha256": "24476bc2a380d78e0b70f8465ee90b0ea1ce8bd761474766d93491c633a85cbe",
+      "matching_lines": []
+    },
+    {
+      "path": "src/helper.rs",
+      "sha256": "d266d15724dbe705818aa31db08027a63bee077e5859e3e3d06ee7192c258a2f",
+      "matching_lines": []
+    },
+    {
+      "path": "src/impl_std.rs",
+      "sha256": "1a83d003954cb11e6712922573d3de978c8646113838b3ca033e6b3e129c1d14",
+      "matching_lines": []
+    },
+    {
+      "path": "src/lib.rs",
+      "sha256": "09694fcbc9ebede5a5edd79debd23cae4d8b5c37c104e9b87a4952d7f4fc199a",
+      "matching_lines": []
+    },
+    {
+      "path": "src/reference.rs",
+      "sha256": "15898feb23b1241dd4dd80f0f53f5819715c6ba0a45e57a3f61b7acc099bdb84",
+      "matching_lines": []
+    },
+    {
+      "path": "src/stream.rs",
+      "sha256": "72e765d1ef7ec098fb3303d5635a3d543515d80052ebb5ce8ce6e478c7a8e91f",
+      "matching_lines": []
+    }
+  ],
+  "note": "The initial independent seahash repository copied the exact original TFS seahash/src tree. Its original actual MIT notice is retained with current published author/license metadata, without inventing a new notice or claiming the historical author is the sole author of subsequent changes."
+}

@@ -1,0 +1,34 @@
+{
+  "packages": [
+    {
+      "name": "seahash",
+      "version": "4.1.0",
+      "declared_license": "MIT",
+      "repository": "https://gitlab.redox-os.org/redox-os/seahash",
+      "revision": "94b632aeac099031c373599313d5b5f0acbbaec0",
+      "status": "resolved",
+      "files": [
+        {
+          "local": "LICENSE-TFS-MIT.txt",
+          "upstream_path": "LICENSE",
+          "url": "https://raw.githubusercontent.com/redox-os/tfs/344ce0f56dee996f098d239ccc3515df0f6bb8ad/LICENSE",
+          "sha256": "6252f0c8d4a0df9b2dc0c6464cb2489dbe8859b0eb727e19c14e6af1ee432394"
+        },
+        {
+          "local": "PUBLISHED-Cargo.toml",
+          "upstream_path": "seahash-4.1.0/Cargo.toml",
+          "url": "https://static.crates.io/crates/seahash/seahash-4.1.0.crate",
+          "sha256": "1d610f6d1bce065add6ec5f2fb764e97eeda505afbe26271acc5f3d73a8c410a"
+        },
+        {
+          "local": "lineage-evidence.json",
+          "upstream_path": "Archived git revision/directory identities and published source-header hashes",
+          "url": "https://archive.softwareheritage.org/api/1/revision/94b632aeac099031c373599313d5b5f0acbbaec0/",
+          "sha256": "bf4d3d9f8bd6ab685c4ae40ba3ef4a6965c716040366d141bab335fb7497bf45"
+        }
+      ],
+      "license_evidence": "Exact original MIT notice retained from the source tree copied into the independent repository, plus immutable archived ancestry and published author/license declarations. No inferred new copyright owner or generic SPDX text."
+    }
+  ],
+  "unresolved": []
+}
