@@ -6,6 +6,7 @@ No arbitrary process target or secret reads: inspect the named fixture service,
 its child role metadata and absence of the public fixture credential path.
 """
 import json
+import sys
 from pathlib import Path
 import subprocess
 
@@ -14,6 +15,30 @@ def main():
     parent = int(subprocess.check_output(
         ["systemctl", "show", "nuschl-musicbot", "--property=MainPID", "--value"], text=True))
     assert parent > 1
+    status = (Path("/proc") / str(parent) / "status").read_text().splitlines()
+    fields = {line.split(":", 1)[0]: line.split(":", 1)[1].strip() for line in status if ":" in line}
+    uid = int(fields["Uid"].split()[1])
+    gid = int(fields["Gid"].split()[1])
+    assert uid != 0 and int(fields["CapEff"], 16) == 0
+    # Enter only the owned service's namespaces, then drop to its actual UID
+    # with no capabilities. os.access is non-mutating; no sysctl/sysrq writes.
+    check = r"""
+import json,os,pathlib
+paths=['/proc/sys/kernel/hostname','/proc/sys/kernel/domainname',
+       '/proc/sys/vm/overcommit_memory','/proc/sysrq-trigger']
+assert all(pathlib.Path(path).exists() for path in paths)
+assert not any(os.access(path,os.W_OK) for path in paths)
+assert os.access('/var/lib/nuschl-musicbot',os.W_OK)
+status=pathlib.Path('/proc/self/status').read_text().splitlines()
+assert int(next(line.split()[1] for line in status if line.startswith('CapEff:')),16)==0
+print(json.dumps({'uid':os.geteuid(),'host_controls_unwritable':True,'effective_capabilities':0,'own_state_writable':True}))
+"""
+    parent_checks = json.loads(subprocess.check_output([
+        "nsenter", "--target", str(parent), "--mount", "--uts", "--ipc", "--net", "--",
+        "setpriv", "--reuid", str(uid), "--regid", str(gid), "--clear-groups",
+        "--bounding-set=-all", "--inh-caps=-all", "--ambient-caps=-all", "--no-new-privs",
+        sys.executable, "-c", check], text=True))
+    assert parent_checks["uid"] == uid
     parent_network = (Path("/proc") / str(parent) / "ns/net").readlink()
     children = []
     for process in Path("/proc").iterdir():
@@ -41,7 +66,7 @@ def main():
             # Exited between enumeration and inspection; not a positive proof.
             continue
     assert any(child["role"] == "encode" for child in children), children
-    print(json.dumps({"parent": parent, "children": children}))
+    print(json.dumps({"parent": parent, "parent_checks": parent_checks, "children": children}))
 
 
 if __name__ == "__main__":
