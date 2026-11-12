@@ -263,8 +263,9 @@ Xcode archive on 2026-11-11. Resume at archive verification and guest feasibilit
 The earlier experiment demonstrated
 Sonoma Recovery 14.6.1/23G93 x86_64 boot and basic GUI rendering over KVM, not an
 installed macOS/Xcode/Simulator environment. Experiment processes were stopped;
-media/evidence remain on disk. The archive's presence does not prove its integrity,
-an installed macOS guest, Xcode availability or Simulator graphics.
+media/evidence remain on disk. Confined archive checks now prove signature,
+current-CRL checks, payload integrity and Xcode/SDK version declarations; an
+installed macOS guest, Xcode execution and Simulator graphics remain unproven.
 
    - [ ] **Linux-hosted macOS VM first** (user, 2026-11-11): no owned Apple
          hardware or paid macOS runner is a development prerequisite. Evaluate
@@ -273,20 +274,32 @@ an installed macOS guest, Xcode availability or Simulator graphics.
          builds, boots in Simulator, renders and runs an automated UI test before
          committing to this environment. Check graphics support explicitly; a booted
          macOS guest alone is insufficient. Keep CI as an optional alternative.
-   - [ ] Verify the supplied Xcode archive before use: local file is
+   - [x] Verify the supplied Xcode archive's signature, integrity and declared version:
+         complete confined XAR/PBZX/CPIO inspection passed without extraction;
+         actual bundle is Xcode 16.2/16C5032a, with Simulator SDK 18.2. Local file is
          2,969,019,672 bytes, SHA-256
          `0e367d06eb7c334ea143bada5e4422f56688aabff571bedf0d2ad9434b7290de`.
-         This is a fingerprint, not Apple signature/payload verification or proof
-         of the declared Xcode version. Keep extraction and guest scratch on disk.
-   - [ ] Fix the iOS container capability diagnostic before another launch:
-         Podman expands `CapDrop=ALL` into explicit capability names, while
-         `status()` requires a literal `all`. The stopped owned container's OCI
-         configuration has empty capabilities and no-new-privileges; do not
-         relabel that as observed live process capability state. Preserve rejection
-         of added capabilities/unsafe mounts and explicitly check no-new-privileges.
+         Mandatory three-cert Apple Software Update policy and both production
+         EKUs, independently retrieved root, RSA signature, payload hashes and
+         current signed CRLs passed; SHA-256 remains a local fingerprint.
+         `tests/ios_xip.py`, `tests/ios_xip_test.py`, `docs/ios-vm.md` retain exact
+         bounds, version/plist hashes and real tamper evidence.
+   - [ ] Before extraction/use, recheck current CRLs and retain native Apple `xip`
+         acceptance as a separate unproven gate. The linked Apple website root CRL
+         was expired; actual certificate distribution-point CRLs passed. Never
+         bypass expired revocation data. Keep extraction/guest scratch on disk;
+         SDK presence is not an installed Simulator runtime.
+   - [x] Fix the iOS container capability diagnostic: normalized Podman CapDrop
+         requires exact local OCI evidence of empty sets/NNP, rejects added caps
+         and unsafe boundaries; all 19 host tests passed. Actual stopped-container
+         configuration passes; `live_effective_verified=false` remains explicit.
+   - [ ] Observe live init capabilities/NNP after controlled owned-container resume;
+         preserve disk state first. Reconcile exact installed macOS candidate and
+         installer source/hash before installation: existing profile is 14.5,
+         Recovery reports 14.6.1 but does not prove the eventual installed version.
    - [x] **Host feasibility tooling** (`tests/ios_vm.py`, `docs/ios-vm.md`): host and
          confined cached-container KVM creation, disk/RAM budgets and immutable
-         registry metadata checks passed; 14 host-side regression tests passed.
+         registry metadata checks passed; 19 host-side regression tests passed.
          `just ios-preflight` and `just ios-vm-check` expose the checks. A later bounded experiment acquired official signed recovery media and booted
          Recovery only. Installed macOS/Xcode, SwiftUI rendering,
          XCTest and Rust-library linking remain unproven in the milestone above.

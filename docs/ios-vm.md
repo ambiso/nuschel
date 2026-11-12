@@ -11,8 +11,12 @@ Latest local checkpoint (2026-11-12): the user supplied `Xcode_16.2.xip` in the
 repository root, excluded by `.gitignore`. It is 2,969,019,672 bytes; its locally
 measured SHA-256 is
 `0e367d06eb7c334ea143bada5e4422f56688aabff571bedf0d2ad9434b7290de`.
-That fingerprint does **not** verify Apple's signature, the archive's declared
-version, payload integrity or completeness. Those checks still precede use.
+The confined checks below now verify its Apple Software Update signature,
+certificate chain/current CRLs, signed payload checksums and complete compressed
+payload stream. Actual bundle plists declare **Xcode 16.2, build 16C5032a**, and
+the iPhoneSimulator **18.2 SDK**. Nothing was extracted, installed or executed.
+The SHA-256 remains a local reproducibility fingerprint, not a separately
+Apple-published SHA-256 checksum. Native Apple `xip` acceptance remains untested.
 
 The later experiment also acquired recovery media and reached a Recovery GUI.
 Retained private-VM console screenshots show `sw_vers` reporting macOS
@@ -22,12 +26,12 @@ signed-chunklist verification; images and logs are under `~/vms/nuschl-ios` and
 Metal, Xcode, Simulator, SwiftUI or XCTest. The owned container currently reports
 `exited`; it has not been restarted for this inspection.
 
-The existing status helper reports a capability-profile mismatch because it
-expects a literal `all` in `CapDrop`. Podman instead reports an explicit dropped
-capability list here; the retained OCI configuration has an empty capabilities
-object and `noNewPrivileges: true`. Correct and test that diagnostic before
-using it as a launch gate. Inspection of a stopped configuration is not a runtime
-effective-capability proof.
+The corrected status helper accepts Podman's expanded dropped-capability list
+only with the matching, bounded local OCI configuration proving empty capability
+sets and `noNewPrivileges: true`; it still rejects added capabilities and unsafe
+mount/device/port profiles. The stopped owned container passes configuration
+checks. `live_effective_verified` remains **false**: no live process was observed.
+The launch plan still explicitly requests `--cap-drop ALL` and no new privileges.
 
 The existing Windows harness (`tests/windows_vm.py`) establishes useful patterns:
 dedicated disk state, private test accounts, bounded resources, and loopback-only
@@ -41,8 +45,8 @@ directory and strict SSH host-key verification instead of reusing that agent.
 | --- | --- | --- |
 | Docker-OSX source | [`aa05a2c9a06aabfc8542c1c373ad1ad0af74ede3`](https://github.com/sickcodes/Docker-OSX/tree/aa05a2c9a06aabfc8542c1c373ad1ad0af74ede3) | A fixed upstream reference for review |
 | Docker-OSX amd64 image | `docker.io/sickcodes/docker-osx@sha256:3a3c82c79bc4e73531f819ccdfa4053b3084efd7c1f645678dbf8b4b3a24369c` | Frozen image bytes; source-to-image provenance has **not** been verified |
-| Candidate macOS | Sonoma **14.5**, x86_64 | An exact guest-version check, not a downloaded or booted guest |
-| Candidate Xcode | **16.2**, with iOS SDK **18.2** | A compatible version selection; actual build number/archive hash must still be recorded |
+| Candidate macOS | Sonoma **14.5**, x86_64 | Existing exact profile; reconcile with actual available installer/catalog before installation, since Recovery reports 14.6.1 and does not establish the installed version |
+| Candidate Xcode | **16.2 / 16C5032a**, with iOS SDK **18.2** | Authenticated archive plists; no guest installation or execution |
 | Simulator runtime | iOS **18.2**, identifier `com.apple.CoreSimulator.SimRuntime.iOS-18-2` | Must be installed and available independently of the SDK |
 | Rust simulator target | **`x86_64-apple-ios`** | Intel Simulator; `aarch64-apple-ios` is a physical-device target |
 
@@ -51,6 +55,103 @@ including the iOS 18.2 SDK. This older, fixed combination is an initial experime
 not a recommendation for eventual store distribution.
 [Apple's Xcode requirements](https://developer.apple.com/xcode/system-requirements)
 describe supported combinations; they do not validate a QEMU guest.
+
+## Confined archive inspection
+
+`tests/ios_xip.py` supports only the observed XAR v1/RSA/SHA-1
+`Metadata`+`Content` profile. The legacy signature authenticates the compressed
+TOC checksum; its signed TOC binds the two payload SHA-1 checksums. All three
+are checked, together with the complete file's local SHA-256. This is not a new
+archive format or a claim of modern SHA-256 signature strength.
+
+The trust anchor is independently retrieved from
+[Apple PKI's Apple Inc. Root](https://www.apple.com/appleca/AppleIncRootCertificate.cer),
+DER SHA-256
+`b0b1730ecbc7ff4505142c49f1295e6eda6bcaed7e2c68c5be91b5a11001f024`.
+An embedded self-signed certificate alone is never trusted. In addition to normal
+chain and current-date checks, **both** the leaf and intermediate must carry
+the production Apple Software Update EKU `1.2.840.113635.100.4.1`, with exactly
+three certificates ending at that root. This follows
+[Apple's `SecPolicyCreateAppleSWUpdateSigning` policy](https://github.com/apple-oss-distributions/Security/blob/main/OSX/sec/Security/SecPolicy.c)
+and [Software Update certificate practice statement](https://images.apple.com/certificateauthority/pdf/Apple_Software_Update_CPS_v3.0.pdf).
+Generic Apple-issued Developer ID/code-signing certificates do not satisfy this
+policy. The observed leaf is `Software Update`, SHA-256
+`e074d204ac2498e9dc904a7bc7ced8464119b79d05668028920583b1e896ebb4`.
+The [Apple XAR implementation](https://github.com/apple-oss-distributions/xar/blob/main/xar/lib/signature.c)
+describes the checksum/signature binding.
+
+Supply current DER CRLs explicitly; the worker never fetches URLs from archive
+data. On this run, the certificate's `http://crl.apple.com/softwareupdateca.crl`
+and `http://crl.apple.com/root.crl` distribution points supplied valid signed CRLs.
+The Software Update CRL is valid November 11–25, 2026; the root CRL is valid
+August 25, 2026–January 7, 2027. Their signatures, issuers, validity intervals and
+certificate serials passed `openssl verify -crl_check_all`. HTTP transport does
+not confer trust; cryptographic verification is mandatory. The HTTPS accelerator
+URLs returned 404, while Apple's linked `https://www.apple.com/appleca/root.crl`
+served a correctly signed **expired 2025 CRL**. That input fails the helper;
+the original failure is retained. Never bypass expiry or use an arbitrary old
+verification date to make it pass. Re-fetch and recheck before later use.
+
+```sh
+python3 tests/ios_xip.py /absolute/path/Xcode_16.2.xip \
+  --apple-root /disk/cache/apple-root.der \
+  --root-crl /disk/cache/root.crl --software-crl /disk/cache/softwareupdateca.crl \
+  --inspect-payload
+```
+
+The Linux wrapper requires Bubblewrap, `prlimit` and OpenSSL. It mounts only the
+archive, supplied public trust material, helper and read-only Nix store. It
+unshares networking, drops capabilities, sets no new privileges, clears the
+environment and exposes no host home, VM disk, clipboard, audio or GPU. Native
+XML/compression/crypto processing runs inside this boundary, not the host
+coordinator. Temporary writes contain only small public certificate material.
+Address space is capped at 256 MiB per process; output at 128 KiB; files at
+1 MiB. Authentication/hash inspection has CPU 30 seconds per process and a
+45-second whole-process-group deadline. Full payload inspection uses CPU
+180 seconds per process and a 240-second whole-group deadline. Timeout/error
+kills the owned process group. No archive path is extracted or followed.
+
+Observed results:
+
+| Check | Actual evidence |
+| --- | --- |
+| Complete signature/hash inspection | 4.65 seconds; zero effective/bounding capabilities, `NoNewPrivs=1` |
+| Metadata | Archive format `Version=1`, declared file data 12,619,879,303 bytes; this is not an Xcode version |
+| Complete payload inspection | 62.27 seconds, 755 checked independent XZ chunks, 12,651,889,664 expanded CPIO bytes |
+| Archive layout | 141,981 entries, complete trailer and 457 zero-padding bytes; no extraction |
+| Xcode Info/version plists | `com.apple.dt.Xcode`, short version 16.2, bundle version 23507; `ProductBuildVersion=16C5032a` (`DTXcodeBuild=16C5032`) |
+| Simulator SDK | `SDKSettings.plist` reports `iphonesimulator18.2`, version 18.2; `simctl` and `xcodebuild` paths exist |
+
+SDK presence is **not** an installed Simulator runtime, working Simulator,
+SwiftUI rendering, Xcode startup or native Apple archive-policy proof.
+Parser limits include 1 MiB TOC, bounded certificates/CRLs, 16 MiB PBZX chunks,
+80 MiB LZMA decoder memory, 64 KiB output chunks, finite expanded-byte/entry
+budgets and bounded selected plists. Unknown formats fail rather than falling
+back to an unbounded extractor. Only original source bytes are hashed; no gain,
+repair, truncation or version inference changes the supplied archive.
+
+Regression invocation (the source archive stays untouched; tamper tests require
+disk-backed CoW copies):
+
+```sh
+TMPDIR=/disk/cache NUSCHL_XIP_ARCHIVE=/absolute/path/Xcode_16.2.xip \
+NUSCHL_APPLE_ROOT=/disk/cache/apple-root.der NUSCHL_XIP_PAYLOAD=1 \
+NUSCHL_ROOT_CRL=/disk/cache/root.crl NUSCHL_SOFTWARE_CRL=/disk/cache/softwareupdateca.crl \
+NUSCHL_STALE_ROOT_CRL=/disk/cache/expired-root.crl \
+  python3 tests/ios_xip_test.py -v
+```
+
+Public evidence/logs are retained under
+`~/.cache/nuschl-ios-feasibility-next/`: `status.json`,
+`xip-authentication.json`, `xip-payload.json`, `xip-revocation.json`,
+`crl-retrieval.json`, the original `crl-verification.json` failure and
+`xip-final-tests.log`. The private container-inspect JSON is mode 0600 and must
+not be published because container environment fields may contain sensitive data.
+The capability suite has 19 host tests; all **18 archive tests passed** with the
+explicit local-media inputs (73.69 seconds). The archive suite covers real signature,
+payload, truncation, untrusted-root, stale/signed CRL and corrupt-CRL failures,
+plus malformed/bounded parser cases. Without explicit supplied-archive/CRL
+environment variables, those real-media tests are skipped, not counted as proof.
 
 Docker-OSX documents headless operation and Xcode use, while GPU acceleration is
 still on its TODO list. Its default virtual display therefore does not establish
@@ -140,6 +241,12 @@ new exception to the application's memory-safety policy or the iOS sandbox revie
 published ports, unexpected host bind mounts/devices, added capabilities,
 privileged mode and host networking are reported as boundary problems. An absent
 or inaccessible container is distinguished from a proven guest.
+For the owned local Podman container, capability normalization reads only the
+exact container's regular, bounded OCI configuration beneath Podman's independently
+reported storage root. A running status additionally reads all five capability
+sets and `NoNewPrivs` from `/proc`, binding the observation to a stable PID/start
+identity across two runtime inspections. Stopped configuration evidence cannot
+stand in for that live check.
 
 `probe` uses strict, noninteractive SSH to the dedicated account at **127.0.0.1
 only**. User SSH configuration, agent access, password prompts and forwarding are
