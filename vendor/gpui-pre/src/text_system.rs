@@ -235,6 +235,9 @@ pub struct TextSystem {
     raster_bounds: RwLock<FxHashMap<RenderGlyphParams, Bounds<DevicePixels>>>,
     wrapper_pool: Mutex<FxHashMap<FontIdWithSize, Vec<CharWidthCache>>>,
     fallback_font_stack: SmallVec<[Font; 2]>,
+    /// Nuschel patch: tried before `fallback_font_stack` when a monospace
+    /// family cannot be resolved (see [`is_monospace_family`]).
+    monospace_fallback_font_stack: SmallVec<[Font; 2]>,
     font_generation: Arc<AtomicUsize>,
     missing_glyph_reporter: Arc<MissingGlyphReporter>,
     missing_glyph_receiver: Mutex<Option<MissingGlyphReceiver>>,
@@ -258,9 +261,10 @@ impl TextSystem {
             raster_bounds: RwLock::default(),
             font_ids_by_font: RwLock::default(),
             wrapper_pool: Mutex::default(),
+            // Nuschel patch: a proportional request no longer falls back to
+            // the monospace .ZedMono first; it is kept last so the set of
+            // candidates (and so when resolution can fail) is unchanged.
             fallback_font_stack: smallvec![
-                // TODO: Remove this when Linux have implemented setting fallbacks.
-                font(".ZedMono"),
                 font(".ZedSans"),
                 font("Helvetica"),
                 font("Segoe UI"),     // Windows
@@ -270,6 +274,22 @@ impl TextSystem {
                 font("Noto Sans"),    // KDE
                 font("DejaVu Sans"),
                 font("Arial"), // macOS, Windows
+                // TODO: Remove this when Linux have implemented setting fallbacks.
+                font(".ZedMono"),
+            ],
+            // Nuschel patch: monospace requests try monospace families first.
+            // "monospace" is the platform's generic family where it maps one
+            // (Linux: `CosmicTextSystem`); elsewhere it is simply missing.
+            monospace_fallback_font_stack: smallvec![
+                font(".ZedMono"),
+                font("monospace"),
+                font("Menlo"),          // macOS
+                font("Consolas"),       // Windows
+                font("Ubuntu Mono"),    // Gnome (Ubuntu)
+                font("Adwaita Mono"),   // Gnome 48
+                font("Noto Sans Mono"), // KDE
+                font("DejaVu Sans Mono"),
+                font("Courier New"), // macOS, Windows
             ],
             font_generation: Arc::default(),
             missing_glyph_reporter: Arc::new(MissingGlyphReporter {
@@ -604,7 +624,18 @@ impl TextSystem {
             if let Some(font_id) = lookup_font(font) {
                 Some(font_id)
             } else {
-                let font_id = self.fallback_font_stack.iter().find_map(lookup_font);
+                // Nuschel patch: a fallback keeps what was asked of the font
+                // (weight, style, features and fallbacks); only the family
+                // changes. Bold, italic and code text used to come out as the
+                // fallback family's regular face.
+                let monospace = is_monospace_family(&font.family);
+                let font_id = self
+                    .monospace_fallback_font_stack
+                    .iter()
+                    .filter(|_| monospace)
+                    .chain(&self.fallback_font_stack)
+                    .map(|fallback| fallback_for(font, fallback))
+                    .find_map(|candidate| lookup_font(&candidate));
                 if let Some(font_id) = font_id {
                     font_ids.with_upgraded(|font_ids| {
                         font_ids.insert(font.clone(), CachedFont::Fallback(font_id));
@@ -620,13 +651,36 @@ impl TextSystem {
             panic!(
                 "failed to resolve font '{}' or any of the fallbacks: {}",
                 font.family,
-                self.fallback_font_stack
+                self.monospace_fallback_font_stack
                     .iter()
+                    .chain(&self.fallback_font_stack)
                     .map(|fallback| &fallback.family)
                     .join(", ")
             );
         })
     }
+}
+
+/// Nuschel patch: `fallback` in place of the requested font's family, with
+/// everything else the request asked for.
+fn fallback_for(font: &Font, fallback: &Font) -> Font {
+    Font {
+        family: fallback.family.clone(),
+        ..font.clone()
+    }
+}
+
+/// Nuschel patch: whether a family is asked for as monospace, so that its
+/// fallback is monospace too: the generic names, GPUI's own monospace family,
+/// and families named like code fonts ("… Mono", "… Code", "Courier …").
+fn is_monospace_family(family: &str) -> bool {
+    let family = family.to_ascii_lowercase();
+    matches!(
+        family.as_str(),
+        "monospace" | "mono" | "ui-monospace" | ".zedmono" | "zed plex mono" | "lilex"
+    ) || ["mono", "code", "courier", "consol"]
+        .iter()
+        .any(|part| family.contains(part))
 }
 
 /// The GPUI text layout subsystem.
@@ -1293,25 +1347,124 @@ mod font_resolution_tests {
     use super::*;
     use crate::NoopTextSystem;
 
+    fn missing() -> CachedFont {
+        CachedFont::Missing(Arc::new(anyhow::anyhow!("missing font")))
+    }
+
     #[test]
     fn caches_resolved_font_fallbacks() {
         let mut text_system = TextSystem::new(Arc::new(NoopTextSystem::new()));
         let requested = font("Missing Font").bold().italic();
-        let missing = CachedFont::Missing(Arc::new(anyhow::anyhow!("missing font")));
+        // Nuschel patch: the fallback is looked up with the request's weight
+        // and style.
+        let arial = fallback_for(&requested, &font("Arial"));
         {
             let mut font_ids = text_system.font_ids_by_font.write();
-            font_ids.insert(requested.clone(), missing.clone());
+            font_ids.insert(requested.clone(), missing());
             for fallback in &text_system.fallback_font_stack {
-                font_ids.insert(fallback.clone(), missing.clone());
+                font_ids.insert(fallback_for(&requested, fallback), missing());
             }
-            font_ids.insert(font("Arial"), CachedFont::Direct(FontId(42)));
+            font_ids.insert(arial.clone(), CachedFont::Direct(FontId(42)));
         }
 
         assert_eq!(text_system.resolve_font(&requested), FontId(42));
-        assert_eq!(text_system.get_font_for_id(FontId(42)), Some(font("Arial")));
+        assert_eq!(text_system.get_font_for_id(FontId(42)), Some(arial));
 
         text_system.fallback_font_stack.clear();
         assert_eq!(text_system.resolve_font(&requested), FontId(42));
+    }
+
+    /// Nuschel patch: bold, italic and font features survive a fallback;
+    /// the fallback family's regular face is not taken instead.
+    #[test]
+    fn fallbacks_keep_the_requested_weight_style_and_features() {
+        let text_system = TextSystem::new(Arc::new(NoopTextSystem::new()));
+        let requested = Font {
+            family: "sans-serif".into(),
+            features: FontFeatures(Arc::new(vec![("tnum".into(), 1)])),
+            weight: FontWeight::BOLD,
+            style: FontStyle::Italic,
+            fallbacks: Some(FontFallbacks::from_fonts(vec!["Noto Color Emoji".into()])),
+        };
+        let expected = fallback_for(&requested, &font("Adwaita Sans"));
+        assert_eq!(expected.family.as_ref(), "Adwaita Sans");
+        assert_eq!(
+            (expected.weight, expected.style, &expected.features),
+            (FontWeight::BOLD, FontStyle::Italic, &requested.features)
+        );
+        assert_eq!(expected.fallbacks, requested.fallbacks);
+        {
+            let mut font_ids = text_system.font_ids_by_font.write();
+            font_ids.insert(requested.clone(), missing());
+            for fallback in &text_system.fallback_font_stack {
+                if fallback.family.as_ref() == "Adwaita Sans" {
+                    break;
+                }
+                font_ids.insert(fallback_for(&requested, fallback), missing());
+            }
+            // The regular face of the same family, which used to be chosen.
+            font_ids.insert(font("Adwaita Sans"), CachedFont::Direct(FontId(7)));
+            font_ids.insert(expected.clone(), CachedFont::Direct(FontId(42)));
+        }
+        assert_eq!(text_system.resolve_font(&requested), FontId(42));
+        assert_eq!(text_system.get_font_for_id(FontId(42)), Some(expected));
+    }
+
+    /// Nuschel patch: code falls back to a monospace family first; other
+    /// text no longer falls back to .ZedMono first.
+    #[test]
+    fn monospace_requests_fall_back_to_monospace_families_first() {
+        let text_system = TextSystem::new(Arc::new(NoopTextSystem::new()));
+        let code = font("Missing Mono");
+        let prose = font("Missing Sans");
+        {
+            let mut font_ids = text_system.font_ids_by_font.write();
+            font_ids.insert(code.clone(), missing());
+            font_ids.insert(prose.clone(), missing());
+            font_ids.insert(font(".ZedMono"), CachedFont::Direct(FontId(5)));
+            font_ids.insert(font(".ZedSans"), CachedFont::Direct(FontId(6)));
+        }
+        assert_eq!(text_system.resolve_font(&code), FontId(5));
+        assert_eq!(text_system.resolve_font(&prose), FontId(6));
+
+        let generic = TextSystem::new(Arc::new(NoopTextSystem::new()));
+        {
+            let mut font_ids = generic.font_ids_by_font.write();
+            font_ids.insert(code.clone(), missing());
+            font_ids.insert(font(".ZedMono"), missing());
+            font_ids.insert(font("monospace"), CachedFont::Direct(FontId(8)));
+            font_ids.insert(font(".ZedSans"), CachedFont::Direct(FontId(6)));
+        }
+        assert_eq!(generic.resolve_font(&code), FontId(8));
+    }
+
+    #[test]
+    fn monospace_families_are_recognised_by_name() {
+        for family in [
+            "monospace",
+            "Monospace",
+            "ui-monospace",
+            ".ZedMono",
+            "Lilex",
+            "DejaVu Sans Mono",
+            "Adwaita Mono",
+            "Fira Code",
+            "Source Code Pro",
+            "Courier New",
+            "Consolas",
+        ] {
+            assert!(is_monospace_family(family), "{family}");
+        }
+        for family in [
+            "sans-serif",
+            "serif",
+            ".ZedSans",
+            "Adwaita Sans",
+            "DejaVu Sans",
+            "Arial",
+        ] {
+            assert!(!is_monospace_family(family), "{family}");
+        }
     }
 }
 

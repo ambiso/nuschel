@@ -5,4 +5,37 @@ Patched so colour emoji render on Linux; see the `Nuschel patch` comment in
 for "m", including fallback families. Colour emoji fonts (Noto Color Emoji)
 have none, so text fell back to the UI font's black-and-white emoji (DejaVu
 Sans has the classic smileys). Known emoji fonts are now exempt. The
-benchmarks were removed. Drop this copy once upstream allows emoji fonts.
+benchmarks were removed.
+
+Generic families. The CSS generic names "sans-serif" (also "sans",
+"system-ui"), "serif" and "monospace" name no font face, so they never
+resolved and GPUI's fallback drew them (see `gpui-pre`'s note). `load_family`
+now maps them to the first installed family of a list: for sans-serif GPUI's
+own fallback order (IBM Plex Sans, Helvetica, Segoe UI, Ubuntu, Adwaita Sans,
+Cantarell, Noto Sans, DejaVu Sans, Arial, Liberation Sans), so the family
+that used to be reached through fallback is kept; for monospace Lilex, IBM
+Plex Mono, Menlo, Consolas, Ubuntu Mono, Adwaita Mono, Source Code Pro, Noto
+Sans Mono, DejaVu Sans Mono, Liberation Mono, Courier New, then any family
+with a face marked monospaced; for serif IBM Plex Serif, Noto Serif, DejaVu
+Serif, Liberation Serif, Times New Roman, Georgia. This is not fontconfig's
+own choice: cosmic-text's `FontSystem::new` overwrites the aliases fontdb
+reads from fontconfig, and resolving them properly needs fontconfig itself.
+
+Variable weights. A variable font has one face for every weight (Adwaita
+Sans, GNOME's interface font, is one file upright and one italic); GPUI used
+the face as it is, at its default weight, so bold text in it was regular.
+`font_id` now gives a variable face whose `wght` axis reaches the requested
+weight its own `FontId`: an instance (`LoadedFont::variable_weight`) that is
+shaped at that weight (cosmic-text's font for the face and weight, and the
+shaping attributes' weight) and drawn, measured and advanced with the axis
+at that weight (`weight_coords` for swash's scaler and metrics). Faces
+cosmic-text falls back to for missing glyphs are instanced at the weight the
+glyph was shaped with. Static faces and regular text are unchanged.
+
+Upstream's unit tests need Zed's bundled fonts (`assets/fonts`), which are
+not vendored; they are compiled out (`cfg(nuschel_upstream_font_assets)`).
+`nuschel_tests` covers the patches; its tests with real fonts read DejaVu and
+Adwaita font files from `NUSCHEL_TEST_FONT_DIRS` and are skipped without it.
+
+Drop this copy once upstream allows emoji fonts, resolves generic families
+and draws variable fonts at the requested weight.

@@ -57,6 +57,9 @@ struct CosmicTextSystemState {
     /// Caches the `FontId`s associated with a specific family to avoid iterating the font database
     /// for every font face in a family.
     font_ids_by_family_cache: HashMap<FontKey, SmallVec<[FontId; 4]>>,
+    /// Nuschel patch: instances of variable faces, by the face's `FontId`
+    /// (never itself an instance) and the weight.
+    variable_instances: HashMap<(FontId, u16), FontId>,
     system_font_fallback: String,
     missing_glyph_sink: Option<Arc<dyn MissingGlyphSink>>,
 }
@@ -68,6 +71,11 @@ struct LoadedFont {
     /// resolved at load time so `layout_line` shares one chain across faces.
     /// `Arc` keeps clone cheap on the per-run hot path.
     user_fallback_chain: Arc<[(FontId, SharedString)]>,
+    /// Nuschel patch: the weight this variable face is instanced at (a point
+    /// on its `wght` axis) when that is not the face's default weight; `None`
+    /// for every other font. Each instance has a `FontId` of its own, so
+    /// glyph caches keyed by `FontId` keep the weights apart.
+    variable_weight: Option<Weight>,
 }
 
 struct FontMatchProperties {
@@ -112,7 +120,8 @@ impl CosmicTextSystem {
             cosmic_text::Style::Italic => gpui::FontStyle::Italic,
             cosmic_text::Style::Oblique => gpui::FontStyle::Oblique,
         };
-        Ok((gpui::FontWeight(face.weight.0 as f32), style))
+        let weight = font.variable_weight.unwrap_or(face.weight);
+        Ok((gpui::FontWeight(weight.0 as f32), style))
     }
 
     /// Builds reports for unresolved source indices after an outer text system
@@ -139,6 +148,7 @@ impl CosmicTextSystem {
             loaded_fonts: Vec::new(),
             loaded_font_ids_by_key: HashMap::default(),
             font_ids_by_family_cache: HashMap::default(),
+            variable_instances: HashMap::default(),
             system_font_fallback: system_font_fallback.to_string(),
             missing_glyph_sink: None,
         }))
@@ -158,6 +168,7 @@ impl CosmicTextSystem {
             loaded_fonts: Vec::new(),
             loaded_font_ids_by_key: HashMap::default(),
             font_ids_by_family_cache: HashMap::default(),
+            variable_instances: HashMap::default(),
             system_font_fallback: system_font_fallback.to_string(),
             missing_glyph_sink: None,
         }))
@@ -204,8 +215,11 @@ impl PlatformTextSystem for CosmicTextSystem {
         };
 
         let ix = find_best_match(font, candidates, &state)?;
+        let selected = candidates[ix];
 
-        Ok(candidates[ix])
+        // Nuschel patch: a variable face (one file for every weight, as
+        // Adwaita Sans) is drawn at the requested weight, not its default.
+        Ok(state.variable_instance(selected, font.weight))
     }
 
     fn prewarm_fonts(&self, font_ids: &[FontId]) {
@@ -213,13 +227,11 @@ impl PlatformTextSystem for CosmicTextSystem {
     }
 
     fn font_metrics(&self, font_id: FontId) -> FontMetrics {
-        let metrics = self
-            .0
-            .read()
-            .loaded_font(font_id)
-            .font
-            .as_swash()
-            .metrics(&[]);
+        let state = self.0.read();
+        let loaded_font = state.loaded_font(font_id);
+        let font_ref = loaded_font.font.as_swash();
+        let coords = weight_coords(font_ref, loaded_font.variable_weight);
+        let metrics = font_ref.metrics(&coords);
 
         FontMetrics {
             units_per_em: metrics.units_per_em as u32,
@@ -239,7 +251,10 @@ impl PlatformTextSystem for CosmicTextSystem {
 
     fn typographic_bounds(&self, font_id: FontId, glyph_id: GlyphId) -> Result<Bounds<f32>> {
         let lock = self.0.read();
-        let glyph_metrics = lock.loaded_font(font_id).font.as_swash().glyph_metrics(&[]);
+        let loaded_font = lock.loaded_font(font_id);
+        let font_ref = loaded_font.font.as_swash();
+        let coords = weight_coords(font_ref, loaded_font.variable_weight);
+        let glyph_metrics = font_ref.glyph_metrics(&coords);
         let glyph_id = glyph_id.0 as u16;
         Ok(Bounds {
             origin: point(0.0, 0.0),
@@ -303,7 +318,7 @@ impl CosmicTextSystemState {
             primary_family_name: first_family.0.clone().into(),
             stretch: face.stretch,
             style: face.style,
-            weight: face.weight,
+            weight: loaded_font.variable_weight.unwrap_or(face.weight),
             features: loaded_font.features.clone(),
             fallback_chain: Arc::clone(&loaded_font.user_fallback_chain),
         })
@@ -384,6 +399,10 @@ impl CosmicTextSystemState {
         };
 
         let name = gpui::font_name_with_fallbacks(name, &self.system_font_fallback);
+        // Nuschel patch: CSS generic families ("sans-serif", "serif",
+        // "monospace") name no face; they stand for an installed family.
+        let generic = self.generic_family(name);
+        let name = generic.as_deref().unwrap_or(name);
 
         let families = self
             .font_system
@@ -443,6 +462,7 @@ impl CosmicTextSystemState {
                 features: cosmic_features.clone(),
                 is_known_emoji_font: check_is_known_emoji_font(&postscript_name),
                 user_fallback_chain: Arc::clone(&user_fallback_chain),
+                variable_weight: None,
             });
             self.loaded_font_ids_by_key.insert(key, font_id);
         }
@@ -450,8 +470,63 @@ impl CosmicTextSystemState {
         Ok(loaded_font_ids)
     }
 
+    /// Nuschel patch: `font_id`, or for a variable face whose `wght` axis
+    /// reaches `weight` (clamped to the axis) and whose default is another
+    /// weight, its instance at that weight. Static faces keep their weight:
+    /// the best-matching face of the family already is the bold or regular one.
+    fn variable_instance(&mut self, font_id: FontId, weight: gpui::FontWeight) -> FontId {
+        let loaded_font = self.loaded_font(font_id);
+        if loaded_font.variable_weight.is_some() {
+            return font_id;
+        }
+        let database_id = loaded_font.font.id();
+        let Some(face) = self.font_system.db().face(database_id) else {
+            return font_id;
+        };
+        let Some(weight) =
+            instance_weight(wght_range(loaded_font.font.as_swash()), face.weight, weight)
+        else {
+            return font_id;
+        };
+        if let Some(&instance) = self.variable_instances.get(&(font_id, weight.0)) {
+            return instance;
+        }
+        // The same face, shaped at the weight (cosmic-text instances it).
+        let Some(font) = self.font_system.get_font(database_id, weight) else {
+            return font_id;
+        };
+        let loaded_font = self.loaded_font(font_id);
+        let instance = LoadedFont {
+            font,
+            features: loaded_font.features.clone(),
+            is_known_emoji_font: loaded_font.is_known_emoji_font,
+            user_fallback_chain: Arc::clone(&loaded_font.user_fallback_chain),
+            variable_weight: Some(weight),
+        };
+        let instance_id = FontId(self.loaded_fonts.len());
+        self.loaded_fonts.push(instance);
+        self.variable_instances
+            .insert((font_id, weight.0), instance_id);
+        instance_id
+    }
+
+    /// Nuschel patch: the installed family a CSS generic family name stands
+    /// for, or `None` for any other name (or when none is installed).
+    fn generic_family(&self, name: &str) -> Option<String> {
+        let generic = GenericFamily::parse(name)?;
+        let faces = self.font_system.db().faces().flat_map(|face| {
+            face.families
+                .iter()
+                .map(move |(family, _)| (family.as_str(), face.monospaced))
+        });
+        generic.resolve(faces)
+    }
+
     fn advance(&self, font_id: FontId, glyph_id: GlyphId) -> Result<Size<f32>> {
-        let glyph_metrics = self.loaded_font(font_id).font.as_swash().glyph_metrics(&[]);
+        let loaded_font = self.loaded_font(font_id);
+        let font_ref = loaded_font.font.as_swash();
+        let coords = weight_coords(font_ref, loaded_font.variable_weight);
+        let glyph_metrics = font_ref.glyph_metrics(&coords);
         Ok(Size {
             width: glyph_metrics.advance_width(glyph_id.0 as u16),
             height: glyph_metrics.advance_height(glyph_id.0 as u16),
@@ -527,11 +602,14 @@ impl CosmicTextSystemState {
             params.subpixel_variant.y as f32 / SUBPIXEL_VARIANTS_Y as f32 / params.scale_factor,
         );
 
+        // Nuschel patch: a variable instance is drawn at its weight.
+        let coords = weight_coords(font_ref, loaded_font.variable_weight);
         let mut scaler = self
             .swash_scale_context
             .builder(font_ref)
             .size(pixel_size * params.scale_factor)
             .hint(true)
+            .normalized_coords(&coords)
             .build();
 
         let sources: &[Source] = if params.is_emoji {
@@ -568,12 +646,21 @@ impl CosmicTextSystemState {
     /// `LoadedFont.features`, as it will have an arbitrarily chosen or empty value. The only
     /// current use of this field is for the *input* of `layout_line`, and so it's fine to use
     /// `font_id_for_cosmic_id` when computing the *output* of `layout_line`.
-    fn font_id_for_cosmic_id(&mut self, id: cosmic_text::fontdb::ID) -> Result<FontId> {
-        if let Some(ix) = self
-            .loaded_fonts
-            .iter()
-            .position(|loaded_font| loaded_font.font.id() == id)
-        {
+    fn font_id_for_cosmic_id(
+        &mut self,
+        id: cosmic_text::fontdb::ID,
+        weight: Weight,
+    ) -> Result<FontId> {
+        // Nuschel patch: the face itself (never an instance), then, for a
+        // variable face, its instance at the weight the glyph was shaped with.
+        let base = self.base_font_id_for_cosmic_id(id)?;
+        Ok(self.variable_instance(base, gpui::FontWeight(weight.0 as f32)))
+    }
+
+    fn base_font_id_for_cosmic_id(&mut self, id: cosmic_text::fontdb::ID) -> Result<FontId> {
+        if let Some(ix) = self.loaded_fonts.iter().position(|loaded_font| {
+            loaded_font.font.id() == id && loaded_font.variable_weight.is_none()
+        }) {
             Ok(FontId(ix))
         } else {
             let font = self
@@ -592,6 +679,7 @@ impl CosmicTextSystemState {
                 features: CosmicFontFeatures::new(),
                 is_known_emoji_font: check_is_known_emoji_font(&face.post_script_name),
                 user_fallback_chain: Arc::from(Vec::new()),
+                variable_weight: None,
             });
 
             Ok(font_id)
@@ -797,7 +885,7 @@ impl CosmicTextSystemState {
             let mut font_id = FontId(glyph.metadata);
             let mut loaded_font = self.loaded_font(font_id);
             if loaded_font.font.id() != glyph.font_id {
-                match self.font_id_for_cosmic_id(glyph.font_id) {
+                match self.font_id_for_cosmic_id(glyph.font_id, glyph.font_weight) {
                     std::result::Result::Ok(resolved_id) => {
                         font_id = resolved_id;
                         loaded_font = self.loaded_font(font_id);
@@ -924,6 +1012,127 @@ impl CosmicTextSystemState {
         } else {
             FallbackFontClass::Proportional
         }
+    }
+}
+
+/// Nuschel patch: a CSS generic family.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum GenericFamily {
+    SansSerif,
+    Serif,
+    Monospace,
+}
+
+impl GenericFamily {
+    /// Installed families tried in order. The proportional ones follow GPUI's
+    /// fallback stack (`gpui::TextSystem`), so text that used to reach a
+    /// family through it (on GNOME, Adwaita Sans) keeps that family; the
+    /// monospace ones are GPUI's own, then the platforms' in the same order.
+    const SANS_SERIF: &[&str] = &[
+        "IBM Plex Sans",
+        "Helvetica",
+        "Segoe UI",
+        "Ubuntu",
+        "Adwaita Sans",
+        "Cantarell",
+        "Noto Sans",
+        "DejaVu Sans",
+        "Arial",
+        "Liberation Sans",
+    ];
+    const SERIF: &[&str] = &[
+        "IBM Plex Serif",
+        "Noto Serif",
+        "DejaVu Serif",
+        "Liberation Serif",
+        "Times New Roman",
+        "Georgia",
+    ];
+    const MONOSPACE: &[&str] = &[
+        "Lilex",
+        "IBM Plex Mono",
+        "Menlo",
+        "Consolas",
+        "Ubuntu Mono",
+        "Adwaita Mono",
+        "Source Code Pro",
+        "Noto Sans Mono",
+        "DejaVu Sans Mono",
+        "Liberation Mono",
+        "Courier New",
+    ];
+
+    fn parse(name: &str) -> Option<Self> {
+        Some(match name.to_ascii_lowercase().as_str() {
+            "sans-serif" | "sans serif" | "sans" | "system-ui" | "ui-sans-serif" => Self::SansSerif,
+            "serif" | "ui-serif" => Self::Serif,
+            "monospace" | "mono" | "ui-monospace" => Self::Monospace,
+            _ => return None,
+        })
+    }
+
+    /// The first preferred family among the installed `(family, monospaced)`
+    /// faces; for monospace, failing that, the alphabetically first family
+    /// with a face marked monospaced.
+    fn resolve<'a>(self, faces: impl Iterator<Item = (&'a str, bool)>) -> Option<String> {
+        let preferred = match self {
+            Self::SansSerif => Self::SANS_SERIF,
+            Self::Serif => Self::SERIF,
+            Self::Monospace => Self::MONOSPACE,
+        };
+        let mut installed = collections::HashSet::default();
+        let mut monospaced: Option<&str> = None;
+        for (family, monospace) in faces {
+            installed.insert(family);
+            if monospace && monospaced.is_none_or(|first| family < first) {
+                monospaced = Some(family);
+            }
+        }
+        preferred
+            .iter()
+            .find(|family| installed.contains(**family))
+            .map(|family| (*family).to_owned())
+            .or_else(|| {
+                (self == Self::Monospace)
+                    .then_some(monospaced)
+                    .flatten()
+                    .map(str::to_owned)
+            })
+    }
+}
+
+/// Nuschel patch: the `wght` axis of a variable face, as (min, max).
+fn wght_range(font: swash::FontRef<'_>) -> Option<(f32, f32)> {
+    font.variations()
+        .find_by_tag(swash::Tag::from_be_bytes(*b"wght"))
+        .map(|axis| (axis.min_value(), axis.max_value()))
+}
+
+/// Nuschel patch: the weight to instance a variable face at for a request,
+/// or `None` when the face is drawn as it is: it has no `wght` axis, or the
+/// request (clamped to the axis) is its default weight.
+fn instance_weight(
+    axis: Option<(f32, f32)>,
+    default: Weight,
+    requested: gpui::FontWeight,
+) -> Option<Weight> {
+    let (min, max) = axis?;
+    if !(min <= max && requested.0.is_finite()) {
+        return None;
+    }
+    let weight = requested.0.clamp(min, max).round().clamp(1., 1000.) as u16;
+    (weight != default.0).then_some(Weight(weight))
+}
+
+/// Nuschel patch: normalized coordinates for a variable instance's weight;
+/// empty (the face's default) for every other font.
+fn weight_coords(font: swash::FontRef<'_>, weight: Option<Weight>) -> SmallVec<[i16; 4]> {
+    match weight {
+        Some(weight) if wght_range(font).is_some() => font
+            .variations()
+            .normalized_coords([(swash::Tag::from_be_bytes(*b"wght"), weight.0 as f32)])
+            .collect(),
+        _ => SmallVec::new(),
     }
 }
 
@@ -1208,7 +1417,10 @@ fn check_is_known_emoji_font(postscript_name: &str) -> bool {
     postscript_name == "NotoColorEmoji"
 }
 
-#[cfg(test)]
+// Nuschel patch: upstream's tests include Zed's bundled fonts
+// (`assets/fonts`), which are not vendored; they are compiled out so that
+// `nuschel_tests` below can build. Set the cfg with those fonts in place.
+#[cfg(all(test, nuschel_upstream_font_assets))]
 mod tests {
     use super::*;
 
@@ -1875,5 +2087,294 @@ mod tests {
         let covers = |_: FontId, _: char| true;
         let spans = compute_run_spans("anything", 3, 0, primary, &fb, &covers);
         assert!(spans.is_empty());
+    }
+}
+
+/// Nuschel patch: generic families, variable weights and weight-keeping
+/// fallbacks. The tests with real fonts read them from the directories in
+/// `NUSCHEL_TEST_FONT_DIRS` (colon-separated; DejaVu and Adwaita fonts, as
+/// `pkgs.dejavu_fonts` and `pkgs.adwaita-fonts`) and are skipped without it:
+/// the vendored crate carries no font files.
+#[cfg(test)]
+mod nuschel_tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn generic_names_are_recognised() {
+        for (name, generic) in [
+            ("sans-serif", GenericFamily::SansSerif),
+            ("Sans-Serif", GenericFamily::SansSerif),
+            ("system-ui", GenericFamily::SansSerif),
+            ("serif", GenericFamily::Serif),
+            ("monospace", GenericFamily::Monospace),
+            ("ui-monospace", GenericFamily::Monospace),
+        ] {
+            assert_eq!(GenericFamily::parse(name), Some(generic), "{name}");
+        }
+        for name in [
+            "Adwaita Sans",
+            "DejaVu Sans Mono",
+            ".ZedSans",
+            "IBM Plex Sans",
+        ] {
+            assert_eq!(GenericFamily::parse(name), None, "{name}");
+        }
+    }
+
+    #[test]
+    fn generic_families_resolve_to_installed_families_in_order() {
+        let gnome = [
+            ("DejaVu Sans", false),
+            ("DejaVu Sans Mono", true),
+            ("Adwaita Sans", false),
+            ("Adwaita Mono", true),
+            ("DejaVu Serif", false),
+        ];
+        let resolve =
+            |generic: GenericFamily, faces: &[(&str, bool)]| generic.resolve(faces.iter().copied());
+        assert_eq!(
+            resolve(GenericFamily::SansSerif, &gnome).as_deref(),
+            Some("Adwaita Sans")
+        );
+        assert_eq!(
+            resolve(GenericFamily::Monospace, &gnome).as_deref(),
+            Some("Adwaita Mono")
+        );
+        assert_eq!(
+            resolve(GenericFamily::Serif, &gnome).as_deref(),
+            Some("DejaVu Serif")
+        );
+        let dejavu = [("DejaVu Sans", false), ("DejaVu Sans Mono", true)];
+        assert_eq!(
+            resolve(GenericFamily::SansSerif, &dejavu).as_deref(),
+            Some("DejaVu Sans")
+        );
+        assert_eq!(
+            resolve(GenericFamily::Monospace, &dejavu).as_deref(),
+            Some("DejaVu Sans Mono")
+        );
+        assert_eq!(resolve(GenericFamily::Serif, &dejavu), None);
+        // A monospace family outside the list, by its fonts' monospace flag.
+        let other = [
+            ("Fancy Sans", false),
+            ("Zeta Mono", true),
+            ("Alpha Code", true),
+        ];
+        assert_eq!(
+            resolve(GenericFamily::Monospace, &other).as_deref(),
+            Some("Alpha Code")
+        );
+        assert_eq!(resolve(GenericFamily::SansSerif, &other), None);
+    }
+
+    #[test]
+    fn variable_faces_are_instanced_only_off_their_default_weight() {
+        let axis = Some((100., 900.));
+        let regular = Weight(400);
+        let bold = gpui::FontWeight::BOLD;
+        assert_eq!(instance_weight(axis, regular, bold), Some(Weight(700)));
+        assert_eq!(
+            instance_weight(axis, regular, gpui::FontWeight::NORMAL),
+            None
+        );
+        assert_eq!(instance_weight(None, regular, bold), None);
+        // Clamped to the axis.
+        assert_eq!(
+            instance_weight(Some((300., 600.)), regular, gpui::FontWeight::BLACK),
+            Some(Weight(600))
+        );
+        assert_eq!(instance_weight(Some((400., 400.)), regular, bold), None);
+        assert_eq!(
+            instance_weight(axis, regular, gpui::FontWeight(f32::NAN)),
+            None
+        );
+    }
+
+    /// Font files from `NUSCHEL_TEST_FONT_DIRS`, by file name.
+    fn font_file(name: &str) -> Option<Vec<u8>> {
+        let dirs = std::env::var_os("NUSCHEL_TEST_FONT_DIRS")?;
+        for dir in std::env::split_paths(&dirs) {
+            let mut pending = vec![dir];
+            while let Some(dir) = pending.pop() {
+                for entry in std::fs::read_dir(&dir).ok()?.flatten() {
+                    let path: PathBuf = entry.path();
+                    if path.is_dir() {
+                        pending.push(path);
+                    } else if path.file_name().is_some_and(|file| file == name) {
+                        return std::fs::read(path).ok();
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// A text system with exactly these font files, or `None` (the test is
+    /// skipped) when they are not available.
+    fn with_fonts(files: &[&str]) -> Option<CosmicTextSystem> {
+        let fonts = files
+            .iter()
+            .map(|name| font_file(name).map(Cow::Owned))
+            .collect::<Option<Vec<_>>>();
+        let Some(fonts) = fonts else {
+            eprintln!("skipped: {files:?} not found through NUSCHEL_TEST_FONT_DIRS");
+            return None;
+        };
+        let text_system = CosmicTextSystem::new_without_system_fonts("IBM Plex Sans");
+        text_system.add_fonts(fonts).expect("fonts load");
+        Some(text_system)
+    }
+
+    const DEJAVU: &[&str] = &[
+        "DejaVuSans.ttf",
+        "DejaVuSans-Bold.ttf",
+        "DejaVuSans-Oblique.ttf",
+        "DejaVuSansMono.ttf",
+    ];
+    const ADWAITA: &[&str] = &[
+        "AdwaitaSans-Regular.ttf",
+        "AdwaitaSans-Italic.ttf",
+        "AdwaitaMono-Regular.ttf",
+        "AdwaitaMono-Bold.ttf",
+    ];
+
+    fn family_of(text_system: &CosmicTextSystem, font_id: FontId) -> String {
+        let state = text_system.0.read();
+        let face = state
+            .font_system
+            .db()
+            .face(state.loaded_font(font_id).font.id())
+            .expect("face");
+        face.families[0].0.clone()
+    }
+
+    /// Coverage summed over a glyph's raster: how much ink it has.
+    fn ink(text_system: &CosmicTextSystem, font_id: FontId, ch: char) -> u64 {
+        let glyph_id = text_system.glyph_for_char(font_id, ch).expect("glyph");
+        let params = RenderGlyphParams {
+            font_id,
+            glyph_id,
+            font_size: gpui::px(48.),
+            subpixel_variant: Default::default(),
+            scale_factor: 1.,
+            is_emoji: false,
+            subpixel_rendering: false,
+            dilation: 0,
+        };
+        let bounds = text_system.glyph_raster_bounds(&params).expect("bounds");
+        let (_, pixels) = text_system
+            .rasterize_glyph(&params, bounds)
+            .expect("raster");
+        pixels.iter().map(|&value| u64::from(value)).sum()
+    }
+
+    #[test]
+    fn generic_families_load_installed_fonts() -> Result<()> {
+        let Some(mut fonts) = with_fonts(&[DEJAVU, ADWAITA].concat()) else {
+            return Ok(());
+        };
+        for (generic, family) in [
+            ("sans-serif", "Adwaita Sans"),
+            ("monospace", "Adwaita Mono"),
+        ] {
+            let font_id = fonts.font_id(&gpui::font(generic))?;
+            assert_eq!(family_of(&fonts, font_id), family, "{generic}");
+        }
+        let Some(dejavu) = with_fonts(DEJAVU) else {
+            return Ok(());
+        };
+        fonts = dejavu;
+        for (generic, family) in [
+            ("sans-serif", "DejaVu Sans"),
+            ("monospace", "DejaVu Sans Mono"),
+        ] {
+            let font_id = fonts.font_id(&gpui::font(generic))?;
+            assert_eq!(family_of(&fonts, font_id), family, "{generic}");
+        }
+        assert!(fonts.font_id(&gpui::font("serif")).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn variable_faces_are_drawn_at_the_requested_weight() -> Result<()> {
+        let Some(fonts) = with_fonts(ADWAITA) else {
+            return Ok(());
+        };
+        let regular = fonts.font_id(&gpui::font("Adwaita Sans"))?;
+        let bold = fonts.font_id(&gpui::font("Adwaita Sans").bold())?;
+        assert_ne!(regular, bold);
+        assert_eq!(fonts.font_id(&gpui::font("Adwaita Sans").bold())?, bold);
+        assert_eq!(
+            fonts.font_weight_and_style(regular)?,
+            (gpui::FontWeight::NORMAL, gpui::FontStyle::Normal)
+        );
+        assert_eq!(
+            fonts.font_weight_and_style(bold)?,
+            (gpui::FontWeight::BOLD, gpui::FontStyle::Normal)
+        );
+        let bold_italic = fonts.font_id(&gpui::font("Adwaita Sans").bold().italic())?;
+        assert_eq!(
+            fonts.font_weight_and_style(bold_italic)?,
+            (gpui::FontWeight::BOLD, gpui::FontStyle::Italic)
+        );
+        // Drawn and measured at the weight: more ink, wider advances.
+        for ch in ['H', 'l', 'o'] {
+            let (thin, thick) = (ink(&fonts, regular, ch), ink(&fonts, bold, ch));
+            assert!(thick * 10 > thin * 13, "{ch}: regular {thin}, bold {thick}");
+        }
+        let glyph = fonts.glyph_for_char(regular, 'H').expect("H");
+        assert!(fonts.advance(bold, glyph)?.width > fonts.advance(regular, glyph)?.width);
+        // The regular face is untouched: same raster as an unpatched load.
+        let state = fonts.0.read();
+        assert_eq!(state.loaded_font(regular).variable_weight, None);
+        assert_eq!(state.loaded_font(bold).variable_weight, Some(Weight(700)));
+        Ok(())
+    }
+
+    #[test]
+    fn static_faces_keep_their_own_weight() -> Result<()> {
+        let Some(fonts) = with_fonts(DEJAVU) else {
+            return Ok(());
+        };
+        let regular = fonts.font_id(&gpui::font("DejaVu Sans"))?;
+        let bold = fonts.font_id(&gpui::font("DejaVu Sans").bold())?;
+        assert_ne!(regular, bold);
+        let state = fonts.0.read();
+        assert_eq!(state.loaded_font(bold).variable_weight, None);
+        assert_eq!(
+            state
+                .font_system
+                .db()
+                .face(state.loaded_font(bold).font.id())
+                .map(|face| face.weight),
+            Some(Weight::BOLD)
+        );
+        Ok(())
+    }
+
+    /// With gpui's patched fallback: an unresolved family keeps bold and
+    /// italic, and code falls back to monospace.
+    #[test]
+    fn fallbacks_keep_weight_and_monospace() -> Result<()> {
+        let Some(fonts) = with_fonts(ADWAITA) else {
+            return Ok(());
+        };
+        let fonts = Arc::new(fonts);
+        let text_system = gpui::TextSystem::new(fonts.clone());
+        let bold = text_system.resolve_font(&gpui::font("Missing Font").bold());
+        assert_eq!(family_of(&fonts, bold), "Adwaita Sans");
+        assert_eq!(
+            fonts.font_weight_and_style(bold)?,
+            (gpui::FontWeight::BOLD, gpui::FontStyle::Normal)
+        );
+        let italic = text_system.resolve_font(&gpui::font("Missing Font").italic());
+        assert_eq!(
+            fonts.font_weight_and_style(italic)?,
+            (gpui::FontWeight::NORMAL, gpui::FontStyle::Italic)
+        );
+        let code = text_system.resolve_font(&gpui::font("Missing Mono"));
+        assert_eq!(family_of(&fonts, code), "Adwaita Mono");
+        Ok(())
     }
 }

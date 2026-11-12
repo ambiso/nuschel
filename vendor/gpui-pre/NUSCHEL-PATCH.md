@@ -27,5 +27,19 @@ The desktop's timeline stands in for entries it does not lay out with such an
 element: a list item for screen readers, without bounds, that scrolls the entry
 into view when asked to (see `apps/desktop/src/scrolling.rs`, `Unseen`).
 
+Font fallback keeps what was asked for (`src/text_system.rs`,
+`resolve_font_uncached`). When a family cannot be resolved, GPUI tries its
+fallback families; it used to try them at their default weight and style, so
+bold and italic text in a missing family (Nuschel's defaults, "sans-serif" and
+"monospace", on Linux before the generic families below) came out as the
+fallback's regular face, and code came out proportional. A fallback now has
+the request's weight, style, features and fallbacks, with only the family
+changed. A monospace request (generic names, `.ZedMono`, Lilex, and families
+named "… Mono", "… Code", "Courier …" or "Consol…") first tries `.ZedMono`,
+the platform's generic "monospace" and common monospace families, then the
+proportional stack; a proportional request no longer tries `.ZedMono` first
+(it stays last, so the set of candidates is unchanged).
+
 Drop this copy if upstream gains an equivalent window scale and a way for
-custom elements to handle accessibility actions.
+custom elements to handle accessibility actions, and keeps the requested
+weight and style through fallback.
