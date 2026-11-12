@@ -393,11 +393,13 @@ mod tests {
         })
     }
 
+    /// Diagnostic replay on two instances of this build's DSP; not a general
+    /// old/new implementation or live-device regression proof.
     #[test]
+    #[ignore = "diagnostic requires an explicit public PCM fixture in NUSCHL_NOISE_REPLAY"]
     fn identical_owned_pcm_has_identical_gate_decisions_with_and_without_prefix_storage() {
-        let Some(path) = std::env::var_os("NUSCHL_NOISE_REPLAY") else {
-            return;
-        };
+        let path = std::env::var_os("NUSCHL_NOISE_REPLAY")
+            .expect("set NUSCHL_NOISE_REPLAY to the owned synthetic PCM fixture");
         let bytes = std::fs::read(path).unwrap();
         assert!(!bytes.is_empty() && bytes.len() <= 1_000_000 && bytes.len() % (FRAME * 4) == 0);
         let samples: Vec<f32> = bytes

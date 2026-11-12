@@ -53,7 +53,19 @@ impl CaptureQueue {
             self.pending.retain(|frame| !frame.prefix);
         }
         if gate {
-            if !self.active && prefix_allowed {
+            let reopening = !self.active || self.ending;
+            let prefix_frames = if reopening && prefix_allowed {
+                self.prefix.len()
+            } else {
+                0
+            };
+            // Make room BEFORE appending, so a reopening edge cannot allocate
+            // a larger queue or discard the next word's retained onset.
+            while self.pending.len() + prefix_frames >= MAX_PENDING_FRAMES {
+                self.pending.pop_front();
+                self.pending.pop_front();
+            }
+            if reopening && prefix_allowed {
                 self.pending
                     .extend(self.prefix.drain(..).map(|samples| Frame {
                         samples,
@@ -63,12 +75,6 @@ impl CaptureQueue {
             self.prefix.clear();
             self.active = true;
             self.ending = false;
-            // Drop old whole packets after a stalled loop; never grow/catch up
-            // without bound. Normal operation has at most 80 ms of prefix.
-            while self.pending.len() >= MAX_PENDING_FRAMES {
-                self.pending.pop_front();
-                self.pending.pop_front();
-            }
             self.pending.push_back(Frame {
                 samples,
                 prefix: false,
@@ -138,6 +144,41 @@ mod tests {
             "no catch-up burst"
         );
     }
+    #[test]
+    fn a_reopened_gate_keeps_the_next_onset_while_the_previous_tail_is_draining() {
+        let mut queue = CaptureQueue::default();
+        let now = Instant::now();
+        let frame = |marker| [marker as f32 / 100.; FRAME];
+        for marker in 1..=8 {
+            queue.push(frame(marker), false, true);
+        }
+        queue.push(frame(9), true, true);
+        let mut markers = Vec::new();
+        let mut take = |packet: Packet| {
+            markers.push(packet.samples[0]);
+            markers.push(packet.samples[FRAME]);
+        };
+        take(queue.due(now).unwrap());
+        for marker in 10..=12 {
+            queue.push(frame(marker), false, true);
+        }
+        take(queue.due(now + PACKET_PERIOD).unwrap());
+        // Old speech is still draining here; this is a real closed→open edge.
+        assert!(queue.active && queue.ending);
+        queue.push(frame(13), true, true);
+        queue.push(frame(14), true, true);
+        assert!(queue.pending.len() <= MAX_PENDING_FRAMES);
+        for tick in 2..=6 {
+            let at = now + PACKET_PERIOD * tick;
+            take(queue.due(at).unwrap());
+            assert!(queue.due(at).is_none(), "reopening must not flood packets");
+        }
+        assert_eq!(
+            markers,
+            (1..=14).map(|v| v as f32 / 100.).collect::<Vec<_>>()
+        );
+    }
+
     #[test]
     fn reset_and_echo_guard_revoke_prefix_and_ptt_never_replays_it() {
         let now = Instant::now();
