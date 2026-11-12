@@ -9,6 +9,12 @@ The rename/build-cache cleanup is complete. Publication remains behind signing,
 notice and packaging gates; public `main` is still the last user-pushed
 `7f28f8d4`. No new push, tag or release is implied below.
 
+Queue policy (user, 2026-11-12): record every reported or discovered issue here
+when it cannot be fixed immediately. Delegation does not close an issue: retain
+its remaining work and verification limits until the fix is integrated and its
+relevant checks pass. Keep newly discovered blockers visible even when they are
+outside the current task's scope.
+
 Current integration checkpoint (2026-11-12):
 
 - **Desktop layout foundation is integrated through `12d6695c`.** Shared finite
@@ -586,9 +592,13 @@ The media worker uses per-speaker adaptive jitter buffers and Opus loss concealm
       first transmitted/received audio separately against stock Mumble. Preserve
       microphone release while muted; do not reduce latency by recording without
       explicit unmute consent. Include repeated mute/unmute and route changes.
+      Pulse stream startup, the initial supervisor debounce and bounded VAD onset
+      retention are corrected through `769c479b`; the detailed remaining physical
+      device, cold-graph, noise-classifier and playback-continuity work remains
+      listed below. Private synthetic timings do not complete this investigation.
 - [ ] Audit receive/output fidelity against stock Mumble with independent decoded
       PCM fixtures before claiming 1:1 quality. Native Mixer and browser VoiceDecoder
-      currently downmix to mono; preserve stereo where supported and examine
+      stereo preservation is corrected; continue examining
       per-speaker gain, mixing/clamping, resampling, jitter and packet-loss
       concealment separately. Compare high-bitrate mono/stereo, simultaneous
       speakers and deterministic loss/reordering, then the actual output path;
