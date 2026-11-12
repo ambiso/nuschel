@@ -1,4 +1,4 @@
-# Receive phase-inversion decoder control
+# Receive decoder corrections
 
 Base: the exact published `opus-pure` 0.2.3 archive, retrieved from
 https://static.crates.io/crates/opus-pure/opus-pure-0.2.3.crate (547373 bytes).
@@ -27,3 +27,25 @@ Nuschl's native and browser voice receivers opt in separately to match stock
 Mumble's `AudioOutputSpeech.cpp` setting. Generic and nonlive decoder users retain
 the original default. This is a deliberate mono-downmix/stereo tradeoff, not a
 claim that inversion-disabled rendering is universally better stereo.
+
+Additional bounded receive fixes match libopus 1.6.1 `opus_decoder.c`:
+
+- Validate all FEC packet framing before concealment or state changes, including
+  CELT/short-request fallbacks and leading PLC. Invalid odd-sized CBR payloads
+  return an error without consuming decoder history.
+- Treat parsed zero- and one-byte payloads as PLC/DTX before changing layer,
+  internal sample rate or channel state, including padded/mixed-frame packets.
+  A bounded stack buffer reuses the ordinary decoder for mixed nonshort frames.
+  PLC reports zero final entropy range and clears consumed redundancy state.
+  A private accepted-packet mode remains distinct from the synthesis mode, so
+  short-frame mode switches select subsequent FEC fallbacks as libopus does.
+- Report the actual SILK FEC range coder or hybrid CELT concealment RNG instead
+  of retaining the previous packet's public final range. The CELT accessor is
+  crate-private; no public codec API is added.
+
+The phase setting is unchanged. There are no new dependencies, unsafe code,
+encoder changes or backend replacements. Original provenance bytes above remain
+unchanged. Independent synthetic checks, evidence and known direct 8/12 kHz API
+resampling limitations are documented in `docs/opus-silk.md`; the strict broad
+audit remains failing until those separate limitations are corrected. These
+patches do not claim general bitstream or perceptual parity.

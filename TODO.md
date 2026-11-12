@@ -666,16 +666,31 @@ The media worker uses per-speaker adaptive jitter buffers and Opus loss concealm
       matched complete reference-Mumble multispeaker/loss playback and physical
       listening remain open. See `docs/output-quality.md`; bitrate and synthetic
       tone SNR alone do not establish perceptual equivalence.
-- [ ] Fix the independent ordered SILK/FEC decoder mismatch (2026-11-12,
-      urgent codec investigation). A valid libopus 1.6.1 mono 24 kbit/s VoIP
-      stream with in-band FEC enabled diverges in the direct Rust decoder before
-      any loss or jitter: the first two packets match, packet index 2 differs in
-      PCM and entropy range, and whole-fixture agreement is only 6.30 dB.
-      Fresh output buffers reproduce it. LBRR handling is a hypothesis to test,
-      not an established cause. Preserve the frozen packets/controls/reference
-      evidence under `~/.cache/nuschl-output-quality/codec-lbrr-failure`; do not
-      weaken the gate or mark browser/native FEC parity complete before an
-      independently validated memory-safe correction.
+- [x] Correct the independent ordered SILK/DTX decoder mismatch (2026-11-12).
+      The frozen FEC-enabled stream contains valid padded one-byte coded DTX
+      frames at packet 2/22. libopus conceals those; Rust incorrectly range-decoded
+      them as ordinary SILK. The bounded safe-Rust correction makes all 46,080
+      samples and 24 entropy ranges bit-exact, versus the preserved 6.30 dB
+      failure. Full FEC framing validation now precedes fallback/leading PLC,
+      malformed `09 00` preserves state, FEC reports its actual canonical range,
+      and accepted packet mode stays distinct from DTX synthesis mode. Scoped
+      synthetic 48 kHz regressions cover ordered/FEC/PLC, durations/channels,
+      padding/mixed frames and mode/reset transitions. See `docs/opus-silk.md`;
+      preserve `~/.cache/nuschl-output-quality/codec-lbrr-failure`. This does not
+      complete browser/native pipeline verification or full Mumble parity.
+- [ ] Fix direct `opus-pure` 8/12 kHz decoder-API SILK resampling mismatch.
+      The independent broader synthetic audit matches entropy but yields only
+      about 1.7–8.5 dB PCM agreement for ordered WB/MB SILK downsampling at those
+      rates; FEC/PLC inherit it. The strict broad `--require-parity` gate remains
+      failing, with baseline/fixed per-case evidence retained. Production
+      native/browser receivers decode at 48 kHz and convert device rates
+      separately; do not broaden this into their conversion paths or claim full
+      codec conformance. See `tests/opus_silk_fec.py` and `docs/opus-silk.md`.
+- [ ] Audit direct `OpusDecoder::last_packet_duration` metadata compatibility.
+      The current Rust API documents retaining the last real packet duration
+      through PLC/FEC; libopus updates `OPUS_GET_LAST_PACKET_DURATION` after
+      those calls. This pre-existing API difference is separate from the fixed
+      PCM/range behavior. Check consumers before changing its public semantics.
 - [x] Match Mumble's explicit `OPUS_SET_PHASE_INVERSION_DISABLED(1)` receive
       setting. The pinned, minimally patched opus-pure 0.2.3 exposes its existing
       synthesis control with upstream/generic defaults unchanged; only native

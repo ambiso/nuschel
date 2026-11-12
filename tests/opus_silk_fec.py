@@ -82,6 +82,12 @@ class Reference:
         records, samples = [], []
         try:
             for operation, frames, packet in events:
+                if operation == 'reset':
+                    assert ctl(decoder, 4028, 0) == 0
+                    final = C.c_uint32()
+                    assert self.query(decoder, 4031, C.byref(final)) == 0
+                    records.append({'result': 0, 'range': final.value})
+                    continue
                 output = (C.c_float * (frames * channels))()
                 result = self.lib.opus_decode_float(decoder, packet or None, len(packet), output,
                                                    frames, int(operation == 'fec'))
@@ -128,6 +134,8 @@ def main():
                         help='regressions uses the receive 48k API; audit also checks lower API rates')
     parser.add_argument('--require-parity', action='store_true')
     args = parser.parse_args()
+    if args.suite == 'regressions' and args.require_parity and not args.frozen:
+        parser.error('the strict receive regression gate requires the original --frozen fixture')
     args.output.mkdir(parents=True, exist_ok=True)
     ref = Reference(args.opus_library)
     cases = []
@@ -154,6 +162,7 @@ def main():
         return expected_records, expected, observed_records, observed
 
     if args.frozen:
+        assert hashlib.sha256(args.frozen.read_bytes()).hexdigest() == 'ee9fdd1411600fedbad7535ae58401cfb51ba638fd7b7d4903647125fa401e85'
         packets = read_frozen(args.frozen)
         check('frozen-ordered-fec-enabled', ordered(packets, 48000, 20))
         assert len(packets) == 24
@@ -196,6 +205,13 @@ def main():
         lost = ordered(packets, 48000, ms)
         lost[4] = ('fec', 960, packets[5])
         check(f'loss-{kind}-control', lost)
+        if kind == 'hybrid':
+            no_lbrr = ref.encode(2, ms, False, bandwidth, app)
+            lost = ordered(no_lbrr, 48000, ms)
+            lost[4] = ('fec', 960, no_lbrr[5])
+            check('loss-hybrid-no-lbrr', lost)
+            lost[4] = ('decode', 960, b'')
+            check('plc-hybrid-control', lost)
         payload = ref.payload(packets[5])
         toc = packets[5][0] & ~3
         for short in [b'', b'\x00', b'\xff']:
@@ -222,6 +238,22 @@ def main():
             packet = bytes([after[0][0] & ~3]) + short
             check(f'dtx-mode-switch-{before[0][0]}-{len(short)}',
                   ordered(before[:4] + [packet] + before[4:7] + after[4:7], 48000, 20))
+            check(f'dtx-mode-switch-fec-{before[0][0]}-{len(short)}',
+                  ordered(before[:4] + [packet], 48000, 20) + [('fec', 960, before[5])]
+                  + ordered(before[5:8], 48000, 20))
+            check(f'reset-dtx-mode-fec-{before[0][0]}-{len(short)}',
+                  ordered(before[:4], 48000, 20) + [('reset', 0, b'')]
+                  + ordered([packet], 48000, 20) + [('fec', 960, before[5])]
+                  + ordered(before[5:8], 48000, 20))
+    for kind, app, bandwidth in [('silk', 2048, 1103), ('celt', 2051, 1105)]:
+        mono = ref.encode(1, 20, True, bandwidth, app)
+        stereo = ref.encode(2, 20, True, bandwidth, app)
+        for before, after in [(mono, stereo), (stereo, mono)]:
+            for short in [b'', b'\x00']:
+                packet = bytes([after[0][0] & ~3]) + short
+                check(f'dtx-channel-{kind}-{before[0][0]}-{len(short)}',
+                      ordered(before[:4] + [packet], 48000, 20) + [('fec', 960, after[5])]
+                      + ordered(after[5:8], 48000, 20))
     malformed = [b'\x09\x00', b'\x99\x00', b'\x4b', b'\x4b\x00', b'\x4b\x41\xff', b'\x4a\xfc']
     for prefix_name, prefix in [('celt', celt), ('silk', silk)]:
         for index, packet in enumerate(malformed):

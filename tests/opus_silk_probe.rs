@@ -18,6 +18,15 @@ fn main() {
         assert!(index < 1000);
         let fields: Vec<_> = line.split_whitespace().collect();
         assert_eq!(fields.len(), 3);
+        if fields[0] == "reset" {
+            decoder.reset_state().unwrap();
+            assert!(decoder.phase_inversion_disabled());
+            records.push(format!(
+                "{{\"result\":0,\"range\":{}}}",
+                decoder.final_range()
+            ));
+            continue;
+        }
         let frames: usize = fields[1].parse().unwrap();
         assert!((1..=5760).contains(&frames));
         let hex = fields[2];

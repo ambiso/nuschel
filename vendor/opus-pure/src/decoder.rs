@@ -65,6 +65,9 @@ pub struct OpusDecoder {
     channels: usize,
 
     prev_mode: Option<OpusMode>,
+    // libopus st->mode follows the last accepted packet's TOC. A DTX frame
+    // conceals in prev_mode, so that synthesis mode can differ from this one.
+    packet_mode: Option<OpusMode>,
     frame_size: usize,
 
     stream_channels: usize,
@@ -193,6 +196,7 @@ impl OpusDecoder {
             sampling_rate,
             channels,
             prev_mode: None,
+            packet_mode: None,
             frame_size: 0,
             stream_channels: channels,
             silk_resampler: silk::resampler::SilkResampler::default(),
@@ -706,6 +710,7 @@ impl OpusDecoder {
             sampling_rate,
             channels,
             prev_mode,
+            packet_mode,
             frame_size,
             stream_channels,
             silk_resampler,
@@ -742,6 +747,7 @@ impl OpusDecoder {
         silk_dec.init((*sampling_rate).min(16000), *channels as i32);
         silk_dec.channel_state[0].fs_api_hz = *sampling_rate;
         *prev_mode = None;
+        *packet_mode = None;
         *frame_size = 0;
         *stream_channels = *channels;
         *silk_resampler = silk::resampler::SilkResampler::default();
@@ -938,17 +944,12 @@ impl OpusDecoder {
         let (_, frames, _) = repacketizer::parse_packet(packet, false)?;
         let toc = packet[0];
         let mode = mode_from_toc(toc);
-        if mode == OpusMode::CeltOnly || self.prev_mode == Some(OpusMode::CeltOnly) {
+        if mode == OpusMode::CeltOnly || self.packet_mode == Some(OpusMode::CeltOnly) {
             return self.decode_plc(frame_size, output);
         }
         let packet_frame_ms = frame_duration_ms_from_toc(toc);
         let packet_frame_size = (packet_frame_ms * self.sampling_rate / 1000) as usize;
         if packet_frame_size == 0 || frame_size < packet_frame_size {
-            return self.decode_plc(frame_size, output);
-        }
-        // opus_decode_frame treats zero- and one-byte coded payloads as DTX,
-        // including when the caller requested redundant decoding.
-        if frames[0].len() <= 1 {
             return self.decode_plc(frame_size, output);
         }
 
@@ -959,6 +960,15 @@ impl OpusDecoder {
             self.decode_plc(lead, &mut output[..lead * self.channels])?;
         }
         let base = lead * self.channels;
+        self.packet_mode = Some(mode);
+        self.stream_channels = channels_from_toc(toc);
+        // opus_decode_frame treats zero- and one-byte coded payloads as DTX,
+        // including redundant decoding. The accepted TOC still selects the
+        // next FEC fallback, but concealment keeps the previous synthesis mode.
+        if frames[0].len() <= 1 {
+            self.decode_plc(packet_frame_size, &mut output[base..capacity])?;
+            return Ok(frame_size);
+        }
         for v in output[base..capacity].iter_mut() {
             *v = 0.0;
         }
@@ -1060,6 +1070,13 @@ impl OpusDecoder {
 
         self.prev_mode = Some(mode);
         self.prev_redundancy = false;
+        // opus_decode_frame reports the SILK coder for SILK-only FEC and the
+        // concealed CELT state for hybrid FEC, including when no LBRR exists.
+        self.last_range = if mode == OpusMode::Hybrid {
+            self.celt_dec.final_range()
+        } else {
+            rc.rng
+        };
         Ok(frame_size)
     }
 
@@ -1141,6 +1158,7 @@ impl OpusDecoder {
         // the packet actually held. Treating it as the exact output length
         // instead stretched a 20 ms packet across whatever buffer it was given.
         let frame_size = frame_count * packet_frame_samples;
+        self.packet_mode = Some(mode);
 
         // RFC 6716 permits empty frames (including inside padded CBR packets).
         // libopus opus_decode_frame also treats a one-byte payload as PLC/DTX.

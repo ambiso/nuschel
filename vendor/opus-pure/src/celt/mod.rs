@@ -3137,6 +3137,11 @@ impl CeltDecoder {
         self.decode_impl_from_rc(rc, total_bits, frame_size, pcm, start_band, end_band)
     }
 
+    /// libopus CELT_GET_FINAL_RANGE, including noise-based concealment state.
+    pub(crate) fn final_range(&self) -> u32 {
+        self.rng
+    }
+
     fn decode_impl_from_rc(
         &mut self,
         rc: &mut RangeCoder,
