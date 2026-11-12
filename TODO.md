@@ -549,8 +549,8 @@ Later (reported):
       native/web/TUI renderers. Preserve newlines, code highlighting and inert
       resource handling. Obtain a minimal user example where possible and retain
       a private rendered negative/positive control; existing parser-only tests
-      do not prove messages are displayed correctly. Native desktop is the
-      confirmed by the user, observed this morning and not yet retested; it may
+      do not prove messages are displayed correctly. The user confirms native
+      desktop, observed this morning and not yet retested; it may
       already be corrected. Check the current combined product before editing.
       A separate read-only diagnosis is being delegated
       before allocating edits alongside image quality and chat scrolling.
@@ -736,12 +736,14 @@ Later (reported):
 - [x] Dark faint-text contrast raised to 6.04:1 on the main background and 4.68:1
       on selected rows; desktop tests and real GNOME clipboard/UI checks passed.
 - [ ] Ctrl+scroll / pinch zoom; IME placement at zoom ≠ 100 % untested.
-- [ ] Integrate native spacing regression proof for the rail bottom and compact
+- [x] Integrate native spacing regression proof for the rail bottom and compact
       Settings/mute/deafen gaps: exact root 1db package passes 16 real private-GNOME
       window/100–200% zoom cases, contained first/last rail decorations and
       pointer actions with owned null Pulse. Cached pre-spacing GUI fails with
       0px control gaps and 1px Add gutter; positive gaps 4 logical and bottom 13+
-      logical. See `docs/native-spacing.md`; test/docs integration pending.
+      logical. Tests/docs are integrated; root verifies the exact four source
+      hashes, visually reviews both screenshots and passes the combined package.
+      See `docs/native-spacing.md` and the integration checkpoint above.
 - [ ] Smallest native 860×520 window at 200% remains visually cramped in the chat
       pane because rail/sidebar consume most width (observed in spacing screenshot).
       Spacing/contained footer controls are verified separately; consider a
