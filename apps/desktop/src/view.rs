@@ -2018,11 +2018,13 @@ fn conversation(
                             .aria_label("Chat history scrollbar")
                             // A thumb grab takes over immediately, even before
                             // its first move changes the retained scroll offset.
-                            .capture_any_mouse_down(cx.listener(|this, event, _, _| {
-                                if event.button == MouseButton::Left {
-                                    this.cancel_chat_scroll();
-                                }
-                            }))
+                            .capture_any_mouse_down(cx.listener(
+                                |this, event: &MouseDownEvent, _, _| {
+                                    if event.button == MouseButton::Left {
+                                        this.cancel_chat_scroll();
+                                    }
+                                },
+                            ))
                             .child(
                                 Scrollbar::vertical(&this.scroll)
                                     .id("chat-history-scrollbar")

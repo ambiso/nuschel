@@ -216,17 +216,22 @@ class ScrollbarScenes(Scenes):
             self.timeline().call('Component', 'GrabFocus')
             self.shell.key('Home'); time.sleep(.6)
             self.shell.key('End'); self.latest(161)
-            for width, zoom_steps in ((900, 0), (900, 6)):
+            for width, zoom_steps in ((900, 0), (900, 5)):
                 self.shell.place('Nuschl', 40, 40, width, 800)
+                self.shell.chord('Control_L', '0')
                 if zoom_steps:
-                    self.shell.chord('Control_L', '0')
                     for _ in range(zoom_steps):
-                        self.shell.chord('Control_L', 'plus')
+                        self.shell.chord('Control_L', 'equal')
+                        time.sleep(.1)
+                expected_zoom = 2.0 if zoom_steps else 1.0
+                eventually(lambda: abs(json.loads((profile / 'config/settings.json').read_text())
+                    .get('appearance', {}).get('zoom', 1.0) - expected_zoom) < .001,
+                    'actual Ctrl++ zoom did not persist')
                 time.sleep(.8)
                 bounds = self.gutter()
                 thumb, painted = self.thumb(f'06-{width}-{zoom_steps}')
                 self.shot(f'06-{width}-{zoom_steps}')
-                self.proof['cases'].append({'window_width': width, 'zoom_key_steps': zoom_steps,
+                self.proof['cases'].append({'window_width': width, 'actual_zoom': expected_zoom, 'zoom_key_steps': zoom_steps,
                                            'gutter_bounds': bounds, 'painted_thumb': painted})
             assert self.recording() == [], 'fixture unexpectedly opened a capture stream'
             self.proof['no_private_capture_streams'] = True
