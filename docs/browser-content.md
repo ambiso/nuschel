@@ -103,3 +103,19 @@ strict same-origin CSP with synthetic images, a real canvas and malicious
 resource canaries. It uses the confined browser wrapper from
 `tests/web_audio.py --prepare-only`; no host clipboard or physical devices are
 needed. Exact native/WASM/browser results are recorded in the handoff once run.
+
+The initial exact Nix codec build and the three native boundary tests passed.
+The generated WASM was 3,741,531 bytes, with 35 initial memory pages and an
+explicit 4,096-page maximum (256 MiB). Its three imports were reviewed in the
+matching generated glue: throwing an error, converting a string and initializing
+an externref table. No network, storage, device, random or clock import was
+present.
+
+The confined Chromium 156 run passed with the actual generated WASM, production
+service and Worker. A known 2×2 image survived encoding into Mumble HTML and
+legacy decoding with all sixteen RGBA bytes unchanged, then painted on a real
+canvas. Plain newlines, Rust syntax colors, legacy inline code and recovery after
+an invalid image passed. Script, CSS and remote-image canaries caused no resource
+requests or CSP violations. Eight production scheduler/reply-boundary tests also
+passed. This is isolated content proof, not yet a stock-server-to-App attachment
+or browser clipboard integration claim, and no mobile browser hardware was used.

@@ -59,6 +59,15 @@ test("cancelling a waiting job preserves the active codec and sends no cancelled
   assert.equal(workers[0].sent.length, 1); service.dispose();
 });
 
+test("cancelling the last job during startup stops the unused codec immediately", async () => {
+  const {service, workers} = fixture(); const abort = new AbortController();
+  const pending = outcome(service.render({source:"cancel before startup"}, {signal:abort.signal}));
+  abort.abort(); assert.match((await pending).error.message, /cancelled/);
+  assert.ok(workers[0].terminated); assert.equal(service.bytes, 0);
+  const next = outcome(service.render({source:"new consumer"})); workers[1].ready(); workers[1].finish();
+  assert.ok((await next).value); service.dispose();
+});
+
 test("a stalled codec times out, frees credits and permits a fresh realm", async () => {
   const {service, workers} = fixture({timeoutMs:25});
   const first = outcome(service.render({source:"stall"})); workers[0].ready();

@@ -97,7 +97,11 @@ export class ContentService {
   expire(job, message) {
     if (job.done) return;
     if (this.active === job) this.stopWorker();
-    this.settle(job, reason(message)); this.dispatch();
+    this.settle(job, reason(message));
+    // Cancellation during startup must not leave a now-unneeded decoder
+    // compiling/loading after its last consumer has gone away.
+    if (!this.active && !this.queue.length) this.stopWorker();
+    this.dispatch();
   }
   rejectAll(message) {
     this.stopWorker();
