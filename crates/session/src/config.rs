@@ -7,7 +7,7 @@ use std::{
     fs,
     io::{self, Write},
     path::{Path, PathBuf},
-    sync::{Arc, Mutex, PoisonError},
+    sync::{Arc, Mutex, MutexGuard, PoisonError},
 };
 use uuid::Uuid;
 
@@ -315,6 +315,14 @@ pub struct ClientSettings {
     /// The web host for share links (`web.example.org`, docs/web.md) when the
     /// server names none; empty: the project's, if it has one.
     pub share_web_host: String,
+    /// The requested voice bitrate (mono Opus, bits per second); a server's
+    /// bandwidth limit can lower it (`nuschl_core::bitrate`). Kept in
+    /// voice-quality.json, never written to settings.json: earlier versions
+    /// set aside a settings file with a key they do not know and start with
+    /// every setting at its default, relay-only included. Read here from
+    /// managed.json (and, once, from a settings.json written by hand).
+    #[serde(skip_serializing)]
+    pub voice_bitrate: u32,
 }
 
 /// Light or dark, or as the desktop prefers.
@@ -408,12 +416,14 @@ impl Default for ClientSettings {
             e2ee_direct_messages: true,
             key_transparency: Default::default(),
             share_web_host: String::new(),
+            voice_bitrate: nuschl_core::audio::DEFAULT_VOICE_BITRATE,
         }
     }
 }
 impl ClientSettings {
     pub fn sanitized(mut self) -> Self {
         self.audio = self.audio.sanitized();
+        self.voice_bitrate = nuschl_core::bitrate::requested_voice_bitrate(self.voice_bitrate);
         self.appearance = self.appearance.sanitized();
         self.user_volumes
             .retain(|hash, volume| hash.len() <= 128 && volume.is_finite());
@@ -692,6 +702,8 @@ impl ManagedSettings {
         let Ok(Value::Object(mut map)) = serde_json::to_value(&settings) else {
             return settings;
         };
+        // Not serialized (see the field): carried over unless managed.
+        map.insert(VOICE_BITRATE.into(), settings.voice_bitrate.into());
         merge(&mut map, &self.layer);
         ClientSettings::deserialize(&Value::Object(map)).map_or(settings, ClientSettings::sanitized)
     }
@@ -835,6 +847,31 @@ pub struct Profile {
     kept: Arc<Mutex<BTreeSet<&'static str>>>,
     /// What [`Profile::open`] moved from earlier versions' places.
     migration: Arc<Migration>,
+    /// What voice-quality.json held when last read or written. Saving other
+    /// settings writes it only when the bitrate changed from this, and never
+    /// over a file it could not read (a later version's survives).
+    voice_quality: Arc<Mutex<VoiceQuality>>,
+}
+
+/// voice-quality.json as this profile last saw it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum VoiceQuality {
+    #[default]
+    Absent,
+    Saved(u32),
+    /// Unreadable, malformed or from a later version: kept until the user
+    /// chooses a bitrate (`Profile::save_voice_bitrate`).
+    Unreadable,
+}
+
+impl VoiceQuality {
+    fn of(read: &io::Result<Option<u32>>) -> Self {
+        match read {
+            Ok(Some(bitrate)) => Self::Saved(*bitrate),
+            Ok(None) => Self::Absent,
+            Err(_) => Self::Unreadable,
+        }
+    }
 }
 
 const HISTORY_FILE: &str = crate::layout::HISTORY_FILE;
@@ -842,6 +879,21 @@ const SETTINGS_FILE: &str = "settings.json";
 const SERVERS_FILE: &str = "servers.json";
 /// Written by Home Manager or an administrator; Nuschl only reads it.
 const MANAGED_FILE: &str = "managed.json";
+/// Voice preferences earlier versions do not know (see
+/// `ClientSettings::voice_bitrate`); they never read it.
+const VOICE_QUALITY_FILE: &str = "voice-quality.json";
+const VOICE_QUALITY_VERSION: u32 = 1;
+const MAX_VOICE_QUALITY_FILE: u64 = 4096;
+/// The settings key, in managed.json.
+const VOICE_BITRATE: &str = "voice_bitrate";
+
+/// voice-quality.json.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct VoiceQualityFile {
+    version: u32,
+    voice_bitrate: u32,
+}
 /// In the cache folder: the channel trees, by bookmark id.
 const CHANNELS_FILE: &str = "channels.json";
 /// In the cache folder: the server icons and when each was looked for.
@@ -1142,6 +1194,7 @@ impl Profile {
             system_managed,
             kept: Default::default(),
             migration: Default::default(),
+            voice_quality: Default::default(),
         };
         let (places, migration) = crate::layout::migrate(&profile.layout, &profile);
         profile.places = places;
@@ -1202,10 +1255,24 @@ impl Profile {
             }
         };
         let declared = managed.clone().unwrap_or_default();
-        let (settings, managed_settings) = self.load_settings(&declared).unwrap_or_else(|error| {
-            problems.push(self.set_aside(SETTINGS_FILE, &error, "default settings"));
-            declared.settings_over(Map::new())
-        });
+        let (mut settings, managed_settings) =
+            self.load_settings(&declared).unwrap_or_else(|error| {
+                problems.push(self.set_aside(SETTINGS_FILE, &error, "default settings"));
+                declared.settings_over(Map::new())
+            });
+        // Its own file, never set aside: a problem costs only the bitrate.
+        match self.load_voice_quality() {
+            Ok(saved) => {
+                if let Some(bitrate) = saved.filter(|_| !managed_settings.contains(VOICE_BITRATE)) {
+                    settings.voice_bitrate = nuschl_core::bitrate::requested_voice_bitrate(bitrate);
+                }
+            }
+            Err(error) => problems.push(format!(
+                "{VOICE_QUALITY_FILE} could not be read ({error}); the voice bitrate stays at {} \
+                 until you choose one. No other setting is affected.",
+                nuschl_core::bitrate::kbps(settings.voice_bitrate)
+            )),
+        }
         let servers = self.load_servers(managed.as_ref()).unwrap_or_else(|error| {
             problems.push(self.set_aside(SERVERS_FILE, &error, "no saved servers"));
             merge_servers(Vec::new(), &declared.servers)
@@ -1371,7 +1438,96 @@ impl Profile {
         self.write(
             SETTINGS_FILE,
             &serde_json::to_vec_pretty(&managed.unmanaged(settings)?)?,
-        )
+        )?;
+        self.save_voice_quality(settings.voice_bitrate, managed)
+    }
+
+    /// The bitrate voice-quality.json holds, if there is one; an error for
+    /// a file that is unreadable, malformed or from a later version.
+    fn load_voice_quality(&self) -> io::Result<Option<u32>> {
+        let saved = self.read_voice_quality();
+        *self.voice_quality_record() = VoiceQuality::of(&saved);
+        saved
+    }
+
+    /// The record of voice-quality.json. One left poisoned by a panic is not
+    /// trusted: it is reloaded from the file on disk before the poison is
+    /// cleared, so a later version's file stays protected.
+    fn voice_quality_record(&self) -> MutexGuard<'_, VoiceQuality> {
+        match self.voice_quality.lock() {
+            Ok(record) => record,
+            Err(poisoned) => {
+                let mut record = poisoned.into_inner();
+                *record = VoiceQuality::of(&self.read_voice_quality());
+                self.voice_quality.clear_poison();
+                record
+            }
+        }
+    }
+
+    /// voice-quality.json as it is on disk; reading changes nothing.
+    fn read_voice_quality(&self) -> io::Result<Option<u32>> {
+        let path = self.config_dir.join(VOICE_QUALITY_FILE);
+        let saved = match read_bounded(&path, MAX_VOICE_QUALITY_FILE) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+            bytes => bytes.and_then(|bytes| {
+                let file: VoiceQualityFile = serde_json::from_slice(&bytes)?;
+                if file.version == VOICE_QUALITY_VERSION {
+                    Ok(Some(file.voice_bitrate))
+                } else {
+                    Err(io::Error::other(format!(
+                        "version {} is not known",
+                        file.version
+                    )))
+                }
+            }),
+        };
+        saved
+    }
+
+    /// With other settings: write voice-quality.json only when the bitrate
+    /// changed from what it holds (the default without one), and never over a
+    /// file that could not be read. A managed bitrate is not the user's.
+    fn save_voice_quality(&self, bitrate: u32, managed: &ManagedSettings) -> io::Result<()> {
+        let changed = match *self.voice_quality_record() {
+            VoiceQuality::Saved(saved) => bitrate != saved,
+            VoiceQuality::Absent => bitrate != nuschl_core::audio::DEFAULT_VOICE_BITRATE,
+            VoiceQuality::Unreadable => false,
+        };
+        if changed && !managed.contains(VOICE_BITRATE) {
+            self.write_voice_quality(bitrate)
+        } else {
+            Ok(())
+        }
+    }
+
+    /// The user chose `bitrate`: write voice-quality.json, replacing one that
+    /// could not be read, even with the value shown in its place. Refused
+    /// while the bitrate is managed.
+    pub fn save_voice_bitrate(&self, bitrate: u32, managed: &ManagedSettings) -> io::Result<()> {
+        if managed.contains(VOICE_BITRATE) {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "the voice bitrate is set by your system configuration",
+            ));
+        }
+        self.write_voice_quality(nuschl_core::bitrate::requested_voice_bitrate(bitrate))
+    }
+
+    fn write_voice_quality(&self, bitrate: u32) -> io::Result<()> {
+        let file = VoiceQualityFile {
+            version: VOICE_QUALITY_VERSION,
+            voice_bitrate: bitrate,
+        };
+        let bytes = serde_json::to_vec_pretty(&file)?;
+        if bytes.len() as u64 > MAX_VOICE_QUALITY_FILE {
+            return Err(io::Error::other(
+                "voice-quality.json exceeds its size limit",
+            ));
+        }
+        self.write(VOICE_QUALITY_FILE, &bytes)?;
+        *self.voice_quality_record() = VoiceQuality::Saved(bitrate);
+        Ok(())
     }
 
     /// Write a configuration file, unless it holds `bytes` already: files
@@ -2942,5 +3098,269 @@ mod tests {
         let plain = MumbleUrl::parse("mumble://voice.example.org/?version=1.2.0").unwrap();
         assert!(!plain.require_nuschl && plain.certificate_sha256.is_none());
         assert!(MumbleUrl::parse("mumble://h/?fp=sha1:00").is_err());
+    }
+
+    /// The keys settings.json had in Nuschl 0.1.0 (ab843f7a), the published
+    /// release. Its ClientSettings was `deny_unknown_fields`: a file with any
+    /// other key is set aside, and every setting, relay-only included, goes
+    /// back to its default when that version opens it.
+    const RELEASED_KEYS: [&str; 25] = [
+        "appearance",
+        "audio",
+        "auto_reconnect",
+        "check_updates",
+        "enter_sends",
+        "force_tcp",
+        "friend_notifications",
+        "friends",
+        "key_transparency",
+        "local_mutes",
+        "nicknames",
+        "notifications",
+        "recovery_key",
+        "relay_only",
+        "send_typing",
+        "server_icons",
+        "server_volumes",
+        "share_web_host",
+        "shortcuts",
+        "sidebar_width",
+        "sound_effects",
+        "sound_volume",
+        "user_volumes",
+        "wormhole_relay",
+        "wormhole_rendezvous",
+    ];
+    fn settings_keys(profile: &Profile) -> BTreeSet<String> {
+        let saved: Map<String, Value> =
+            serde_json::from_str(&read(profile, "settings.json")).unwrap();
+        saved.keys().cloned().collect()
+    }
+    fn released_keys() -> BTreeSet<String> {
+        RELEASED_KEYS.iter().map(|key| key.to_string()).collect()
+    }
+    fn sidecar(profile: &Profile) -> Option<String> {
+        fs::read_to_string(profile.config_dir.join("voice-quality.json")).ok()
+    }
+
+    #[test]
+    fn a_chosen_voice_bitrate_never_reaches_settings_json() {
+        let (root, profile) = temporary_profile("bitrate-chosen");
+        let loaded = profile.load();
+        let mut settings = loaded.settings.clone();
+        settings.relay_only = true;
+        settings.voice_bitrate = 256_000;
+        profile.save_settings(&settings, &loaded.managed).unwrap();
+        // What the released version reads: only keys it knows, privacy kept.
+        let written = read(&profile, "settings.json");
+        assert!(!written.contains("voice_bitrate"), "{written}");
+        assert_eq!(settings_keys(&profile), released_keys());
+        let old: Map<String, Value> = serde_json::from_str(&written).unwrap();
+        assert_eq!(old["relay_only"], Value::Bool(true));
+        assert_eq!(
+            serde_json::from_str::<Value>(&sidecar(&profile).unwrap()).unwrap(),
+            serde_json::json!({"version": 1, "voice_bitrate": 256_000})
+        );
+        // This version restores both.
+        let reloaded = Profile::open(Some(root.clone())).unwrap().load();
+        assert!(reloaded.problems.is_empty(), "{:?}", reloaded.problems);
+        assert_eq!(reloaded.settings.voice_bitrate, 256_000);
+        assert!(reloaded.settings.relay_only);
+        // Back to the default: still recorded, still out of settings.json.
+        settings.voice_bitrate = 128_000;
+        profile.save_settings(&settings, &loaded.managed).unwrap();
+        assert!(sidecar(&profile).unwrap().contains("128000"));
+        assert!(settings_keys(&profile).is_subset(&released_keys()));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn an_untouched_voice_bitrate_writes_no_sidecar() {
+        let (root, profile) = temporary_profile("bitrate-untouched");
+        let loaded = profile.load();
+        assert_eq!(loaded.settings.voice_bitrate, 128_000);
+        let mut settings = loaded.settings.clone();
+        settings.enter_sends = false;
+        profile.save_settings(&settings, &loaded.managed).unwrap();
+        assert!(sidecar(&profile).is_none());
+        // A saved choice is not rewritten by unrelated changes.
+        settings.voice_bitrate = 96_000;
+        profile.save_settings(&settings, &loaded.managed).unwrap();
+        let path = profile.config_dir.join("voice-quality.json");
+        let written = fs::metadata(&path).unwrap().modified().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        settings.sound_volume = 0.3;
+        profile.save_settings(&settings, &loaded.managed).unwrap();
+        assert_eq!(fs::metadata(&path).unwrap().modified().unwrap(), written);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_broken_or_later_sidecar_costs_only_the_bitrate() {
+        for contents in [
+            "{broken",
+            r#"{"version": 2, "voice_bitrate": 192000, "stereo": true}"#,
+        ] {
+            let (root, profile) = temporary_profile("bitrate-broken");
+            write(&profile, "settings.json", r#"{"relay_only": true}"#);
+            write(&profile, "voice-quality.json", contents);
+            let loaded = profile.load();
+            assert_eq!(loaded.problems.len(), 1, "{:?}", loaded.problems);
+            assert!(
+                loaded.problems[0].starts_with("voice-quality.json could not be read")
+                    && loaded.problems[0].contains("No other setting is affected"),
+                "{:?}",
+                loaded.problems
+            );
+            assert!(loaded.settings.relay_only);
+            assert_eq!(loaded.settings.voice_bitrate, 128_000);
+            assert_eq!(read(&profile, "settings.json"), r#"{"relay_only": true}"#);
+            assert!(!profile.config_dir.join("settings.json.invalid").exists());
+            assert!(
+                !profile
+                    .config_dir
+                    .join("voice-quality.json.invalid")
+                    .exists()
+            );
+            // Unrelated saves, even with another bitrate in memory, keep it.
+            let mut settings = loaded.settings.clone();
+            settings.enter_sends = false;
+            profile.save_settings(&settings, &loaded.managed).unwrap();
+            settings.voice_bitrate = 64_000;
+            profile.save_settings(&settings, &loaded.managed).unwrap();
+            assert_eq!(sidecar(&profile).unwrap(), contents);
+            assert!(settings_keys(&profile).is_subset(&released_keys()));
+            // Choosing the bitrate shown in its place repairs it.
+            profile
+                .save_voice_bitrate(128_000, &loaded.managed)
+                .unwrap();
+            let repaired = profile.load();
+            assert!(repaired.problems.is_empty(), "{:?}", repaired.problems);
+            assert_eq!(repaired.settings.voice_bitrate, 128_000);
+            assert!(repaired.settings.relay_only);
+            std::fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn a_poisoned_voice_quality_record_is_reloaded_and_a_later_file_survives() {
+        let (root, profile) = temporary_profile("bitrate-poison");
+        write(
+            &profile,
+            "voice-quality.json",
+            r#"{"version": 1, "voice_bitrate": 192000}"#,
+        );
+        let loaded = profile.load();
+        assert_eq!(loaded.settings.voice_bitrate, 192_000);
+        // A later version replaces the file meanwhile, and a panic elsewhere
+        // poisons the record, which still says 192k.
+        let later = r#"{"version": 2, "voice_bitrate": 320000, "stereo": true}"#;
+        write(&profile, "voice-quality.json", later);
+        let shared = profile.clone();
+        let poisoner = std::thread::spawn(move || {
+            let _record = shared.voice_quality.lock();
+            panic!("poisoning the voice quality record on purpose");
+        });
+        assert!(poisoner.join().is_err());
+        assert!(profile.voice_quality.is_poisoned());
+        // Not trusted: reloaded from disk, so the later file is kept.
+        let mut settings = loaded.settings.clone();
+        settings.voice_bitrate = 64_000;
+        profile.save_settings(&settings, &loaded.managed).unwrap();
+        assert_eq!(sidecar(&profile).unwrap(), later);
+        assert!(!profile.voice_quality.is_poisoned());
+        assert_eq!(*profile.voice_quality_record(), VoiceQuality::Unreadable);
+        // The user's explicit choice still replaces it.
+        profile.save_voice_bitrate(64_000, &loaded.managed).unwrap();
+        assert!(sidecar(&profile).unwrap().contains("64000"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_managed_voice_bitrate_wins_and_is_never_written() {
+        let (root, profile) = temporary_profile("bitrate-managed");
+        write(
+            &profile,
+            "managed.json",
+            r#"{"settings": {"voice_bitrate": 64000}}"#,
+        );
+        write(
+            &profile,
+            "voice-quality.json",
+            r#"{"version": 1, "voice_bitrate": 192000}"#,
+        );
+        let loaded = profile.load();
+        assert!(loaded.problems.is_empty(), "{:?}", loaded.problems);
+        assert_eq!(loaded.settings.voice_bitrate, 64_000);
+        assert!(loaded.managed.contains("voice_bitrate"));
+        // The user's own choice stays underneath, untouched.
+        let mut settings = loaded.managed.apply(ClientSettings {
+            voice_bitrate: 256_000,
+            ..loaded.settings.clone()
+        });
+        assert_eq!(settings.voice_bitrate, 64_000);
+        settings.enter_sends = false;
+        profile.save_settings(&settings, &loaded.managed).unwrap();
+        assert!(sidecar(&profile).unwrap().contains("192000"));
+        assert!(!read(&profile, "settings.json").contains("voice_bitrate"));
+        assert_eq!(
+            profile
+                .save_voice_bitrate(96_000, &loaded.managed)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        // Another managed key does not reset an unmanaged bitrate.
+        write(
+            &profile,
+            "managed.json",
+            r#"{"settings": {"audio": {"transmit": "push_to_talk"}}}"#,
+        );
+        let loaded = profile.load();
+        assert_eq!(loaded.settings.voice_bitrate, 192_000);
+        assert_eq!(
+            loaded.managed.apply(loaded.settings.clone()).voice_bitrate,
+            192_000
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_hand_written_voice_bitrate_moves_into_the_sidecar() {
+        let (root, profile) = temporary_profile("bitrate-hand");
+        write(&profile, "settings.json", r#"{"voice_bitrate": 96000}"#);
+        let loaded = profile.load();
+        assert!(loaded.problems.is_empty(), "{:?}", loaded.problems);
+        assert_eq!(loaded.settings.voice_bitrate, 96_000);
+        profile
+            .save_settings(&loaded.settings, &loaded.managed)
+            .unwrap();
+        assert!(!read(&profile, "settings.json").contains("voice_bitrate"));
+        assert!(sidecar(&profile).unwrap().contains("96000"));
+        assert_eq!(profile.load().settings.voice_bitrate, 96_000);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn out_of_range_voice_bitrates_are_repaired() {
+        for (value, expected) in [
+            (0_u64, 64_000),
+            (6_000, 64_000),
+            (80_000, 80_000),
+            (384_000, 256_000),
+            (510_000, 256_000),
+        ] {
+            let settings: ClientSettings =
+                serde_json::from_str(&format!(r#"{{"voice_bitrate": {value}}}"#)).unwrap();
+            assert_eq!(settings.sanitized().voice_bitrate, expected, "{value}");
+            let (root, profile) = temporary_profile("bitrate-range");
+            write(
+                &profile,
+                "voice-quality.json",
+                &format!(r#"{{"version": 1, "voice_bitrate": {value}}}"#),
+            );
+            assert_eq!(profile.load().settings.voice_bitrate, expected);
+            std::fs::remove_dir_all(root).unwrap();
+        }
     }
 }
