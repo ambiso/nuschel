@@ -11,7 +11,7 @@ from pathlib import Path
 
 import document_link_regression as fixture
 import welcome_html
-from accessibility import items
+from accessibility import ROLES, Node, items
 from layout_regression import inside
 from local_murmur import eventually
 from mumble_client import Client
@@ -44,11 +44,46 @@ def actions(args, root, shell, application, bot, murmur):
     )
     records = []
 
+    def nodes(parent=application):
+        if parent is application:
+            return items(application)
+        # The common items() helper intentionally returns the entire cache.
+        # Filter actual cached parent references when a dialog/menu is scoped.
+        data = application.bus(
+            "call",
+            application.destination,
+            "/org/a11y/atspi/cache",
+            "org.a11y.atspi.Cache",
+            "GetItems",
+        )[0]
+        parents = {tuple(row[0]): tuple(row[2]) for row in data}
+        wanted = (parent.destination, parent.path)
+        result = []
+        for row in data:
+            current = tuple(row[0])
+            for _ in range(64):
+                if current == wanted:
+                    destination, path = row[0]
+                    result.append(
+                        (
+                            Node(application.bus, destination, path),
+                            ROLES.get(row[7], f"role {row[7]}"),
+                            row[6],
+                            row[9][0],
+                        )
+                    )
+                    break
+                previous = current
+                current = parents.get(current)
+                if current is None or current == previous:
+                    break
+        return result
+
     def named(name, role=None, parent=application):
         return next(
             (
                 node
-                for node, kind, label, _ in items(parent)
+                for node, kind, label, _ in nodes(parent)
                 if label == name and (role is None or kind == role)
             ),
             None,
@@ -136,34 +171,10 @@ def actions(args, root, shell, application, bot, murmur):
         )
         assert inside(node.extents(), viewport()), f"{label} escaped window"
 
-    def cancel_prompt(check_text=False):
+    def cancel_prompt():
         dialog = eventually(
             lambda: named("Input", "dialog"), "Ban action did not open reason prompt"
         )
-        if check_text:
-            reason = eventually(
-                lambda: next(
-                    (
-                        node
-                        for node, role, name, _ in items(dialog)
-                        if role in ("entry", "text") and name.startswith("Ban ")
-                    ),
-                    None,
-                ),
-                "reason input missing",
-            )
-            reason.call("Component", "GrabFocus")
-            shell.type("sample")
-            shell.key("Home")
-            shell.type("A")
-            shell.key("End")
-            shell.type("B")
-            eventually(
-                lambda: (
-                    reason.call("Text", "GetText", "ii", "0", "-1")[0] == "AsampleB"
-                ),
-                "menu navigation stole prompt text editing",
-            )
         eventually(
             lambda: named("Cancel", "push button", dialog), "Cancel missing"
         ).press()
@@ -171,6 +182,51 @@ def actions(args, root, shell, application, bot, murmur):
             lambda: named("Input", "dialog") is None, "Cancel did not dismiss prompt"
         )
         assert target.process.poll() is None, "fixture target was actually moderated"
+
+    def check_prompt_editing():
+        current = open_user()
+        action = control("Set nickname…", current)
+        action.call("Component", "GrabFocus")
+        assert_visible(action, current, "nickname action")
+        shell.click(*point(action))
+        dialog = eventually(lambda: named("Input", "dialog"), "nickname prompt missing")
+        entry = eventually(
+            lambda: next(
+                (
+                    node
+                    for node, role, name, _ in nodes(dialog)
+                    if role in ("entry", "text") and name.startswith("Nickname for ")
+                ),
+                None,
+            ),
+            "nickname input missing",
+        )
+        shell.click(*point(entry))
+        shell.type("sample")
+        shell.key("Home")
+        shell.type("A")
+        shell.key("End")
+        shell.type("B")
+        shell.key("Left")
+        shell.type("X")
+        shell.key("Right")
+        shell.type("Y")
+        eventually(
+            lambda: named("Save", "push button", dialog), "nickname Save missing"
+        ).press()
+        certificate = target.users[target.session]["certificate_hash"]
+        settings = root / "profile/config/settings.json"
+        eventually(
+            lambda: (
+                json.loads(settings.read_text()).get("nicknames", {}).get(certificate)
+                == "AsampleXBY"
+            ),
+            "menu navigation changed native prompt editing or saved the wrong value",
+        )
+        return {
+            "saved_private_nickname": "AsampleXBY",
+            "keys": ["Home", "End", "Left", "Right"],
+        }
 
     def observe_idle():
         frames = args.output / "frames.log"
@@ -232,7 +288,7 @@ def actions(args, root, shell, application, bot, murmur):
             time.sleep(0.3)
             current = open_user()
             entries = [
-                name for _, role, name, _ in items(current) if role == "menu item"
+                name for _, role, name, _ in nodes(current) if role == "menu item"
             ]
             assert len(entries) >= 12, entries
             first = control("Profile and connection", current)
@@ -293,7 +349,7 @@ def actions(args, root, shell, application, bot, murmur):
             shell.move(*point(last))
             shell.screenshot(args.output / f"context-menu-{width}-{zoom}-last.png")
             shell.key("Return")
-            cancel_prompt(check_text=zoom == 200)
+            cancel_prompt()
             record["last_keyboard_activation"] = True
             # Wheel movement plus real pointer activation exercises both ends;
             # focusing a clipped AT-SPI node is not used to fake visibility.
@@ -372,6 +428,7 @@ def actions(args, root, shell, application, bot, murmur):
                 assert named("Copy message", "menu item", current)
                 record["right_edge_message_popup"] = current.extents()
                 close_menu()
+        prompt_editing = check_prompt_editing()
         frames = args.output / "frames.log"
         if frames.exists():
             # Drain the collector's last completed draw without changing its
@@ -408,6 +465,7 @@ def actions(args, root, shell, application, bot, murmur):
             "private_stock_murmur": True,
             "no_actual_moderation": True,
             "normal_chat_control": True,
+            "prompt_editing": prompt_editing,
         }
     finally:
         target.close()
