@@ -1,0 +1,48 @@
+{
+  "format": 1,
+  "date": "2026-11-12",
+  "status": "in_progress",
+  "source": {
+    "source_revision": "c26529d3df26d9d4e23755bc7c3a7907f5055237",
+    "tree_sha256": "5a8bdafd28e757c34e330c45d60a3babd34e5539fbded0231f3bb5cb6a551027",
+    "production_trust_sha256": "d6ad4266f8de5d48b9264944510c9799ff62ec21507c54fc94644e381c99c945",
+    "fixture": false
+  },
+  "fixture_source": {
+    "source_revision": "c26529d3df26d9d4e23755bc7c3a7907f5055237",
+    "fixture_only": true,
+    "changed_files": [
+      "crates/update/update-trust.json"
+    ],
+    "public_trust_sha256": "a866652ffc8405b7d20a4cdaba503a41f73e54d082a6ba6922a8747582776c37",
+    "secret_mode": "0o600",
+    "secret_location": "sibling keys directory, outside both source snapshots; never copied into store or guest",
+    "signer": "/nix/store/li1vj81blzvv9y9kgc9pyh60yvwxzw85-rust_nuschl-update-worker-0.1.0/bin/nuschl-update-sign"
+  },
+  "fixture_cache_equality": {
+    "fixture": {
+      "artifacts": "/nix/store/97byba227lajm6h9q6hbcypiv5c6rvn9-nuschl-windows-deps-x86_64-w64-mingw32-0.1.0",
+      "deps": "/nix/store/n4mvfqv4ny9zhrnfgwkxsxvmlbia3hln-nuschl-windows-deps-x86_64-w64-mingw32-0.1.0.drv",
+      "drv": "/nix/store/ajsg63494l6if6aw96hvz5n3qydfwyql-nuschl-windows-x86_64-w64-mingw32-0.1.0.drv",
+      "out": "/nix/store/931xmnpbj8xw2xl17y19rdyq6z82m6pc-nuschl-windows-x86_64-w64-mingw32-0.1.0"
+    },
+    "production": {
+      "artifacts": "/nix/store/97byba227lajm6h9q6hbcypiv5c6rvn9-nuschl-windows-deps-x86_64-w64-mingw32-0.1.0",
+      "deps": "/nix/store/n4mvfqv4ny9zhrnfgwkxsxvmlbia3hln-nuschl-windows-deps-x86_64-w64-mingw32-0.1.0.drv",
+      "drv": "/nix/store/sccvfcdq7xfb1cprwav41wp61inixj35-nuschl-windows-x86_64-w64-mingw32-0.1.0.drv",
+      "out": "/nix/store/n2zn1yx1d79wvvxs7nkcib7bywas6ff9-nuschl-windows-x86_64-w64-mingw32-0.1.0"
+    }
+  },
+  "gates": {
+    "windows_production_build": "running",
+    "macos_production_build": "pending",
+    "archive_and_notice_checks": "pending",
+    "windows_gui_fixture": "pending"
+  },
+  "limits": [
+    "Not a GitHub workflow or release",
+    "Production public trust remains unenrolled",
+    "Native macOS execution remains untested",
+    "Only explicitly selected existing Windows guest may be used; no host devices or public servers"
+  ]
+}
