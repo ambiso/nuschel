@@ -34,6 +34,15 @@ its remaining work and verification limits until the fix is integrated and its
 relevant checks pass. Keep newly discovered blockers visible even when they are
 outside the current task's scope.
 
+Concurrent coordination (user, 2026-11-12): Claude Code session `nuschel-8e`
+works alongside Codex through `~/.cache/nuschl-coordination/to-claude.md` and
+`to-codex.md`, with an active reply-file watcher. Claude owns the received-audio
+attenuation audit, an independent read-only simplification/correctness review,
+and the separate volume-slider/VAD-meter design lane. Codex owners retain ACLs,
+native spacing/status, NixOS ACME/operator work and queue/integration. Implement
+in isolated jj workspaces with explicit file/function ownership; exchange frozen
+revisions and evidence before integration. This is collaboration, not a handover.
+
 Current integration checkpoint (2026-11-12):
 
 - **Sparse server limits and precise browser refusals are integrated through
@@ -853,8 +862,8 @@ The media worker uses per-speaker adaptive jitter buffers and Opus loss concealm
       and spectral differences. Existing C-component fixtures do not rule out
       a complete-device regression. Keep this separate from the new slider
       taper, preserve existing gain semantics, and do not compensate blindly.
-      Root is auditing history; private runtime comparison is queued with the
-      audio/status UI owner after the current spacing proof.
+      Claude Code owns the independent history audit and matched private worker
+      comparison. Source-only findings do not close the reported regression.
 - [ ] Complete receive/output parity against stock Mumble with independent PCM
       and device proofs before claiming 1:1 quality. The stereo/gain source
       checkpoint preserves native/browser LR and volume; independent native
@@ -1273,8 +1282,8 @@ listed below. Plugin data remains the explicit gap.
       keyboard adjustment, retaining existing saved gain values and limits.
       Percent/readouts and accessible values must describe the actual gain;
       dragging must not cause synchronous disk/IPC work on every pointer event.
-      Keep VAD sensitivity on its own appropriate scale. Queue after current
-      native spacing/status work; not yet implemented.
+      Keep VAD sensitivity on its own appropriate scale. Claude Code owns the
+      independent design/implementation lane; not yet implemented.
 - [ ] Add a live input/activity meter directly above VAD sensitivity (user,
       2026-11-12). Show whether speech opens the actual voice gate; distinguish
       microphone level from a probability-based VAD threshold rather than drawing
@@ -1282,7 +1291,7 @@ listed below. Plugin data remains the explicit gap.
       microphone-test flow, reset stale readings on mute/disconnect/device change,
       and never open the microphone solely by visiting Settings. Bound meter
       update work and verify with private synthetic input, not host capture.
-      Queue alongside the slider work; not yet implemented.
+      Claude Code owns this alongside the slider work; not yet implemented.
 - [ ] Restore desktop rail/footer spacing (user, 2026-11-12): Add-a-server's
       bottom edge currently touches the window, and Settings/mute/deafen have no
       gaps. The rail now has matching top/bottom padding and the compact control
