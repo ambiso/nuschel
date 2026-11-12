@@ -2558,8 +2558,11 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
       Keep protected backups of the private pair locally; do not provision a
       GitHub signing secret. Accept exact-tag local Nix outputs with explicit
       provenance, revalidate actual store products and complete archive/notice
-      hashes before signing and publishing, and require real native Mac proof
-      for the Mac artifact. Key-free CI can build/test or supply that proof.
+      hashes before signing and publishing. The user accepts an experimental Mac
+      artifact without Developer ID/notarization or mandatory native Mac testing:
+      retain local ad-hoc signature, code-page and bundle-integrity checks, and
+      explicitly record native Mac verification as absent unless actually run.
+      Key-free CI can still supply additional build/native verification evidence.
       Preserve the immutable `v0.1.0` tag at `ab843f7a`; its automatic publish
       run was cancelled when the user chose local signing. The separate manual
       test build continues. Local publisher fixtures/review are in progress;
