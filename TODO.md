@@ -839,12 +839,24 @@ The media worker uses per-speaker adaptive jitter buffers and Opus loss concealm
       76.51 dB and formerly silent gain 4 opposing LR→88.53 dB; quiet 66.10 dB and stereo
       regressions pass. 68 native units include allocation-free converter/reference
       correspondence and unchanged exact clocks. Preserve the failing baseline.
-- [ ] Quantify native non-48 kHz SRC versus full-scale clipping placement against
-      stock Mumble. Nuschl retains its existing 48 kHz mix clip before SRC plus a
-      device overshoot guard; stock maps/filters before its final output clip.
-      Compare overload/overshoot/filter ringing with fixed gain at actual device
-      rates, and design fallback-reference correspondence before broadening the
-      clipping boundary. The mono correction does not close this separate gap.
+- [x] Produce independent native receive/output spectrograms and float32 audio:
+      tests/output_spectral.py drives the actual Mixer and PlaybackConverter with
+      identical C libopus packets, then compares C decode/Speex 3 at fixed gain and
+      unfitted clocks. Multiband/transient/speech-like/stereo-music cases at 48/44.1 kHz
+      agree by 127.44–194.26 dB; isolated 44.1 kHz SRC agrees by 145.76–147.64 dB, with
+      bit-exact callback chunk changes. Five negative controls protect measurement
+      sensitivity. Input/codec lossy error is separate; no native TX/network/device
+      listening or full executed-Mumble/perceptual equivalence follows. Actual
+      plots/WAV provenance: docs/reviews/2026-11-12-output-spectral.json.
+- [ ] Correct native non-48 kHz clipping/SRC staging with reviewed fallback-reference
+      correspondence. Actual overload baseline now measures 20.03 dB fixed-gain
+      agreement/max 0.63958 sample error at 44.1 kHz versus C components in stock Mumble
+      filter-before-clip order; matching Nuschl's current order restores 127.26 dB.
+      Nuschl retains its 48 kHz mix clip before SRC plus a device guard. The overall
+      spectral command deliberately exits 1/stock-order gate false; nominal component
+      gates pass. Preserve failed baseline and expand overshoot/ringing, multivoice
+      and private device/reference fixtures before changing the clipping boundary.
+      The mono correction does not close this separate gap.
 
 - [x] Preserve legitimate per-speaker decoded headroom until the final mix.
       Native and browser queues now store raw finite PCM with per-frame gain,

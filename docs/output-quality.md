@@ -637,3 +637,113 @@ flush IPC. In particular, it does not promise immediate suppression of previousl
 queued PCM or concealment. Stream deafen/disconnect behavior and microphone
 consent/startup are untouched. No physical audio, public server, full perceptual
 Mumble-equivalence or general AEC reliability claim follows from these fixtures.
+
+## Spectrograms and measured receive/output artifacts (2026-11-12)
+
+The earlier decoder, jitter/mixer and SRC evidence above consists mainly of
+synthetic fixed-gain sample, tone, impulse and private virtual-sink comparisons.
+It did not include spectrograms or a matched full input→native encoder→network→
+output/listening comparison. The latter remains unproven. New spectral evidence
+uses the frozen receiver source `caff0785`; it does not certify later encoder
+changes or turn synthetic numerical agreement into perceptual equivalence.
+
+![Measured receive/output summary](reviews/2026-11-12-output-spectral/summary.png)
+
+`tests/output_spectral.py` supplies deterministic stereo multiband carriers,
+sharp attacks/decays, harmonic speech-like envelopes and stereo chords/percussion.
+An independent C libopus 1.6.1 encoder creates 150 real 20ms packets per case.
+Those exact packets enter the production `Mixer` and native jitter adapter in
+`tests/native_gain_probe.rs`, compiled against the actual cached Nix codec/jitter
+rlibs. All 83 cached decoder Rust source files and the shared jitter source match
+the frozen current tree. The real Nix media-worker test binary's explicitly
+invoked `live::output_fixture::dump` passes that PCM through the production
+`PlaybackConverter`; its source/fixture bytes are checked against the test
+binary's immutable derivation source. No device/context is constructed.
+
+The independent receive reference is C libopus with stock Mumble's explicit
+phase-inversion-disabled control, followed by C SpeexDSP 1.2.1 quality 3. The
+[source baseline](https://github.com/mumble-voip/mumble/blob/35dce9e4801fe52b2217f0d9f421d17b0aaf3bb0/src/mumble/AudioOutputSpeech.cpp)
+selects those decoder/SRC settings and filters before the final output clip.
+This runs the independent C components, not the full stock Mumble client:
+its jitter, fade, positional, multi-speaker and sound-device paths are not executed.
+
+| Synthetic fixture | Actual native vs C, 48kHz | Actual native vs C, 44.1kHz |
+| --- | ---: | ---: |
+| Multiband | 127.75 dB | 127.44 dB |
+| Transients | 135.61 dB | 134.60 dB |
+| Speech-like | 194.26 dB | 145.90 dB |
+| Stereo music | 133.60 dB | 132.91 dB |
+| Overload, stock clip order | 127.52 dB | **20.03 dB — fails** |
+
+These are fixed-gain sample signal/error ratios, not listening scores or physical
+noise-floor measurements. The particularly high speech-like figure reflects
+near-identical float results. The isolated converter comparison gives the same
+actual Mixer PCM to C Speex and the Rust converter: 48kHz bypass is bit-exact;
+44.1kHz agrees by 145.76–147.64 dB. Whole versus irregular callbacks
+`1,127,511,37,960,256` produce bit-identical native samples for every case/rate.
+
+![Stereo music reference, native output and residual](reviews/2026-11-12-output-spectral/music-44100.png)
+
+Both signals keep the fixed virtual 20ms initial jitter offset and their actual
+SRC filter delay. No correlation search, fitted gain, channel-specific shift,
+phase rotation or time warping is applied. STFTs use Hann 20ms windows/hop 5ms,
+amplitude normalized by `2/sum(window)`, with stated fixed dBFS/bin scales;
+reference/native use −100…0 and residuals use a separate −160…−40 scale. Reports
+also retain absolute residual RMS/max, bandwise residual energy, clipping counts
+and active-bin magnitude errors (reference ≥−70dBFS). Five measurement tests reject
+hidden level/channel/one-sample timing errors and upper-band contamination, reject
+nonfinite PCM, and verify tiny residual/headroom samples survive the WAV format.
+
+### Measured clipping-order gap remains open
+
+At a fixed gain 3, the overload fixture's source remains legal (peak 0.74850), but
+its decoded/gained mix clips. At 44.1kHz, native clip-before-SRC differs from the
+stock-order C component reference by 20.03 dB, maximum sample error 0.63958 and
+active-bin absolute magnitude-error p95 = 11.58 dB. Keeping the same clipping order on
+both sides restores 127.26 dB agreement. This isolates a real staging difference;
+it is not evidence that the Rust SRC itself has poor spectral fidelity.
+
+![Actual overloaded 44.1kHz staging residual](reviews/2026-11-12-output-spectral/overload-44100.png)
+
+The complete measurement command intentionally exits 1:
+`all_component_gates_passed=true`, `all_stock_order_gates_passed=false`. The
+unchanged 35 dB receive/stock-order and 100 dB isolated-SRC gates are numerical
+regressions, not perceptual certification. No production clipping/reference
+boundary changed. A correction must preserve wide intermediate headroom until
+the device-rate clip and define corresponding fallback-reference/timestamp
+behavior; multi-speaker, local effects, mono fold, filter ringing and private
+sink/DSP regressions must accompany it. That work stays in TODO.
+
+### Codec loss is a separate comparison
+
+The original synthetic input versus the C-encoded/C-decoded signal uses only
+`OPUS_GET_LOOKAHEAD`: it returned 312 samples for these Audio fixtures. This CTL
+reports the [total codec delay](https://opus-codec.org/docs/opus_api-1.5/group__opus__encoderctls.html).
+The test does not guess a better alignment or fit away differences. Source versus
+codec signal/error ratios are 6.93 dB multiband, 20.86 dB transients, 12.60 dB
+speech-like and 20.10 dB music for these deliberately demanding synthetic fixtures.
+They include ordinary lossy Opus error, especially upper-band/attack behavior;
+they are neither native encoder measurements nor subjective quality scores.
+
+![Lossy C codec versus original speech-like source](reviews/2026-11-12-output-spectral/speech-codec-loss.png)
+
+The raw corpus, matching packets, float PCM, full plots and IEEE float32 stereo
+WAVs live in `~/.cache/nuschl-output-spectral/final/`. Float WAVs preserve finite
+headroom and quiet residuals without normalizing or adding clipping/PCM16
+quantization. `aligned-source.wav` and `aligned-c-decoded.wav` share the measured
+codec clock; `<rate>-reference.wav` and `<rate>-actual.wav` share the receive/output
+clock. Residual WAVs retain their real level; none is automatically amplified or
+played. No physical capture/output, socket/server, native encoder/DSP input,
+profile, production key or package rebuild was used. Cache usage is approximately
+201 MiB, with no new Cargo target or dependency build.
+
+[The structured report](reviews/2026-11-12-output-spectral.json) records exact
+binary/library/source hashes, compilation/invocation, every band metric and all
+artifact hashes. Reproduce with the recorded Python interpreter (NumPy 2.5.3 /
+Matplotlib 3.11.2), its `measurement_invocation`, and an owned disk TMPDIR /
+MPLCONFIGDIR. Run `python3 tests/output_spectral_test.py` in that environment for
+the five negative controls; `tests/plot_output_spectral.py --evidence DIRECTORY
+--output summary.png` regenerates the compact summary only after verifying the
+actual float-WAV hashes. This evidence expands receive/output characterization;
+full live stock-client, network/loss, hardware and controlled listening parity
+remain separately open.
