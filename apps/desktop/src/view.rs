@@ -210,6 +210,9 @@ fn server_rail(this: &Desktop, selected: Option<usize>, cx: &mut Context<Desktop
             let active = Some(index) == selected;
             let online = server.status == Status::Connected;
             let radius = this.voice_motion.radius(&server.id, active);
+            let tile_id = ElementId::from(format!("server-tile:{}", server.id));
+            let click_id = server.id.clone();
+            let menu_id = server.id.clone();
             let hover_id = server.id.clone();
             let key_id = server.id.clone();
             let drag_id = server.id.clone();
@@ -224,7 +227,7 @@ fn server_rail(this: &Desktop, selected: Option<usize>, cx: &mut Context<Desktop
                 .map(|channel| channel.unread)
                 .sum();
             layout::decorated_slot(px(crate::voice::RAIL_DECORATION_OUTSET))
-                .id(("server-slot", index))
+                .id(format!("server-slot:{}", server.id))
                 .top(px(this.rail.offset(&server.id)))
                 .w_full()
                 .flex()
@@ -244,7 +247,7 @@ fn server_rail(this: &Desktop, selected: Option<usize>, cx: &mut Context<Desktop
                 )
                 .child(
                     div()
-                        .id(("server", index))
+                        .id(tile_id.clone())
                         .role(Role::Button)
                         .tab_index(0)
                         .aria_label({
@@ -288,13 +291,17 @@ fn server_rail(this: &Desktop, selected: Option<usize>, cx: &mut Context<Desktop
                         .text_color(color(WHITE))
                         .font_weight(FontWeight::BOLD)
                         .on_click(cx.listener(move |this, _, window, cx| {
-                            this.browse_server(index, window, cx);
-                            cx.notify();
+                            if let Some(index) = this.client.server_index(&click_id) {
+                                this.browse_server(index, window, cx);
+                                cx.notify();
+                            }
                         }))
                         .on_mouse_down(
                             MouseButton::Right,
                             cx.listener(move |this, event: &MouseDownEvent, _, cx| {
-                                this.open_menu(index, MenuTarget::Server, event.position);
+                                if let Some(index) = this.client.server_index(&menu_id) {
+                                    this.open_menu(index, MenuTarget::Server, event.position);
+                                }
                                 cx.stop_propagation();
                                 cx.notify();
                             }),
@@ -324,8 +331,10 @@ fn server_rail(this: &Desktop, selected: Option<usize>, cx: &mut Context<Desktop
                                 return;
                             }
                             if activation_key(event) {
-                                this.browse_server(index, window, cx);
-                                cx.notify();
+                                if let Some(index) = this.client.server_index(&key_id) {
+                                    this.browse_server(index, window, cx);
+                                    cx.notify();
+                                }
                             }
                         }))
                         .map(|tile| {
@@ -336,7 +345,7 @@ fn server_rail(this: &Desktop, selected: Option<usize>, cx: &mut Context<Desktop
                                 ),
                                 None => tile.child(
                                     text!(theme::initials(&server.name))
-                                        .with_id(("server-name", index)),
+                                        .with_id((tile_id.clone(), "name")),
                                 ),
                             }
                         })
@@ -389,7 +398,7 @@ fn server_rail(this: &Desktop, selected: Option<usize>, cx: &mut Context<Desktop
                         })
                         .map(|tile| {
                             layout::focusable_with_outset(
-                                ("server", index),
+                                tile_id,
                                 tile,
                                 px(crate::voice::RAIL_DECORATION_OUTSET + 2.),
                             )
