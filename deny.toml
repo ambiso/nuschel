@@ -91,20 +91,20 @@ deny = [
     "nuschl-media-worker",
     "nuschl-audio-wasm",
     "nuschl-musicbot",
-  ], reason = "Keep codec processing in the native media worker, separate browser audio worker WASM memory, and music bot under its documented credential exception (SECURITY.md)" },
+  ], reason = "Keep codec processing in the native media worker, separate browser audio worker WASM memory, and credential-free musicbot child roles (SECURITY.md)" },
   { name = "symphonia", wrappers = [
     "nuschl-musicbot",
-  ], reason = "Decoding music files is the music bot's job alone; clients and the server never decode files" },
+  ], reason = "Only the confined musicbot decode child handles music formats; clients and the server never decode files" },
   { name = "rubato", wrappers = [
     "nuschl-musicbot",
-  ], reason = "Resampling music files belongs to the music bot" },
+  ], reason = "Resampling music files belongs to the confined musicbot decode child" },
   { name = "sonora", wrappers = [
     "nuschl-media-worker",
   ], reason = "DSP runs outside the UI and network session" },
   { name = "nnnoiseless", wrappers = [
     "nuschl-media-worker",
     "nuschl-musicbot",
-  ], reason = "Keep speech processing on the media execution path, and in the music bot, which detects speech to duck its music" },
+  ], reason = "Keep speech processing on the media execution path, and in the credential-free musicbot duck child" },
   { name = "sqlx", wrappers = [
     "nuschl-storage",
   ], reason = "SQLx drivers, SQLite FFI, and database credentials are confined to storage" },
