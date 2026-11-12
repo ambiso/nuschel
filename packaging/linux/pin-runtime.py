@@ -18,7 +18,7 @@ args = parser.parse_args()
 spec = importlib.util.spec_from_file_location('pins', Path(__file__).with_name('pin-debian.py'))
 pins = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(pins)
-pins.SEEDS = sorted(set(pins.SEEDS + ['pipewire-bin', 'xvfb', 'xauth', 'mesa-vulkan-drivers',
+pins.SEEDS = sorted(set(pins.SEEDS + ['dash', 'pipewire-bin', 'xvfb', 'xauth', 'mesa-vulkan-drivers',
                                     'dbus-daemon', 'bubblewrap', 'util-linux', 'fontconfig']))
 result = pins.prepare(args.release, args.signature, args.packages, args.keyring, args.gpgv)
 result['scope'] = 'Distro-only integration-test userspace; not redistributed in the application package.'

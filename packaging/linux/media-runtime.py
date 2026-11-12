@@ -1,0 +1,91 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: EUPL-1.2
+"""Prove distro PipeWire public-data requirements using only virtual devices.
+
+The outer namespace contains a private sound server. The tested worker is its
+nested, offline, library-only child, so the server can inspect its own client's
+PID as a normal sound server would. No host audio, GPU, profile or bus is exposed.
+"""
+import argparse
+import hashlib
+import json
+from pathlib import Path
+import subprocess
+import sys
+import time
+
+
+def inside():
+    own = Path('/evidence')
+    runtime = own / 'run'
+    runtime.mkdir(mode=0o700)
+    config = own / 'config/pipewire/pipewire.conf.d'
+    config.mkdir(parents=True)
+    (config / '10-private.conf').write_text('''context.properties = { support.dbus = false }
+context.objects = [
+{ factory = adapter args = { factory.name = support.null-audio-sink node.name = speakers node.description = Speakers media.class = Audio/Sink audio.position = [ FL FR ] object.linger = true } }
+{ factory = adapter args = { factory.name = support.null-audio-sink node.name = microphone node.description = Microphone media.class = Audio/Source/Virtual audio.position = [ MONO ] object.linger = true } }
+]
+''')
+    environment = {'XDG_RUNTIME_DIR': str(runtime), 'XDG_CONFIG_HOME': str(own / 'config')}
+    with (own / 'server.log').open('wb') as log:
+        server = subprocess.Popen(['/usr/bin/pipewire'], stdout=log, stderr=log, env=environment)
+        try:
+            deadline = time.monotonic() + 5
+            while not (runtime / 'pipewire-0').exists():
+                assert server.poll() is None, 'private server exited'
+                assert time.monotonic() < deadline, 'private socket timeout'
+                time.sleep(.05)
+            worker = Path('/stage/usr/lib/nuschl/nuschl-media-worker')
+            command = ['/usr/bin/bwrap', '--unshare-all', '--die-with-parent', '--new-session', '--clearenv',
+                       '--ro-bind', '/usr/lib', '/usr/lib', '--ro-bind', '/usr/lib64', '/usr/lib64',
+                       '--symlink', 'usr/lib', '/lib', '--symlink', 'usr/lib64', '/lib64',
+                       '--proc', '/proc', '--dev', '/dev', '--tmpfs', '/tmp',
+                       '--ro-bind', str(runtime / 'pipewire-0'), '/run/audio/pipewire-0',
+                       '--setenv', 'XDG_RUNTIME_DIR', '/run/audio',
+                       '--setenv', 'NUSCHL_AUDIO_BACKEND', 'pipewire',
+                       '--setenv', 'PIPEWIRE_DEBUG', '3', '--ro-bind', str(worker), '/worker']
+            results = []
+            for name, extra in [('missing', []), ('public-config', ['--ro-bind', '/usr/share/pipewire', '/usr/share/pipewire'])]:
+                result = subprocess.run(command + extra + ['--', '/worker', '--probe-route'],
+                                        capture_output=True, timeout=15, env={})
+                assert len(result.stdout) + len(result.stderr) < 1024 * 1024
+                (own / (name + '.log')).write_bytes(result.stderr)
+                results.append({'case': name, 'exit': result.returncode,
+                                'route': json.loads(result.stdout) if result.returncode == 0 else None,
+                                'stderr_tail': result.stderr.decode(errors='replace')[-2000:]})
+            proof = {'worker_sha256': hashlib.sha256(worker.read_bytes()).hexdigest(), 'cases': results,
+                     'scope': 'Private virtual PipeWire devices; namespace/data admission, not physical audio or capture-quality proof.'}
+            (own / 'proof.json').write_text(json.dumps(proof, indent=2) + '\n')
+            assert results[0]['exit'] != 0 and 'client.conf' in results[0]['stderr_tail']
+            assert results[1]['exit'] == 0, results[1]
+        finally:
+            server.terminate()
+            try:
+                server.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                server.kill()
+                server.wait()
+
+
+def main():
+    if sys.argv[1:] == ['--inside']:
+        inside()
+        return
+    parser = argparse.ArgumentParser(description=__doc__)
+    for name in ('root', 'stage', 'bwrap', 'scratch'):
+        parser.add_argument('--' + name, required=True, type=Path)
+    args = parser.parse_args()
+    args.scratch.mkdir(mode=0o700)  # Refuse to overwrite a failed trial.
+    command = [str(args.bwrap), '--unshare-all', '--die-with-parent', '--new-session', '--clearenv',
+               '--ro-bind', str(args.root / 'usr'), '/usr', '--symlink', 'usr/lib', '/lib',
+               '--symlink', 'usr/lib64', '/lib64', '--proc', '/proc', '--dev', '/dev', '--tmpfs', '/tmp',
+               '--ro-bind', str(args.stage), '/stage', '--bind', str(args.scratch), '/evidence',
+               '--ro-bind', str(Path(__file__).resolve()), '/fixture.py',
+               '--', '/usr/bin/python3', '/fixture.py', '--inside']
+    subprocess.run(command, env={}, timeout=45, check=True)
+    print(str(args.scratch / 'proof.json'))
+
+
+if __name__ == '__main__':
+    main()

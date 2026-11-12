@@ -35,11 +35,12 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ('stage', 'sysroot', 'bwrap', 'prlimit', 'scratch', 'proof'):
         parser.add_argument('--' + name, required=True, type=Path)
+    parser.add_argument('--supervisor', action='store_true', help='also exercise the real UI content supervisor; target root needs bwrap and prlimit')
     args = parser.parse_args()
     args.scratch.mkdir(parents=True, exist_ok=True, mode=0o700)
     records = []
 
-    def run(name, arguments=(), data=b'', expected=0, writable=False):
+    def run(name, arguments=(), data=b'', expected=0, writable=False, supervisor=False):
         binary = args.stage / 'usr/lib/nuschl' / name
         with tempfile.TemporaryDirectory(prefix=name + '-', dir=args.scratch) as own:
             own = Path(own)
@@ -51,7 +52,9 @@ def main():
             if writable:
                 (own / 'data').mkdir(mode=0o700)
                 command += ['--bind', str(own / 'data'), '/data']
-            command += ['--', '/worker', *arguments]
+            if supervisor:
+                command += ['--ro-bind', str(args.stage / 'usr/lib/nuschl'), '/app', '--setenv', 'PATH', '/usr/bin:/bin']
+            command += ['--', '/app/nuschl' if supervisor else '/worker', *arguments]
             with (own / 'stdout').open('wb') as out, (own / 'stderr').open('wb') as err:
                 process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=out, stderr=err,
                                            env={'PATH': '/usr/bin:/bin'})
@@ -121,6 +124,16 @@ def main():
         request = b'NUSUVR2\0' + bytes([tag]) + struct.pack('>I', 1) + bytes(public_size + signature_size) + b'x'
         _, error = run(name, data=request, expected=1)
         assert b'update verification rejected' in error
+    if args.supervisor:
+        rendered, _ = run('nuschl', ['render', '**Nuschl**\n```rust\nlet value = 1;\n```'], supervisor=True)
+        document = json.loads(rendered)
+        assert any(block['kind'] == 'code' for block in document['blocks'])
+        code = ('import os,socket; assert not any(os.path.exists(p) for p in '
+                '("/nix/store","/home","/app","/dev/snd","/dev/dri","/run/user")); '
+                'assert set(os.environ)<={"LC_CTYPE","PWD"}; s=socket.socket(); s.settimeout(.1); '
+                'assert s.connect_ex(("192.0.2.1",9))!=0; print("confined")')
+        output, _ = run('nuschl', ['sandbox-probe', '/usr/bin/python3', '--', '-c', code], supervisor=True)
+        assert output.strip() == b'confined'
     proof = {'schema': 1, 'stage': str(args.stage), 'sysroot': str(args.sysroot),
              'stage_build_info_sha256': hashlib.sha256((args.stage / 'usr/share/nuschl/build-info.json').read_bytes()).hexdigest(),
              'namespace_canaries': 'passed', 'programs': records,

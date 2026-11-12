@@ -28,7 +28,7 @@ DEPENDS = ('bubblewrap, util-linux, desktop-file-utils, hicolor-icon-theme, '
            'libxkbcommon-x11-0, libwayland-client0, libwayland-cursor0, '
            'libvulkan1, libgl1, libegl1, libx11-6, libxcursor1, libxi6, '
            'libxrandr2, libxcb1, libasound2t64 | libasound2, '
-           'libpipewire-0.3-0t64 | libpipewire-0.3-0, libspa-0.2-modules, libpulse0')
+           'libpipewire-0.3-0t64 | libpipewire-0.3-0, pipewire-bin, libpipewire-0.3-modules, libspa-0.2-modules, libpulse0')
 
 
 def version(value):

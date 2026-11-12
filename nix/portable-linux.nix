@@ -11,6 +11,7 @@
   revision ? null,
   version ? "0.1.0",
 }:
+assert pkgs.lib.assertMsg (pkgs.stdenv.hostPlatform.system == "x86_64-linux") "The signed native sysroot currently targets amd64 Linux only";
 let
   inherit (pkgs) lib;
   pins = builtins.fromJSON (builtins.readFile ../packaging/linux/debian/sysroot-lock.json);
