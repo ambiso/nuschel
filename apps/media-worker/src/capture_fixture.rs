@@ -38,14 +38,15 @@ fn dump() {
     let mut metadata = Vec::new();
     while cursor < frames {
         let count = chunks[index % chunks.len()].min(frames - cursor);
-        // Frozen baseline callback stamps raw device capture time directly.
+        // Same capture-time helper as the actual input callback.
         let capture_time = 1_000_000_000 + cursor as u64 * 1_000_000_000 / u64::from(rate);
+        let represented = converter.capture_time(capture_time);
         let begin = Instant::now();
         let generated = converter.push(
             &source[cursor * channels..(cursor + count) * channels],
             &mut ring,
         );
-        metadata.push(serde_json::json!({"device_start":cursor,"device_frames":count,"queued":generated,"capture_time_ns":capture_time,"callback_ns":begin.elapsed().as_nanos()}));
+        metadata.push(serde_json::json!({"device_start":cursor,"device_frames":count,"queued":generated,"raw_capture_time_ns":capture_time,"capture_time_ns":represented,"callback_ns":begin.elapsed().as_nanos()}));
         cursor += count;
         index += 1;
     }

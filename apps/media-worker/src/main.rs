@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: EUPL-1.2
 mod adaptive;
+mod capture;
 mod capture_queue;
 mod dsp;
 mod encoder;

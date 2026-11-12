@@ -6,6 +6,7 @@
 //! mixes, cancels echo, encodes and talks to the supervisor.
 use crate::{
     adaptive::{Controller, WINDOW},
+    capture::CaptureConverter,
     capture_queue::CaptureQueue,
     dsp::{CapturePipeline, FRAME, RATE},
     mixer::{Mixer, Voice},
@@ -1273,7 +1274,7 @@ where
                 let latency = timestamp
                     .callback
                     .saturating_duration_since(timestamp.capture);
-                stamper.anchor(clock.now_shifted(latency, Duration::ZERO));
+                stamper.anchor(converter.capture_time(clock.now_shifted(latency, Duration::ZERO)));
                 stamper.advance(converter.push(data, &mut ring));
             },
             error_callback(tx),
@@ -1427,61 +1428,6 @@ where
             None,
         )
         .map_err(|error| error.to_string())
-}
-
-/// Device-rate, multi-channel capture to 48 kHz mono. Runs on the device
-/// thread: it must not lock, allocate or block (see the tests).
-struct CaptureConverter {
-    channels: usize,
-    rate: u32,
-    previous: f32,
-    accumulator: u64,
-}
-
-impl CaptureConverter {
-    fn new(channels: usize, rate: u32) -> Self {
-        Self {
-            channels,
-            rate,
-            previous: 0.,
-            accumulator: 0,
-        }
-    }
-
-    /// Convert and queue; returns the 48 kHz samples actually queued.
-    fn push<T>(&mut self, data: &[T], ring: &mut Producer<f32>) -> u64
-    where
-        T: SizedSample,
-        f32: FromSample<T>,
-    {
-        let mut pushed = 0;
-        for chunk in data.chunks_exact(self.channels) {
-            let sample = chunk
-                .iter()
-                .map(|value| f32::from_sample(*value))
-                .sum::<f32>()
-                / self.channels as f32;
-            let sample = if sample.is_finite() {
-                sample.clamp(-1., 1.)
-            } else {
-                0.
-            };
-            self.accumulator += u64::from(RATE);
-            while self.accumulator >= u64::from(self.rate) {
-                self.accumulator -= u64::from(self.rate);
-                let fraction = 1. - self.accumulator as f32 / RATE as f32;
-                // A full ring means the worker stalled; dropping is better than blocking.
-                if ring
-                    .push(self.previous + (sample - self.previous) * fraction)
-                    .is_ok()
-                {
-                    pushed += 1;
-                }
-            }
-            self.previous = sample;
-        }
-        pushed
-    }
 }
 
 /// Resample the mixed 48 kHz playback ring to the device. Underruns play silence.
