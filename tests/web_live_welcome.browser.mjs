@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: EUPL-1.2
-// No widget/state injection: real App, SDK, Murmur text, worker and native MathML.
+// Real App/SDK worker with an owned TLS/protobuf fixture; no widget/state injection.
 import assert from "node:assert/strict";
 import {createServer} from "node:http";
 import {createConnection} from "node:net";
