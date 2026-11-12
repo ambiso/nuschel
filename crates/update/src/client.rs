@@ -452,6 +452,43 @@ mod tests {
     }
 
     #[test]
+    fn same_version_metadata_refresh_advances_state_without_bypassing_clock_or_rollback() {
+        const NOW: u64 = 1_800_000_000;
+        let directory = tempfile::tempdir().unwrap();
+        let state = directory.path().join("refresh-state.json");
+        let raw = |released, expires| {
+            serde_json::to_vec(&serde_json::json!({
+                "format": 2, "algorithm": crate::trust::ALGORITHM_NAME,
+                "version": "0.1.0", "released": released, "expires": expires,
+                "platforms": {"windows-x86_64": [{"path": "nuschl.exe",
+                    "url": "https://example.invalid/v0.1.0/nuschl.exe",
+                    "sha256": "ab".repeat(32), "size": 11}]}
+            }))
+            .unwrap()
+        };
+        let original = crate::manifest::parse(&raw(NOW - 100, NOW + 100), NOW).unwrap();
+        let renewed_bytes = raw(NOW, NOW + 86400);
+        let renewed = crate::manifest::parse(&renewed_bytes, NOW).unwrap();
+        assert_eq!(original.platforms, renewed.platforms);
+        remember(&state, &original).unwrap();
+        remember(&state, &renewed).unwrap();
+        let seen: Seen = serde_json::from_slice(&fs::read(&state).unwrap()).unwrap();
+        assert_eq!(seen.version.to_string(), "0.1.0");
+        assert_eq!(seen.released, NOW);
+        assert!(!is_newer(&renewed.version, &original.version));
+        assert!(matches!(remember(&state, &original), Err(Error::Stale(_))));
+        assert!(matches!(
+            crate::manifest::parse(&renewed_bytes, NOW + 86400),
+            Err(Error::Expired)
+        ));
+        assert!(matches!(
+            crate::manifest::parse(&renewed_bytes, NOW - 301),
+            Err(Error::Manifest(_))
+        ));
+        assert!(crate::manifest::parse(&renewed_bytes, NOW - 300).is_ok());
+    }
+
+    #[test]
     fn expiry_is_rechecked_before_network_and_before_installation() {
         let (root, files) = installation();
         let update = Update {
