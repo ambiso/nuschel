@@ -14,7 +14,7 @@ worker or trust root. There is no minisign fallback. Production accepts only
 `crates/update/update-trust.json` compiled into the program. On 2026-11-12 the
 dedicated production public pair was enrolled with key ID
 `dbc40ac478b51573eaebebb0a40532bec7cf2a87282a98ae08f1a25ee5b42535`.
-This public-only source enrollment does not provision or verify a CI signing secret.
+This public-only source enrollment does not publish a release or establish private-key backup safety.
 Earlier fixture/audit results used unenrolled or temporary-public-key sources;
 their historical scope is unchanged.
 
@@ -62,16 +62,13 @@ If public-file creation fails after a valid new secret has been saved, the
 secret is retained; use `public-key` to recover its public half. The tool never
 silently regenerates or removes a saved key.
 
-The new repository Actions secret name is `UPDATE_HYBRID_SIGNING_KEY`. Its exact
-value is the complete UTF-8 private JSON file, including both independent 32-byte
-seeds as lowercase 64-character hex strings. It is a different format and secret
-name from `UPDATE_SIGNING_KEY` (minisign). Provision it through an authorized
-GitHub secret UI/credential flow after matching it to the enrolled public file;
-the tool does not read/write GitHub secrets or print the file's private values.
-CI must refuse publication when the secret is absent or its derived public pair
-does not match the built-in trust store. A CI host holding both seeds remains a
-common authority; hybrid signatures do not protect against compromise of that
-host or deliberate misuse of both private keys.
+The long-lived private pair stays local. Do not provision it as a GitHub Actions
+secret. Read-only CI may build and verify artifacts, including native Apple static
+checks, but cannot sign or publish. The explicit local publisher matches the
+private pair to tagged embedded public trust, signs exact bytes and verifies both
+algorithms before draft-first publication. See [runnable local release commands](../../docs/local-release.md).
+The local signing machine remains a common authority holding both seeds; hybrid
+signatures do not protect against its compromise or deliberate misuse of both keys.
 
 ## Format and provider review
 
@@ -118,7 +115,7 @@ nix run --cores 2 --max-jobs 2 .#update-signer -- verify \
 `sign` refuses an existing output and requires the private pair to match an
 explicitly enrolled public pair. It signs exact bounded raw bytes, including
 whitespace. `verify` also checks strict manifest v2 semantics and expiry. The
-release helper uses both operations; it never generates/enrolls a key. The secret
+release helper uses both operations; it never generates/enrolls a key. The private key
 file must be in an operator-controlled directory; on Windows protect that
 directory with appropriate ACLs (Unix mode 0600 is not a Windows ACL policy).
 
@@ -166,7 +163,7 @@ Only each engine's own signature is sent to it. The transcript necessarily
 contains the full **public** pair, not the other signature or any private seed.
 A compromised verifier can fabricate its own reply; it cannot substitute for the
 other verifier's success. The parent, SHA-256/transcript code, OS/kernel, compiler,
-shared dependency defects and a CI signer holding both seeds remain common
+shared dependency defects and the local signing machine holding both seeds remain common
 failure boundaries. This is not a claim of protection against two compromised
 engines or a compromised application installation.
 
@@ -231,15 +228,17 @@ changed. Later integrated artifacts still need their final distribution checks.
 
 Downloadable CI payloads first run `release/check-notices.py`; failed gates still
 upload diagnostic logs, while binary/static-web payloads remain blocked.
-Publication reuses independent SHA-named build artifacts and checks repository,
-commit, run ID, platform, version, hashes, safe tar members and mandatory worker
-presence before accessing a signing secret. Earlier successful attempts from the
-same run/commit are allowed; future/foreign attempts fail. All three platform jobs must pass. Linux's validated build evidence and static
-web tar are included as release assets: they are Nix references and a deployable
-web bundle, never a portable Linux binary archive. Their metadata/hashes/lock file
-are checked before copying; the static bundle also requires the full runtime
-notice inventory at `licenses/nuschl/THIRD-PARTY.json`, covering all three WASM
-roots and actual JS/asset terms. Missing/incomplete bundled notices block signing. The scoped attribution pipeline now recovers actual upstream/native/asset terms,
+Publication uses exact tagged local Nix products with derivation/output/NAR receipts;
+key-free CI native-Mac artifacts are optional proof inputs, accepted only after
+actual run/job/artifact validation and exact local-tree comparison. The private
+signing pair stays local. The draft-first publisher verifies both signatures,
+all payloads, local Mac structural/ad-hoc integrity, notices, checksums and
+uploaded digests before finalization. Native Apple verification is optional;
+without it the signed release metadata explicitly records
+`native_macos_verified=false`, not Apple/Gatekeeper acceptance. Linux
+references and a deployable static web bundle are included without claiming a
+portable Linux binary. See [local commands and native-Mac gates](../../docs/local-release.md).
+Missing/incomplete bundled notices block signing. The scoped attribution pipeline now recovers actual upstream/native/asset terms,
 losslessly compacts them, preserves patched corresponding source and verifies
 scope/roots/features/body hashes before upload or signing. The actual Nix
 metadata bundles pass with zero unresolved entries; see

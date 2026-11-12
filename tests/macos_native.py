@@ -125,13 +125,13 @@ class NativeTools:
         return text
 
 
-def verify_native(app, output, report):
+def verify_native(app, output, report, *, local=False):
     tools = NativeTools(output, report)
-    require(os.environ.get("RUNNER_OS") == "macOS" and os.environ.get("RUNNER_ARCH") == "ARM64",
+    require(local or os.environ.get("RUNNER_OS") == "macOS" and os.environ.get("RUNNER_ARCH") == "ARM64",
             "expected the explicitly selected hosted ARM64 macOS runner")
     report["host"] = {"platform": sys.platform, "machine": platform.machine(),
-                       "macos": platform.mac_ver()[0], "runner_os": os.environ["RUNNER_OS"],
-                       "runner_arch": os.environ["RUNNER_ARCH"], "python": sys.version.split()[0]}
+                       "macos": platform.mac_ver()[0], "runner_os": os.environ.get("RUNNER_OS"),
+                       "runner_arch": os.environ.get("RUNNER_ARCH"), "python": sys.version.split()[0]}
     tools.run("/usr/bin/codesign", "--verify", "--strict", "--deep", "--all-architectures", "--verbose=4", str(app))
     for program in PROGRAMS:
         binary = app / "Contents/MacOS" / program

@@ -4,7 +4,9 @@ Source audit: 2026-11-11, baseline `15a733bf`. This is a release checklist,
 not a new platform test result. The original baseline used minisign; the current hybrid runtime is described in
 [the update worker README](../apps/update-worker/README.md), with Linux actual-worker
 proof and explicit remaining platform/enrollment gates. Recheck the final integrated
-commit and record the actual CI run before publishing.
+commit and record actual artifact/local-integrity evidence before publishing; native
+Apple verification is optional and must be reported honestly. Local Nix
+products are accepted with exact derivation/NAR/source receipts; CI is optional.
 
 The chosen first release is the normal `0.1.0` release, described as an early
 preview. It is not a separate prerelease update channel. No tag, release or CI
@@ -41,16 +43,18 @@ permissions, playback and self-update. Mark the Mac artifact untested/experiment
   key ID `dbc40ac478b51573eaebebb0a40532bec7cf2a87282a98ae08f1a25ee5b42535`.
   This is public-only enrollment; historical fixture results remain scoped to
   their recorded trust/source snapshots. No legacy-key fallback remains.
-- [ ] Retain protected private-key backups and provision/verify the matching
-  `UPDATE_HYBRID_SIGNING_KEY` CI secret using the reviewed tool. Public source
-  enrollment does not verify secret availability or authorize a release by itself.
+- [ ] Retain protected local private-key backups and run the reviewed [local
+  prepare/sign/publish procedure](local-release.md). No long-lived signing key
+  belongs in GitHub Actions; CI verification remains key-free. Public enrollment
+  does not establish artifact/native-Mac acceptance or publication readiness.
 - [x] Choose `0.1.0` as the normal early-preview version. The eventual tag must be
   `v0.1.0`, matching the workspace and package versions; this decision has not
   created that tag.
-- [ ] Run the reusable build workflow at the intended commit and retain all three
-  independent platform artifacts and logs. No successful GitHub build is claimed
-  by this source review. A failed cross job must not hide another platform's
-  downloadable CI artifact; publication must require all intended jobs to pass.
+- [ ] Prepare and validate all intended exact-tag local Nix products and mandatory
+  local Mac structural/ad-hoc integrity. Native Apple/CI verification is optional
+  additional evidence; mark Mac experimental and not natively verified when absent. The
+  reusable build workflow remains optional artifact/verification infrastructure;
+  local receipts must not claim invented CI provenance.
 - [x] Implement scoped, fail-closed notice packaging and actual source evidence,
   including two updater engines, native runtimes, explicit curated MPL/source
   decisions, the math font/syntax/theme data and actual emitted web owners. The

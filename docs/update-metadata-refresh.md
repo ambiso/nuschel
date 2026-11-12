@@ -5,7 +5,8 @@ authenticated release without rebuilding or fetching binaries. It writes a new
 review directory only. It never uploads assets, creates/enrolls keys, edits client
 state, changes a clock, or schedules a signing job. Production public trust was
 enrolled on 2026-11-12; these instructions do not authorize key rotation or
-publication, and do not establish matching CI secret availability. Initial publication uses the normal release preparation, not renewal
+publication or local private-key availability. Long-lived signing keys stay local;
+no GitHub signing secret is required. Initial publication uses the normal release preparation, not renewal
 of a legacy/minisign document.
 
 `released` is the signed **metadata issuance time**, also used by clients for

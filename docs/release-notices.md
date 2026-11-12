@@ -113,4 +113,5 @@ microphone, camera, audio output, clipboard or public Mumble server.
 Production trust update (2026-11-12): the dedicated public pair is now enrolled
 in `crates/update/update-trust.json`. Statements above about absent enrollment
 describe the recorded historical work, not the current source trust store.
-This does not establish CI secret availability, a remote release or new platform proof.
+This does not establish local private-key availability, a remote release or new
+platform proof. Signing remains local; GitHub CI has no long-lived signing key.
