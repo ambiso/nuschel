@@ -60,6 +60,14 @@ checkpoints. A background filesystem watcher alone does not advance a session.
 
 Current integration checkpoint (2026-11-12):
 
+- **Local SQLite history uses a smaller page cache (`9157817a`, merged in
+  `d68c065d`).** Each history connection sets `cache_size=-512`; server databases,
+  imports, schema and SQLite temporary/mmap defaults are unchanged. The preserved
+  merge passes all 24 storage tests with immutable Murmur fixtures; the existing
+  PostgreSQL-only test remains ignored. Separate measurements saved roughly
+  1.3–1.6 MiB private dirty memory with a small search-median tradeoff. This is a
+  suggested SQLite page-cache budget, not a hard bound on worker memory or sort
+  temporary storage. Evidence: `~/.cache/nuschl-memory-staging/handoff.json`.
 - **Desktop rendering and diagnostics are integrated through `1f2b3b38`.**
   Preserved font/Markdown and scrollbar histories combine cleanly with the rail
   badge paint-order correction and receive-side profile statistics. Native default,
@@ -739,6 +747,23 @@ Later (reported):
       state; retry mutations only with safe idempotency/reconciliation. Test
       injected panics, repeated startup/request failures, stalled teardown,
       recovery after the cause clears and isolation from healthy worker roles.
+      Review found native Media/Transfer drop paths abort child-owning tasks
+      before confirmed reaping; replacement and resource credit must wait for
+      actual exit. Proposed crypto-idle code is held: `Ok(Err(wait))` and a final
+      teardown timeout cannot release containment/credit or authorize a restart.
+      The common lifecycle core is allocated separately from caller adoption.
+      Also cover storage cancellation poisoning/operator-lock restart races,
+      inherited-FD auditing, Windows spawn/contain ordering and the desktop math
+      helper's bare-name fallback; preserve fail-closed executable discovery.
+- [ ] Preserve browser selection/copy blank lines between Markdown blocks.
+      Geometry is correct, but empty spacer elements lose those newlines in
+      DOM selection. A scoped fix must preserve exact selected newlines and
+      source edges, bounded text-node counts and existing layout. Correct the
+      welcome fixture using exact selection plus geometry rather than weakening
+      the newline assertion; the Markdown owner is implementing this separately.
+- [ ] Diagnose `tests/web_voice_ui.mjs`'s "Enable sound" timeout: the receiver
+      toggles deafen twice. It reproduces on both the existing baseline and the
+      processing-display candidate; neither fixture failure proves an AEC fix.
 - [ ] Integrate `andir/nuschl`'s `musicbot` branch (user, 2026-11-12), fetched
       at `c9005e31`: Subsonic playback/queue, browser controls, listener
       subscriptions, NixOS service and private integration tests. Preserve
@@ -2690,6 +2715,10 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
       Nix. Preserve credential-free content/media roles inside Flatpak; a manifest
       around the current nested bubblewrap launcher is insufficient. The Flatpak
       owner is inspecting exact signed Freedesktop 26.08 runtime compatibility.
+      A pinned x86_64 bundle now assembles and all nine ELF dependency checks plus
+      `--version` pass without `/nix/store`; this is not yet an install/GUI/audio
+      or worker-confinement result. The portal launcher and real-portal failure
+      matrix remain shipping gates (`~/.cache/nuschl-flatpak/handoff.json`).
       A parent-owned portal worker manager must retain actual-exit evidence and
       role credit across cancellation, with fixed FD/env/path/network/device
       grants and limits inside the child. Portal/proxy loss is not child-exit
@@ -3012,6 +3041,25 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
           the UI, plus paste/attach encoding/send acknowledgement, without parsing
           in the TLS worker or giving the content worker keys/network/storage.
           Keep plaintext/newlines/code source and image/formula fallback accessible.
+          Frozen foundation `4e6b63fc` passes actual packaged-App desktop/mobile
+          live Markdown and phone IndexedDB reload. Basic failure/retry controls,
+          image sending/viewing and combined integration remain open. Preserve
+          original authenticated source/mode going forward: images already
+          replaced with `[image]` in old browser history cannot be reconstructed.
+    - [ ] Close the source-audited parity gaps before claiming desktop parity:
+          export real SDK unread counts (current badge/jump fixtures inject a
+          field absent from real snapshots); reconnect/backoff and saved-server
+          auto-connect must rejoin muted without reopening capture. Add explicit
+          notification permission, focus/read handling and bounded sounds.
+          Implement per-user volume/local mute, device choice/mic test and stats;
+          VAD/PTT/meter are separate from browser AEC. Honor invite channel paths
+          and in-app `mumble://` links; align Enter/composer settings, navigation
+          and search. Review `navigator.storage.persist()` and Safari eviction.
+          Stable browser identity, negotiated Nuschl history/edits/deletes,
+          moderation/admin, file offers and MLS remain separate protocol work.
+          Plan shared native/browser session logic before extending the reduced
+          browser protocol copy. Current source audit is `7137dfd5`; read-only
+          reconnect/unread allocation plans are underway, not implementations.
   - [x] NixOS module for the web host, share links and tunnel relay
         (`services.nuschl-web`, 2026-11-11: nginx with `enableACME`, optionally a
         subdomain; static files, the landing page, app-link files, the relay over a
