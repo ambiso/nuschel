@@ -385,9 +385,9 @@ The former native `Speaker::extend` and Worklet enqueue clipped each gain-adjust
 speaker before summing. Opposing samples 1.5 and -1.25 consequently became zero
 instead of 0.25. Stock Mumble sums gain-adjusted contributors before its final
 output clip. Both paths now retain raw finite PCM plus bounded per-frame gain,
-multiply and accumulate in f64, then clip the final mix. Native local effects,
-loopback and probe audio also enter that wide sum before the 48 kHz mix boundary;
-the device converter separately guards filter overshoot. Native decoded
+multiply and accumulate in f64. The browser clips its final Worklet mix. Native
+local effects, loopback and probe audio join the wide sum; the correction below
+keeps f64 through its 48 kHz ring and clips after device-rate SRC. Native decoded
 nonfinite values become silence; the Worklet rejects nonfinite chunks. Finite
 f32 extremes times gain≤4 and the existing speaker caps cannot overflow f64.
 No arbitrary amplitude cutoff is imposed on finite decoded headroom.
@@ -548,10 +548,10 @@ at 1/2/6 channels, local effects and maximum-finite opposing headroom. Existing
 exact-rate/chunk/delay/underrun tests remain green. The original private DSP
 suite also passes: echo 46 dB/0% transmitted, double-talk 0.8 dB/100% gate, clipping
 detection and effects isolation/6 dB volume (`mono-dsp-regression.log`).
-This does not establish the broader non-48 kHz SRC/final-clip ordering or full stock-device equivalence:
-Mumble filters before its device-output clip; Nuschl retains its existing 48 kHz
-mix clip before SRC and a separate post-filter device guard. Quantifying that
-staging under overload needs its own reference/fallback design and fixtures.
+That mono checkpoint did not establish non-48 kHz SRC/final-clip ordering or full
+stock-device equivalence: it retained the old 48 kHz mix clip before SRC. The
+spectral investigation and subsequent device/fallback correction below measure
+and address that staging difference. Full stock-device equivalence remains open.
 
 ## Native encoded-packet gain baseline (2026-11-12)
 
@@ -694,7 +694,7 @@ and active-bin magnitude errors (reference ≥−70dBFS). Five measurement tests
 hidden level/channel/one-sample timing errors and upper-band contamination, reject
 nonfinite PCM, and verify tiny residual/headroom samples survive the WAV format.
 
-### Measured clipping-order gap remains open
+### Frozen pre-correction clipping-order failure
 
 At a fixed gain 3, the overload fixture's source remains legal (peak 0.74850), but
 its decoded/gained mix clips. At 44.1kHz, native clip-before-SRC differs from the
@@ -708,11 +708,10 @@ it is not evidence that the Rust SRC itself has poor spectral fidelity.
 The complete measurement command intentionally exits 1:
 `all_component_gates_passed=true`, `all_stock_order_gates_passed=false`. The
 unchanged 35 dB receive/stock-order and 100 dB isolated-SRC gates are numerical
-regressions, not perceptual certification. No production clipping/reference
-boundary changed. A correction must preserve wide intermediate headroom until
-the device-rate clip and define corresponding fallback-reference/timestamp
-behavior; multi-speaker, local effects, mono fold, filter ringing and private
-sink/DSP regressions must accompany it. That work stays in TODO.
+regressions, not perceptual certification. That measurement checkpoint changed no production clipping/reference boundary.
+It established the need to retain wide headroom until the device-rate clip and
+reconstruct the corresponding fallback reference. The following correction
+addresses that measured defect; the original failed dataset remains unchanged.
 
 ### Codec loss is a separate comparison
 
@@ -747,3 +746,112 @@ the five negative controls; `tests/plot_output_spectral.py --evidence DIRECTORY
 actual float-WAV hashes. This evidence expands receive/output characterization;
 full live stock-client, network/loss, hardware and controlled listening parity
 remain separately open.
+
+## Device-rate clipping and actual fallback reconstruction
+
+The production correction retains f64 voice/local-effect headroom and mono fold
+through the 200 ms playback ring, then clips only after device-rate SRC and mapping.
+The initial pre-SRC failure remains in the preceding report. The new run uses
+identical encoded packet bytes and identical independent C reference WAV bytes
+for all five cases/rates; only the native path changed. At 44.1 kHz, overloaded
+stock-order agreement improves **20.03→127.31 dB**, while nominal cases and 48 kHz
+results retain their earlier agreement. The complete spectral command now exits 0
+with both component and stock-order gates true.
+
+![Actual corrected output, with unchanged failing baseline](reviews/2026-11-12-output-clip-order/summary.png)
+
+The numerical safety guard permits up to 1024 times finite f32::MAX: 128 speakers
+at gain≤4, six sound-effect voices at gain≤1, loopback and the echo probe fit
+inside that budget. Nonfinite internal sums become silence. The f32 FIR receives
+a constant 2^-32 scale; its inverse is applied in f64 before the device clip.
+For the pinned quality 3 filter, the longest forward filter is 288 taps at 48k→8k.
+Conservative absolute bounds 16 for its sinc/window coefficients and 16 for cubic
+interpolation, plus over 10× rounding reserve, give FIR gain<2^20. Thus admitted
+scaled accumulation stays below f32::MAX/4. This is constant representational
+scaling, with no fitted/per-block normalization or ordinary audio level cutoff;
+normal f32 precision is retained. Eight-rate finite-extreme→quiet recovery tests
+check that neither channel's FIR state is poisoned. The ring adds 76,800 bytes;
+its 200 ms duration, speaker limits and encoded/decoded queues do not change.
+
+### Reference follows the heard device samples
+
+The fallback no longer copies consumed 48 kHz source frames. After rendering, it
+reads the actual mapped/clipped/quantized CPAL samples. Mono is duplicated into
+LR; front LR is retained for stereo/surround without averaging in silent speaker
+slots. The existing `ReferenceConverter` reconstructs this device-rate waveform
+to 48 kHz. Its independent accepted/generated rational clocks retain callback phase.
+The callback anchors these reconstructed samples at the actual playback time
+**minus reverse-SRC timestamp delay**; the forward filter delay is already part
+of the output waveform and is not added twice. The stamper advances by buffered
+reconstructed 48 kHz frames. Full sample rings lose whole stereo frames without
+freezing the generation clock; device reopen creates clean forward/reverse state.
+
+`Producer::is_abandoned()` is checked once after audible rendering. When a system
+monitor succeeds, or own AEC is unnecessary, the existing consumer lifecycle
+already drops the fallback reader. The callback then skips all reverse-SRC work
+and leaves that state unadvanced. Audible data is bit-identical with the consumer
+active/absent. No extra startup state, monitor selection or consent switch is
+introduced; capture, encoding, browser audio and IPC are unchanged.
+
+The actual Nix media-worker suite passes 76 tests (seven explicit/old diagnostic
+helpers ignored). New checks cover actual i16 quantization, 1/2/6 channel mapping,
+finite extremes, stereo atomicity/overflow, one-frame rational-clock drift,
+underrun/filter-tail recovery, clean reopen, unused-consumer behavior and zero
+callback allocations. The three relevant ignored helpers were separately invoked.
+Twenty independent C-reference cases at 11.025/44.1/48/96/192 kHz compare actual
+reconstructed fallback PCM to C Speex quality 3 applied to the actual clipped
+device waveform. All pass the 100 dB gate; whole/fragmented device and reference
+samples are bit-identical. C-queried filter latency and independent rational
+accounting match actual reference timestamps to 0 ns in these fixtures.
+
+### AEC and private runtime evidence
+
+A separate controlled room uses C reconstruction of the actual clipped device
+output, a fixed 40 ms direct echo path plus 55/73 ms reflections, and the actual
+production capture/AEC pipeline with noise suppression/AGC disabled. The source
+is the existing deterministic aperiodic `EchoProbe` supplied as a local effect at
+peak 10.8, ensuring real device clipping. Actual fallback reference yields 58.55 dB
+reduction at 48 kHz and 58.19 dB at 44.1 kHz, with 0% transmitted during the measured
+three-second settled window. This is a direct production fallback/AEC proof;
+it does not claim an opened CPAL fallback device or general hardware performance.
+
+The exact final worker also passes the entire original private Pulse suite:
+jitter/loss, system-AEC route and override choices, 46 dB/0% echo, 0.7 dB/100% double
+talk, clipping detection and −25 LUFS/6 dB effects isolation. Separate actual
+negotiated s16le stereo outputs at 22.05/44.1/96 kHz keep carrier errors≤ 0.00349 dB
+and LR separation≥ 72.15 dB. Its private 44.1 kHz **recorded-monitor** AEC run passes
+36 dB/0% sent. Those runtime tests use owned null sinks/loopback only; no host audio,
+physical microphone/speaker, profile or public server is accessed. The older
+non-48 kHz convergence variability and failed trials are retained, not erased by
+this passing run. Windows/macOS runtime, physical/room coverage and controlled
+listening/full stock-client equivalence remain open in TODO.
+
+### Callback cost and reproducibility
+
+Paired three-repeat tests use actual 480-device-frame callbacks and exclude the
+first ten warm-up calls; device audio stays bit-identical with active/absent
+fallback. Median p95 costs in this short same-host run are:
+
+| Device rate | Fallback reader absent | Fallback active |
+| --- | ---: | ---: |
+| 44.1 kHz | 194.26 µs | 324.38 µs |
+| 48 kHz | 2.18 µs | 10.53 µs |
+| 96 kHz | 35.24 µs | 97.80 µs |
+
+The largest active callback in these benchmark trials is 452.12 µs. These are
+component measurements with OS noise, not a hardware deadline or a universal
+performance guarantee. Reconstruction has its own initialized bounded resampler;
+the callback performs no allocation. Final builds used only four cached Nix
+leaf/test/link derivations at 2 cores/2 jobs, 30 seconds per final run, no dependency
+build or Cargo target. Client TMPDIR is disk-backed; daemon build-dir stayed at
+its default. The five-second 8 GiB guard observed at least 22.48 GiB free in `/tmp`.
+Initial trait-import and undersized control-fixture failures are retained.
+
+[The structured correction proof](reviews/2026-11-12-output-clip-order.json)
+records the exact worker/test/source hashes, spectral invocation, C/ref/timestamp
+metrics, runtime logs and cost trials. Full owned evidence is under
+`~/.cache/nuschl-output-clip-order/`. Run `tests/output_reference.py` with the
+recorded test binary, C Speex library, output directory and `--echo --benchmark`;
+run the recorded spectral invocation with `--wide-mixer`. The historical clipped
+probe path remains available to reproduce the preserved failure. Five spectral
+measurement negative controls and nine existing native gain fixtures also pass.

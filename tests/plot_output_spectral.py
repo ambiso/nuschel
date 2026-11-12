@@ -19,12 +19,13 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--evidence", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--baseline", type=Path, help="optional immutable pre-fix evidence; packet/reference bytes must match")
     args = parser.parse_args()
     report = json.loads((args.evidence/"proof.json").read_text())
 
-    def read(relative):
-        raw = (args.evidence/relative).read_bytes()
-        assert hashlib.sha256(raw).hexdigest() == report['artifacts'][relative]['sha256']
+    def read(relative, evidence=None, metadata=None):
+        raw = ((evidence or args.evidence)/relative).read_bytes()
+        assert hashlib.sha256(raw).hexdigest() == (metadata or report)['artifacts'][relative]['sha256']
         assert raw[:4] == b'RIFF' and raw[8:16] == b'WAVEfmt ' and raw[36:40] == b'data'
         assert struct.unpack('<H', raw[20:22])[0] == 3
         return np.frombuffer(raw[44:], dtype='<f4').reshape(-1, 2)
@@ -61,8 +62,19 @@ def main():
     start, end = round(.7*44100), round(.706*44100)
     time = np.arange(start, end)/44.1
     axes[1, 1].plot(time, expected[start:end, 0], label='Filter then clip (C)', linewidth=1)
-    axes[1, 1].plot(time, actual[start:end, 0], label='Clip then filter (native)', linewidth=1, alpha=.8)
-    axes[1, 1].set(title='Measured overload gap · 44.1kHz · left channel', xlabel='Fixed output clock (ms)', ylabel='Sample amplitude', ylim=(-1.1, 1.1))
+    corrected = report.get('wide_pre_src_ring', False)
+    axes[1, 1].plot(time, actual[start:end, 0], label='Filter then clip (native)' if corrected else 'Clip then filter (native)', linewidth=1, alpha=.8)
+    if args.baseline:
+        baseline = json.loads((args.baseline/'proof.json').read_text())
+        assert baseline['artifacts']['overload-staging/packets.bin']['sha256'] == report['artifacts']['overload-staging/packets.bin']['sha256']
+        np.testing.assert_array_equal(read('overload-staging/44100-reference.wav', args.baseline, baseline), expected)
+        old = read('overload-staging/44100-actual.wav', args.baseline, baseline)
+        axes[1, 1].plot(time, old[start:end, 0], label='Before fix (same packets)', linewidth=1, alpha=.7)
+        previous = next(row for row in baseline['cases'] if row['name'] == 'overload-staging')
+        snr = next(row for row in previous['rates'] if row['rate'] == 44100)['stock_clip_order_diagnostic']['fixed_gain_snr_db']
+        axes[1, 0].scatter([len(names)-1], [snr], marker='x', color='red', zorder=5, label='Before fix, 44.1kHz')
+        axes[1, 0].legend(fontsize=8)
+    axes[1, 1].set(title=('Corrected overload' if corrected else 'Measured overload gap')+' · 44.1kHz · left channel', xlabel='Fixed output clock (ms)', ylabel='Sample amplitude', ylim=(-1.1, 1.1))
     axes[1, 1].legend(fontsize=8)
     for ax in axes.flat: ax.grid(alpha=.2)
     fig.suptitle('Native receive/output spectral audit · synthetic/offline · fixed gain\nIdentical-packet implementation error is separate from lossy input/codec error', fontsize=13)

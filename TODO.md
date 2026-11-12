@@ -885,15 +885,25 @@ The media worker uses per-speaker adaptive jitter buffers and Opus loss concealm
       sensitivity. Input/codec lossy error is separate; no native TX/network/device
       listening or full executed-Mumble/perceptual equivalence follows. Actual
       plots/WAV provenance: docs/reviews/2026-11-12-output-spectral.json.
-- [ ] Correct native non-48 kHz clipping/SRC staging with reviewed fallback-reference
-      correspondence. Actual overload baseline now measures 20.03 dB fixed-gain
-      agreement/max 0.63958 sample error at 44.1 kHz versus C components in stock Mumble
-      filter-before-clip order; matching Nuschl's current order restores 127.26 dB.
-      Nuschl retains its 48 kHz mix clip before SRC plus a device guard. The overall
-      spectral command deliberately exits 1/stock-order gate false; nominal component
-      gates pass. Preserve failed baseline and expand overshoot/ringing, multivoice
-      and private device/reference fixtures before changing the clipping boundary.
-      The mono correction does not close this separate gap.
+- [x] Correct the measured native non-48 kHz clipping/SRC defect together with
+      fallback correspondence. Keep f64 mix/mono/FX headroom through the 200 ms
+      ring, fixed bounded binary scaling around f32 SRC, then map/clip the device.
+      Reconstruct actual clipped/quantized front-LR playback to 48 kHz with rational
+      clocks and compensated reverse-filter delay; skip work if its consumer is
+      dropped. Actual identical-packet 44.1 kHz overload improves 20.03→127.31 dB;
+      all stock-order/component gates pass. Native 76 tests, 20 independent C
+      reference/clock cases, mono/i16/overflow/reopen/no-allocation checks pass.
+      Direct fallback plus independent C room yields 58 dB/0% sent; actual private
+      monitor runs pass 46 dB at 48 kHz and 36 dB at 44.1 kHz, 0% sent. Original failed
+      spectral/AEC evidence remains preserved. See docs/output-quality.md and
+      docs/reviews/2026-11-12-output-clip-order.json.
+- [ ] Extend output/AEC validation beyond this synthetic correction: an actual
+      opened CPAL fallback device (current fallback proof directly runs production
+      converter/AEC with an independent C room), physical devices, Windows/macOS
+      runtime, multivoice/room/overload listening and matched full stock-client
+      input→encoder→network→output remain unproven. Short paired callback timings
+      and one passing private 44.1 kHz monitor run do not establish general non-48 kHz
+      AEC reliability; retain earlier failures and all consent/mute queue TODOs.
 
 - [x] Preserve legitimate per-speaker decoded headroom until the final mix.
       Native and browser queues now store raw finite PCM with per-frame gain,

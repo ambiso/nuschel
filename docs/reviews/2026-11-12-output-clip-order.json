@@ -1,0 +1,4306 @@
+{
+  "format": 1,
+  "result": "passed",
+  "source_base": "95a1a27f478f012483f902da87425663ee295f76",
+  "production_head": "8da73bda8c441f6369949cebc63b8aff21cb0279",
+  "implementation": {
+    "playback_ring": "200ms stereo f64; +76800bytes",
+    "finite_budget": "1024*f32MAX (128 speakers*gain4 +6FXvoices +loopback +echo probe)",
+    "filter_binary_scale": "2^-32 before f32 FIR, inverse in f64 before clip; no dynamic normalization",
+    "filter_bound": "Quality3 forward<=288taps, |sinc|<=16 and cubic L1<=16, conservative FIRgain<2^20 including >10x rounding reserve; scaled state <=f32MAX/4",
+    "fallback": "Actual mapped/clipped/quantized CPAL PCM, frontLR or duplicated mono; independent rational reverseSRC back to48k",
+    "fallback_clock": "Playback time minus reverseSRC timestamp_delay; generated48kbuffered frame count, not consumed source frames",
+    "no_unused_reverse_work": "Producer.is_abandoned once/callback after audible render; drop lifecycles inherited unchanged"
+  },
+  "worker": {
+    "path": "/nix/store/9jadmhmvil88scb2m1n8hq833jah0ym0-rust_nuschl-media-worker-0.1.0-linked/bin/nuschl-media-worker",
+    "sha256": "bade7879db1ffb59bba1e3e6db53c89b3b93995c61ae280450472e08b8567893"
+  },
+  "test_binary": {
+    "path": "/nix/store/rf3kapkdak0h3nrq4vv4fxc0ix2c5flf-rust_nuschl-media-worker-0.1.0-test/tests/nuschl-media-worker",
+    "sha256": "d244f15fa2c0643da6ebb4286a8a9646a806b92759f989100acb2148db4fb25f",
+    "immutable_source": "/nix/store/kd808s9a1yg13ym1jgm1ab9a11nhqsgv-source",
+    "production_source_hashes": {
+      "live.rs": "d8475a70c2e1183da564f2f507bee1b0d12e8e6a5bf554f434eca078af57da3d",
+      "mixer.rs": "0b8d2419fe1fc4e5212b4fc09dd6a8067d2ef8d5ae6e36e7a7bb0b20b5a23fa4",
+      "playback.rs": "2d4e5f132010d4b84c34d2695fbee3767c4d77404dbbcc542c1e23cbdf37e56c",
+      "reference.rs": "7eff73b215759165a1ca887e79aee217bca0a94b2d09e1f55a23f197b64cafe6",
+      "output_fixture.rs": "be7acb1260724dddaccd15b8b586cfb14e316f07a4d948a0ba4b0907ccd3f031"
+    }
+  },
+  "native_unit_tests": {
+    "passed": 76,
+    "ignored": 7,
+    "new_ignored_helpers_actually_invoked": [
+      "live::output_fixture::dump",
+      "live::output_fixture::echo_source",
+      "live::output_fixture::fallback_echo"
+    ],
+    "coverage": [
+      "no_callback_allocation",
+      "finite_extremes_then_quiet_recovery_all8rates",
+      "actual_i16_quantization_and_frontLR_vs_mono_mapping",
+      "reference_overflow_stereo_atomicity_and_clock",
+      "consumer_abandonment_no_reverse_work_or_waveform_change",
+      "reopen_no_old_filter_tail_or_reference_phase"
+    ]
+  },
+  "spectral": {
+    "exit_code": 0,
+    "all_component_gates_passed": true,
+    "all_stock_order_gates_passed": true,
+    "all_packets_and_C_reference_WAVs_identical_to_frozen_baseline": true,
+    "baseline_path": "docs/reviews/2026-11-12-output-spectral.json",
+    "baseline_result": "exit1,44.1kHz overload20.0286709556dB; retained unchanged",
+    "cases": [
+      {
+        "name": "multiband",
+        "synthetic": true,
+        "channels": 2,
+        "bitrate": 128000,
+        "application": 2049,
+        "gain": 0.75,
+        "packets": 150,
+        "max_packet_bytes": 320,
+        "lookahead_samples": 312,
+        "source_peak": 0.24949853122234344,
+        "mixer_vs_c_decoder": {
+          "exact_float_match": false,
+          "fixed_gain_snr_db": 127.78451256265623,
+          "max_abs_error": 1.2852251529693604e-07,
+          "rms_error_dbfs": -153.8469650134137,
+          "reference_peak": 0.20284710824489594,
+          "actual_peak": 0.20284710824489594,
+          "actual_clipped_samples": 0,
+          "active_bin_abs_magnitude_error_p95_db": 2.2356516270339502e-05,
+          "bands": [
+            {
+              "hz": [
+                0,
+                300
+              ],
+              "reference_energy": 1.4951377427802266,
+              "residual_energy": 1.37371625311643e-13,
+              "residual_relative_db": -130.3678416818621
+            },
+            {
+              "hz": [
+                300,
+                3400
+              ],
+              "reference_energy": 1.5057847288449553,
+              "residual_energy": 6.556870064312476e-13,
+              "residual_relative_db": -123.610663109028
+            },
+            {
+              "hz": [
+                3400,
+                8000
+              ],
+              "reference_energy": 1.7384519644923808,
+              "residual_energy": 4.590678525873377e-13,
+              "residual_relative_db": -125.7828581387148
+            },
+            {
+              "hz": [
+                8000,
+                16000
+              ],
+              "reference_energy": 2.7731390973890915,
+              "residual_energy": 1.9911039837110126e-13,
+              "residual_relative_db": -131.43877712544236
+            },
+            {
+              "hz": [
+                16000,
+                22050
+              ],
+              "reference_energy": 1.5302292239248454,
+              "residual_energy": 5.862322072617954e-14,
+              "residual_relative_db": -134.16686817103627
+            }
+          ]
+        },
+        "codec_loss_vs_input": {
+          "exact_float_match": false,
+          "fixed_gain_snr_db": 6.928588746148171,
+          "max_abs_error": 0.15053275972604752,
+          "rms_error_dbfs": -30.427034206549216,
+          "reference_peak": 0.24949853122234344,
+          "actual_peak": 0.2704628109931946,
+          "actual_clipped_samples": 0,
+          "active_bin_abs_magnitude_error_p95_db": 13.684030974374629,
+          "bands": [
+            {
+              "hz": [
+                0,
+                300
+              ],
+              "reference_energy": 2.6761219757961268,
+              "residual_energy": 0.008638068132252173,
+              "residual_relative_db": -24.91089279193162
+            },
+            {
+              "hz": [
+                300,
+                3400
+              ],
+              "reference_energy": 2.68049834187317,
+              "residual_energy": 0.0025266090019904893,
+              "residual_relative_db": -30.25677503768263
+            },
+            {
+              "hz": [
+                3400,
+                8000
+              ],
+              "reference_energy": 3.044847807270087,
+              "residual_energy": 0.09320908133799574,
+              "residual_relative_db": -15.141073622499519
+            },
+            {
+              "hz": [
+                8000,
+                16000
+              ],
+              "reference_energy": 4.9892703891079275,
+              "residual_energy": 0.37309985685640806,
+              "residual_relative_db": -11.26211958364019
+            },
+            {
+              "hz": [
+                16000,
+                22050
+              ],
+              "reference_energy": 2.6780397153584508,
+              "residual_energy": 2.7825846219491046,
+              "residual_relative_db": 0.16631367341265457
+            }
+          ]
+        },
+        "rates": [
+          {
+            "rate": 48000,
+            "src_delay_output_frames": 0,
+            "chunks_bit_exact": true,
+            "isolated_device_src": {
+              "exact_float_match": true,
+              "fixed_gain_snr_db": null,
+              "max_abs_error": 0.0,
+              "rms_error_dbfs": -300.0,
+              "reference_peak": 0.20284710824489594,
+              "actual_peak": 0.20284710824489594,
+              "actual_clipped_samples": 0,
+              "active_bin_abs_magnitude_error_p95_db": 0.0,
+              "bands": [
+                {
+                  "hz": [
+                    0,
+                    300
+                  ],
+                  "reference_energy": 1.4951377833127348,
+                  "residual_energy": 0.0,
+                  "residual_relative_db": -301.7468121659031
+                },
+                {
+                  "hz": [
+                    300,
+                    3400
+                  ],
+                  "reference_energy": 1.505784778903718,
+                  "residual_energy": 0.0,
+                  "residual_relative_db": -301.77762902798315
+                },
+                {
+                  "hz": [
+                    3400,
+                    8000
+                  ],
+                  "reference_energy": 1.738452056353287,
+                  "residual_energy": 0.0,
+                  "residual_relative_db": -302.4016271805734
+                },
+                {
+                  "hz": [
+                    8000,
+                    16000
+                  ],
+                  "reference_energy": 2.773139473455506,
+                  "residual_energy": 0.0,
+                  "residual_relative_db": -304.42971712718446
+                },
+                {
+                  "hz": [
+                    16000,
+                    22050
+                  ],
+                  "reference_energy": 1.5302292842972691,
+                  "residual_energy": 0.0,
+                  "residual_relative_db": -301.8475650888596
+                }
+              ]
+            },
+            "matched_order_pipeline": {
+              "exact_float_match": false,
+              "fixed_gain_snr_db": 127.74990966551071,
+              "max_abs_error": 1.341104507446289e-07,
+              "rms_error_dbfs": -153.81236211572752,
+              "reference_peak": 0.20284710824489594,
+              "actual_peak": 0.20284710824489594,
+              "actual_clipped_samples": 0,
+              "active_bin_abs_magnitude_error_p95_db": 2.2228206178448427e-05,
+              "bands": [
+                {
+                  "hz": [
+                    0,
+                    300
+                  ],
+                  "reference_energy": 1.495137742832145,
+                  "residual_energy": 1.3764764690722236e-13,
+                  "residual_relative_db": -130.35912413322959
+                },
+                {
+                  "hz": [
+                    300,
+                    3400
+                  ],
+                  "reference_energy": 1.5057847297598697,
+                  "residual_energy": 6.569908516870911e-13,
+                  "residual_relative_db": -123.60203566384953
+                },
+                {
+                  "hz": [
+                    3400,
+                    8000
+                  ],
+                  "reference_energy": 1.7384519646283847,
+                  "residual_energy": 4.607985149085229e-13,
+                  "residual_relative_db": -125.76651624398066
+                },
+                {
+                  "hz": [
+                    8000,
+                    16000
+                  ],
+                  "reference_energy": 2.773139097422133,
+                  "residual_energy": 2.0332323839688152e-13,
+                  "residual_relative_db": -131.34784635590296
+                },
+                {
+                  "hz": [
+                    16000,
+                    22050
+                  ],
+                  "reference_energy": 1.5302292238958215,
+                  "residual_energy": 6.204050819263874e-14,
+                  "residual_relative_db": -133.92081145149322
+                }
+              ]
+            },
+            "stock_clip_order_diagnostic": {
+              "exact_float_match": false,
+              "fixed_gain_snr_db": 127.74990966551071,
+              "max_abs_error": 1.341104507446289e-07,
+              "rms_error_dbfs": -153.81236211572752,
+              "reference_peak": 0.20284710824489594,
+              "actual_peak": 0.20284710824489594,
+              "actual_clipped_samples": 0,
+              "active_bin_abs_magnitude_error_p95_db": 2.2228206178448427e-05,
+              "bands": [
+                {
+                  "hz": [
+                    0,
+                    300
+                  ],
+                  "reference_energy": 1.495137742832145,
+                  "residual_energy": 1.3764764690722236e-13,
+                  "residual_relative_db": -130.35912413322959
+                },
+                {
+                  "hz": [
+                    300,
+                    3400
+                  ],
+                  "reference_energy": 1.5057847297598697,
+                  "residual_energy": 6.569908516870911e-13,
+                  "residual_relative_db": -123.60203566384953
+                },
+                {
+                  "hz": [
+                    3400,
+                    8000
+                  ],
+                  "reference_energy": 1.7384519646283847,
+                  "residual_energy": 4.607985149085229e-13,
+                  "residual_relative_db": -125.76651624398066
+                },
+                {
+                  "hz": [
+                    8000,
+                    16000
+                  ],
+                  "reference_energy": 2.773139097422133,
+                  "residual_energy": 2.0332323839688152e-13,
+                  "residual_relative_db": -131.34784635590296
+                },
+                {
+                  "hz": [
+                    16000,
+                    22050
+                  ],
+                  "reference_energy": 1.5302292238958215,
+                  "residual_energy": 6.204050819263874e-14,
+                  "residual_relative_db": -133.92081145149322
+                }
+              ]
+            },
+            "component_gate_passed": true,
+            "stock_order_gate_passed": true
+          },
+          {
+            "rate": 44100,
+            "src_delay_output_frames": 26,
+            "chunks_bit_exact": true,
+            "isolated_device_src": {
+              "exact_float_match": false,
+              "fixed_gain_snr_db": 145.91313656546077,
+              "max_abs_error": 1.4901161193847656e-08,
+              "rms_error_dbfs": -172.09114760514112,
+              "reference_peak": 0.20242568850517273,
+              "actual_peak": 0.20242568850517273,
+              "actual_clipped_samples": 0,
+              "active_bin_abs_magnitude_error_p95_db": 4.100088686172769e-06,
+              "bands": [
+                {
+                  "hz": [
+                    0,
+                    300
+                  ],
+                  "reference_energy": 1.4986971493515937,
+                  "residual_energy": 3.2327810274950674e-16,
+                  "residual_relative_db": -156.661375925847
+                },
+                {
+                  "hz": [
+                    300,
+                    3400
+                  ],
+                  "reference_energy": 1.5093259978634859,
+                  "residual_energy": 3.2327583219570767e-15,
+                  "residual_relative_db": -146.69209814384095
+                },
+                {
+                  "hz": [
+                    3400,
+                    8000
+                  ],
+                  "reference_energy": 1.7426100132811222,
+                  "residual_energy": 4.7755056716464996e-15,
+                  "residual_relative_db": -145.62180840029438
+                },
+                {
+                  "hz": [
+                    8000,
+                    16000
+                  ],
+                  "reference_energy": 2.7795875443316307,
+                  "residual_energy": 8.139138085899753e-15,
+                  "residual_relative_db": -145.33401940246645
+                },
+                {
+                  "hz": [
+                    16000,
+                    22050
+                  ],
+                  "reference_energy": 1.2959162402726125,
+                  "residual_energy": 6.144860253475745e-15,
+                  "residual_relative_db": -143.24064921825627
+                }
+              ]
+            },
+            "matched_order_pipeline": {
+              "exact_float_match": false,
+              "fixed_gain_snr_db": 127.43768599954052,
+              "max_abs_error": 1.341104507446289e-07,
+              "rms_error_dbfs": -153.61569734430068,
+              "reference_peak": 0.20242571830749512,
+              "actual_peak": 0.20242568850517273,
+              "actual_clipped_samples": 0,
+              "active_bin_abs_magnitude_error_p95_db": 2.444527122413122e-05,
+              "bands": [
+                {
+                  "hz": [
+                    0,
+                    300
+                  ],
+                  "reference_energy": 1.4986971043432225,
+                  "residual_energy": 1.393162083173078e-13,
+                  "residual_relative_db": -130.3171222217822
+                },
+                {
+                  "hz": [
+                    300,
+                    3400
+                  ],
+                  "reference_energy": 1.5093259491779314,
+                  "residual_energy": 6.741602836425309e-13,
+                  "residual_relative_db": -123.50019875107898
+                },
+                {
+                  "hz": [
+                    3400,
+                    8000
+                  ],
+                  "reference_energy": 1.7426099227057008,
+                  "residual_energy": 4.805099700465668e-13,
+                  "residual_relative_db": -125.59497779424132
+                },
+                {
+                  "hz": [
+                    8000,
+                    16000
+                  ],
+                  "reference_energy": 2.779587166495766,
+                  "residual_energy": 2.3848447984965383e-13,
+                  "residual_relative_db": -130.66520176675948
+                },
+                {
+                  "hz": [
+                    16000,
+                    22050
+                  ],
+                  "reference_energy": 1.295916182211752,
+                  "residual_energy": 7.19706943069674e-14,
+                  "residual_relative_db": -132.55421220588846
+                }
+              ]
+            },
+            "stock_clip_order_diagnostic": {
+              "exact_float_match": false,
+              "fixed_gain_snr_db": 127.43768599954052,
+              "max_abs_error": 1.341104507446289e-07,
+              "rms_error_dbfs": -153.61569734430068,
+              "reference_peak": 0.20242571830749512,
+              "actual_peak": 0.20242568850517273,
+              "actual_clipped_samples": 0,
+              "active_bin_abs_magnitude_error_p95_db": 2.444527122413122e-05,
+              "bands": [
+                {
+                  "hz": [
+                    0,
+                    300
+                  ],
+                  "reference_energy": 1.4986971043432225,
+                  "residual_energy": 1.393162083173078e-13,
+                  "residual_relative_db": -130.3171222217822
+                },
+                {
+                  "hz": [
+                    300,
+                    3400
+                  ],
+                  "reference_energy": 1.5093259491779314,
+                  "residual_energy": 6.741602836425309e-13,
+                  "residual_relative_db": -123.50019875107898
+                },
+                {
+                  "hz": [
+                    3400,
+                    8000
+                  ],
+                  "reference_energy": 1.7426099227057008,
+                  "residual_energy": 4.805099700465668e-13,
+                  "residual_relative_db": -125.59497779424132
+                },
+                {
+                  "hz": [
+                    8000,
+                    16000
+                  ],
+                  "reference_energy": 2.779587166495766,
+                  "residual_energy": 2.3848447984965383e-13,
+                  "residual_relative_db": -130.66520176675948
+                },
+                {
+                  "hz": [
+                    16000,
+                    22050
+                  ],
+                  "reference_energy": 1.295916182211752,
+                  "residual_energy": 7.19706943069674e-14,
+                  "residual_relative_db": -132.55421220588846
+                }
+              ]
+            },
+            "component_gate_passed": true,
+            "stock_order_gate_passed": true
+          }
+        ]
+      },
+      {
+        "name": "transients",
+        "synthetic": true,
+        "channels": 2,
+        "bitrate": 128000,
+        "application": 2049,
+        "gain": 0.75,
+        "packets": 150,
+        "max_packet_bytes": 320,
+        "lookahead_samples": 312,
+        "source_peak": 0.6800000071525574,
+        "mixer_vs_c_decoder": {
+          "exact_float_match": false,
+          "fixed_gain_snr_db": 135.74780249197306,
+          "max_abs_error": 1.1175870895385742e-07,
+          "rms_error_dbfs": -167.99300225360582,
+          "reference_peak": 0.46783094108104706,
+          "actual_peak": 0.46783094108104706,
+          "actual_clipped_samples": 0,
+          "active_bin_abs_magnitude_error_p95_db": 1.4627120588257583e-05,
+          "bands": [
+            {
+              "hz": [
+                0,
+                300
+              ],
+              "reference_energy": 0.00014130279688704024,
+              "residual_energy": 6.8969511106598955e-15,
+              "residual_relative_db": -103.11493610688206
+            },
+            {
+              "hz": [
+                300,
+                3400
+              ],
+              "reference_energy": 1.3051694973329786,
+              "residual_energy": 2.2965673529108275e-14,
+              "residual_relative_db": -137.5458772871273
+            },
+            {
+              "hz": [
+                3400,
+                8000
+              ],
+              "reference_energy": 0.8676598975676534,
+              "residual_energy": 2.3638640367197598e-14,
+              "residual_relative_db": -135.64727031784986
+            },
+            {
+              "hz": [
+                8000,
+                16000
+              ],
+              "reference_energy": 0.0037071542546452587,
+              "residual_energy": 2.3366565259623277e-15,
+              "residual_relative_db": -122.00445778909275
+            },
+            {
+              "hz": [
+                16000,
+                22050
+              ],
+              "reference_energy": 0.000987857234578345,
+              "residual_energy": 1.7617187417240945e-15,
+              "residual_relative_db": -117.48757610228772
+            }
+          ]
+        },
+        "codec_loss_vs_input": {
+          "exact_float_match": false,
+          "fixed_gain_snr_db": 20.859905217822188,
+          "max_abs_error": 0.1549200564622879,
+          "rms_error_dbfs": -50.54540529580674,
+          "reference_peak": 0.6800000071525574,
+          "actual_peak": 0.6237745881080627,
+          "actual_clipped_samples": 0,
+          "active_bin_abs_magnitude_error_p95_db": 78.43888037814851,
+          "bands": [
+            {
+              "hz": [
+                0,
+                300
+              ],
+              "reference_energy": 0.00024486150389968877,
+              "residual_energy": 4.2551753879166185e-06,
+              "residual_relative_db": -17.600030471861526
+            },
+            {
+              "hz": [
+                300,
+                3400
+              ],
+              "reference_energy": 2.3511963623816574,
+              "residual_energy": 0.00995066389953435,
+              "residual_relative_db": -23.73436843695007
+            },
+            {
+              "hz": [
+                3400,
+                8000
+              ],
+              "reference_energy": 1.504476375999838,
+              "residual_energy": 0.018357075360749934,
+              "residual_relative_db": -19.13581881816064
+            },
+            {
+              "hz": [
+                8000,
+                16000
+              ],
+              "reference_energy": 0.006508948869610362,
+              "residual_energy": 0.0002871760775761306,
+              "residual_relative_db": -13.553626006452003
+            },
+            {
+              "hz": [
+                16000,
+                22050
+              ],
+              "reference_energy": 0.002765061713663584,
+              "residual_energy": 0.002288828866570939,
+              "residual_relative_db": -0.8209150667945536
+            }
+          ]
+        },
+        "rates": [
+          {
+            "rate": 48000,
+            "src_delay_output_frames": 0,
+            "chunks_bit_exact": true,
+            "isolated_device_src": {
+              "exact_float_match": true,
+              "fixed_gain_snr_db": null,
+              "max_abs_error": 0.0,
+              "rms_error_dbfs": -300.0,
+              "reference_peak": 0.46783095598220825,
+              "actual_peak": 0.46783095598220825,
+              "actual_clipped_samples": 0,
+              "active_bin_abs_magnitude_error_p95_db": 0.0,
+              "bands": [
+                {
+                  "hz": [
+                    0,
+                    300
+                  ],
+                  "reference_energy": 0.0001413026323769266,
+                  "residual_energy": 0.0,
+                  "residual_relative_db": -261.50150252550077
+                },
+                {
+                  "hz": [
+                    300,
+                    3400
+                  ],
+                  "reference_energy": 1.3051695322503851,
+                  "residual_energy": 0.0,
+                  "residual_relative_db": -301.15666927106355
+                },
+                {
+                  "hz": [
+                    3400,
+                    8000
+                  ],
+                  "reference_energy": 0.8676598076050572,
+                  "residual_energy": 0.0,
+                  "residual_relative_db": -299.38349480199736
+                },
+                {
+                  "hz": [
+                    8000,
+                    16000
+                  ],
+                  "reference_energy": 0.0037071544480533547,
+                  "residual_energy": 0.0,
+                  "residual_relative_db": -275.69040680051694
+                },
+                {
+                  "hz": [
+                    16000,
+                    22050
+                  ],
+                  "reference_energy": 0.000987857312925963,
+                  "residual_energy": 0.0,
+                  "residual_relative_db": -269.94694219198914
+                }
+              ]
+            },
+            "matched_order_pipeline": {
+              "exact_float_match": false,
+              "fixed_gain_snr_db": 135.61463883992258,
+              "max_abs_error": 1.1920928955078125e-07,
+              "rms_error_dbfs": -167.85983860069587,
+              "reference_peak": 0.46783095598220825,
+              "actual_peak": 0.46783095598220825,
+              "actual_clipped_samples": 0,
+              "active_bin_abs_magnitude_error_p95_db": 1.5651205621756794e-05,
+              "bands": [
+                {
+                  "hz": [
+                    0,
+                    300
+                  ],
+                  "reference_energy": 0.00014130282066258495,
+                  "residual_energy": 6.6975207823120794e-15,
+                  "residual_relative_db": -103.24236761354824
+                },
+                {
+                  "hz": [
+                    300,
+                    3400
+                  ],
+                  "reference_energy": 1.305169497696219,
+                  "residual_energy": 2.277308255968731e-14,
+                  "residual_relative_db": -137.582450950042
+                },
+                {
+                  "hz": [
+                    3400,
+                    8000
+                  ],
+                  "reference_energy": 0.8676598974815523,
+                  "residual_energy": 2.398055324512737e-14,
+                  "residual_relative_db": -135.58490326884728
+                },
+                {
+                  "hz": [
+                    8000,
+                    16000
+                  ],
+                  "reference_energy": 0.003707154409528772,
+                  "residual_energy": 3.2420710595218367e-15,
+                  "residual_relative_db": -120.58218146080927
+                },
+                {
+                  "hz": [
+                    16000,
+                    22050
+                  ],
+                  "reference_energy": 0.0009878572133741887,
+                  "residual_energy": 2.4890057015809816e-15,
+                  "residual_relative_db": -115.98668283981854
+                }
+              ]
+            },
+            "stock_clip_order_diagnostic": {
+              "exact_float_match": false,
+              "fixed_gain_snr_db": 135.61463883992258,
+              "max_abs_error": 1.1920928955078125e-07,
+              "rms_error_dbfs": -167.85983860069587,
+              "reference_peak": 0.46783095598220825,
+              "actual_peak": 0.46783095598220825,
+              "actual_clipped_samples": 0,
+              "active_bin_abs_magnitude_error_p95_db": 1.5651205621756794e-05,
+              "bands": [
+                {
+                  "hz": [
+                    0,
+                    300
+                  ],
+                  "reference_energy": 0.00014130282066258495,
+                  "residual_energy": 6.6975207823120794e-15,
+                  "residual_relative_db": -103.24236761354824
+                },
+                {
+                  "hz": [
+                    300,
+                    3400
+                  ],
+                  "reference_energy": 1.305169497696219,
+                  "residual_energy": 2.277308255968731e-14,
+                  "residual_relative_db": -137.582450950042
+                },
+                {
+                  "hz": [
+                    3400,
+                    8000
+                  ],
+                  "reference_energy": 0.8676598974815523,
+                  "residual_energy": 2.398055324512737e-14,
+                  "residual_relative_db": -135.58490326884728
+                },
+                {
+                  "hz": [
+                    8000,
+                    16000
+                  ],
+                  "reference_energy": 0.003707154409528772,
+                  "residual_energy": 3.2420710595218367e-15,
+                  "residual_relative_db": -120.58218146080927
+                },
+                {
+                  "hz": [
+                    16000,
+                    22050
+                  ],
+                  "reference_energy": 0.0009878572133741887,
+                  "residual_energy": 2.4890057015809816e-15,
+                  "residual_relative_db": -115.98668283981854
+                }
+              ]
+            },
+            "component_gate_passed": true,
+            "stock_order_gate_passed": true
+          },
+          {
+            "rate": 44100,
+            "src_delay_output_frames": 26,
+            "chunks_bit_exact": true,
+            "isolated_device_src": {
+              "exact_float_match": false,
+              "fixed_gain_snr_db": 145.83157472652275,
+              "max_abs_error": 2.9802322387695312e-08,
+              "rms_error_dbfs": -178.0771266368757,
+              "reference_peak": 0.49739784002304077,
+              "actual_peak": 0.49739784002304077,
+              "actual_clipped_samples": 0,
+              "active_bin_abs_magnitude_error_p95_db": 8.9712678952262e-06,
+              "bands": [
+                {
+                  "hz": [
+                    0,
+                    300
+                  ],
+                  "reference_energy": 0.00014155417849432447,
+                  "residual_energy": 7.687236695176699e-17,
+                  "residual_relative_db": -122.65152440202088
+                },
+                {
+                  "hz": [
+                    300,
+                    3400
+                  ],
+                  "reference_energy": 1.308250081389858,
+                  "residual_energy": 8.688438598132953e-16,
+                  "residual_relative_db": -151.7774903415923
+                },
+                {
+                  "hz": [
+                    3400,
+                    8000
+                  ],
+                  "reference_energy": 0.8696814849211312,
+                  "residual_energy": 1.113428590087239e-15,
+                  "residual_relative_db": -148.92697855543
+                },
+                {
+                  "hz": [
+                    8000,
+                    16000
+                  ],
+                  "reference_energy": 0.003715673264753144,
+                  "residual_energy": 2.0239887461201133e-15,
+                  "residual_relative_db": -122.63829424216041
+                },
+                {
+                  "hz": [
+                    16000,
+                    22050
+                  ],
+                  "reference_energy": 0.000838315674644507,
+                  "residual_energy": 1.6180435044882096e-15,
+                  "residual_relative_db": -117.14417392228677
+                }
+              ]
+            },
+            "matched_order_pipeline": {
+              "exact_float_match": false,
+              "fixed_gain_snr_db": 134.6017615328343,
+              "max_abs_error": 1.4901161193847656e-07,
+              "rms_error_dbfs": -166.8473133330894,
+              "reference_peak": 0.49739786982536316,
+              "actual_peak": 0.49739784002304077,
+              "actual_clipped_samples": 0,
+              "active_bin_abs_magnitude_error_p95_db": 2.486320244983299e-05,
+              "bands": [
+                {
+                  "hz": [
+                    0,
+                    300
+                  ],
+                  "reference_energy": 0.00014155440746228267,
+                  "residual_energy": 7.473355076622114e-15,
+                  "residual_relative_db": -102.77407779083553
+                },
+                {
+                  "hz": [
+                    300,
+                    3400
+                  ],
+                  "reference_energy": 1.3082500484296753,
+                  "residual_energy": 2.581730443135723e-14,
+                  "residual_relative_db": -137.04779863607087
+                },
+                {
+                  "hz": [
+                    3400,
+                    8000
+                  ],
+                  "reference_energy": 0.8696815727685773,
+                  "residual_energy": 2.699159954537509e-14,
+                  "residual_relative_db": -135.081316461486
+                },
+                {
+                  "hz": [
+                    8000,
+                    16000
+                  ],
+                  "reference_energy": 0.0037156735547807327,
+                  "residual_energy": 9.609451788435913e-15,
+                  "residual_relative_db": -115.87338939283055
+                },
+                {
+                  "hz": [
+                    16000,
+                    22050
+                  ],
+                  "reference_energy": 0.0008383155929355172,
+                  "residual_energy": 6.139009646232916e-15,
+                  "residual_relative_db": -111.35309228460493
+                }
+              ]
+            },
+            "stock_clip_order_diagnostic": {
+              "exact_float_match": false,
+              "fixed_gain_snr_db": 134.6017615328343,
+              "max_abs_error": 1.4901161193847656e-07,
+              "rms_error_dbfs": -166.8473133330894,
+              "reference_peak": 0.49739786982536316,
+              "actual_peak": 0.49739784002304077,
+              "actual_clipped_samples": 0,
+              "active_bin_abs_magnitude_error_p95_db": 2.486320244983299e-05,
+              "bands": [
+                {
+                  "hz": [
+                    0,
+                    300
+                  ],
+                  "reference_energy": 0.00014155440746228267,
+                  "residual_energy": 7.473355076622114e-15,
+                  "residual_relative_db": -102.77407779083553
+                },
+                {
+                  "hz": [
+                    300,
+                    3400
+                  ],
+                  "reference_energy": 1.3082500484296753,
+                  "residual_energy": 2.581730443135723e-14,
+                  "residual_relative_db": -137.04779863607087
+                },
+                {
+                  "hz": [
+                    3400,
+                    8000
+                  ],
+                  "reference_energy": 0.8696815727685773,
+                  "residual_energy": 2.699159954537509e-14,
+                  "residual_relative_db": -135.081316461486
+                },
+                {
+                  "hz": [
+                    8000,
+                    16000
+                  ],
+                  "reference_energy": 0.0037156735547807327,
+                  "residual_energy": 9.609451788435913e-15,
+                  "residual_relative_db": -115.87338939283055
+                },
+                {
+                  "hz": [
+                    16000,
+                    22050
+                  ],
+                  "reference_energy": 0.0008383155929355172,
+                  "residual_energy": 6.139009646232916e-15,
+                  "residual_relative_db": -111.35309228460493
+                }
+              ]
+            },
+            "component_gate_passed": true,
+            "stock_order_gate_passed": true
+          }
+        ]
+      },
+      {
+        "name": "speech-like",
+        "synthetic": true,
+        "channels": 2,
+        "bitrate": 48000,
+        "application": 2049,
+        "gain": 0.75,
+        "packets": 150,
+        "max_packet_bytes": 120,
+        "lookahead_samples": 312,
+        "source_peak": 0.19494694471359253,
+        "mixer_vs_c_decoder": {
+          "exact_float_match": false,
+          "fixed_gain_snr_db": 196.25128541099573,
+          "max_abs_error": 1.3969838619232178e-09,
+          "rms_error_dbfs": -229.16693992487026,
+          "reference_peak": 0.15330515429377556,
+          "actual_peak": 0.15330515429377556,
+          "actual_clipped_samples": 0,
+          "active_bin_abs_magnitude_error_p95_db": 4.535251361737548e-11,
+          "bands": [
+            {
+              "hz": [
+                0,
+                300
+              ],
+              "reference_energy": 0.8913544954567939,
+              "residual_energy": 5.951587691172006e-22,
+              "residual_relative_db": -211.75417622235162
+            },
+            {
+              "hz": [
+                300,
+                3400
+              ],
+              "reference_energy": 0.9690085587560309,
+              "residual_energy": 6.668040051945234e-21,
+              "residual_relative_db": -201.62329413191082
+            },
+            {
+              "hz": [
+                3400,
+                8000
+              ],
+              "reference_energy": 0.0058893750692817215,
+              "residual_energy": 9.304461859260546e-21,
+              "residual_relative_db": -178.01377953601698
+            },
+            {
+              "hz": [
+                8000,
+                16000
+              ],
+              "reference_energy": 9.88173762575686e-08,
+              "residual_energy": 1.4451013814163402e-20,
+              "residual_relative_db": -128.34935002378305
+            },
+            {
+              "hz": [
+                16000,
+                22050
+              ],
+              "reference_energy": 2.7771059304294862e-08,
+              "residual_energy": 1.0084415534013707e-20,
+              "residual_relative_db": -124.39941713151765
+            }
+          ]
+        },
+        "codec_loss_vs_input": {
+          "exact_float_match": false,
+          "fixed_gain_snr_db": 12.60228210082332,
+          "max_abs_error": 0.1311912052333355,
+          "rms_error_dbfs": -42.93094555614373,
+          "reference_peak": 0.19494694471359253,
+          "actual_peak": 0.20440687239170074,
+          "actual_clipped_samples": 0,
+          "active_bin_abs_magnitude_error_p95_db": 3.203971570057802,
+          "bands": [
+            {
+              "hz": [
+                0,
+                300
+              ],
+              "reference_energy": 1.6124722507187585,
+              "residual_energy": 0.011541000993045083,
+              "residual_relative_db": -21.45248771136208
+            },
+            {
+              "hz": [
+                300,
+                3400
+              ],
+              "reference_energy": 1.710488672363936,
+              "residual_energy": 0.1613448816635604,
+              "residual_relative_db": -10.25365009580397
+            },
+            {
+              "hz": [
+                3400,
+                8000
+              ],
+              "reference_energy": 0.011014667457811569,
+              "residual_energy": 0.010345883636031986,
+              "residual_relative_db": -0.2720380053418144
+            },
+            {
+              "hz": [
+                8000,
+                16000
+              ],
+              "reference_energy": 5.018760393778256e-08,
+              "residual_energy": 1.4224689479680715e-07,
+              "residual_relative_db": 4.524463326229666
+            },
+            {
+              "hz": [
+                16000,
+                22050
+              ],
+              "reference_energy": 1.592672559206806e-08,
+              "residual_energy": 5.02228969796909e-08,
+              "residual_relative_db": 4.9877526277694875
+            }
+          ]
+        },
+        "rates": [
+          {
+            "rate": 48000,
+            "src_delay_output_frames": 0,
+            "chunks_bit_exact": true,
+            "isolated_device_src": {
+              "exact_float_match": true,
+              "fixed_gain_snr_db": null,
+              "max_abs_error": 0.0,
+              "rms_error_dbfs": -300.0,
+              "reference_peak": 0.15330515801906586,
+              "actual_peak": 0.15330515801906586,
+              "actual_clipped_samples": 0,
+              "active_bin_abs_magnitude_error_p95_db": 0.0,
+              "bands": [
+                {
+                  "hz": [
+                    0,
+                    300
+                  ],
+                  "reference_energy": 0.8913544955138326,
+                  "residual_energy": 0.0,
+                  "residual_relative_db": -299.500504591739
+                },
+                {
+                  "hz": [
+                    300,
+                    3400
+                  ],
+                  "reference_energy": 0.9690085593686625,
+                  "residual_energy": 0.0,
+                  "residual_relative_db": -299.86327613242884
+                },
+                {
+                  "hz": [
+                    3400,
+                    8000
+                  ],
+                  "reference_energy": 0.005889375040969748,
+                  "residual_energy": 0.0,
+                  "residual_relative_db": -277.70069211483434
+                },
+                {
+                  "hz": [
+                    8000,
+                    16000
+                  ],
+                  "reference_energy": 9.881753860344705e-08,
+                  "residual_energy": 0.0,
+                  "residual_relative_db": -229.9483403206449
+                },
+                {
+                  "hz": [
+                    16000,
+                    22050
+                  ],
+                  "reference_energy": 2.7771057070390694e-08,
+                  "residual_energy": 0.0,
+                  "residual_relative_db": -224.43592410938606
+                }
+              ]
+            },
+            "matched_order_pipeline": {
+              "exact_float_match": false,
+              "fixed_gain_snr_db": 194.25606224726977,
+              "max_abs_error": 1.862645149230957e-09,
+              "rms_error_dbfs": -227.17171675964693,
+              "reference_peak": 0.15330515801906586,
+              "actual_peak": 0.15330515801906586,
+              "actual_clipped_samples": 0,
+              "active_bin_abs_magnitude_error_p95_db": 3.851514258135744e-11,
+              "bands": [
+                {
+                  "hz": [
+                    0,
+                    300
+                  ],
+                  "reference_energy": 0.8913544955156886,
+                  "residual_energy": 8.875103483632701e-22,
+                  "residual_relative_db": -210.01877033548107
+                },
+                {
+                  "hz": [
+                    300,
+                    3400
+                  ],
+                  "reference_energy": 0.9690085593679466,
+                  "residual_energy": 9.77126955257645e-21,
+                  "residual_relative_db": -199.96376619241434
+                },
+                {
+                  "hz": [
+                    3400,
+                    8000
+                  ],
+                  "reference_energy": 0.005889375040992297,
+                  "residual_energy": 1.4315825309874757e-20,
+                  "residual_relative_db": -176.14252821251648
+                },
+                {
+                  "hz": [
+                    8000,
+                    16000
+                  ],
+                  "reference_energy": 9.881753720855774e-08,
+                  "residual_energy": 2.3029186400233078e-20,
+                  "residual_relative_db": -126.32555430919508
+                },
+                {
+                  "hz": [
+                    16000,
+                    22050
+                  ],
+                  "reference_energy": 2.777105747504759e-08,
+                  "residual_energy": 1.6830933012631854e-20,
+                  "residual_relative_db": -122.17484225770683
+                }
+              ]
+            },
+            "stock_clip_order_diagnostic": {
+              "exact_float_match": false,
+              "fixed_gain_snr_db": 194.25606224726977,
+              "max_abs_error": 1.862645149230957e-09,
+              "rms_error_dbfs": -227.17171675964693,
+              "reference_peak": 0.15330515801906586,
+              "actual_peak": 0.15330515801906586,
+              "actual_clipped_samples": 0,
+              "active_bin_abs_magnitude_error_p95_db": 3.851514258135744e-11,
+              "bands": [
+                {
+                  "hz": [
+                    0,
+                    300
+                  ],
+                  "reference_energy": 0.8913544955156886,
+                  "residual_energy": 8.875103483632701e-22,
+                  "residual_relative_db": -210.01877033548107
+                },
+                {
+                  "hz": [
+                    300,
+                    3400
+                  ],
+                  "reference_energy": 0.9690085593679466,
+                  "residual_energy": 9.77126955257645e-21,
+                  "residual_relative_db": -199.96376619241434
+                },
+                {
+                  "hz": [
+                    3400,
+                    8000
+                  ],
+                  "reference_energy": 0.005889375040992297,
+                  "residual_energy": 1.4315825309874757e-20,
+                  "residual_relative_db": -176.14252821251648
+                },
+                {
+                  "hz": [
+                    8000,
+                    16000
+                  ],
+                  "reference_energy": 9.881753720855774e-08,
+                  "residual_energy": 2.3029186400233078e-20,
+                  "residual_relative_db": -126.32555430919508
+                },
+                {
+                  "hz": [
+                    16000,
+                    22050
+                  ],
+                  "reference_energy": 2.777105747504759e-08,
+                  "residual_energy": 1.6830933012631854e-20,
+                  "residual_relative_db": -122.17484225770683
+                }
+              ]
+            },
+            "component_gate_passed": true,
+            "stock_order_gate_passed": true
+          },
+          {
+            "rate": 44100,
+            "src_delay_output_frames": 26,
+            "chunks_bit_exact": true,
+            "isolated_device_src": {
+              "exact_float_match": false,
+              "fixed_gain_snr_db": 145.89959771000704,
+              "max_abs_error": 1.4901161193847656e-08,
+              "rms_error_dbfs": -178.81522875065832,
+              "reference_peak": 0.15268176794052124,
+              "actual_peak": 0.15268176794052124,
+              "actual_clipped_samples": 0,
+              "active_bin_abs_magnitude_error_p95_db": 1.8334421257520741e-06,
+              "bands": [
+                {
+                  "hz": [
+                    0,
+                    300
+                  ],
+                  "reference_energy": 0.8934514266967182,
+                  "residual_energy": 7.12348826775883e-17,
+                  "residual_relative_db": -160.98378233303012
+                },
+                {
+                  "hz": [
+                    300,
+                    3400
+                  ],
+                  "reference_energy": 0.9713347045883469,
+                  "residual_energy": 6.900261299587529e-16,
+                  "residual_relative_db": -151.48503368874916
+                },
+                {
+                  "hz": [
+                    3400,
+                    8000
+                  ],
+                  "reference_energy": 0.005903380987998499,
+                  "residual_energy": 1.0124501917383249e-15,
+                  "residual_relative_db": -127.65727145335995
+                },
+                {
+                  "hz": [
+                    8000,
+                    16000
+                  ],
+                  "reference_energy": 9.904855228671731e-08,
+                  "residual_energy": 1.7140109435908052e-15,
+                  "residual_relative_db": -77.61834541713898
+                },
+                {
+                  "hz": [
+                    16000,
+                    22050
+                  ],
+                  "reference_energy": 1.7820618492723762e-08,
+                  "residual_energy": 1.319912875119858e-15,
+                  "residual_relative_db": -71.30377507620281
+                }
+              ]
+            },
+            "matched_order_pipeline": {
+              "exact_float_match": false,
+              "fixed_gain_snr_db": 145.89951964235678,
+              "max_abs_error": 1.4901161193847656e-08,
+              "rms_error_dbfs": -178.8151506830047,
+              "reference_peak": 0.15268176794052124,
+              "actual_peak": 0.15268176794052124,
+              "actual_clipped_samples": 0,
+              "active_bin_abs_magnitude_error_p95_db": 1.8337910066293517e-06,
+              "bands": [
+                {
+                  "hz": [
+                    0,
+                    300
+                  ],
+                  "reference_energy": 0.8934514266987588,
+                  "residual_energy": 7.12247378059245e-17,
+                  "residual_relative_db": -160.98440087488027
+                },
+                {
+                  "hz": [
+                    300,
+                    3400
+                  ],
+                  "reference_energy": 0.9713347045877847,
+                  "residual_energy": 6.900385844494296e-16,
+                  "residual_relative_db": -151.48495530232725
+                },
+                {
+                  "hz": [
+                    3400,
+                    8000
+                  ],
+                  "reference_energy": 0.005903380987986092,
+                  "residual_energy": 1.0124532627872772e-15,
+                  "residual_relative_db": -127.65725827998583
+                },
+                {
+                  "hz": [
+                    8000,
+                    16000
+                  ],
+                  "reference_energy": 9.904855218901022e-08,
+                  "residual_energy": 1.71402449935763e-15,
+                  "residual_relative_db": -77.61831106551611
+                },
+                {
+                  "hz": [
+                    16000,
+                    22050
+                  ],
+                  "reference_energy": 1.782061952737827e-08,
+                  "residual_energy": 1.3199829182584324e-15,
+                  "residual_relative_db": -71.30354486964438
+                }
+              ]
+            },
+            "stock_clip_order_diagnostic": {
+              "exact_float_match": false,
+              "fixed_gain_snr_db": 145.89951964235678,
+              "max_abs_error": 1.4901161193847656e-08,
+              "rms_error_dbfs": -178.8151506830047,
+              "reference_peak": 0.15268176794052124,
+              "actual_peak": 0.15268176794052124,
+              "actual_clipped_samples": 0,
+              "active_bin_abs_magnitude_error_p95_db": 1.8337910066293517e-06,
+              "bands": [
+                {
+                  "hz": [
+                    0,
+                    300
+                  ],
+                  "reference_energy": 0.8934514266987588,
+                  "residual_energy": 7.12247378059245e-17,
+                  "residual_relative_db": -160.98440087488027
+                },
+                {
+                  "hz": [
+                    300,
+                    3400
+                  ],
+                  "reference_energy": 0.9713347045877847,
+                  "residual_energy": 6.900385844494296e-16,
+                  "residual_relative_db": -151.48495530232725
+                },
+                {
+                  "hz": [
+                    3400,
+                    8000
+                  ],
+                  "reference_energy": 0.005903380987986092,
+                  "residual_energy": 1.0124532627872772e-15,
+                  "residual_relative_db": -127.65725827998583
+                },
+                {
+                  "hz": [
+                    8000,
+                    16000
+                  ],
+                  "reference_energy": 9.904855218901022e-08,
+                  "residual_energy": 1.71402449935763e-15,
+                  "residual_relative_db": -77.61831106551611
+                },
+                {
+                  "hz": [
+                    16000,
+                    22050
+                  ],
+                  "reference_energy": 1.782061952737827e-08,
+                  "residual_energy": 1.3199829182584324e-15,
+                  "residual_relative_db": -71.30354486964438
+                }
+              ]
+            },
+            "component_gate_passed": true,
+            "stock_order_gate_passed": true
+          }
+        ]
+      },
+      {
+        "name": "stereo-music",
+        "synthetic": true,
+        "channels": 2,
+        "bitrate": 128000,
+        "application": 2049,
+        "gain": 0.75,
+        "packets": 150,
+        "max_packet_bytes": 320,
+        "lookahead_samples": 312,
+        "source_peak": 0.1605735570192337,
+        "mixer_vs_c_decoder": {
+          "exact_float_match": false,
+          "fixed_gain_snr_db": 133.74263612234665,
+          "max_abs_error": 3.3527612686157227e-08,
+          "rms_error_dbfs": -170.32141304353573,
+          "reference_peak": 0.12642256915569305,
+          "actual_peak": 0.12642258033156395,
+          "actual_clipped_samples": 0,
+          "active_bin_abs_magnitude_error_p95_db": 6.479992600080649e-06,
+          "bands": [
+            {
+              "hz": [
+                0,
+                300
+              ],
+              "reference_energy": 0.17471939297297423,
+              "residual_energy": 4.914438092320957e-15,
+              "residual_relative_db": -135.50867243573074
+            },
+            {
+              "hz": [
+                300,
+                3400
+              ],
+              "reference_energy": 0.5201600499165774,
+              "residual_energy": 1.8572162663694048e-14,
+              "residual_relative_db": -134.4727451506348
+            },
+            {
+              "hz": [
+                3400,
+                8000
+              ],
+              "reference_energy": 0.0022999332733117505,
+              "residual_energy": 3.4607084890787995e-15,
+              "residual_relative_db": -118.22550217983147
+            },
+            {
+              "hz": [
+                8000,
+                16000
+              ],
+              "reference_energy": 0.10693137732711824,
+              "residual_energy": 6.207333948534292e-15,
+              "residual_relative_db": -132.36200050144535
+            },
+            {
+              "hz": [
+                16000,
+                22050
+              ],
+              "reference_energy": 1.1728482034882438e-05,
+              "residual_energy": 6.344072333518465e-16,
+              "residual_relative_db": -102.668736809006
+            }
+          ]
+        },
+        "codec_loss_vs_input": {
+          "exact_float_match": false,
+          "fixed_gain_snr_db": 20.098975862116966,
+          "max_abs_error": 0.016929585486650467,
+          "rms_error_dbfs": -54.15960938017594,
+          "reference_peak": 0.1605735570192337,
+          "actual_peak": 0.16856342554092407,
+          "actual_clipped_samples": 0,
+          "active_bin_abs_magnitude_error_p95_db": 3.2561592926530185,
+          "bands": [
+            {
+              "hz": [
+                0,
+                300
+              ],
+              "reference_energy": 0.30276368656014585,
+              "residual_energy": 0.002085974943992193,
+              "residual_relative_db": -21.617946971969765
+            },
+            {
+              "hz": [
+                300,
+                3400
+              ],
+              "reference_energy": 0.9196805669341378,
+              "residual_energy": 0.01093802870163334,
+              "residual_relative_db": -19.246979511990325
+            },
+            {
+              "hz": [
+                3400,
+                8000
+              ],
+              "reference_energy": 0.0041226274911447605,
+              "residual_energy": 0.00020080776075810568,
+              "residual_relative_db": -13.123936016839043
+            },
+            {
+              "hz": [
+                8000,
+                16000
+              ],
+              "reference_energy": 0.18750432026927139,
+              "residual_energy": 0.0007538827270615325,
+              "residual_relative_db": -23.957074858329484
+            },
+            {
+              "hz": [
+                16000,
+                22050
+              ],
+              "reference_energy": 2.7806231772768917e-05,
+              "residual_energy": 4.3087489665200114e-05,
+              "residual_relative_db": 1.9020905383947357
+            }
+          ]
+        },
+        "rates": [
+          {
+            "rate": 48000,
+            "src_delay_output_frames": 0,
+            "chunks_bit_exact": true,
+            "isolated_device_src": {
+              "exact_float_match": true,
+              "fixed_gain_snr_db": null,
+              "max_abs_error": 0.0,
+              "rms_error_dbfs": -300.0,
+              "reference_peak": 0.12642258405685425,
+              "actual_peak": 0.12642258405685425,
+              "actual_clipped_samples": 0,
+              "active_bin_abs_magnitude_error_p95_db": 0.0,
+              "bands": [
+                {
+                  "hz": [
+                    0,
+                    300
+                  ],
+                  "reference_energy": 0.17471940831085736,
+                  "residual_energy": 0.0,
+                  "residual_relative_db": -292.4234115028423
+                },
+                {
+                  "hz": [
+                    300,
+                    3400
+                  ],
+                  "reference_energy": 0.520160063457336,
+                  "residual_energy": 0.0,
+                  "residual_relative_db": -297.1613700513415
+                },
+                {
+                  "hz": [
+                    3400,
+                    8000
+                  ],
+                  "reference_energy": 0.0022999334126729623,
+                  "residual_energy": 0.0,
+                  "residual_relative_db": -273.6171526257093
+                },
+                {
+                  "hz": [
+                    8000,
+                    16000
+                  ],
+                  "reference_energy": 0.10693138986954973,
+                  "residual_energy": 0.0,
+                  "residual_relative_db": -290.29105211719764
+                },
+                {
+                  "hz": [
+                    16000,
+                    22050
+                  ],
+                  "reference_energy": 1.1728483116802945e-05,
+                  "residual_energy": 0.0,
+                  "residual_relative_db": -250.692418470174
+                }
+              ]
+            },
+            "matched_order_pipeline": {
+              "exact_float_match": false,
+              "fixed_gain_snr_db": 133.60372573635036,
+              "max_abs_error": 3.725290298461914e-08,
+              "rms_error_dbfs": -170.1825026573275,
+              "reference_peak": 0.12642256915569305,
+              "actual_peak": 0.12642258405685425,
+              "actual_clipped_samples": 0,
+              "active_bin_abs_magnitude_error_p95_db": 6.535314687661049e-06,
+              "bands": [
+                {
+                  "hz": [
+                    0,
+                    300
+                  ],
+                  "reference_energy": 0.17471939284036644,
+                  "residual_energy": 4.958303069891459e-15,
+                  "residual_relative_db": -135.47008042895538
+                },
+                {
+                  "hz": [
+                    300,
+                    3400
+                  ],
+                  "reference_energy": 0.5201600501215111,
+                  "residual_energy": 1.8692802814569662e-14,
+                  "residual_relative_db": -134.4446256925872
+                },
+                {
+                  "hz": [
+                    3400,
+                    8000
+                  ],
+                  "reference_energy": 0.002299933286520769,
+                  "residual_energy": 3.646760206821287e-15,
+                  "residual_relative_db": -117.9980803158569
+                },
+                {
+                  "hz": [
+                    8000,
+                    16000
+                  ],
+                  "reference_energy": 0.10693137727574406,
+                  "residual_energy": 6.588902918858058e-15,
+                  "residual_relative_db": -132.10292051887345
+                },
+                {
+                  "hz": [
+                    16000,
+                    22050
+                  ],
+                  "reference_energy": 1.1728481885012969e-05,
+                  "residual_energy": 9.090028740941146e-16,
+                  "residual_relative_db": -101.10676545024748
+                }
+              ]
+            },
+            "stock_clip_order_diagnostic": {
+              "exact_float_match": false,
+              "fixed_gain_snr_db": 133.60372573635036,
+              "max_abs_error": 3.725290298461914e-08,
+              "rms_error_dbfs": -170.1825026573275,
+              "reference_peak": 0.12642256915569305,
+              "actual_peak": 0.12642258405685425,
+              "actual_clipped_samples": 0,
+              "active_bin_abs_magnitude_error_p95_db": 6.535314687661049e-06,
+              "bands": [
+                {
+                  "hz": [
+                    0,
+                    300
+                  ],
+                  "reference_energy": 0.17471939284036644,
+                  "residual_energy": 4.958303069891459e-15,
+                  "residual_relative_db": -135.47008042895538
+                },
+                {
+                  "hz": [
+                    300,
+                    3400
+                  ],
+                  "reference_energy": 0.5201600501215111,
+                  "residual_energy": 1.8692802814569662e-14,
+                  "residual_relative_db": -134.4446256925872
+                },
+                {
+                  "hz": [
+                    3400,
+                    8000
+                  ],
+                  "reference_energy": 0.002299933286520769,
+                  "residual_energy": 3.646760206821287e-15,
+                  "residual_relative_db": -117.9980803158569
+                },
+                {
+                  "hz": [
+                    8000,
+                    16000
+                  ],
+                  "reference_energy": 0.10693137727574406,
+                  "residual_energy": 6.588902918858058e-15,
+                  "residual_relative_db": -132.10292051887345
+                },
+                {
+                  "hz": [
+                    16000,
+                    22050
+                  ],
+                  "reference_energy": 1.1728481885012969e-05,
+                  "residual_energy": 9.090028740941146e-16,
+                  "residual_relative_db": -101.10676545024748
+                }
+              ]
+            },
+            "component_gate_passed": true,
+            "stock_order_gate_passed": true
+          },
+          {
+            "rate": 44100,
+            "src_delay_output_frames": 26,
+            "chunks_bit_exact": true,
+            "isolated_device_src": {
+              "exact_float_match": false,
+              "fixed_gain_snr_db": 145.76287471039944,
+              "max_abs_error": 1.4901161193847656e-08,
+              "rms_error_dbfs": -182.3416639811178,
+              "reference_peak": 0.1269454061985016,
+              "actual_peak": 0.1269453912973404,
+              "actual_clipped_samples": 0,
+              "active_bin_abs_magnitude_error_p95_db": 1.1652085348110717e-06,
+              "bands": [
+                {
+                  "hz": [
+                    0,
+                    300
+                  ],
+                  "reference_energy": 0.17510956611337644,
+                  "residual_energy": 2.953821558716074e-17,
+                  "residual_relative_db": -157.72925616033024
+                },
+                {
+                  "hz": [
+                    300,
+                    3400
+                  ],
+                  "reference_energy": 0.521396155719175,
+                  "residual_energy": 2.941203586825416e-16,
+                  "residual_relative_db": -152.48642737842206
+                },
+                {
+                  "hz": [
+                    3400,
+                    8000
+                  ],
+                  "reference_energy": 0.0023055456476829797,
+                  "residual_energy": 4.280287165154305e-16,
+                  "residual_relative_db": -127.31300818394537
+                },
+                {
+                  "hz": [
+                    8000,
+                    16000
+                  ],
+                  "reference_energy": 0.10718202551853634,
+                  "residual_energy": 7.847009539093202e-16,
+                  "residual_relative_db": -141.35417779499573
+                },
+                {
+                  "hz": [
+                    16000,
+                    22050
+                  ],
+                  "reference_energy": 1.1516057079525552e-05,
+                  "residual_energy": 5.985212824070563e-16,
+                  "residual_relative_db": -102.84224211003006
+                }
+              ]
+            },
+            "matched_order_pipeline": {
+              "exact_float_match": false,
+              "fixed_gain_snr_db": 132.91034107859784,
+              "max_abs_error": 4.470348358154297e-08,
+              "rms_error_dbfs": -169.4891305808615,
+              "reference_peak": 0.1269453912973404,
+              "actual_peak": 0.1269453912973404,
+              "actual_clipped_samples": 0,
+              "active_bin_abs_magnitude_error_p95_db": 6.867314958410075e-06,
+              "bands": [
+                {
+                  "hz": [
+                    0,
+                    300
+                  ],
+                  "reference_energy": 0.1751095499997467,
+                  "residual_energy": 5.084621234030158e-15,
+                  "residual_relative_db": -135.370512251749
+                },
+                {
+                  "hz": [
+                    300,
+                    3400
+                  ],
+                  "reference_energy": 0.5213961414404782,
+                  "residual_energy": 1.9791954762231497e-14,
+                  "residual_relative_db": -134.20679123240365
+                },
+                {
+                  "hz": [
+                    3400,
+                    8000
+                  ],
+                  "reference_energy": 0.002305545582375565,
+                  "residual_energy": 5.067711878642474e-15,
+                  "residual_relative_db": -116.57961797577856
+                },
+                {
+                  "hz": [
+                    8000,
+                    16000
+                  ],
+                  "reference_energy": 0.10718201255413037,
+                  "residual_energy": 9.083217152785446e-15,
+                  "residual_relative_db": -130.71882210515795
+                },
+                {
+                  "hz": [
+                    16000,
+                    22050
+                  ],
+                  "reference_energy": 1.1516056559986166e-05,
+                  "residual_energy": 2.466330736965151e-15,
+                  "residual_relative_db": -96.69252473796605
+                }
+              ]
+            },
+            "stock_clip_order_diagnostic": {
+              "exact_float_match": false,
+              "fixed_gain_snr_db": 132.91034107859784,
+              "max_abs_error": 4.470348358154297e-08,
+              "rms_error_dbfs": -169.4891305808615,
+              "reference_peak": 0.1269453912973404,
+              "actual_peak": 0.1269453912973404,
+              "actual_clipped_samples": 0,
+              "active_bin_abs_magnitude_error_p95_db": 6.867314958410075e-06,
+              "bands": [
+                {
+                  "hz": [
+                    0,
+                    300
+                  ],
+                  "reference_energy": 0.1751095499997467,
+                  "residual_energy": 5.084621234030158e-15,
+                  "residual_relative_db": -135.370512251749
+                },
+                {
+                  "hz": [
+                    300,
+                    3400
+                  ],
+                  "reference_energy": 0.5213961414404782,
+                  "residual_energy": 1.9791954762231497e-14,
+                  "residual_relative_db": -134.20679123240365
+                },
+                {
+                  "hz": [
+                    3400,
+                    8000
+                  ],
+                  "reference_energy": 0.002305545582375565,
+                  "residual_energy": 5.067711878642474e-15,
+                  "residual_relative_db": -116.57961797577856
+                },
+                {
+                  "hz": [
+                    8000,
+                    16000
+                  ],
+                  "reference_energy": 0.10718201255413037,
+                  "residual_energy": 9.083217152785446e-15,
+                  "residual_relative_db": -130.71882210515795
+                },
+                {
+                  "hz": [
+                    16000,
+                    22050
+                  ],
+                  "reference_energy": 1.1516056559986166e-05,
+                  "residual_energy": 2.466330736965151e-15,
+                  "residual_relative_db": -96.69252473796605
+                }
+              ]
+            },
+            "component_gate_passed": true,
+            "stock_order_gate_passed": true
+          }
+        ]
+      },
+      {
+        "name": "overload-staging",
+        "synthetic": true,
+        "channels": 2,
+        "bitrate": 128000,
+        "application": 2049,
+        "gain": 3.0,
+        "packets": 150,
+        "max_packet_bytes": 320,
+        "lookahead_samples": 312,
+        "source_peak": 0.7484955787658691,
+        "mixer_vs_c_decoder": {
+          "exact_float_match": false,
+          "fixed_gain_snr_db": 127.80956609455902,
+          "max_abs_error": 1.341104507446289e-06,
+          "rms_error_dbfs": -132.31770671281316,
+          "reference_peak": 2.40142160654068,
+          "actual_peak": 2.4014214277267456,
+          "actual_clipped_samples": 31278,
+          "active_bin_abs_magnitude_error_p95_db": 0.0002148814131733341,
+          "bands": [
+            {
+              "hz": [
+                0,
+                300
+              ],
+              "reference_energy": 217.706859676732,
+              "residual_energy": 2.0378679952959233e-11,
+              "residual_relative_db": -130.2869606457251
+            },
+            {
+              "hz": [
+                300,
+                3400
+              ],
+              "reference_energy": 216.91051269285296,
+              "residual_energy": 9.239041327775852e-11,
+              "residual_relative_db": -123.70653691070935
+            },
+            {
+              "hz": [
+                3400,
+                8000
+              ],
+              "reference_energy": 249.6441087321312,
+              "residual_energy": 6.479106056135412e-11,
+              "residual_relative_db": -125.85806232795441
+            },
+            {
+              "hz": [
+                8000,
+                16000
+              ],
+              "reference_energy": 392.6082736497955,
+              "residual_energy": 2.8853475643496177e-11,
+              "residual_relative_db": -131.33761312425517
+            },
+            {
+              "hz": [
+                16000,
+                22050
+              ],
+              "reference_energy": 216.50755060548875,
+              "residual_energy": 8.266839765204438e-12,
+              "residual_relative_db": -134.18133526931473
+            }
+          ]
+        },
+        "codec_loss_vs_input": {
+          "exact_float_match": false,
+          "fixed_gain_snr_db": 6.6334366278242785,
+          "max_abs_error": 0.45709676295518875,
+          "rms_error_dbfs": -20.589456990039604,
+          "reference_peak": 0.7484955787658691,
+          "actual_peak": 0.8004738688468933,
+          "actual_clipped_samples": 0,
+          "active_bin_abs_magnitude_error_p95_db": 27.48196743669238,
+          "bands": [
+            {
+              "hz": [
+                0,
+                300
+              ],
+              "reference_energy": 24.08509779538026,
+              "residual_energy": 0.06383615504551816,
+              "residual_relative_db": -25.766816931938745
+            },
+            {
+              "hz": [
+                300,
+                3400
+              ],
+              "reference_energy": 24.124485076519022,
+              "residual_energy": 0.03209888277185808,
+              "residual_relative_db": -28.759681356552484
+            },
+            {
+              "hz": [
+                3400,
+                8000
+              ],
+              "reference_energy": 27.403630281198073,
+              "residual_energy": 0.7270643743742133,
+              "residual_relative_db": -15.762352345083874
+            },
+            {
+              "hz": [
+                8000,
+                16000
+              ],
+              "reference_energy": 44.90343354972302,
+              "residual_energy": 5.49221516400806,
+              "residual_relative_db": -9.125320077878573
+            },
+            {
+              "hz": [
+                16000,
+                22050
+              ],
+              "reference_energy": 24.1023574881051,
+              "residual_energy": 25.086656234941273,
+              "residual_relative_db": 0.17383255018788468
+            }
+          ]
+        },
+        "rates": [
+          {
+            "rate": 48000,
+            "src_delay_output_frames": 0,
+            "chunks_bit_exact": true,
+            "isolated_device_src": {
+              "exact_float_match": true,
+              "fixed_gain_snr_db": null,
+              "max_abs_error": 0.0,
+              "rms_error_dbfs": -300.0,
+              "reference_peak": 1.0,
+              "actual_peak": 1.0,
+              "actual_clipped_samples": 31278,
+              "active_bin_abs_magnitude_error_p95_db": 0.0,
+              "bands": [
+                {
+                  "hz": [
+                    0,
+                    300
+                  ],
+                  "reference_energy": 170.2145213530539,
+                  "residual_energy": 0.0,
+                  "residual_relative_db": -322.3099660789006
+                },
+                {
+                  "hz": [
+                    300,
+                    3400
+                  ],
+                  "reference_energy": 173.0950641113209,
+                  "residual_energy": 0.0,
+                  "residual_relative_db": -322.38284683936746
+                },
+                {
+                  "hz": [
+                    3400,
+                    8000
+                  ],
+                  "reference_energy": 198.3505042721232,
+                  "residual_energy": 0.0,
+                  "residual_relative_db": -322.9743330893078
+                },
+                {
+                  "hz": [
+                    8000,
+                    16000
+                  ],
+                  "reference_energy": 314.41063318414416,
+                  "residual_energy": 0.0,
+                  "residual_relative_db": -324.9749722520169
+                },
+                {
+                  "hz": [
+                    16000,
+                    22050
+                  ],
+                  "reference_energy": 172.7905333377409,
+                  "residual_energy": 0.0,
+                  "residual_relative_db": -322.37519945134756
+                }
+              ]
+            },
+            "matched_order_pipeline": {
+              "exact_float_match": false,
+              "fixed_gain_snr_db": 127.52467019686917,
+              "max_abs_error": 1.341104507446289e-06,
+              "rms_error_dbfs": -133.01579588925588,
+              "reference_peak": 1.0,
+              "actual_peak": 1.0,
+              "actual_clipped_samples": 31278,
+              "active_bin_abs_magnitude_error_p95_db": 6.833322434374647e-05,
+              "bands": [
+                {
+                  "hz": [
+                    0,
+                    300
+                  ],
+                  "reference_energy": 170.2145140762919,
+                  "residual_energy": 1.546225512418849e-11,
+                  "residual_relative_db": -130.41723754555971
+                },
+                {
+                  "hz": [
+                    300,
+                    3400
+                  ],
+                  "reference_energy": 173.09506160191233,
+                  "residual_energy": 7.119962269505753e-11,
+                  "residual_relative_db": -123.8580698543482
+                },
+                {
+                  "hz": [
+                    3400,
+                    8000
+                  ],
+                  "reference_energy": 198.35049737213635,
+                  "residual_energy": 5.253880204209908e-11,
+                  "residual_relative_db": -125.76953127779487
+                },
+                {
+                  "hz": [
+                    8000,
+                    16000
+                  ],
+                  "reference_energy": 314.4106028214146,
+                  "residual_energy": 2.937746000632372e-11,
+                  "residual_relative_db": -130.29482939558483
+                },
+                {
+                  "hz": [
+                    16000,
+                    22050
+                  ],
+                  "reference_energy": 172.79053215056842,
+                  "residual_energy": 1.2302720635752093e-11,
+                  "residual_relative_db": -131.47518779781467
+                }
+              ]
+            },
+            "stock_clip_order_diagnostic": {
+              "exact_float_match": false,
+              "fixed_gain_snr_db": 127.52467019686917,
+              "max_abs_error": 1.341104507446289e-06,
+              "rms_error_dbfs": -133.01579588925588,
+              "reference_peak": 1.0,
+              "actual_peak": 1.0,
+              "actual_clipped_samples": 31278,
+              "active_bin_abs_magnitude_error_p95_db": 6.833322434374647e-05,
+              "bands": [
+                {
+                  "hz": [
+                    0,
+                    300
+                  ],
+                  "reference_energy": 170.2145140762919,
+                  "residual_energy": 1.546225512418849e-11,
+                  "residual_relative_db": -130.41723754555971
+                },
+                {
+                  "hz": [
+                    300,
+                    3400
+                  ],
+                  "reference_energy": 173.09506160191233,
+                  "residual_energy": 7.119962269505753e-11,
+                  "residual_relative_db": -123.8580698543482
+                },
+                {
+                  "hz": [
+                    3400,
+                    8000
+                  ],
+                  "reference_energy": 198.35049737213635,
+                  "residual_energy": 5.253880204209908e-11,
+                  "residual_relative_db": -125.76953127779487
+                },
+                {
+                  "hz": [
+                    8000,
+                    16000
+                  ],
+                  "reference_energy": 314.4106028214146,
+                  "residual_energy": 2.937746000632372e-11,
+                  "residual_relative_db": -130.29482939558483
+                },
+                {
+                  "hz": [
+                    16000,
+                    22050
+                  ],
+                  "reference_energy": 172.79053215056842,
+                  "residual_energy": 1.2302720635752093e-11,
+                  "residual_relative_db": -131.47518779781467
+                }
+              ]
+            },
+            "component_gate_passed": true,
+            "stock_order_gate_passed": true
+          },
+          {
+            "rate": 44100,
+            "src_delay_output_frames": 26,
+            "chunks_bit_exact": true,
+            "isolated_device_src": {
+              "exact_float_match": false,
+              "fixed_gain_snr_db": 148.40453452344497,
+              "max_abs_error": 1.1920928955078125e-07,
+              "rms_error_dbfs": -153.95005512571848,
+              "reference_peak": 1.0,
+              "actual_peak": 1.0,
+              "actual_clipped_samples": 27908,
+              "active_bin_abs_magnitude_error_p95_db": 8.784414954983551e-06,
+              "bands": [
+                {
+                  "hz": [
+                    0,
+                    300
+                  ],
+                  "reference_energy": 172.82632480781243,
+                  "residual_energy": 1.9009047066508387e-14,
+                  "residual_relative_db": -159.58649548669578
+                },
+                {
+                  "hz": [
+                    300,
+                    3400
+                  ],
+                  "reference_energy": 175.2276153491429,
+                  "residual_energy": 2.1008355145458002e-13,
+                  "residual_relative_db": -149.21210500200465
+                },
+                {
+                  "hz": [
+                    3400,
+                    8000
+                  ],
+                  "reference_energy": 202.57359504532783,
+                  "residual_energy": 3.0707344613754414e-13,
+                  "residual_relative_db": -148.19340572633186
+                },
+                {
+                  "hz": [
+                    8000,
+                    16000
+                  ],
+                  "reference_energy": 320.5675796518204,
+                  "residual_energy": 5.320618759581859e-13,
+                  "residual_relative_db": -147.7995745684684
+                },
+                {
+                  "hz": [
+                    16000,
+                    22050
+                  ],
+                  "reference_energy": 149.75931704061367,
+                  "residual_energy": 4.0550895307877266e-13,
+                  "residual_relative_db": -145.67393403574098
+                }
+              ]
+            },
+            "matched_order_pipeline": {
+              "exact_float_match": false,
+              "fixed_gain_snr_db": 127.31463668652623,
+              "max_abs_error": 1.3113021850585938e-06,
+              "rms_error_dbfs": -132.8601575239371,
+              "reference_peak": 1.0,
+              "actual_peak": 1.0,
+              "actual_clipped_samples": 27908,
+              "active_bin_abs_magnitude_error_p95_db": 7.494308057852942e-05,
+              "bands": [
+                {
+                  "hz": [
+                    0,
+                    300
+                  ],
+                  "reference_energy": 172.82631777656897,
+                  "residual_energy": 1.5760779257642456e-11,
+                  "residual_relative_db": -130.40032190566205
+                },
+                {
+                  "hz": [
+                    300,
+                    3400
+                  ],
+                  "reference_energy": 175.22761281043398,
+                  "residual_energy": 7.342097690980685e-11,
+                  "residual_relative_db": -123.77782385694775
+                },
+                {
+                  "hz": [
+                    3400,
+                    8000
+                  ],
+                  "reference_energy": 202.57358688378568,
+                  "residual_energy": 5.524516821568297e-11,
+                  "residual_relative_db": -125.64288517737725
+                },
+                {
+                  "hz": [
+                    8000,
+                    16000
+                  ],
+                  "reference_energy": 320.5675453071267,
+                  "residual_energy": 3.325598961780041e-11,
+                  "residual_relative_db": -129.84049675765957
+                },
+                {
+                  "hz": [
+                    16000,
+                    22050
+                  ],
+                  "reference_energy": 149.75931389747097,
+                  "residual_energy": 1.3040318631193455e-11,
+                  "residual_relative_db": -130.6010563852401
+                }
+              ]
+            },
+            "stock_clip_order_diagnostic": {
+              "exact_float_match": false,
+              "fixed_gain_snr_db": 127.31463668652623,
+              "max_abs_error": 1.3113021850585938e-06,
+              "rms_error_dbfs": -132.8601575239371,
+              "reference_peak": 1.0,
+              "actual_peak": 1.0,
+              "actual_clipped_samples": 27908,
+              "active_bin_abs_magnitude_error_p95_db": 7.494308057852942e-05,
+              "bands": [
+                {
+                  "hz": [
+                    0,
+                    300
+                  ],
+                  "reference_energy": 172.82631777656897,
+                  "residual_energy": 1.5760779257642456e-11,
+                  "residual_relative_db": -130.40032190566205
+                },
+                {
+                  "hz": [
+                    300,
+                    3400
+                  ],
+                  "reference_energy": 175.22761281043398,
+                  "residual_energy": 7.342097690980685e-11,
+                  "residual_relative_db": -123.77782385694775
+                },
+                {
+                  "hz": [
+                    3400,
+                    8000
+                  ],
+                  "reference_energy": 202.57358688378568,
+                  "residual_energy": 5.524516821568297e-11,
+                  "residual_relative_db": -125.64288517737725
+                },
+                {
+                  "hz": [
+                    8000,
+                    16000
+                  ],
+                  "reference_energy": 320.5675453071267,
+                  "residual_energy": 3.325598961780041e-11,
+                  "residual_relative_db": -129.84049675765957
+                },
+                {
+                  "hz": [
+                    16000,
+                    22050
+                  ],
+                  "reference_energy": 149.75931389747097,
+                  "residual_energy": 1.3040318631193455e-11,
+                  "residual_relative_db": -130.6010563852401
+                }
+              ]
+            },
+            "component_gate_passed": true,
+            "stock_order_gate_passed": true
+          }
+        ]
+      }
+    ],
+    "raw_report": "/home/ambiso/.cache/nuschl-output-clip-order/spectral-final/proof.json",
+    "raw_report_sha256": "011d3a145a7bf01b8a96bf7ba5712e6e9b173a987b6221caa4aa3696048463d0",
+    "invocation": [
+      "/nix/store/igcsxi89qpy38gvz7d7qz6qrw9ii5gvw-python3-3.14.8-env/bin/python3",
+      "tests/output_spectral.py",
+      "--mixer-probe",
+      "/home/ambiso/.cache/nuschl-output-clip-order/mixer-probe",
+      "--converter-test",
+      "/nix/store/rf3kapkdak0h3nrq4vv4fxc0ix2c5flf-rust_nuschl-media-worker-0.1.0-test/tests/nuschl-media-worker",
+      "--converter-source",
+      "/nix/store/kd808s9a1yg13ym1jgm1ab9a11nhqsgv-source",
+      "--opus-library",
+      "/nix/store/ah26jmgs60s1dzphf0vi4f9pqmlpl9y6-libopus-1.6.1/lib/libopus.so",
+      "--speex-library",
+      "/nix/store/9mzqdjywmmlb10c06jiql8mgwlk5lw1s-speexdsp-1.2.1/lib/libspeexdsp.so",
+      "--output",
+      "/home/ambiso/.cache/nuschl-output-clip-order/spectral-final",
+      "--wide-mixer",
+      "--source-revision",
+      "8da73bda8c441f6369949cebc63b8aff21cb0279"
+    ]
+  },
+  "independent_fallback": {
+    "passed": true,
+    "host_devices": false,
+    "network": false,
+    "cases": [
+      {
+        "name": "multiband",
+        "rate": 11025,
+        "chunks": "whole",
+        "c_reference": {
+          "exact_float_match": false,
+          "fixed_gain_snr_db": 145.96537717890217,
+          "max_abs_error": 1.4901161193847656e-08,
+          "rms_error_dbfs": -175.6042093669492,
+          "reference_peak": 0.10116775333881378,
+          "actual_peak": 0.10116775333881378,
+          "actual_clipped_samples": 0,
+          "active_bin_abs_magnitude_error_p95_db": 2.2833435105465974e-06,
+          "bands": [
+            {
+              "hz": [
+                0,
+                300
+              ],
+              "reference_energy": 0.5006295448101532,
+              "residual_energy": 4.0655437564427817e-17,
+              "residual_relative_db": -160.90397836424182
+            },
+            {
+              "hz": [
+                300,
+                3400
+              ],
+              "reference_energy": 0.5014574562510594,
+              "residual_energy": 4.3170811622011037e-16,
+              "residual_relative_db": -150.65043879712871
+            },
+            {
+              "hz": [
+                3400,
+                8000
+              ],
+              "reference_energy": 0.29140202705932805,
+              "residual_energy": 6.22634512686821e-16,
+              "residual_relative_db": -146.70259378500748
+            },
+            {
+              "hz": [
+                8000,
+                16000
+              ],
+              "reference_energy": 3.398193734560716e-10,
+              "residual_energy": 1.0774450161559734e-15,
+              "residual_relative_db": -54.98853018203864
+            },
+            {
+              "hz": [
+                16000,
+                22050
+              ],
+              "reference_energy": 2.010292878346621e-11,
+              "residual_energy": 8.397213486927366e-16,
+              "residual_relative_db": -43.79124139497775
+            }
+          ]
+        },
+        "clock": {
+          "device_frames": 11025,
+          "generated_48k_frames": 48000,
+          "max_timestamp_error_ns": 0,
+          "callback_count": 2,
+          "p95_pull_ns": 18266831,
+          "max_pull_ns": 18891175
+        },
+        "passed": true
+      },
+      {
+        "name": "multiband",
+        "rate": 11025,
+        "chunks": "fragmented",
+        "c_reference": {
+          "exact_float_match": false,
+          "fixed_gain_snr_db": 145.96537717890217,
+          "max_abs_error": 1.4901161193847656e-08,
+          "rms_error_dbfs": -175.6042093669492,
+          "reference_peak": 0.10116775333881378,
+          "actual_peak": 0.10116775333881378,
+          "actual_clipped_samples": 0,
+          "active_bin_abs_magnitude_error_p95_db": 2.2833435105465974e-06,
+          "bands": [
+            {
+              "hz": [
+                0,
+                300
+              ],
+              "reference_energy": 0.5006295448101532,
+              "residual_energy": 4.0655437564427817e-17,
+              "residual_relative_db": -160.90397836424182
+            },
+            {
+              "hz": [
+                300,
+                3400
+              ],
+              "reference_energy": 0.5014574562510594,
+              "residual_energy": 4.3170811622011037e-16,
+              "residual_relative_db": -150.65043879712871
+            },
+            {
+              "hz": [
+                3400,
+                8000
+              ],
+              "reference_energy": 0.29140202705932805,
+              "residual_energy": 6.22634512686821e-16,
+              "residual_relative_db": -146.70259378500748
+            },
+            {
+              "hz": [
+                8000,
+                16000
+              ],
+              "reference_energy": 3.398193734560716e-10,
+              "residual_energy": 1.0774450161559734e-15,
+              "residual_relative_db": -54.98853018203864
+            },
+            {
+              "hz": [
+                16000,
+                22050
+              ],
+              "reference_energy": 2.010292878346621e-11,
+              "residual_energy": 8.397213486927366e-16,
+              "residual_relative_db": -43.79124139497775
+            }
+          ]
+        },
+        "clock": {
+          "device_frames": 11025,
+          "generated_48k_frames": 48000,
+          "max_timestamp_error_ns": 0,
+          "callback_count": 35,
+          "p95_pull_ns": 2307946,
+          "max_pull_ns": 2567309
+        },
+        "passed": true
+      },
+      {
+        "name": "multiband",
+        "rate": 44100,
+        "chunks": "whole",
+        "c_reference": {
+          "exact_float_match": false,
+          "fixed_gain_snr_db": 146.16156276753233,
+          "max_abs_error": 2.9802322387695312e-08,
+          "rms_error_dbfs": -172.25728008963983,
+          "reference_peak": 0.18376804888248444,
+          "actual_peak": 0.18376806378364563,
+          "actual_clipped_samples": 0,
+          "active_bin_abs_magnitude_error_p95_db": 3.054299929420946e-06,
+          "bands": [
+            {
+              "hz": [
+                0,
+                300
+              ],
+              "reference_energy": 0.5025938689177311,
+              "residual_energy": 8.684980249006605e-17,
+              "residual_relative_db": -157.6244835125146
+            },
+            {
+              "hz": [
+                300,
+                3400
+              ],
+              "reference_energy": 0.5034252058676595,
+              "residual_energy": 9.110030859086741e-16,
+              "residual_relative_db": -147.4241510824231
+            },
+            {
+              "hz": [
+                3400,
+                8000
+              ],
+              "reference_energy": 0.5718668107153676,
+              "residual_energy": 1.390381414631259e-15,
+              "residual_relative_db": -146.1416093835751
+            },
+            {
+              "hz": [
+                8000,
+                16000
+              ],
+              "reference_energy": 0.936965095883836,
+              "residual_energy": 2.34850744071115e-15,
+              "residual_relative_db": -146.009314722309
+            },
+            {
+              "hz": [
+                16000,
+                22050
+              ],
+              "reference_energy": 0.4096521198667092,
+              "residual_energy": 1.7677157244923448e-15,
+              "residual_relative_db": -143.6500278143661
+            }
+          ]
+        },
+        "clock": {
+          "device_frames": 44100,
+          "generated_48k_frames": 48000,
+          "max_timestamp_error_ns": 0,
+          "callback_count": 6,
+          "p95_pull_ns": 5748309,
+          "max_pull_ns": 5829711
+        },
+        "passed": true
+      },
+      {
+        "name": "multiband",
+        "rate": 44100,
+        "chunks": "fragmented",
+        "c_reference": {
+          "exact_float_match": false,
+          "fixed_gain_snr_db": 146.16156276753233,
+          "max_abs_error": 2.9802322387695312e-08,
+          "rms_error_dbfs": -172.25728008963983,
+          "reference_peak": 0.18376804888248444,
+          "actual_peak": 0.18376806378364563,
+          "actual_clipped_samples": 0,
+          "active_bin_abs_magnitude_error_p95_db": 3.054299929420946e-06,
+          "bands": [
+            {
+              "hz": [
+                0,
+                300
+              ],
+              "reference_energy": 0.5025938689177311,
+              "residual_energy": 8.684980249006605e-17,
+              "residual_relative_db": -157.6244835125146
+            },
+            {
+              "hz": [
+                300,
+                3400
+              ],
+              "reference_energy": 0.5034252058676595,
+              "residual_energy": 9.110030859086741e-16,
+              "residual_relative_db": -147.4241510824231
+            },
+            {
+              "hz": [
+                3400,
+                8000
+              ],
+              "reference_energy": 0.5718668107153676,
+              "residual_energy": 1.390381414631259e-15,
+              "residual_relative_db": -146.1416093835751
+            },
+            {
+              "hz": [
+                8000,
+                16000
+              ],
+              "reference_energy": 0.936965095883836,
+              "residual_energy": 2.34850744071115e-15,
+              "residual_relative_db": -146.009314722309
+            },
+            {
+              "hz": [
+                16000,
+                22050
+              ],
+              "reference_energy": 0.4096521198667092,
+              "residual_energy": 1.7677157244923448e-15,
+              "residual_relative_db": -143.6500278143661
+            }
+          ]
+        },
+        "clock": {
+          "device_frames": 44100,
+          "generated_48k_frames": 48000,
+          "max_timestamp_error_ns": 0,
+          "callback_count": 141,
+          "p95_pull_ns": 567279,
+          "max_pull_ns": 657430
+        },
+        "passed": true
+      },
+      {
+        "name": "multiband",
+        "rate": 48000,
+        "chunks": "whole",
+        "c_reference": {
+          "exact_float_match": true,
+          "fixed_gain_snr_db": null,
+          "max_abs_error": 0.0,
+          "rms_error_dbfs": -300.0,
+          "reference_peak": 0.18712389469146729,
+          "actual_peak": 0.18712389469146729,
+          "actual_clipped_samples": 0,
+          "active_bin_abs_magnitude_error_p95_db": 0.0,
+          "bands": [
+            {
+              "hz": [
+                0,
+                300
+              ],
+              "reference_energy": 0.5032895660155617,
+              "residual_energy": 0.0,
+              "residual_relative_db": -297.0181792688266
+            },
+            {
+              "hz": [
+                300,
+                3400
+              ],
+              "reference_energy": 0.5041224607946776,
+              "residual_energy": 0.0,
+              "residual_relative_db": -297.02536047531146
+            },
+            {
+              "hz": [
+                3400,
+                8000
+              ],
+              "reference_energy": 0.5726549851372889,
+              "residual_energy": 0.0,
+              "residual_relative_db": -297.5789304573803
+            },
+            {
+              "hz": [
+                8000,
+                16000
+              ],
+              "reference_energy": 0.938315617418394,
+              "residual_energy": 0.0,
+              "residual_relative_db": -299.7234894482643
+            },
+            {
+              "hz": [
+                16000,
+                22050
+              ],
+              "reference_energy": 0.5036569766378962,
+              "residual_energy": 0.0,
+              "residual_relative_db": -297.0213485415972
+            }
+          ]
+        },
+        "clock": {
+          "device_frames": 48000,
+          "generated_48k_frames": 48000,
+          "max_timestamp_error_ns": 0,
+          "callback_count": 6,
+          "p95_pull_ns": 153267,
+          "max_pull_ns": 159573
+        },
+        "passed": true
+      },
+      {
+        "name": "multiband",
+        "rate": 48000,
+        "chunks": "fragmented",
+        "c_reference": {
+          "exact_float_match": true,
+          "fixed_gain_snr_db": null,
+          "max_abs_error": 0.0,
+          "rms_error_dbfs": -300.0,
+          "reference_peak": 0.18712389469146729,
+          "actual_peak": 0.18712389469146729,
+          "actual_clipped_samples": 0,
+          "active_bin_abs_magnitude_error_p95_db": 0.0,
+          "bands": [
+            {
+              "hz": [
+                0,
+                300
+              ],
+              "reference_energy": 0.5032895660155617,
+              "residual_energy": 0.0,
+              "residual_relative_db": -297.0181792688266
+            },
+            {
+              "hz": [
+                300,
+                3400
+              ],
+              "reference_energy": 0.5041224607946776,
+              "residual_energy": 0.0,
+              "residual_relative_db": -297.02536047531146
+            },
+            {
+              "hz": [
+                3400,
+                8000
+              ],
+              "reference_energy": 0.5726549851372889,
+              "residual_energy": 0.0,
+              "residual_relative_db": -297.5789304573803
+            },
+            {
+              "hz": [
+                8000,
+                16000
+              ],
+              "reference_energy": 0.938315617418394,
+              "residual_energy": 0.0,
+              "residual_relative_db": -299.7234894482643
+            },
+            {
+              "hz": [
+                16000,
+                22050
+              ],
+              "reference_energy": 0.5036569766378962,
+              "residual_energy": 0.0,
+              "residual_relative_db": -297.0213485415972
+            }
+          ]
+        },
+        "clock": {
+          "device_frames": 48000,
+          "generated_48k_frames": 48000,
+          "max_timestamp_error_ns": 0,
+          "callback_count": 155,
+          "p95_pull_ns": 15732,
+          "max_pull_ns": 23030
+        },
+        "passed": true
+      },
+      {
+        "name": "multiband",
+        "rate": 96000,
+        "chunks": "whole",
+        "c_reference": {
+          "exact_float_match": false,
+          "fixed_gain_snr_db": 134.17659226559368,
+          "max_abs_error": 1.4901161193847656e-07,
+          "rms_error_dbfs": -160.13551254405638,
+          "reference_peak": 0.1871235966682434,
+          "actual_peak": 0.18712358176708221,
+          "actual_clipped_samples": 0,
+          "active_bin_abs_magnitude_error_p95_db": 1.271957172499139e-05,
+          "bands": [
+            {
+              "hz": [
+                0,
+                300
+              ],
+              "reference_energy": 0.5026711166833865,
+              "residual_energy": 1.3226161395422344e-15,
+              "residual_relative_db": -145.79850113543867
+            },
+            {
+              "hz": [
+                300,
+                3400
+              ],
+              "reference_energy": 0.5035062087449256,
+              "residual_energy": 1.5469950575115565e-14,
+              "residual_relative_db": -135.12515904040575
+            },
+            {
+              "hz": [
+                3400,
+                8000
+              ],
+              "reference_energy": 0.571951729278411,
+              "residual_energy": 2.2276357861732276e-14,
+              "residual_relative_db": -134.09515191347816
+            },
+            {
+              "hz": [
+                8000,
+                16000
+              ],
+              "reference_energy": 0.937144064888926,
+              "residual_energy": 3.8312380446834486e-14,
+              "residual_relative_db": -133.8846722240387
+            },
+            {
+              "hz": [
+                16000,
+                22050
+              ],
+              "reference_energy": 0.502916459574662,
+              "residual_energy": 2.8713370261590477e-14,
+              "residual_relative_db": -132.43411678297792
+            }
+          ]
+        },
+        "clock": {
+          "device_frames": 96000,
+          "generated_48k_frames": 48000,
+          "max_timestamp_error_ns": 0,
+          "callback_count": 12,
+          "p95_pull_ns": 1360430,
+          "max_pull_ns": 1409552
+        },
+        "passed": true
+      },
+      {
+        "name": "multiband",
+        "rate": 96000,
+        "chunks": "fragmented",
+        "c_reference": {
+          "exact_float_match": false,
+          "fixed_gain_snr_db": 134.17659226559368,
+          "max_abs_error": 1.4901161193847656e-07,
+          "rms_error_dbfs": -160.13551254405638,
+          "reference_peak": 0.1871235966682434,
+          "actual_peak": 0.18712358176708221,
+          "actual_clipped_samples": 0,
+          "active_bin_abs_magnitude_error_p95_db": 1.271957172499139e-05,
+          "bands": [
+            {
+              "hz": [
+                0,
+                300
+              ],
+              "reference_energy": 0.5026711166833865,
+              "residual_energy": 1.3226161395422344e-15,
+              "residual_relative_db": -145.79850113543867
+            },
+            {
+              "hz": [
+                300,
+                3400
+              ],
+              "reference_energy": 0.5035062087449256,
+              "residual_energy": 1.5469950575115565e-14,
+              "residual_relative_db": -135.12515904040575
+            },
+            {
+              "hz": [
+                3400,
+                8000
+              ],
+              "reference_energy": 0.571951729278411,
+              "residual_energy": 2.2276357861732276e-14,
+              "residual_relative_db": -134.09515191347816
+            },
+            {
+              "hz": [
+                8000,
+                16000
+              ],
+              "reference_energy": 0.937144064888926,
+              "residual_energy": 3.8312380446834486e-14,
+              "residual_relative_db": -133.8846722240387
+            },
+            {
+              "hz": [
+                16000,
+                22050
+              ],
+              "reference_energy": 0.502916459574662,
+              "residual_energy": 2.8713370261590477e-14,
+              "residual_relative_db": -132.43411678297792
+            }
+          ]
+        },
+        "clock": {
+          "device_frames": 96000,
+          "generated_48k_frames": 48000,
+          "max_timestamp_error_ns": 0,
+          "callback_count": 305,
+          "p95_pull_ns": 116838,
+          "max_pull_ns": 209574
+        },
+        "passed": true
+      },
+      {
+        "name": "multiband",
+        "rate": 192000,
+        "chunks": "whole",
+        "c_reference": {
+          "exact_float_match": false,
+          "fixed_gain_snr_db": 131.57694975249808,
+          "max_abs_error": 1.7881393432617188e-07,
+          "rms_error_dbfs": -157.53588012392197,
+          "reference_peak": 0.18712328374385834,
+          "actual_peak": 0.18712332844734192,
+          "actual_clipped_samples": 0,
+          "active_bin_abs_magnitude_error_p95_db": 1.7154518820475926e-05,
+          "bands": [
+            {
+              "hz": [
+                0,
+                300
+              ],
+              "reference_energy": 0.5026674631328463,
+              "residual_energy": 2.6361480944206503e-15,
+              "residual_relative_db": -142.80310970395408
+            },
+            {
+              "hz": [
+                300,
+                3400
+              ],
+              "reference_energy": 0.5035067107056177,
+              "residual_energy": 2.7639581300502412e-14,
+              "residual_relative_db": -132.60473803356015
+            },
+            {
+              "hz": [
+                3400,
+                8000
+              ],
+              "reference_energy": 0.5719517953563654,
+              "residual_energy": 3.957489995101418e-14,
+              "residual_relative_db": -131.59939601982228
+            },
+            {
+              "hz": [
+                8000,
+                16000
+              ],
+              "reference_energy": 0.9371425333588672,
+              "residual_energy": 7.04158084688833e-14,
+              "residual_relative_db": -131.24135479373348
+            },
+            {
+              "hz": [
+                16000,
+                22050
+              ],
+              "reference_energy": 0.5029140626650279,
+              "residual_energy": 5.271783301764137e-14,
+              "residual_relative_db": -129.79536229542455
+            }
+          ]
+        },
+        "clock": {
+          "device_frames": 192000,
+          "generated_48k_frames": 48000,
+          "max_timestamp_error_ns": 0,
+          "callback_count": 24,
+          "p95_pull_ns": 1162802,
+          "max_pull_ns": 1166128
+        },
+        "passed": true
+      },
+      {
+        "name": "multiband",
+        "rate": 192000,
+        "chunks": "fragmented",
+        "c_reference": {
+          "exact_float_match": false,
+          "fixed_gain_snr_db": 131.57694975249808,
+          "max_abs_error": 1.7881393432617188e-07,
+          "rms_error_dbfs": -157.53588012392197,
+          "reference_peak": 0.18712328374385834,
+          "actual_peak": 0.18712332844734192,
+          "actual_clipped_samples": 0,
+          "active_bin_abs_magnitude_error_p95_db": 1.7154518820475926e-05,
+          "bands": [
+            {
+              "hz": [
+                0,
+                300
+              ],
+              "reference_energy": 0.5026674631328463,
+              "residual_energy": 2.6361480944206503e-15,
+              "residual_relative_db": -142.80310970395408
+            },
+            {
+              "hz": [
+                300,
+                3400
+              ],
+              "reference_energy": 0.5035067107056177,
+              "residual_energy": 2.7639581300502412e-14,
+              "residual_relative_db": -132.60473803356015
+            },
+            {
+              "hz": [
+                3400,
+                8000
+              ],
+              "reference_energy": 0.5719517953563654,
+              "residual_energy": 3.957489995101418e-14,
+              "residual_relative_db": -131.59939601982228
+            },
+            {
+              "hz": [
+                8000,
+                16000
+              ],
+              "reference_energy": 0.9371425333588672,
+              "residual_energy": 7.04158084688833e-14,
+              "residual_relative_db": -131.24135479373348
+            },
+            {
+              "hz": [
+                16000,
+                22050
+              ],
+              "reference_energy": 0.5029140626650279,
+              "residual_energy": 5.271783301764137e-14,
+              "residual_relative_db": -129.79536229542455
+            }
+          ]
+        },
+        "clock": {
+          "device_frames": 192000,
+          "generated_48k_frames": 48000,
+          "max_timestamp_error_ns": 0,
+          "callback_count": 611,
+          "p95_pull_ns": 123092,
+          "max_pull_ns": 786872
+        },
+        "passed": true
+      },
+      {
+        "name": "overload-staging",
+        "rate": 11025,
+        "chunks": "whole",
+        "c_reference": {
+          "exact_float_match": false,
+          "fixed_gain_snr_db": 146.45808792282864,
+          "max_abs_error": 1.1920928955078125e-07,
+          "rms_error_dbfs": -154.63259287223318,
+          "reference_peak": 1.0,
+          "actual_peak": 1.0,
+          "actual_clipped_samples": 1149,
+          "active_bin_abs_magnitude_error_p95_db": 3.64987906806373e-05,
+          "bands": [
+            {
+              "hz": [
+                0,
+                300
+              ],
+              "reference_energy": 70.3411188791425,
+              "residual_energy": 5.123259065354568e-15,
+              "residual_relative_db": -161.3766295493965
+            },
+            {
+              "hz": [
+                300,
+                3400
+              ],
+              "reference_energy": 70.58765899844005,
+              "residual_energy": 5.236405081055473e-14,
+              "residual_relative_db": -151.29695543393956
+            },
+            {
+              "hz": [
+                3400,
+                8000
+              ],
+              "reference_energy": 40.28003561017891,
+              "residual_energy": 8.017293334972542e-14,
+              "residual_relative_db": -147.01062072066935
+            },
+            {
+              "hz": [
+                8000,
+                16000
+              ],
+              "reference_energy": 0.015445976258760655,
+              "residual_energy": 1.3481419479894777e-13,
+              "residual_relative_db": -110.59079740813499
+            },
+            {
+              "hz": [
+                16000,
+                22050
+              ],
+              "reference_energy": 0.0014131574741359778,
+              "residual_energy": 1.032254891013813e-13,
+              "residual_relative_db": -101.36403610503969
+            }
+          ]
+        },
+        "clock": {
+          "device_frames": 11025,
+          "generated_48k_frames": 48000,
+          "max_timestamp_error_ns": 0,
+          "callback_count": 2,
+          "p95_pull_ns": 17810217,
+          "max_pull_ns": 18408458
+        },
+        "passed": true
+      },
+      {
+        "name": "overload-staging",
+        "rate": 11025,
+        "chunks": "fragmented",
+        "c_reference": {
+          "exact_float_match": false,
+          "fixed_gain_snr_db": 146.45808792282864,
+          "max_abs_error": 1.1920928955078125e-07,
+          "rms_error_dbfs": -154.63259287223318,
+          "reference_peak": 1.0,
+          "actual_peak": 1.0,
+          "actual_clipped_samples": 1149,
+          "active_bin_abs_magnitude_error_p95_db": 3.64987906806373e-05,
+          "bands": [
+            {
+              "hz": [
+                0,
+                300
+              ],
+              "reference_energy": 70.3411188791425,
+              "residual_energy": 5.123259065354568e-15,
+              "residual_relative_db": -161.3766295493965
+            },
+            {
+              "hz": [
+                300,
+                3400
+              ],
+              "reference_energy": 70.58765899844005,
+              "residual_energy": 5.236405081055473e-14,
+              "residual_relative_db": -151.29695543393956
+            },
+            {
+              "hz": [
+                3400,
+                8000
+              ],
+              "reference_energy": 40.28003561017891,
+              "residual_energy": 8.017293334972542e-14,
+              "residual_relative_db": -147.01062072066935
+            },
+            {
+              "hz": [
+                8000,
+                16000
+              ],
+              "reference_energy": 0.015445976258760655,
+              "residual_energy": 1.3481419479894777e-13,
+              "residual_relative_db": -110.59079740813499
+            },
+            {
+              "hz": [
+                16000,
+                22050
+              ],
+              "reference_energy": 0.0014131574741359778,
+              "residual_energy": 1.032254891013813e-13,
+              "residual_relative_db": -101.36403610503969
+            }
+          ]
+        },
+        "clock": {
+          "device_frames": 11025,
+          "generated_48k_frames": 48000,
+          "max_timestamp_error_ns": 0,
+          "callback_count": 35,
+          "p95_pull_ns": 2147255,
+          "max_pull_ns": 2243645
+        },
+        "passed": true
+      },
+      {
+        "name": "overload-staging",
+        "rate": 44100,
+        "chunks": "whole",
+        "c_reference": {
+          "exact_float_match": false,
+          "fixed_gain_snr_db": 147.91960561563081,
+          "max_abs_error": 1.1920928955078125e-07,
+          "rms_error_dbfs": -153.6360746551607,
+          "reference_peak": 1.0,
+          "actual_peak": 1.0,
+          "actual_clipped_samples": 6575,
+          "active_bin_abs_magnitude_error_p95_db": 1.2063825787809804e-05,
+          "bands": [
+            {
+              "hz": [
+                0,
+                300
+              ],
+              "reference_energy": 53.623837760160235,
+              "residual_energy": 6.933237777318653e-15,
+              "residual_relative_db": -158.8842179771799
+            },
+            {
+              "hz": [
+                300,
+                3400
+              ],
+              "reference_energy": 54.719138553625925,
+              "residual_energy": 6.80493896493135e-14,
+              "residual_relative_db": -149.05315017374883
+            },
+            {
+              "hz": [
+                3400,
+                8000
+              ],
+              "reference_energy": 63.14609697473203,
+              "residual_energy": 9.851832632477323e-14,
+              "residual_relative_db": -148.0682948698686
+            },
+            {
+              "hz": [
+                8000,
+                16000
+              ],
+              "reference_energy": 103.70058718443892,
+              "residual_energy": 1.7430145960869865e-13,
+              "residual_relative_db": -147.74480191576345
+            },
+            {
+              "hz": [
+                16000,
+                22050
+              ],
+              "reference_energy": 43.908348153662075,
+              "residual_energy": 1.2924352888658748e-13,
+              "residual_relative_db": -145.3113829155653
+            }
+          ]
+        },
+        "clock": {
+          "device_frames": 44100,
+          "generated_48k_frames": 48000,
+          "max_timestamp_error_ns": 0,
+          "callback_count": 6,
+          "p95_pull_ns": 4934524,
+          "max_pull_ns": 4935827
+        },
+        "passed": true
+      },
+      {
+        "name": "overload-staging",
+        "rate": 44100,
+        "chunks": "fragmented",
+        "c_reference": {
+          "exact_float_match": false,
+          "fixed_gain_snr_db": 147.91960561563081,
+          "max_abs_error": 1.1920928955078125e-07,
+          "rms_error_dbfs": -153.6360746551607,
+          "reference_peak": 1.0,
+          "actual_peak": 1.0,
+          "actual_clipped_samples": 6575,
+          "active_bin_abs_magnitude_error_p95_db": 1.2063825787809804e-05,
+          "bands": [
+            {
+              "hz": [
+                0,
+                300
+              ],
+              "reference_energy": 53.623837760160235,
+              "residual_energy": 6.933237777318653e-15,
+              "residual_relative_db": -158.8842179771799
+            },
+            {
+              "hz": [
+                300,
+                3400
+              ],
+              "reference_energy": 54.719138553625925,
+              "residual_energy": 6.80493896493135e-14,
+              "residual_relative_db": -149.05315017374883
+            },
+            {
+              "hz": [
+                3400,
+                8000
+              ],
+              "reference_energy": 63.14609697473203,
+              "residual_energy": 9.851832632477323e-14,
+              "residual_relative_db": -148.0682948698686
+            },
+            {
+              "hz": [
+                8000,
+                16000
+              ],
+              "reference_energy": 103.70058718443892,
+              "residual_energy": 1.7430145960869865e-13,
+              "residual_relative_db": -147.74480191576345
+            },
+            {
+              "hz": [
+                16000,
+                22050
+              ],
+              "reference_energy": 43.908348153662075,
+              "residual_energy": 1.2924352888658748e-13,
+              "residual_relative_db": -145.3113829155653
+            }
+          ]
+        },
+        "clock": {
+          "device_frames": 44100,
+          "generated_48k_frames": 48000,
+          "max_timestamp_error_ns": 0,
+          "callback_count": 141,
+          "p95_pull_ns": 565499,
+          "max_pull_ns": 634390
+        },
+        "passed": true
+      },
+      {
+        "name": "overload-staging",
+        "rate": 48000,
+        "chunks": "whole",
+        "c_reference": {
+          "exact_float_match": true,
+          "fixed_gain_snr_db": null,
+          "max_abs_error": 0.0,
+          "rms_error_dbfs": -300.0,
+          "reference_peak": 1.0,
+          "actual_peak": 1.0,
+          "actual_clipped_samples": 10680,
+          "active_bin_abs_magnitude_error_p95_db": 0.0,
+          "bands": [
+            {
+              "hz": [
+                0,
+                300
+              ],
+              "reference_energy": 56.32308891237348,
+              "residual_energy": 0.0,
+              "residual_relative_db": -317.5068646468542
+            },
+            {
+              "hz": [
+                300,
+                3400
+              ],
+              "reference_energy": 57.33749376807724,
+              "residual_energy": 0.0,
+              "residual_relative_db": -317.5843870593725
+            },
+            {
+              "hz": [
+                3400,
+                8000
+              ],
+              "reference_energy": 65.14421649567831,
+              "residual_energy": 0.0,
+              "residual_relative_db": -318.1387586509072
+            },
+            {
+              "hz": [
+                8000,
+                16000
+              ],
+              "reference_energy": 108.95933670749366,
+              "residual_energy": 0.0,
+              "residual_relative_db": -320.37264450798955
+            },
+            {
+              "hz": [
+                16000,
+                22050
+              ],
+              "reference_energy": 58.64302981795677,
+              "residual_energy": 0.0,
+              "residual_relative_db": -317.68216400228357
+            }
+          ]
+        },
+        "clock": {
+          "device_frames": 48000,
+          "generated_48k_frames": 48000,
+          "max_timestamp_error_ns": 0,
+          "callback_count": 6,
+          "p95_pull_ns": 234804,
+          "max_pull_ns": 237444
+        },
+        "passed": true
+      },
+      {
+        "name": "overload-staging",
+        "rate": 48000,
+        "chunks": "fragmented",
+        "c_reference": {
+          "exact_float_match": true,
+          "fixed_gain_snr_db": null,
+          "max_abs_error": 0.0,
+          "rms_error_dbfs": -300.0,
+          "reference_peak": 1.0,
+          "actual_peak": 1.0,
+          "actual_clipped_samples": 10680,
+          "active_bin_abs_magnitude_error_p95_db": 0.0,
+          "bands": [
+            {
+              "hz": [
+                0,
+                300
+              ],
+              "reference_energy": 56.32308891237348,
+              "residual_energy": 0.0,
+              "residual_relative_db": -317.5068646468542
+            },
+            {
+              "hz": [
+                300,
+                3400
+              ],
+              "reference_energy": 57.33749376807724,
+              "residual_energy": 0.0,
+              "residual_relative_db": -317.5843870593725
+            },
+            {
+              "hz": [
+                3400,
+                8000
+              ],
+              "reference_energy": 65.14421649567831,
+              "residual_energy": 0.0,
+              "residual_relative_db": -318.1387586509072
+            },
+            {
+              "hz": [
+                8000,
+                16000
+              ],
+              "reference_energy": 108.95933670749366,
+              "residual_energy": 0.0,
+              "residual_relative_db": -320.37264450798955
+            },
+            {
+              "hz": [
+                16000,
+                22050
+              ],
+              "reference_energy": 58.64302981795677,
+              "residual_energy": 0.0,
+              "residual_relative_db": -317.68216400228357
+            }
+          ]
+        },
+        "clock": {
+          "device_frames": 48000,
+          "generated_48k_frames": 48000,
+          "max_timestamp_error_ns": 0,
+          "callback_count": 155,
+          "p95_pull_ns": 19146,
+          "max_pull_ns": 28710
+        },
+        "passed": true
+      },
+      {
+        "name": "overload-staging",
+        "rate": 96000,
+        "chunks": "whole",
+        "c_reference": {
+          "exact_float_match": false,
+          "fixed_gain_snr_db": 136.11194105482267,
+          "max_abs_error": 6.556510925292969e-07,
+          "rms_error_dbfs": -141.71105607772066,
+          "reference_peak": 1.0,
+          "actual_peak": 1.0,
+          "actual_clipped_samples": 7193,
+          "active_bin_abs_magnitude_error_p95_db": 5.3972873792182555e-05,
+          "bands": [
+            {
+              "hz": [
+                0,
+                300
+              ],
+              "reference_energy": 53.64347458897207,
+              "residual_energy": 1.8787281546591606e-13,
+              "residual_relative_db": -144.55652956396884
+            },
+            {
+              "hz": [
+                300,
+                3400
+              ],
+              "reference_energy": 54.71544256062483,
+              "residual_energy": 1.0166147413161377e-12,
+              "residual_relative_db": -137.30953513467477
+            },
+            {
+              "hz": [
+                3400,
+                8000
+              ],
+              "reference_energy": 62.40631727787367,
+              "residual_energy": 1.524549002443436e-12,
+              "residual_relative_db": -136.1208716661748
+            },
+            {
+              "hz": [
+                8000,
+                16000
+              ],
+              "reference_energy": 102.93081109433119,
+              "residual_energy": 2.6474413390507926e-12,
+              "residual_relative_db": -135.89719049065667
+            },
+            {
+              "hz": [
+                16000,
+                22050
+              ],
+              "reference_energy": 54.161397437003615,
+              "residual_energy": 2.0093894501246622e-12,
+              "residual_relative_db": -134.30625743446276
+            }
+          ]
+        },
+        "clock": {
+          "device_frames": 96000,
+          "generated_48k_frames": 48000,
+          "max_timestamp_error_ns": 0,
+          "callback_count": 12,
+          "p95_pull_ns": 1299186,
+          "max_pull_ns": 1445143
+        },
+        "passed": true
+      },
+      {
+        "name": "overload-staging",
+        "rate": 96000,
+        "chunks": "fragmented",
+        "c_reference": {
+          "exact_float_match": false,
+          "fixed_gain_snr_db": 136.11194105482267,
+          "max_abs_error": 6.556510925292969e-07,
+          "rms_error_dbfs": -141.71105607772066,
+          "reference_peak": 1.0,
+          "actual_peak": 1.0,
+          "actual_clipped_samples": 7193,
+          "active_bin_abs_magnitude_error_p95_db": 5.3972873792182555e-05,
+          "bands": [
+            {
+              "hz": [
+                0,
+                300
+              ],
+              "reference_energy": 53.64347458897207,
+              "residual_energy": 1.8787281546591606e-13,
+              "residual_relative_db": -144.55652956396884
+            },
+            {
+              "hz": [
+                300,
+                3400
+              ],
+              "reference_energy": 54.71544256062483,
+              "residual_energy": 1.0166147413161377e-12,
+              "residual_relative_db": -137.30953513467477
+            },
+            {
+              "hz": [
+                3400,
+                8000
+              ],
+              "reference_energy": 62.40631727787367,
+              "residual_energy": 1.524549002443436e-12,
+              "residual_relative_db": -136.1208716661748
+            },
+            {
+              "hz": [
+                8000,
+                16000
+              ],
+              "reference_energy": 102.93081109433119,
+              "residual_energy": 2.6474413390507926e-12,
+              "residual_relative_db": -135.89719049065667
+            },
+            {
+              "hz": [
+                16000,
+                22050
+              ],
+              "reference_energy": 54.161397437003615,
+              "residual_energy": 2.0093894501246622e-12,
+              "residual_relative_db": -134.30625743446276
+            }
+          ]
+        },
+        "clock": {
+          "device_frames": 96000,
+          "generated_48k_frames": 48000,
+          "max_timestamp_error_ns": 0,
+          "callback_count": 305,
+          "p95_pull_ns": 129514,
+          "max_pull_ns": 328195
+        },
+        "passed": true
+      },
+      {
+        "name": "overload-staging",
+        "rate": 192000,
+        "chunks": "whole",
+        "c_reference": {
+          "exact_float_match": false,
+          "fixed_gain_snr_db": 133.66331260154854,
+          "max_abs_error": 7.152557373046875e-07,
+          "rms_error_dbfs": -139.26672616492587,
+          "reference_peak": 1.0,
+          "actual_peak": 1.0,
+          "actual_clipped_samples": 7262,
+          "active_bin_abs_magnitude_error_p95_db": 7.36723814533541e-05,
+          "bands": [
+            {
+              "hz": [
+                0,
+                300
+              ],
+              "reference_energy": 53.61983403440803,
+              "residual_energy": 2.1109435766229985e-13,
+              "residual_relative_db": -144.0484884019611
+            },
+            {
+              "hz": [
+                300,
+                3400
+              ],
+              "reference_energy": 54.661012868836835,
+              "residual_energy": 1.8060739215744185e-12,
+              "residual_relative_db": -134.80942153143639
+            },
+            {
+              "hz": [
+                3400,
+                8000
+              ],
+              "reference_energy": 62.37890371002659,
+              "residual_energy": 2.745837393461132e-12,
+              "residual_relative_db": -133.56362922845085
+            },
+            {
+              "hz": [
+                8000,
+                16000
+              ],
+              "reference_energy": 102.80308713805995,
+              "residual_energy": 4.690148509319901e-12,
+              "residual_relative_db": -133.40819562079466
+            },
+            {
+              "hz": [
+                16000,
+                22050
+              ],
+              "reference_energy": 54.07039244464706,
+              "residual_energy": 3.548966721606759e-12,
+              "residual_relative_db": -131.8285759469029
+            }
+          ]
+        },
+        "clock": {
+          "device_frames": 192000,
+          "generated_48k_frames": 48000,
+          "max_timestamp_error_ns": 0,
+          "callback_count": 24,
+          "p95_pull_ns": 1385787,
+          "max_pull_ns": 1541364
+        },
+        "passed": true
+      },
+      {
+        "name": "overload-staging",
+        "rate": 192000,
+        "chunks": "fragmented",
+        "c_reference": {
+          "exact_float_match": false,
+          "fixed_gain_snr_db": 133.66331260154854,
+          "max_abs_error": 7.152557373046875e-07,
+          "rms_error_dbfs": -139.26672616492587,
+          "reference_peak": 1.0,
+          "actual_peak": 1.0,
+          "actual_clipped_samples": 7262,
+          "active_bin_abs_magnitude_error_p95_db": 7.36723814533541e-05,
+          "bands": [
+            {
+              "hz": [
+                0,
+                300
+              ],
+              "reference_energy": 53.61983403440803,
+              "residual_energy": 2.1109435766229985e-13,
+              "residual_relative_db": -144.0484884019611
+            },
+            {
+              "hz": [
+                300,
+                3400
+              ],
+              "reference_energy": 54.661012868836835,
+              "residual_energy": 1.8060739215744185e-12,
+              "residual_relative_db": -134.80942153143639
+            },
+            {
+              "hz": [
+                3400,
+                8000
+              ],
+              "reference_energy": 62.37890371002659,
+              "residual_energy": 2.745837393461132e-12,
+              "residual_relative_db": -133.56362922845085
+            },
+            {
+              "hz": [
+                8000,
+                16000
+              ],
+              "reference_energy": 102.80308713805995,
+              "residual_energy": 4.690148509319901e-12,
+              "residual_relative_db": -133.40819562079466
+            },
+            {
+              "hz": [
+                16000,
+                22050
+              ],
+              "reference_energy": 54.07039244464706,
+              "residual_energy": 3.548966721606759e-12,
+              "residual_relative_db": -131.8285759469029
+            }
+          ]
+        },
+        "clock": {
+          "device_frames": 192000,
+          "generated_48k_frames": 48000,
+          "max_timestamp_error_ns": 0,
+          "callback_count": 611,
+          "p95_pull_ns": 122477,
+          "max_pull_ns": 264324
+        },
+        "passed": true
+      }
+    ],
+    "echo": [
+      {
+        "rate": 48000,
+        "result": {
+          "host_devices": false,
+          "kind": "actual fallback reference plus independent C room; direct production AEC pipeline",
+          "measured_frames": 300,
+          "reduction_db": 58.550679239498606,
+          "transmitted": 0.0
+        },
+        "room_truth": "independent C reverse-SRC of actual clipped device PCM",
+        "source_peak": 10.799999713897705,
+        "clipped_device_samples": 195992,
+        "clock": {
+          "device_frames": 384000,
+          "generated_48k_frames": 384000,
+          "max_timestamp_error_ns": 0,
+          "callback_count": 1114,
+          "p95_pull_ns": 16498,
+          "max_pull_ns": 107131
+        }
+      },
+      {
+        "rate": 44100,
+        "result": {
+          "host_devices": false,
+          "kind": "actual fallback reference plus independent C room; direct production AEC pipeline",
+          "measured_frames": 300,
+          "reduction_db": 58.18664151326036,
+          "transmitted": 0.0
+        },
+        "room_truth": "independent C reverse-SRC of actual clipped device PCM",
+        "source_peak": 10.799999713897705,
+        "clipped_device_samples": 172212,
+        "clock": {
+          "device_frames": 352800,
+          "generated_48k_frames": 384000,
+          "max_timestamp_error_ns": 0,
+          "callback_count": 1024,
+          "p95_pull_ns": 581963,
+          "max_pull_ns": 777593
+        }
+      }
+    ],
+    "callback_benchmarks": [
+      {
+        "rate": 44100,
+        "device_frames_per_callback": 480,
+        "device_audio_bit_exact": true,
+        "order": "alternating paired3repeats",
+        "rows": [
+          {
+            "repeat": 0,
+            "fallback_active": true,
+            "calls": 82,
+            "p50_pull_ns": 275079,
+            "p95_pull_ns": 324378,
+            "max_pull_ns": 379406
+          },
+          {
+            "repeat": 0,
+            "fallback_active": false,
+            "calls": 82,
+            "p50_pull_ns": 180587,
+            "p95_pull_ns": 194258,
+            "max_pull_ns": 209123
+          },
+          {
+            "repeat": 1,
+            "fallback_active": false,
+            "calls": 82,
+            "p50_pull_ns": 143207,
+            "p95_pull_ns": 197840,
+            "max_pull_ns": 261804
+          },
+          {
+            "repeat": 1,
+            "fallback_active": true,
+            "calls": 82,
+            "p50_pull_ns": 383365,
+            "p95_pull_ns": 411243,
+            "max_pull_ns": 452117
+          },
+          {
+            "repeat": 2,
+            "fallback_active": true,
+            "calls": 82,
+            "p50_pull_ns": 276374,
+            "p95_pull_ns": 294938,
+            "max_pull_ns": 387856
+          },
+          {
+            "repeat": 2,
+            "fallback_active": false,
+            "calls": 82,
+            "p50_pull_ns": 140947,
+            "p95_pull_ns": 150697,
+            "max_pull_ns": 175153
+          }
+        ],
+        "summary": [
+          {
+            "fallback_active": false,
+            "median_p95_pull_ns": 194258.0,
+            "max_pull_ns": 261804
+          },
+          {
+            "fallback_active": true,
+            "median_p95_pull_ns": 324378.0,
+            "max_pull_ns": 452117
+          }
+        ]
+      },
+      {
+        "rate": 48000,
+        "device_frames_per_callback": 480,
+        "device_audio_bit_exact": true,
+        "order": "alternating paired3repeats",
+        "rows": [
+          {
+            "repeat": 0,
+            "fallback_active": true,
+            "calls": 90,
+            "p50_pull_ns": 7885,
+            "p95_pull_ns": 8363,
+            "max_pull_ns": 16000
+          },
+          {
+            "repeat": 0,
+            "fallback_active": false,
+            "calls": 90,
+            "p50_pull_ns": 1780,
+            "p95_pull_ns": 1805,
+            "max_pull_ns": 12480
+          },
+          {
+            "repeat": 1,
+            "fallback_active": false,
+            "calls": 90,
+            "p50_pull_ns": 2060,
+            "p95_pull_ns": 2178,
+            "max_pull_ns": 3520
+          },
+          {
+            "repeat": 1,
+            "fallback_active": true,
+            "calls": 90,
+            "p50_pull_ns": 8020,
+            "p95_pull_ns": 14231,
+            "max_pull_ns": 20701
+          },
+          {
+            "repeat": 2,
+            "fallback_active": true,
+            "calls": 90,
+            "p50_pull_ns": 7930,
+            "p95_pull_ns": 10534,
+            "max_pull_ns": 63691
+          },
+          {
+            "repeat": 2,
+            "fallback_active": false,
+            "calls": 90,
+            "p50_pull_ns": 1840,
+            "p95_pull_ns": 3605,
+            "max_pull_ns": 4430
+          }
+        ],
+        "summary": [
+          {
+            "fallback_active": false,
+            "median_p95_pull_ns": 2178.0,
+            "max_pull_ns": 12480
+          },
+          {
+            "fallback_active": true,
+            "median_p95_pull_ns": 10534.0,
+            "max_pull_ns": 63691
+          }
+        ]
+      },
+      {
+        "rate": 96000,
+        "device_frames_per_callback": 480,
+        "device_audio_bit_exact": true,
+        "order": "alternating paired3repeats",
+        "rows": [
+          {
+            "repeat": 0,
+            "fallback_active": true,
+            "calls": 190,
+            "p50_pull_ns": 58811,
+            "p95_pull_ns": 70539,
+            "max_pull_ns": 106661
+          },
+          {
+            "repeat": 0,
+            "fallback_active": false,
+            "calls": 190,
+            "p50_pull_ns": 27040,
+            "p95_pull_ns": 35239,
+            "max_pull_ns": 47130
+          },
+          {
+            "repeat": 1,
+            "fallback_active": false,
+            "calls": 190,
+            "p50_pull_ns": 27040,
+            "p95_pull_ns": 27414,
+            "max_pull_ns": 47561
+          },
+          {
+            "repeat": 1,
+            "fallback_active": true,
+            "calls": 190,
+            "p50_pull_ns": 59246,
+            "p95_pull_ns": 119688,
+            "max_pull_ns": 237544
+          },
+          {
+            "repeat": 2,
+            "fallback_active": true,
+            "calls": 190,
+            "p50_pull_ns": 59186,
+            "p95_pull_ns": 97800,
+            "max_pull_ns": 122262
+          },
+          {
+            "repeat": 2,
+            "fallback_active": false,
+            "calls": 190,
+            "p50_pull_ns": 27201,
+            "p95_pull_ns": 35402,
+            "max_pull_ns": 59711
+          }
+        ],
+        "summary": [
+          {
+            "fallback_active": false,
+            "median_p95_pull_ns": 35239.0,
+            "max_pull_ns": 59711
+          },
+          {
+            "fallback_active": true,
+            "median_p95_pull_ns": 97800.0,
+            "max_pull_ns": 237544
+          }
+        ]
+      }
+    ],
+    "limits": [
+      "Direct production fallback/AEC pipeline with synthetic C room; not an opened CPAL fallback device",
+      "Native worker/system-monitor private-Pulse proof is separate",
+      "No general hardware or non48k AEC reliability claim"
+    ]
+  },
+  "legacy_gain_cases": {
+    "passed": true,
+    "cases": 9,
+    "report": "/home/ambiso/.cache/nuschl-output-clip-order/gain-final/proof.json",
+    "sha256": "35a20d9b84212592fca8509f03c58a733bfd87f8d5febb90e4c5198d170e8f1d"
+  },
+  "private_actual_worker_DSP": {
+    "exit_code": 0,
+    "log": "/home/ambiso/.cache/nuschl-output-clip-order/private-dsp-final.log",
+    "log_sha256": "a64fa8fbc81ac5f1f4c8e0a38ea4748429e425cf7536259aae95b2dbb3cd29c4",
+    "echo_reduction_db": 46,
+    "echo_transmitted_fraction": 0,
+    "double_talk_delta_db": 0.7,
+    "double_talk_gate_fraction": 1,
+    "effects_lufs": -25,
+    "effects_half_volume_delta_db": 6,
+    "transmitted_effects_dbfs": -92,
+    "jitter_lost_packets": 5,
+    "jitter_silent20ms_windows": 2,
+    "jitter_longest_gap_ms": 20,
+    "route_overrides_clipping_and_host_system_levels_unchanged_tests": "passed"
+  },
+  "private_actual_negotiated_rates": {
+    "echo": {
+      "rate": 44100,
+      "capture_rate": 48000,
+      "passed": true,
+      "fixture": "existing independent loopback/probe assertions"
+    },
+    "passed": true,
+    "worker": "/nix/store/9jadmhmvil88scb2m1n8hq833jah0ym0-rust_nuschl-media-worker-0.1.0-linked/bin/nuschl-media-worker",
+    "host_devices": false,
+    "cases": [
+      {
+        "rate": 22050,
+        "actual_client_sample_spec": "s16le 2ch 22050Hz",
+        "monitor_rate": 22050,
+        "fixed_gain_carrier_error_db": [
+          0.002648131099450399,
+          0.0034883361592053285
+        ],
+        "stereo_separation_db": 72.15446513789962,
+        "reference_filter_delay_frames": 24,
+        "passed": true
+      },
+      {
+        "rate": 44100,
+        "actual_client_sample_spec": "s16le 2ch 44100Hz",
+        "monitor_rate": 44100,
+        "fixed_gain_carrier_error_db": [
+          -0.0008584854118437323,
+          -0.0009454817837865964
+        ],
+        "stereo_separation_db": 72.62835833879659,
+        "reference_filter_delay_frames": 26,
+        "passed": true
+      },
+      {
+        "rate": 96000,
+        "actual_client_sample_spec": "s16le 2ch 96000Hz",
+        "monitor_rate": 96000,
+        "fixed_gain_carrier_error_db": [
+          -0.0009103320516692915,
+          -0.0009114502495814803
+        ],
+        "stereo_separation_db": 72.70239917482883,
+        "reference_filter_delay_frames": 48,
+        "passed": true
+      }
+    ],
+    "limits": [
+      "Low-band encoded carriers; broad passband/alias/chunk/clock are direct converter fixtures.",
+      "Gain compared without fitting; fractional endpoint delay prevents a single integer-aligned PCM identity claim.",
+      "No perceptual/hardware guarantee."
+    ]
+  },
+  "private_monitor_44100_echo": {
+    "reduction_db": 36,
+    "transmitted_fraction": 0,
+    "log": "/home/ambiso/.cache/nuschl-output-clip-order/private-rates-final.log",
+    "log_sha256": "57757286e8606ec51c077747b8b3dc8ee70d4e592373d285bfef10c1f1c133cc"
+  },
+  "build_guard": {
+    "exit_code": 0,
+    "elapsed_seconds": 30.002271361998282,
+    "minimum_tmp_free": 22476148736,
+    "aborted": false,
+    "client_tmpdir": "/home/ambiso/.cache/nuschl-output-clip-order/tmp",
+    "daemon_build_dir": "default; not overridden"
+  },
+  "retained_initial_failures": [
+    {
+      "path": "/home/ambiso/.cache/nuschl-output-clip-order/build-first-failure.log",
+      "reason": "missing CPAL Sample trait import; corrected"
+    },
+    {
+      "path": "/home/ambiso/.cache/nuschl-output-clip-order/build-clock-fixture-failure.log",
+      "reason": "control reference ring too small to retain expected5843frames; corrected fixture capacity, no policy relaxation"
+    }
+  ],
+  "source_test_hashes": {
+    "tests/output_reference.py": "8cca4db8fff689571dd526808a3de9ada0a087795bba4bd0b9e43ea17d2772bf",
+    "tests/output_spectral.py": "7aba4a2b09e3f6a784d71d3961d27b76fb431895c84ad5454f64c00777dd6f1a",
+    "tests/native_gain_probe.rs": "26055333339777986231e3437c4f9cf6e18429c79e118a087485fcb716e8b768",
+    "tests/plot_output_spectral.py": "006321022ec23b507e8433f6eda203cd28e326b8256cf135693403e0c05ff91d"
+  },
+  "figures": {
+    "docs/reviews/2026-11-12-output-clip-order/summary.png": "93c4c625c6f91e495b72a4d9d9d7510103bf137bca80795da5d4158428ce4af7",
+    "docs/reviews/2026-11-12-output-clip-order/overload-44100.png": "f6ab70f80d7dfb42124f48e64a088a5b4a286a58ea0ad6e70062cdc973f7a2d4"
+  },
+  "evidence_directory": "/home/ambiso/.cache/nuschl-output-clip-order",
+  "limits": [
+    "No physical capture/output/profile/publicserver used",
+    "Direct fallback plus C synthetic-room proof does not claim an opened CPAL fallback device; actual native private CPAL monitor path tested separately",
+    "No nativeWindows/macOS runtime proof for this correction",
+    "No full native input/encoder/network/output perceptual equivalence or controlled listening claim",
+    "No general non48k/hardware AEC reliability claim; older variability/failures retained",
+    "Capture/encoder/browser/IPC/consent and queue durations unchanged",
+    "Callback cost trials are short same-host paired measurements, not universal/hardware deadlines"
+  ],
+  "root_combined_gate": {
+    "head": "700b8d24",
+    "handoff": "/home/ambiso/.cache/nuschl-integration-20261112/output-clip-order/handoff.json",
+    "reported_by_parent": "8combined checks and native/web packages/notices passed; packagedmediaworker exactSHA match; web9runtimefiles unchanged"
+  }
+}
