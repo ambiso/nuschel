@@ -240,6 +240,16 @@ pub enum Update {
     },
 }
 
+/// Model correlation after admission, never permission or network authority.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MessageReceipt {
+    pub server: String,
+    pub channel: u32,
+    pub channel_instance: u64,
+    pub serial: u64,
+    pub revision: u32,
+}
+
 /// A notification for something that arrived out of sight.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Notification {
@@ -1825,9 +1835,7 @@ impl Client {
                 peer,
                 message,
             } => {
-                if let Some(index) = self.current(&server, generation) {
-                    self.message(index, target, storage_key, peer, message);
-                }
+                self.receive_message(&server, generation, target, storage_key, peer, message);
             }
         }
     }
@@ -1889,6 +1897,21 @@ impl Client {
         Ok(())
     }
 
+    /// The common live-message admission path, also used by asynchronous
+    /// platform adapters that need the exact allocated row's identity.
+    pub fn receive_message(
+        &mut self,
+        server: &str,
+        generation: u64,
+        target: TextTarget,
+        storage_key: String,
+        peer: Option<User>,
+        message: crate::timeline::IncomingMessage,
+    ) -> Option<MessageReceipt> {
+        let index = self.current(server, generation)?;
+        self.message(index, target, storage_key, peer, message)
+    }
+
     fn message(
         &mut self,
         index: usize,
@@ -1896,7 +1919,7 @@ impl Client {
         storage_key: String,
         peer: Option<User>,
         mut message: crate::timeline::IncomingMessage,
-    ) {
+    ) -> Option<MessageReceipt> {
         let server = &mut self.servers[index];
         // Acknowledged before it was shown.
         if let Some(key) = message.pending
@@ -1953,7 +1976,7 @@ impl Client {
                 };
                 server.direct_view(id, &name, peer.clone())
             } else {
-                return;
+                return None;
             };
         let direct = matches!(
             target,
@@ -2039,7 +2062,8 @@ impl Client {
                 }));
         // Older history shown apart from the newest gets the message with
         // the newer pages.
-        let added = channel.timeline.receive(message);
+        let received = channel.timeline.receive_with_receipt(message);
+        let added = received.added;
         let selected = self
             .navigation
             .selection()
@@ -2066,6 +2090,21 @@ impl Client {
         {
             server.dismiss_notice();
         }
+        received.serial.and_then(|serial| {
+            let channel = &server.channels[position];
+            let message = channel
+                .timeline
+                .messages
+                .iter()
+                .find(|message| message.serial == serial)?;
+            Some(MessageReceipt {
+                server: server.id.clone(),
+                channel: channel.id,
+                channel_instance: channel.instance,
+                serial,
+                revision: message.revision,
+            })
+        })
     }
 
     fn server_event(&mut self, index: usize, event: ServerEvent) {
@@ -3280,6 +3319,49 @@ mod tests {
         client.settle();
         client.take_updates();
         (client, recorder, id)
+    }
+
+    #[test]
+    fn observed_receipts_use_exact_serials_and_keep_generation_and_detached_semantics() {
+        let (mut client, _, id) = connected();
+        let Input::Message { mut message, .. } = message(&id, 2, "same", 5) else {
+            unreachable!()
+        };
+        message.id = None;
+        let receive = |client: &mut Client, generation, message| {
+            client.receive_message(
+                &id,
+                generation,
+                TextTarget::Channel(2),
+                "2".into(),
+                None,
+                message,
+            )
+        };
+        assert_eq!(receive(&mut client, 77, message.clone()), None);
+        let first = receive(&mut client, 1, message.clone()).unwrap();
+        let second = receive(&mut client, 1, message.clone()).unwrap();
+        assert_ne!(first.serial, second.serial);
+        assert_eq!(
+            (first.server.as_str(), first.channel, first.revision),
+            (id.as_str(), 2, 0)
+        );
+        let channel = client.servers[0]
+            .channels
+            .iter_mut()
+            .find(|channel| channel.id == 2)
+            .unwrap();
+        assert_eq!(channel.timeline.messages.len(), 2);
+        channel.timeline.next_after = Some(7);
+        message.id = Some(8);
+        assert_eq!(receive(&mut client, 1, message), None);
+        let channel = client.servers[0]
+            .channels
+            .iter()
+            .find(|channel| channel.id == 2)
+            .unwrap();
+        assert!(channel.timeline.missed_live);
+        assert_eq!(channel.timeline.messages.len(), 2);
     }
 
     #[test]

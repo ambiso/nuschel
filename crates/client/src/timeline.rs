@@ -13,6 +13,13 @@ use std::collections::VecDeque;
 /// older ones are dropped and load again from history on scrolling up.
 pub const MAX_TIMELINE: usize = 1000;
 
+/// Admission may count a detached live message without inserting a row.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ReceiveReceipt {
+    pub added: bool,
+    pub serial: Option<u64>,
+}
+
 /// A message as the content worker rendered it, live or from a page.
 #[derive(Clone, Debug, PartialEq)]
 pub struct IncomingMessage {
@@ -213,27 +220,46 @@ impl Timeline {
     /// orders it: an unsaved message still appears where it arrived.
     /// Returns whether it is new here.
     pub fn merge(&mut self, message: IncomingMessage) -> bool {
+        self.merge_with_receipt(message).is_some()
+    }
+
+    /// The exact newly allocated row, independent of its sorted position,
+    /// source text, observation time or whether storage assigned an id.
+    pub fn merge_with_receipt(&mut self, message: IncomingMessage) -> Option<u64> {
         if message
             .id
             .is_some_and(|id| self.messages.iter().any(|entry| entry.id == Some(id)))
         {
-            return false;
+            return None;
         }
-        self.messages.push(message.into());
+        let message = Message::from(message);
+        let serial = message.serial;
+        self.messages.push(message);
         self.messages
             .sort_by_key(|message| (message.observed_at_ms, message.id.unwrap_or(i64::MAX)));
-        true
+        Some(serial)
     }
 
     /// A live message. While older history is shown apart from the newest
     /// (`next_after`), a stored one arrives with the newer pages instead.
     /// Returns whether it counts as new.
     pub fn receive(&mut self, message: IncomingMessage) -> bool {
+        self.receive_with_receipt(message).added
+    }
+
+    pub fn receive_with_receipt(&mut self, message: IncomingMessage) -> ReceiveReceipt {
         if self.next_after.is_some() && message.id.is_some() {
             self.missed_live = true;
-            true
+            ReceiveReceipt {
+                added: true,
+                serial: None,
+            }
         } else {
-            self.merge(message)
+            let serial = self.merge_with_receipt(message);
+            ReceiveReceipt {
+                added: serial.is_some(),
+                serial,
+            }
         }
     }
 
@@ -501,6 +527,43 @@ mod tests {
             MessageDocument { blocks: Vec::new() },
             false,
         )
+    }
+
+    #[test]
+    fn receipts_identify_unsaved_sorted_rows_and_distinguish_detached_admission() {
+        let mut timeline = Timeline::default();
+        let later = timeline.merge_with_receipt(message(None, 100)).unwrap();
+        let earlier = timeline.merge_with_receipt(message(None, 1)).unwrap();
+        assert_ne!(earlier, later);
+        assert_eq!(timeline.messages.first().unwrap().serial, earlier);
+        let same = timeline.merge_with_receipt(message(None, 1)).unwrap();
+        assert_ne!(
+            same, earlier,
+            "even identical unsaved text/time are separate rows"
+        );
+        let saved = timeline.merge_with_receipt(message(Some(7), 1));
+        assert!(saved.is_some());
+        assert_eq!(timeline.merge_with_receipt(message(Some(7), 1)), None);
+        timeline.next_after = Some(7);
+        let detached = timeline.receive_with_receipt(message(Some(8), 2));
+        assert_eq!(
+            detached,
+            ReceiveReceipt {
+                added: true,
+                serial: None
+            }
+        );
+        assert!(timeline.missed_live);
+        assert!(
+            !timeline
+                .messages
+                .iter()
+                .any(|message| message.id == Some(8))
+        );
+        assert!(
+            timeline.receive(message(Some(9), 3)),
+            "existing bool contract stays true"
+        );
     }
 
     fn page(ids: std::ops::RangeInclusive<i64>) -> Vec<IncomingMessage> {
