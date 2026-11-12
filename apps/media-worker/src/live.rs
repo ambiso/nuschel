@@ -1532,6 +1532,35 @@ mod capture_fixture;
 
 #[cfg(test)]
 mod tests {
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "explicit metadata-only PipeWire fixture; no capture or playback"]
+    fn inspect_native_default_metadata_without_capture() {
+        let output = std::env::var_os("NUSCHL_GRAPH_AUDIT_OUTPUT")
+            .expect("explicit private metadata output path");
+        let (found, resolved) = super::upstream_processing("input_default", false, true);
+        let graph = crate::graph::snapshot().expect("fixture native PipeWire is available");
+        let expected = graph.source_identity("input_default");
+        assert!(expected.is_some(), "fixture publishes an effective source");
+        assert_eq!(resolved, expected);
+        assert_eq!(found, graph.upstream("input_default"));
+        std::fs::write(
+            output,
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "resolved": resolved,
+                "echo": found.echo,
+                "noise": found.noise,
+                "reference": found.reference,
+                "dangling": found.dangling,
+                "capture_opened": false,
+                "playback_opened": false,
+                "scope": "native read-only metadata and graph inspection only"
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+    }
+
     #[test]
     fn real_mono_packets_fit_default_and_reduced_live_targets_without_devices() {
         let mut encoder =

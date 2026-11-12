@@ -477,6 +477,94 @@ mod tests {
     }
 
     #[test]
+    fn native_default_aliases_find_upstream_processing_without_pulse() {
+        let graph = rnnoise_after_echo_cancel();
+        for alias in ["input_default", "source_default"] {
+            assert_eq!(
+                graph.upstream(alias),
+                graph.upstream("effect_output.rnnoise")
+            );
+            assert_eq!(
+                graph.source_identity(alias),
+                Some((
+                    "effect_output.rnnoise".into(),
+                    "Noise Canceling source".into()
+                ))
+            );
+        }
+        // An explicitly selected hardware source remains that source even
+        // though the native default is a processed virtual microphone.
+        assert_eq!(graph.upstream("alsa_input.usb-mic"), Upstream::default());
+    }
+
+    #[test]
+    fn changed_native_default_and_node_names_do_not_reuse_old_processing() {
+        let mut graph = rnnoise_after_echo_cancel();
+        graph.default_property(
+            0,
+            Some("default.audio.source"),
+            Some(r#"{"name":"alsa_input.usb-mic"}"#),
+        );
+        assert_eq!(graph.upstream("input_default"), Upstream::default());
+        let source = graph.nodes.iter_mut().find(|node| node.id == 61).unwrap();
+        source.name = "new-filter-source".into();
+        graph.default_property(
+            0,
+            Some("default.audio.source"),
+            Some(r#"{"name":"new-filter-source"}"#),
+        );
+        let found = graph.upstream("input_default");
+        assert!(found.noise.is_some() && found.echo.is_some());
+        assert_eq!(
+            graph.source_identity("input_default").unwrap().0,
+            "new-filter-source"
+        );
+    }
+
+    #[test]
+    fn default_metadata_is_subject_key_shape_and_size_bounded() {
+        let mut graph = rnnoise_after_echo_cancel();
+        let before = graph.default_source.clone();
+        for (subject, key) in [
+            (42, Some("default.audio.source")),
+            (0, Some("default.configured.audio.source")),
+            (0, Some("default.audio.sink")),
+        ] {
+            graph.default_property(subject, key, Some(r#"{"name":"alsa_input.usb-mic"}"#));
+            assert_eq!(graph.default_source, before);
+        }
+        for invalid in [
+            "",
+            "{}",
+            "[]",
+            r#"{"name":32}"#,
+            r#"{"name":""}"#,
+            r#"{"name":"input_default"}"#,
+            r#"{"name":"bad\u0000name"}"#,
+            &" ".repeat(4097),
+        ] {
+            assert_eq!(default_source_name(invalid), None);
+        }
+        assert!(default_source_name(&format!(r#"{{"name":"{}"}}"#, "n".repeat(1025))).is_none());
+        graph.default_property(0, Some("default.audio.source"), None);
+        assert_eq!(graph.default_source, None);
+        assert_eq!(graph.upstream("input_default"), Upstream::default());
+        graph.default_source = before;
+        graph.default_property(0, None, None);
+        assert_eq!(graph.default_source, None);
+    }
+
+    #[test]
+    fn invalid_native_default_target_does_not_become_a_microphone() {
+        let mut graph = rnnoise_after_echo_cancel();
+        for name in ["missing-node", "Firefox", "echo-cancel-sink"] {
+            graph.default_source = Some(name.into());
+            assert!(graph.source_identity("input_default").is_none());
+            assert_eq!(graph.upstream("input_default"), Upstream::default());
+        }
+    }
+
+    #[test]
     fn capturing_the_echo_canceller_directly_finds_no_noise_suppressor() {
         let found = rnnoise_after_echo_cancel().upstream("echo-cancel-source");
         assert_eq!(found.echo.as_deref(), Some("Echo-Cancel Source"));
