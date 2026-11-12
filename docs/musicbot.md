@@ -18,9 +18,12 @@ bot in Mumble. It works with any Mumble server, stock Murmur as well as `nuschld
   playlists. A search asks all libraries at once for artists, albums and songs.
   Every song, album and playlist has *Add* and *Play next*. Choose the destination
   queue in the player bar; the browser remembers the selection for that link.
-- **Covers.** The bot fetches covers from the library with its own credentials and
-  passes them on unchanged (JPEG, PNG, WebP, GIF or AVIF, at most 8 MiB); it does
-  not decode them. The browser may keep a cover for a day.
+- **Covers.** The bot fetches at most 8 MiB of encoded art, then a credential-free,
+  confined content worker decodes PNG, JPEG, WebP or the first GIF frame. Source
+  dimensions are capped at 4096 per edge with a 64 MiB decoder allocation budget;
+  the returned thumbnail is at most 400×400 RGBA pixels (300×300 by default).
+  The browser validates these pixels and paints Canvas; encoded image bytes never
+  reach its image decoder. Unsupported formats and failed helpers show a placeholder.
 - **Channels.** One Mumble connection per configured channel, each with its own
   client certificate. Every channel starts with its own queue. On the web page a
   channel can play another channel's queue instead: then both hear the same song,
@@ -225,10 +228,19 @@ corpus for every supported format, physical audio quality or instantaneous
 revocation of packets already submitted to the session. A canceled blocking
 library read can delay replacement until its existing 30-second read bound.
 
-Two separate HTTP/browser review items remain open: authenticated SSE subscribers
-currently have no global admission cap, and cover art is bounded as encoded bytes
-but is served to the browser without a decoded-pixel admission/normalization step.
-The codec-role isolation proof does not cover that artwork decoder path.
+Authenticated SSE streams share 32 lifetime permits; overload returns HTTP 503
+without an admission wait queue. Artwork has two global jobs. Each owned task
+retains its permit through the worker's bounded response, EOF and actual process
+reaping, even if the HTTP client disconnects. A helper failure never falls back
+to parent decoding or encoded browser images. The fixed packaged content helper
+has no network, credentials, profile or audio devices.
+
+The browser permits two active fetches and 64 queued requests, with absolute
+10-second consumer deadlines. Cancellation retains an active fetch's capacity
+until its real settlement. Cached pixel storage is bounded to 64 entries/8 MiB;
+live Canvas storage is bounded to 64 bitmaps/16 MiB logical RGBA. Offscreen or
+obsolete-library bitmaps are cleared. CSP forbids image resource loading.
+These are application-level budgets, not a complete accounting of browser memory.
 
 Use `tokens_file = "channel-tokens"` for private Mumble ACL tokens; its contents
 are a JSON array of token strings supplied through `credentials.channel-tokens`.
@@ -239,7 +251,7 @@ existing credential-file handling. Never put secret values directly in Nix setti
 
 ## Tests
 
-The integration checkpoint passed 90 Rust tests, 23 frontend tests and eleven
+The original codec-isolation checkpoint passed 90 Rust tests, 23 frontend tests and eleven
 real NixOS module-evaluation invariants, plus package/deny/audit/fmt/crate2nix
 checks. `tests/musicbot_workers.py` exercises actual confined decode/encode/duck
 roles (malformed media and framing, fresh-owner recovery, finite PCM, encoder
@@ -249,6 +261,20 @@ uses only owned file/network/environment sentinels. `musicbot_module.nix` evalua
 credential handling and retained parent restrictions without starting a service.
 `musicbot_service_isolation.py` runs only inside the owned NixOS VM and verifies
 actual service/child metadata and non-mutating access checks.
+
+The artwork/SSE follow-up passed 91 bot tests, 29 frontend tests, 20 IPC tests
+(one existing ignored test), and one content-worker unit plus four integration
+tests (one existing ignored test). `musicbot_artwork_boundary.py` drives the real
+supervisor against malformed replies, oversized advertised lengths, missing
+helpers, lingering children, malformed media and a compressed oversized PNG.
+Its 17 cases passed. `musicbot_artwork.py --cancel-probe …` verifies actual HTTP
+cancellation while both confined children are stalled, immediate overload, real
+PID exit and capacity reuse. Browser mode runs the packaged UI and CSP at
+320/390/1280 pixels: exact generated red/blue pixels, library changes, held stale
+responses, malformed JSON, offscreen Canvas release and no image/media requests.
+The browser is isolated from host devices and profiles; its non-local background
+requests meet an owned rejecting proxy. This proves synthetic artwork behavior,
+not full browser resource-exhaustion resistance or platform-wide confinement.
 
 Rust tests cover queue ordering, seek boundaries, history lifecycle and retention,
 durable state, library identity across reordering/removal, gain ramps, and VAD.
@@ -317,6 +343,8 @@ The Svelte app uses endpoints below `/u/<token>/api/`. `GET state` returns a
 snapshot; `GET events` sends `event: state` SSE frames immediately, after changes,
 and roughly every two seconds for progress correction. Slow viewers receive the
 latest state when they can read again. Revoked links lose access to the stream.
+At most 32 streams may remain open across all tokens; excess viewers receive 503.
+The permit belongs to the response stream, not merely its request handler.
 Proxies must pass SSE through without buffering; the bot sends `X-Accel-Buffering: no`.
 
 The authenticated `GET /u/<token>/licenses` route serves the installed, bounded
@@ -345,6 +373,10 @@ or null for the end. Successful commands return 204 and broadcast the new state.
 Browsing uses `albums`, `album`, `artists`, `artist`, `playlists`, `playlist`, and
 `search` JSON endpoints. Library identity in requests is its current config index.
 Album lists accept `library`, `list`, and `page`; detail endpoints accept `library`
-and `id`. The authenticated `art/<library>/<id>?size=…` route serves covers.
+and `id`. The authenticated `art/<library>/<id>?size=…` route returns
+`{"width":N,"height":N,"rgba":"<canonical base64 RGBA>"}` with private/no-store
+caching. Size is clamped to 32–400. There are exactly these three fields, no
+encoded-file or source-URL authority. Invalid images return 404, unavailable or
+busy workers return 503. Library failures preserve the existing redacted errors.
 API errors carry an HTTP error status and `{"error":"message"}`.
 

@@ -18,8 +18,11 @@ address-space bounds. Non-mutating checks under the service UID verify empty
 effective capabilities and unwritable host sysctl/sysrq paths. The fixture uses
 restricted VM networking and no host audio devices. Separate launcher canaries and
 actual child role/framing tests are described in
-[musicbot.md](../docs/musicbot.md); Windows/macOS and unnormalized browser artwork
-are outside this proof.
+[musicbot.md](../docs/musicbot.md). `musicbot_artwork.py` adds actual HTTP
+cancellation/reaping and packaged Canvas checks at phone/desktop widths;
+`musicbot_artwork_boundary.py` checks the confined thumbnail helper's malformed,
+size, deadline and missing-helper boundaries. These use generated art only.
+Windows/macOS runtime confinement remains outside this proof.
 
 The iOS app track is cancelled/deferred by the user; its stopped environment experiment is documented in [ios-vm.md](../docs/ios-vm.md).
 `just ios-preflight` checks this Linux host without downloading VM media;
