@@ -611,6 +611,27 @@ Reported while testing (2026-11-10/11):
 
 Later (reported):
 
+- [ ] Eliminate panics from the main client, server and other credential-bearing
+      supervisors (user, 2026-11-12). Audit first-party runtime `unwrap()` and
+      `expect()`, explicit panic/assert/unreachable paths, unchecked indexing,
+      arithmetic and poisoned-lock handling. The user reports roughly 4,189
+      `unwrap` matches outside vendor; distinguish panicking calls from fallback
+      helpers and test-only assertions before prioritizing runtime paths. Return
+      typed failures or follow a safe recovery path, with scoped lint/CI checks
+      to prevent regressions. Do not mask invalid state with blanket catch-and-
+      continue handling or claim raw match counts prove runtime panic frequency.
+- [ ] Make worker supervision recover safely without crash loops (user,
+      2026-11-12). Erlang/Elixir-style worker crashes are acceptable when a safe
+      in-process recovery path is unavailable; the main application must survive.
+      Recover routine failures where possible, otherwise retire/reap the worker
+      and recreate clean state. Bound restart attempts with backoff/jitter,
+      reset budgets only after sustained healthy operation, and stop repeatedly
+      replaying poison inputs. Persistent failures need a stable actionable
+      state rather than rapid restarts or repeated notices. Preserve microphone
+      consent/epochs, actual-exit resource credit and transactional crypto/storage
+      state; retry mutations only with safe idempotency/reconciliation. Test
+      injected panics, repeated startup/request failures, stalled teardown,
+      recovery after the cause clears and isolation from healthy worker roles.
 - [ ] Integrate `andir/nuschl`'s `musicbot` branch (user, 2026-11-12), fetched
       at `c9005e31`: Subsonic playback/queue, browser controls, listener
       subscriptions, NixOS service and private integration tests. Preserve
