@@ -303,6 +303,8 @@ def prepare(args):
     install.mkdir()
     windows = install / 'windows'
     shutil.copytree(Path(products['windows']['output']) / 'bin', windows)
+    # Nix store directories are read-only; this staging root also receives notices.
+    windows.chmod(0o755)
     shutil.copytree(Path(products['windows']['output']) / 'share/licenses/nuschl', windows / 'licenses')
     shutil.copytree(Path(products['macos-app']['output']) / 'Nuschl.app', install / 'Nuschl.app')
     check_installs(stage, source)
