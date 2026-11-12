@@ -1395,14 +1395,16 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
       tool. The embedded store deliberately remains empty; no production key or
       secret is created by tests. This protects updates independently of OS code
       signing (below).
-- [ ] Finish source-scoped runtime notice evidence and compact packaging for all
-      native/cross/web artifacts, including both verifier feature roots and all
-      three client/audio/content WASM roots. Resolve remaining upstream/native/
-      asset terms; use combined notice text plus provenance/index to respect the
-      updater's 256-file installation bound. Do not truncate notices or silently
-      increase that bound. Payload uploads and publication fail closed on missing
-      inventories, scope or notice bytes; diagnostic logs remain downloadable.
-      Passing cargo-deny or an empty self-asserted unresolved list is insufficient.
+- [x] Source-scoped runtime notice producer/publisher gates and lossless compact
+      packaging for native/cross/web artifacts. Known platform mappings select
+      authoritative roots/features; Mac requires both slices, native builds do
+      not depend on web App/WASM outputs, and CI retains the complete source audit.
+      Actual scoped Nix bundles have zero unresolved entries (931-package union
+      at the Speex checkpoint), preserve original bytes/hashes and patched MPL
+      corresponding source, and use five native/four web files within the existing
+      256-file limit. Full final distribution review remains a separate row;
+      metadata evidence is not legal-compliance or native-runtime proof. See
+      docs/release-notices.md.
 - [ ] Provide an operator metadata refresh procedure before signed latest metadata
       expires (maximum 30 days), including unchanged binaries, and actionable
       expiry/clock recovery. The tag-create workflow is not a refresh procedure;
@@ -1425,7 +1427,13 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
         start needs **Privacy & Security → Open Anyway**.
   - [ ] Windows Authenticode signing; until then SmartScreen asks on the first start
         (**More info → Run anyway**) and Smart App Control blocks Nuschl.
-- [ ] Third-party notices and attribution; walk through the release gates in `SECURITY.md`.
+- [ ] Final third-party/source attribution review of the exact integrated native,
+      cross and static-web archives after later dependency/vendor changes. Verify
+      scope/roots/features, original notice/source hashes, updater file limits and
+      both verifier binaries in every desktop distribution; run the release gates
+      in `SECURITY.md`/docs/release-notices.md. Current metadata proofs do not imply
+      an actual GitHub release/CI run, Windows/macOS hybrid updater execution or
+      hardware/accessibility proof.
 - [ ] Mobile, web and terminal clients (user, 2026-11-11): decided, see
       docs/clients.md. Then:
   - [x] The headless client SDK in `crates/client` (commands in, updates out; the
@@ -1487,6 +1495,14 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
           session; voice (WebAudio, getUserMedia, datagrams through the tunnel);
           IndexedDB storage and identity in a Worker; its version requirement; the
           Svelte build in the Nix site package; a real-browser test; WebTransport.
+    - [ ] Wire the real async browser content broker: preserve SDK-owned original
+          authenticated source/mode; bind render tickets to server/connection,
+          conversation/message/revision/digest; reject stale derivatives. The
+          content WASM/Worker foundation exists but is currently unreferenced in
+          app chunks. Connect real legacy HTML/image decode and validated RGBA to
+          the UI, plus paste/attach encoding/send acknowledgement, without parsing
+          in the TLS worker or giving the content worker keys/network/storage.
+          Keep plaintext/newlines/code source and image/formula fallback accessible.
   - [x] NixOS module for the web host, share links and tunnel relay
         (`services.nuschl-web`, 2026-11-11: nginx with `enableACME`, optionally a
         subdomain; static files, the landing page, app-link files, the relay over a

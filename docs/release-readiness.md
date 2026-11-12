@@ -17,8 +17,10 @@ zip and the macOS Intel/Apple-silicon universal app. Linux users install the tag
 Nix flake; there is no portable Linux archive, AppImage, Flatpak, or distro package.
 The Linux package also contains the terminal client and server. The cross desktop
 packages currently contain the desktop and its helpers, not a Windows/macOS server
-or terminal distribution. Web assets and relay can build in CI without claiming
-browser voice/video or a finished mobile client.
+or terminal distribution. Browser voice has private synthetic loopback proof;
+rich-message content bridging, full mobile/native browser coverage and video
+remain separate work. CI can produce a deployable static web artifact without
+claiming the complete web/mobile client is finished.
 
 The user deferred Windows Authenticode and macOS Developer ID/notarisation. That
 does not waive update authentication. Windows downloads remain unsigned, macOS
@@ -47,20 +49,16 @@ permissions, playback and self-update. Mark the Mac artifact untested/experiment
   independent platform artifacts and logs. No successful GitHub build is claimed
   by this source review. A failed cross job must not hide another platform's
   downloadable CI artifact; publication must require all intended jobs to pass.
-- [ ] Finish the existing dependency attribution/notices release gate. Linux's
-  `packageLayout` includes several vendored/font licences, while baseline Windows
-  and Mac packaging copies only EUPL-1.2. The deployable web tar must include the
-  full runtime inventory at `licenses/nuschl/THIRD-PARTY.json`, including actual
-  client/audio/content WASM and JS/assets, beyond its existing Temml notices. Passing `cargo deny` is not a complete
-  attribution inventory. Inspect the exact final archives, including helper files.
-  The publisher now rejects missing/incomplete/mismatched bundled inventories;
-  CI payload uploads use the same source policy and retain diagnostic logs on
-  failure; this is a gate, not proof the remaining notices were recovered. Use the source
-  `release/notice-roots.json` (including both verifier features and all three WASM
-  roots). Recover unresolved upstream/native/asset terms, then compact notices
-  into a combined payload plus provenance/index: copying a per-crate tree can
-  exceed the updater's existing 256-file installation bound. Do not truncate
-  notices or silently increase that bound.
+- [x] Implement scoped, fail-closed notice packaging and actual source evidence,
+  including two updater engines, native runtimes, explicit curated MPL/source
+  decisions, the math font/syntax/theme data and actual emitted web owners. The
+  production reader checks scope/roots/features and exact notice/source bytes.
+  Compact native/web payloads respect the existing 256-file limit. Independent
+  Nix metadata bundle/gate proofs pass; see [the notice pipeline](release-notices.md).
+- [ ] Review the exact final integrated native/cross/web archives after later
+  dependency/vendor changes. Verify target scopes, all helpers and notice/source
+  hashes. Current metadata evidence does not establish legal compliance or a
+  successful public all-system CI/release run.
 - [ ] Run the final integrated formatting, Clippy, dependency/advisory, unit and
   private interoperability/confinement checks. CI package builds do not replace
   private NixOS/Windows VM evidence or native Mac testing. Record remaining native

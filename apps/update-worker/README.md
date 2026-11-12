@@ -196,7 +196,11 @@ web tar are included as release assets: they are Nix references and a deployable
 web bundle, never a portable Linux binary archive. Their metadata/hashes/lock file
 are checked before copying; the static bundle also requires the full runtime
 notice inventory at `licenses/nuschl/THIRD-PARTY.json`, covering all three WASM
-roots and actual JS/asset terms. Missing/incomplete bundled notices block signing. **That attribution packaging gate is
-not complete**: upstream/native/asset notice recovery and compact payloads that
-respect the 256-file installation bound remain queued. No release is ready merely
+roots and actual JS/asset terms. Missing/incomplete bundled notices block signing. The scoped attribution pipeline now recovers actual upstream/native/asset terms,
+losslessly compacts them, preserves patched corresponding source and verifies
+scope/roots/features/body hashes before upload or signing. The actual Nix
+metadata bundles pass with zero unresolved entries; see
+[release notice evidence](../../docs/release-notices.md). Exact final platform
+archives must still be reviewed after subsequent source/graph changes.
+No release is ready merely
 because hybrid signatures work. No tag/push/dispatch/deploy was performed.
