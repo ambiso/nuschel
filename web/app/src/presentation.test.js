@@ -51,3 +51,37 @@ test("pixels require bounded exact RGBA; source URLs are never used", () => {
  const image={kind:"image",width:1,height:1,rgba:"/wAA/w=="};
  assert.deepEqual(visibleBlocks({blocks:[image]}).blocks,[image]);
 });
+
+import { documentRows } from "./presentation.js";
+const paragraph = (text) => ({kind:"text", text});
+const shownAs = (blocks) => blocks.map((block) => block.kind === "break" ? block.count : block.text ?? block.source);
+test("a break's line breaks count toward the collapsed preview's eight lines", () => {
+ // "# T\n\n\n\na\nb\nc\n\n\nd": d starts on line 10.
+ const document = {blocks:[paragraph("T"), {kind:"break",count:4}, paragraph("a\nb\nc"), {kind:"break",count:3}, paragraph("d")]};
+ const original = structuredClone(document);
+ const preview = visibleBlocks(document);
+ assert.ok(preview.hasMore);
+ assert.deepEqual(shownAs(preview.blocks), ["T", 4, "a\nb\nc"]);
+ assert.deepEqual(visibleBlocks(document, true).blocks, document.blocks);
+ assert.deepEqual(document, original);
+ // Without breaks blocks are one line break apart, as before.
+ const eight = {blocks:Array.from({length:8}, (_, index) => paragraph(`line ${index}`))};
+ assert.equal(visibleBlocks(eight).hasMore, false);
+ assert.equal(visibleBlocks({blocks:[...eight.blocks, paragraph("ninth")]}).hasMore, true);
+ // A display formula within a line adds no line.
+ const joined = {blocks:[...eight.blocks.slice(0, 7), paragraph("so "), {kind:"break",count:0}, {kind:"math",source:"$$x$$",tex:"x"}, {kind:"break",count:0}, paragraph(" and")]};
+ assert.equal(visibleBlocks(joined).hasMore, false);
+});
+test("rows keep a message's lines: blank lines for breaks, a formula within a line in it", () => {
+ const rows = documentRows([
+  {kind:"break",count:2}, paragraph("a"), {kind:"break",count:3}, paragraph("so "), {kind:"break",count:0},
+  {kind:"math",source:"$$x$$",tex:"x"}, {kind:"break",count:0}, paragraph(" and"), paragraph("b"), {kind:"break",count:1},
+ ]);
+ assert.deepEqual(rows.map((row) => row.kind === "break" ? row.lines : shownAs(row.blocks)),
+  [2, ["a"], 2, ["so ", "$$x$$", " and"], ["b"], 1]);
+ // Two blocks a break of 1 apart are on consecutive lines; a zero break
+ // beside no formula is still a line break.
+ assert.deepEqual(documentRows([paragraph("a"), {kind:"break",count:1}, paragraph("b")]).map((row) => row.kind), ["row", "row"]);
+ assert.deepEqual(documentRows([paragraph("a"), {kind:"break",count:0}, paragraph("b")]).map((row) => row.blocks.length), [1, 1]);
+ assert.deepEqual(documentRows(undefined), []);
+});

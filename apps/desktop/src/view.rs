@@ -2907,12 +2907,8 @@ fn message_row(
                             order,
                             hovered.map(|hovered| (hovered.block, hovered.link)),
                             texts,
-                            div()
-                                .flex()
-                                .flex_col()
-                                .flex_shrink_0()
-                                .gap_2()
-                                .children(blocks),
+                            // The message's lines are its breaks: no gaps.
+                            div().flex().flex_col().flex_shrink_0().children(blocks),
                         ))
                         .when(clamped && ui.has_more(), |content| {
                             // Fade the cut-off edge into the row background
@@ -3526,17 +3522,37 @@ fn blocks(
     cx: &mut Context<Desktop>,
 ) -> Vec<AnyElement> {
     crate::math::prepare(this, cx);
+    // The height of one line of message text (GPUI's default line height).
+    let line = px((this.settings.appearance.text_size * 1.618_034).round());
+    let last = document.blocks.len().saturating_sub(1);
     document
         .blocks
         .iter()
         .enumerate()
         .map(|(index, block)| match block {
+            // `count - 1` empty lines between blocks, `count` at either end;
+            // a display formula written within a line follows directly.
+            Block::Break(count) => {
+                let edge = index == 0 || index == last;
+                let lines = if edge {
+                    *count
+                } else {
+                    count.saturating_sub(1)
+                };
+                div()
+                    .id(("break", index))
+                    .flex_shrink_0()
+                    .h(line * lines.min(4096) as f32)
+                    .into_any_element()
+            }
             Block::Text {
                 kind: Kind::Rule, ..
             } => div()
-                .my_1()
-                .h(px(1.))
-                .bg(color(BORDER_STRONG))
+                .id(("rule", index))
+                .h(line)
+                .flex()
+                .items_center()
+                .child(div().w_full().h(px(1.)).bg(color(BORDER_STRONG)))
                 .into_any_element(),
             Block::Text {
                 text,
@@ -3588,30 +3604,18 @@ fn blocks(
                         .border_color(color(BORDER_STRONG))
                         .text_color(color(TEXT_MUTED))
                         .child(content),
-                    Kind::Item { depth, marker } => {
-                        // Items of one list sit closer than other blocks.
-                        let follows = index > 0
-                            && matches!(
-                                document.blocks[index - 1],
-                                Block::Text {
-                                    kind: Kind::Item { .. },
-                                    ..
-                                }
-                            );
-                        block
-                            .flex()
-                            .pl(px(f32::from(depth - 1) * 18.))
-                            .when(follows, |item| item.mt(px(-4.)))
-                            .child(
-                                div()
-                                    .min_w(px(18.))
-                                    .pr_1()
-                                    .flex_shrink_0()
-                                    .text_color(color(TEXT_MUTED))
-                                    .child(marker.clone()),
-                            )
-                            .child(div().flex_1().min_w_0().child(content))
-                    }
+                    Kind::Item { depth, marker } => block
+                        .flex()
+                        .pl(px(f32::from(depth - 1) * 18.))
+                        .child(
+                            div()
+                                .min_w(px(18.))
+                                .pr_1()
+                                .flex_shrink_0()
+                                .text_color(color(TEXT_MUTED))
+                                .child(marker.clone()),
+                        )
+                        .child(div().flex_1().min_w_0().child(content)),
                     Kind::Paragraph | Kind::Rule => block.child(content),
                 }
                 .into_any_element()

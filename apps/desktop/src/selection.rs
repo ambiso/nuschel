@@ -429,8 +429,9 @@ impl Desktop {
     }
 }
 
-/// The text between two carets: blocks joined by newlines (formulas within
-/// a line stay in it), images left out.
+/// The text between two carets: blocks joined by the message's line breaks
+/// (a break's blank lines kept, formulas within a line in it), images left
+/// out. Carets are only ever in text and code: a break has none.
 pub fn selected_text(document: &Document, start: Caret, end: Caret) -> String {
     let parts = document
         .blocks
@@ -1565,6 +1566,13 @@ mod tests {
         assert_eq!(
             selected_text(&document, caret(2, 3), caret(3, 0)),
             "main() {}"
+        );
+        // A break between blocks is copied as its blank lines.
+        let mut document = document;
+        document.blocks.insert(3, Block::Break(3));
+        assert_eq!(
+            selected_text(&document, caret(2, 3), caret(4, 2)),
+            "main() {}\n\n\nBy"
         );
     }
 

@@ -24,8 +24,12 @@ export function channelRows(channels, expanded, server) {
   if (!rows.length && channels.length) walk(channels[0], 0);
   return rows;
 }
+// A break's line breaks: a non-negative integer (validated in the protocol).
+const breakCount = (block) => Number.isSafeInteger(block?.count) && block.count >= 0 ? block.count : 1;
+// The collapsed preview: eight lines, a break's line breaks counted with the
+// rest (a break takes the place of the one line break between two blocks).
 export function visibleBlocks(document, expanded = false) {
-  let chars = 0, lines = 1, clipped = false;
+  let chars = 0, lines = 1, clipped = false, gap = 0, started = false;
   const trim = (text) => {
     if (expanded) return text;
     let result = "";
@@ -39,6 +43,13 @@ export function visibleBlocks(document, expanded = false) {
   const blocks = [];
   for (const block of document?.blocks || []) {
     if (clipped) break;
+    if (block?.kind === "break") { gap = breakCount(block); blocks.push(block); continue; }
+    lines += gap;
+    if (!expanded && started && lines > 8) {
+      clipped = true;
+      if (blocks.at(-1)?.kind === "break") blocks.pop();
+      break;
+    }
     if (block.kind === "code") {
       const runs = [];
       for (const run of block.runs) {
@@ -54,9 +65,34 @@ export function visibleBlocks(document, expanded = false) {
       blocks.push({ ...block, preview, tex: preview === block.source ? block.tex : undefined });
     }
     else if (block.kind === "image") blocks.push(block);
-    lines++;
+    gap = 1; started = true;
   }
   return { blocks, hasMore: clipped };
+}
+// Blocks as drawn: rows of blocks, where a display formula written within a
+// line (a break of 0 beside it) shares its row with the text around it, and
+// rows of blank lines: `count - 1` for a break between blocks, `count` at
+// either end.
+export function documentRows(blocks) {
+  const list = Array.isArray(blocks) ? blocks : [];
+  const last = list.findLastIndex((block) => block?.kind !== "break");
+  const rows = [];
+  let joined = false, started = false;
+  list.forEach((block, index) => {
+    if (block?.kind === "break") {
+      const count = Math.min(breakCount(block), 4096);
+      const edge = !started || index > last;
+      const formula = list[index - 1]?.kind === "math" || list[index + 1]?.kind === "math";
+      if (count === 0 && !edge && formula) { joined = true; return; }
+      const lines = edge ? count : Math.max(count - 1, 0);
+      if (lines) rows.push({ kind: "break", lines });
+      return;
+    }
+    if (joined && rows.at(-1)?.kind === "row") rows.at(-1).blocks.push(block);
+    else rows.push({ kind: "row", blocks: [block] });
+    joined = false; started = true;
+  });
+  return rows;
 }
 export function codeColor(value) {
   if (!Array.isArray(value) || value.length < 3 || value.slice(0, 3).some((part) => !Number.isInteger(part) || part < 0 || part > 255)) return "inherit";

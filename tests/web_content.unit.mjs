@@ -170,3 +170,16 @@ test("the receiving boundary rejects resource URLs, invalid pixels and split UTF
   assert.throws(()=>validateReply("encode",JSON.stringify({html:'<img src="data:image/png;base64,AA\" onerror=\"bad" />',thumbnail:pixel}),10000));
   const valid=validateReply("render",rendered("first\n\nsecond 🦀"));assert.equal(valid.plain_text,"first\n\nsecond 🦀");
 });
+test("documents carry the line breaks between blocks as breaks, on a budget of their own",()=>{
+  const text=value=>({kind:"text",text:value});
+  validateDocument({blocks:[{kind:"break",count:2},text("a"),{kind:"break",count:0},{kind:"math",source:"$$x$$",tex:"x"},text("b"),{kind:"break",count:3}]});
+  // 512 blocks and a break around each are within both budgets; one more of either is not.
+  const full=[{kind:"break",count:1}];for(let i=0;i<512;i++)full.push(text("x"),{kind:"break",count:2});
+  validateDocument({blocks:full});
+  assert.throws(()=>validateDocument({blocks:[...full,text("y")]}),/Invalid/);
+  for(const bad of [{kind:"break",count:-1},{kind:"break",count:1.5},{kind:"break",count:"2"},{kind:"break"},{kind:"break",count:1,extra:true},{kind:"break",count:protocol.MAX_SOURCE+1}])
+    assert.throws(()=>validateDocument({blocks:[text("a"),bad,text("b")]}),/Invalid/,JSON.stringify(bad));
+  // Never two in a row.
+  assert.throws(()=>validateDocument({blocks:[text("a"),{kind:"break",count:2},{kind:"break",count:2},text("b")]}),/Invalid/);
+  assert.equal(protocol.MAX_BREAKS,protocol.MAX_BLOCKS+1);
+});
