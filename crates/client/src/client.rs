@@ -2352,8 +2352,10 @@ impl Client {
             } => {
                 if flush {
                     server.permissions.clear();
+                    server.permission_queries.clear();
                 }
                 if channel != u32::MAX {
+                    server.permission_queries.remove(&channel);
                     server.permissions.insert(channel, permissions);
                 }
             }
@@ -2454,6 +2456,7 @@ impl Client {
                 }
                 server.expansion.remove(&id);
                 server.permissions.remove(&id);
+                server.permission_queries.remove(&id);
                 let cached = server.bookmark.cached_channels.len();
                 server
                     .bookmark
@@ -3017,6 +3020,69 @@ mod tests {
         client.settle();
         client.take_updates();
         (client, recorder, id)
+    }
+
+    #[test]
+    fn permission_reads_deduplicate_bound_retry_and_drop_stale_cache_on_flush_or_channel_reuse() {
+        let (mut client, _, id) = connected();
+        for channel in &mut client.servers[0].channels {
+            channel.instance = u64::from(channel.id) + 10;
+        }
+        client.servers[0].permissions.clear();
+        assert!(client.servers[0].begin_permission_query(2, 0));
+        assert!(!client.servers[0].begin_permission_query(2, 1));
+        assert!(!client.servers[0].begin_permission_query(2, 1999));
+        assert!(client.servers[0].begin_permission_query(2, 2000));
+        assert!(
+            !client.servers[0].begin_permission_query(2, 100000),
+            "no per-frame or unlimited timeout retries"
+        );
+        client.servers[0].permissions.insert(0, 1); // previously known root Write
+        client.handle(Input::Server {
+            server: id.clone(),
+            generation: 1,
+            event: ServerEvent::Permissions {
+                channel: 2,
+                permissions: 0,
+                flush: true,
+            },
+        });
+        assert_eq!(client.servers[0].permissions.get(&2), Some(&0));
+        assert!(
+            !client.servers[0].permissions.contains_key(&0),
+            "root is unknown after a child-only flush"
+        );
+        assert!(
+            !client.servers[0].begin_permission_query(2, 100001),
+            "a known denial is not polled repeatedly"
+        );
+        assert!(client.servers[0].begin_permission_query(3, 100001));
+        client.handle(Input::Server {
+            server: id.clone(),
+            generation: 1,
+            event: ServerEvent::ChannelRemoved(3),
+        });
+        assert!(!client.servers[0].permission_queries.contains_key(&3));
+        client.handle(Input::Server {
+            server: id.clone(),
+            generation: 1,
+            event: ServerEvent::Channel(Channel {
+                id: 3,
+                instance: 99,
+                parent: Some(0),
+                name: "Replacement".into(),
+                ..Default::default()
+            }),
+        });
+        assert!(client.servers[0].begin_permission_query(3, 100002));
+        client.handle(Input::Reconnecting {
+            server: id,
+            generation: 1,
+            attempt: 1,
+            delay_secs: 1,
+            reason: "owned permission fixture".into(),
+        });
+        assert!(client.servers[0].permission_queries.is_empty());
     }
 
     #[test]

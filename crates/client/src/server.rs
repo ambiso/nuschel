@@ -148,6 +148,8 @@ pub struct ServerState {
     pub transport: Option<TransportStats>,
     pub audio: AudioInfo,
     pub permissions: BTreeMap<u32, u32>,
+    /// Explicit UI requests only: channel lifetime, retry time, attempts.
+    pub(crate) permission_queries: BTreeMap<u32, (u64, u64, u8)>,
     pub limits: Option<ServerLimits>,
     pub context_actions: Vec<ContextAction>,
     /// A server recommendation the user can act on (e.g. push-to-talk).
@@ -243,6 +245,7 @@ impl ServerState {
             transport: None,
             audio: AudioInfo::default(),
             permissions: BTreeMap::new(),
+            permission_queries: BTreeMap::new(),
             limits: None,
             context_actions: Vec::new(),
             suggestion: None,
@@ -269,12 +272,46 @@ impl ServerState {
     }
 
     pub(crate) fn clear_acl_cache(&mut self) {
+        self.permission_queries.clear();
         self.acl = None;
         self.acl_reply = None;
         self.account_reply = None;
         self.user_names.clear();
         self.acl_name_requests.clear();
         self.acl_name_budget = 1024;
+    }
+
+    /// Deduplicate explicit permission reads across menu invocations. No frame
+    /// timer/retry loop: at most two attempts per unknown channel/cache epoch.
+    /// The adapter must still send under its original connection/target lease.
+    pub fn begin_permission_query(&mut self, channel: u32, now_ms: u64) -> bool {
+        if self.status != Status::Connected || self.permissions.contains_key(&channel) {
+            return false;
+        }
+        let Some(instance) = self
+            .channels
+            .iter()
+            .find(|entry| entry.target == TextTarget::Channel(channel))
+            .map(|entry| entry.instance)
+        else {
+            return false;
+        };
+        if instance == 0 {
+            return false;
+        }
+        let query = self
+            .permission_queries
+            .entry(channel)
+            .or_insert((instance, 0, 0));
+        if query.0 != instance {
+            *query = (instance, 0, 0);
+        }
+        if query.2 >= 2 || now_ms < query.1 {
+            return false;
+        }
+        query.2 += 1;
+        query.1 = now_ms.saturating_add(2000);
+        true
     }
 
     pub fn status_label(&self) -> String {

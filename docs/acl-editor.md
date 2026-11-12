@@ -8,7 +8,11 @@ rows. Callbacks use row IDs, never vector positions. Removal and explicit reload
 retire old IDs; inherited rules remain read-only. Group provenance is separate
 from local overrides: an inherited group can have local members, exclusions, or
 inherit/inheritable flags. Removing its local definition resets those overrides;
-it cannot remove the parent's group. Account IDs identify registered users,
+it cannot remove the parent's group. The legacy query cannot distinguish a
+pristine inherited-only group from an explicit empty local definition with the
+same default flags. Like stock Mumble, saving omits that ambiguous definition;
+its independent lifetime after an ancestor removes the group cannot be preserved
+from this wire representation. Account IDs identify registered users,
 including offline users, and must never be populated from presence/session IDs.
 Unedited model fields and unknown permission bits survive edits.
 

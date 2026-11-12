@@ -402,11 +402,16 @@ impl Desktop {
                 MenuTarget::User(session) => view.users.get(&session).map(|user| user.channel),
                 MenuTarget::Server | MenuTarget::Image | MenuTarget::Message => None,
             };
-            for channel in channel.into_iter().chain([0]) {
-                if !view.permissions.contains_key(&channel) {
-                    let _ = self
-                        .driver
-                        .command(&view.id, Command::RequestPermissions(channel));
+            let wanted = channel
+                .into_iter()
+                .chain([0])
+                .collect::<std::collections::BTreeSet<_>>();
+            let now = crate::state::monotonic_ms();
+            for channel in wanted {
+                let view = &mut self.client.servers[server];
+                if view.begin_permission_query(channel, now) {
+                    let origin = ActionOrigin::capture(view, MenuTarget::Channel(channel));
+                    origin.run(self, Command::RequestPermissions(channel));
                 }
             }
         }

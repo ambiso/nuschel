@@ -1902,7 +1902,7 @@ impl State {
                 || self
                     .permissions
                     .get(&0)
-                    .is_some_and(|bits| bits & crate::model::permission::WRITE != 0))
+                    .is_none_or(|bits| bits & crate::model::permission::WRITE != 0))
     }
     fn queue_names(&mut self, query: proto::QueryUsers) {
         if self.account_lookup.is_some() {
@@ -2143,20 +2143,8 @@ impl State {
             }
             Command::QueryAcl(channel)
             | Command::QueryAclDraft { channel, .. }
-            | Command::LookupAccount { channel, .. } => {
-                may(*channel, p::WRITE)
-                    || self
-                        .permissions
-                        .get(&0)
-                        .is_some_and(|bits| bits & p::WRITE != 0)
-            }
-            Command::UpdateAcl(acl) => {
-                may(acl.channel, p::WRITE)
-                    || self
-                        .permissions
-                        .get(&0)
-                        .is_some_and(|bits| bits & p::WRITE != 0)
-            }
+            | Command::LookupAccount { channel, .. } => may(*channel, p::WRITE) || may(0, p::WRITE),
+            Command::UpdateAcl(acl) => may(acl.channel, p::WRITE) || may(0, p::WRITE),
             Command::LinkChannels {
                 channel,
                 add,
@@ -6524,6 +6512,11 @@ mod delayed_action_authority_tests {
                 .authorize(scoped(acl_lease(), Command::RemoveChannel(5)))
                 .is_none()
         );
+        state.permissions.remove(&0);
+        assert!(
+            state.authorize(scoped(acl_lease(), acl_update())).is_some(),
+            "unknown root alternative is left to authoritative server rejection"
+        );
         state.permissions.insert(0, 0);
         assert!(state.authorize(scoped(acl_lease(), acl_update())).is_none());
         assert!(
@@ -6577,6 +6570,7 @@ mod delayed_action_authority_tests {
                 1 => state.users.get_mut(&1).unwrap().instance += 1,
                 2 => {
                     state.permissions.insert(5, 0);
+                    state.permissions.insert(0, 0);
                 }
                 _ => {}
             }

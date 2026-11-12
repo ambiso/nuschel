@@ -11,7 +11,7 @@ from pathlib import Path
 import document_link_regression as fixture
 import welcome_html
 from accessibility import items
-from admin_bootstrap import Operator, scalar
+from admin_bootstrap import Operator, encode, scalar
 from hash_document_wire import fields
 from local_murmur import Murmur, eventually
 from local_nuschld import Nuschld
@@ -379,6 +379,64 @@ def actions(args, root, shell, application, bot, murmur):
     finally:
         observer.close()
     mark("deny_and_subchannel_inheritance_with_unrelated_control")
+    # A second operator changes the ACL while the native draft is dirty. Root
+    # Write must still allow ACL recovery even when the child's Write is denied.
+    activate("Add rule")
+    admin = operator(root, pin)
+    try:
+        current = query_channel(admin, 1)
+        current[4] = [
+            raw for raw in current.get(4, []) if not fields(raw).get(3, [1])[0]
+        ]
+        current[4].append(
+            encode({1: [1], 2: [1], 3: [0], 4: [IDS["reader"]], 6: [0], 7: [1]})
+        )
+        local_groups = []
+        for raw in current.get(3, []):
+            group = fields(raw)
+            if (
+                group.get(2, [1]) == [1]
+                and group.get(3, [1]) == [1]
+                and group.get(4, [1]) == [1]
+                and not group.get(5)
+                and not group.get(6)
+            ):
+                continue
+            group.pop(7, None)
+            local_groups.append(encode(group))
+        current[3] = local_groups
+        current[5] = [0]
+        admin.send(13, encode(current))
+        assert len(local_rules(query_channel(admin, 1))) == 3
+    finally:
+        admin.close()
+    activate("Save permissions")
+    eventually(
+        lambda: text_contains("Permissions changed on the server"),
+        "dirty ACL conflict was silently overwritten",
+    )
+    assert text_contains("Unsaved changes")
+    activate("Reload and discard draft")
+    eventually(
+        lambda: (
+            text_contains("Edit a local rule or group")
+            and not text_contains("Unsaved changes")
+        ),
+        "explicit ACL reload did not discard the draft",
+    )
+    activate("Done")
+    # The menu may not offer ordinary channel editing, but root administrators
+    # retain the separate Edit permissions action and can remove the denial.
+    open_acl("Lobby")
+    activate(f"Welcome reader (#{IDS['reader']})")
+    activate("Remove rule")
+    save()
+    admin = operator(root, pin)
+    try:
+        assert local_rules(query_channel(admin, 1)) == rules
+    finally:
+        admin.close()
+    mark("dirty_conflict_retained_and_root_admin_recovers_denied_child_acl")
     activate("Done")
     open_acl()
     type_field("New group name", "unsaved-draft")
@@ -437,6 +495,8 @@ def actions(args, root, shell, application, bot, murmur):
         "ordered_group_and_registered_user_rules_saved": True,
         "deny_applies_to_user_and_subchannel": True,
         "unrelated_control_can_speak": True,
+        "dirty_conflict_retained": True,
+        "root_admin_recovers_denied_child_acl": True,
         "dirty_draft_retained_read_only_after_disconnect": True,
         "stale_reconnect_save_refused": True,
         "persistence_after_restart": True,
