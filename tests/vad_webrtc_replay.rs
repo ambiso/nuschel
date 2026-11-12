@@ -79,16 +79,21 @@ fn compare_owned_recording() {
             let mut b = *input;
             let ar = old.process(&mut a, false, false);
             let br = new.process(&mut b, false, false);
-            assert_eq!(
-                a.map(f32::to_bits),
-                b.map(f32::to_bits),
-                "VAD must not change microphone samples or gain"
+            assert!(
+                a.iter()
+                    .zip(&b)
+                    .all(|(old, new)| old.to_bits() == new.to_bits()),
+                "VAD changed microphone samples or gain; sample data deliberately omitted"
             );
             let mut active = [false; 9];
             active[0] = ar.transmit;
             for (k, gate) in gates.iter_mut().enumerate() {
                 active[k + 1] = gate(br.voice, br.level_db);
             }
+            assert_eq!(
+                br.transmit, active[2],
+                "production default must match calibrated 0.4/0.2 policy"
+            );
             let raw = dsp::level_db(input);
             let energetic = raw > -50.;
             loud += usize::from(energetic);
@@ -160,5 +165,74 @@ fn capture_cpu_cost() {
             "{}",
             json!({"trial":trial,"frames":3000,"baseline_ns_per_10ms":elapsed[0].as_nanos()/3000,"candidate_ns_per_10ms":elapsed[1].as_nanos()/3000,"limits":"approximate host-local interleaved measurement, no portable speed claim","PCM_bit_identical":true})
         );
+    }
+}
+
+#[test]
+#[ignore = "explicit private numeric frame metrics; uses marker PCM, never user audio"]
+fn audit_prefix_markers() {
+    let text =
+        fs::read_to_string(std::env::var_os("NUSCHL_PRIVATE_FRAME_METRICS").unwrap()).unwrap();
+    assert!(text.len() <= 16_000_000);
+    let rows: Vec<serde_json::Value> = text
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let start = std::env::var("NUSCHL_PRIVATE_SPEECH_START_SECONDS")
+        .unwrap()
+        .parse::<usize>()
+        .unwrap()
+        * 100;
+    let noise_bounds = std::env::var("NUSCHL_PRIVATE_NOISE_START_SECONDS")
+        .ok()
+        .zip(std::env::var("NUSCHL_PRIVATE_NOISE_END_SECONDS").ok())
+        .map(|(start, end)| {
+            (
+                start.parse::<usize>().unwrap() * 100,
+                end.parse::<usize>().unwrap() * 100,
+            )
+        });
+    let mut out =
+        fs::File::create(std::env::var_os("NUSCHL_PRIVATE_PREFIX_METRICS").unwrap()).unwrap();
+    for ns in [false, true] {
+        let frames: Vec<_> = rows.iter().filter(|r| r[1].as_bool() == Some(ns)).collect();
+        for policy in 0..9 {
+            let mut queue = crate::capture_queue::CaptureQueue::default();
+            let clock = std::time::Instant::now();
+            let mut covered = vec![false; frames.len()];
+            let mut delivered_at = vec![None; frames.len()];
+            for n in 0..frames.len() + 12 {
+                let marker = if n < frames.len() { (n + 1) as f32 } else { 0. };
+                let gate = n < frames.len() && frames[n][6][policy].as_bool().unwrap();
+                queue.push([marker; 480], gate, true);
+                if let Some(packet) =
+                    queue.due(clock + std::time::Duration::from_millis(n as u64 * 10))
+                {
+                    for value in [packet.samples[0], packet.samples[480]] {
+                        if value > 0. {
+                            let index = value as usize - 1;
+                            assert!(index < frames.len());
+                            covered[index] = true;
+                            delivered_at[index].get_or_insert(n * 10);
+                        }
+                    }
+                }
+            }
+            let loud: Vec<_> = (start..frames.len().saturating_sub(12))
+                .filter(|&n| frames[n][2].as_f64().unwrap() > -50.)
+                .collect();
+            let missing: Vec<_> = loud
+                .iter()
+                .filter(|&&n| !covered[n])
+                .map(|&n| n * 10)
+                .collect();
+            let first_loud = loud.first().copied();
+            let noise_covered = noise_bounds.map(|(from, to)| {
+                assert!(from < to && to <= frames.len());
+                covered[from..to].iter().filter(|&&present| present).count()
+            });
+            let row = json!({"NS":ns,"policy":policy,"speech_start_frame":start,"energetic_frames":loud.len(),"uncovered_energetic_frames":missing.len(),"uncovered_frame_times_ms":missing,"first_energetic_frame_ms":first_loud.map(|n|n*10),"first_energetic_delivered_at_ms":first_loud.and_then(|n|delivered_at[n]),"requested_noise_bounds_frames":noise_bounds,"covered_noise_source_frames":noise_covered,"prefix_frames":crate::capture_queue::PREFIX_FRAMES,"clock":"actual CaptureQueue sample-clock, frame+1 marker values only","limits":"energy threshold is not phoneme annotation; exclude final120ms/clipped recording ending; final queue drained with marker-only silence, not a privacy-stop claim"});
+            writeln!(out, "{row}").unwrap();
+        }
     }
 }
