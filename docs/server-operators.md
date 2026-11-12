@@ -364,6 +364,8 @@ Create `tmp`, `run` and `out` as mode 0700 too. The test asserts the actual driv
 state paths and filesystem **before booting**. Do not reuse an earlier run's
 state: Pebble generates a new ephemeral issuer each time. Limit the driver to ten
 minutes and monitor free scratch space; the completed run took about a minute.
+Keep the scratch path short (preferably under 50 bytes): QEMU/virtiofs add nested
+names to Unix sockets, whose complete paths must fit the platform limit.
 Client `TMPDIR` does not relocate Nix daemon build scratch.
 
 The completed 2026-11-12 run passed real issuance and renewal with three distinct
@@ -373,6 +375,12 @@ access probes. nginx could read its web/witness keys but could not read the voic
 source/runtime keys; the voice server could read its runtime key but not the
 source key. Renewal performed fresh HTTP validation, changed the served leaf,
 kept the server PID and preserved a logged-in client's ping.
+Root repeated this proof with the current combined server package. The separate
+guests can differ slightly in wall-clock time; the fixture waits up to ten seconds
+for a newly issued public leaf's validity start before normal OpenSSL verification.
+The original socket-path and not-yet-valid failures are retained with the successful
+run under `~/.cache/nuschl-integration-20261112/http01/` and
+`~/.cache/nuschl-http01-root/`.
 
 The issuer is private Pebble, **not a public CA**. The fixture binds its ephemeral
 public root over the CA bundle only inside the publisher's service namespace;

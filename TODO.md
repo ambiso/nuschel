@@ -77,7 +77,18 @@ Current integration checkpoint (2026-11-12):
   witness/client policy. Root independently passes all three actual offline
   module-evaluation variants; these do not claim deployed health or ACME orders.
   The README and server reference link the guide. Separate voice-host HTTP-01
-  convenience support and runtime proof remain in progress.
+  convenience support and runtime proof are integrated below.
+- **Separate voice-host HTTP-01 support is integrated through `10473316`,
+  with fixture clock handling at `ee648b45`.** Enable
+  `services.nuschl.tls.enableACME` and `tls.nginxHTTP01` for the voice hostname.
+  Seven root module-evaluation cases and a repeated two-guest private
+  Pebble/lego test pass with the current combined server executable. Real
+  issuance/renewal, distinct voice/web/witness keys and names, HTTP-only voice
+  routing, actual UID/mount-namespace key isolation and retained authenticated
+  connection across reload are checked. The production publisher and outside
+  CA bundle stay unchanged; no public deployment or state migration occurred.
+  Setup is in docs/server-operators.md; root evidence:
+  `~/.cache/nuschl-integration-20261112/http01/handoff.json`.
 - **Live welcome updates are integrated through `8d65a1a4`.** Native 81 session
   tests (one existing ignored), browser 27 units/six relay integrations and the
   compiled App with an owned TLS/protobuf fixture pass. Absent/empty/changed/
@@ -1415,11 +1426,11 @@ listed below. Plugin data remains the explicit gap.
       bottom edge currently touches the window, and Settings/mute/deafen have no
       gaps. The rail now has matching top/bottom padding and the compact control
       cluster an explicit gap. Sixteen private GNOME cases at four sizes and
-      real 100/125/150/200% zoom pass, with at least13 logical pixels below Add
-      and4-pixel control gaps. Actual pointer actions/private-server audio ACKs,
+      real 100/125/150/200% zoom pass, with at least 13 logical pixels below Add
+      and 4-pixel control gaps. Actual pointer actions/private-server audio ACKs,
       scrolling, first/last decoration gutters and the cached negative control
       pass. Root verifies exact tested layout-source hashes and combined build;
-      see docs/native-spacing.md. Full chat usability at860×520/200% remains
+      see docs/native-spacing.md. Full chat usability at 860×520/200% remains
       separate open work.
 - [ ] Full Mumble feature parity for ACLs and group membership (user, 2026-11-12).
       Provide complete ACL/group editors, including adding/removing/reordering
@@ -1765,8 +1776,8 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
    - [x] Persist channel listeners for registered users (2026-11-11): stored with
          their volume, restored after `ServerSync` with Listen and the limits checked
          again (Murmur does not check), removed with the user or channel.
-   - [ ] Add opt-in nginx HTTP-01 support for a separate voice hostname (user,
-         2026-11-12): proposed `services.nuschl.tls.nginxHTTP01`, requiring
+   - [x] Add opt-in nginx HTTP-01 support for a separate voice hostname (user,
+         2026-11-12): `services.nuschl.tls.nginxHTTP01`, requiring
          `tls.enableACME` and `hostName`. Serve only the ACME challenge on HTTP 80,
          return 404 otherwise, and create no HTTPS voice vhost. Issue a distinct
          voice certificate/key without adding the web hostname; preserve selected
@@ -1775,7 +1786,9 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
          meaningful owned NixOS issuance/renewal/isolation tests and setup examples.
          User explicitly excludes migration/state/bookmark/pin-reset work and
          handles state removal/deployment separately; do not deploy or inspect
-         real secrets. Assigned to the operator/module owner.
+         real secrets. Implemented with seven module-evaluation cases and real
+         private two-guest issuance/renewal/isolation proof, independently repeated
+         using the current combined server package. No public deployment.
    - [x] Review the supplied combined NixOS deployment and provide a server
          operator guide (user, 2026-11-12). Cover imports, ACME/DNS/80+443,
          interface-scoped TCP+UDP 64738, selected fullchain/renewal, browser relay
