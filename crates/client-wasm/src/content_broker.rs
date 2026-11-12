@@ -66,6 +66,72 @@ pub enum ImageAdmissionState {
     SentToTransport,
 }
 
+/// Fixed data-image protocol, not an HTML parser. No URL, attributes, alternate
+/// tags or worker-selected source is accepted. Base64 unwrap is bounded basic
+/// protocol logic; image parsing/encoding remains in the credential-free worker.
+pub fn validate_image_html(html: &str) -> Result<(), &'static str> {
+    if html.len() > MAX_CONTENT_BYTES {
+        return Err(INVALID);
+    }
+    let payload = html
+        .strip_prefix("<img src=\"data:image/png;base64,")
+        .map(|payload| (payload, true))
+        .or_else(|| {
+            html.strip_prefix("<img src=\"data:image/jpeg;base64,")
+                .map(|payload| (payload, false))
+        })
+        .ok_or(INVALID)?;
+    let (payload, png) = payload;
+    let payload = payload.strip_suffix("\" />").ok_or(INVALID)?;
+    let mut base64 = String::with_capacity(payload.len());
+    let mut bytes = payload.bytes();
+    while let Some(byte) = bytes.next() {
+        match byte {
+            b'\n' => {}
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' => base64.push(char::from(byte)),
+            b'%' => {
+                let pair = [bytes.next().ok_or(INVALID)?, bytes.next().ok_or(INVALID)?];
+                base64.push(match &pair {
+                    b"2B" => '+',
+                    b"2F" => '/',
+                    b"3D" => '=',
+                    _ => return Err(INVALID),
+                });
+            }
+            _ => return Err(INVALID),
+        }
+    }
+    if base64.len() < 12 || !base64.len().is_multiple_of(4) {
+        return Err(INVALID);
+    }
+    let padding = base64
+        .bytes()
+        .rev()
+        .take_while(|byte| *byte == b'=')
+        .count();
+    if padding > 2
+        || !canonical_base64(&base64, base64.len() / 4 * 3 - padding)
+        || !(if png {
+            base64.starts_with("iVBORw0KGgo")
+        } else {
+            base64.starts_with("/9j/")
+        })
+    {
+        return Err(INVALID);
+    }
+    Ok(())
+}
+
+pub fn validate_thumbnail(thumbnail: &ContentBlock) -> Result<(), &'static str> {
+    if !matches!(thumbnail, ContentBlock::Image { .. }) {
+        return Err(INVALID);
+    }
+    validate_document(&MessageDocument {
+        blocks: vec![thumbnail.clone()],
+    })?;
+    Ok(())
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct DocumentWire {

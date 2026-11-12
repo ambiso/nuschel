@@ -1,6 +1,7 @@
 <!-- SPDX-License-Identifier: EUPL-1.2 -->
 <script>
   import { onMount, tick } from "svelte";
+  import { ContentBridge } from "./content-bridge.js";
   import { flip } from "svelte/animate";
   import { serverIndices, moveServer, sameOrder, edgeSpeed } from "./server-order.js";
   import { inviteFragment } from "./invite.js";
@@ -95,6 +96,7 @@
     document.documentElement.style.setProperty("--font-size", `${settings.fontSize}px`);
   });
   onMount(() => {
+    let contentBridge;
     try { settings = appearance(JSON.parse(localStorage.getItem("nuschl.appearance.v1") || "null")); } catch { /* Defaults remain usable in private browsing. */ }
     const media = matchMedia("(max-width: 760px)");
     const updateMobile = () => { mobile = media.matches; if (!mobile) drawer = false; };
@@ -112,8 +114,9 @@
     const viewport = window.visualViewport;
     const resizeViewport = () => { if (orderDrag) cancelOrder(); document.documentElement.style.setProperty("--app-height", `${viewport?.height || window.innerHeight}px`); };
     resizeViewport(); viewport?.addEventListener("resize", resizeViewport);
-    const cleanup = () => { cancelOrder(); window.removeEventListener("keydown", escapeOrder, true); window.removeEventListener("resize", cancelOrder); motion.removeEventListener("change", updateMotion); media.removeEventListener("change", updateMobile); viewport?.removeEventListener("resize", resizeViewport); rpc?.close("Client closed.",{notify:false}); worker = null; disposeAudio(); };
+    const cleanup = () => { contentBridge?.dispose(); cancelOrder(); window.removeEventListener("keydown", escapeOrder, true); window.removeEventListener("resize", cancelOrder); motion.removeEventListener("change", updateMotion); media.removeEventListener("change", updateMobile); viewport?.removeEventListener("resize", resizeViewport); rpc?.close("Client closed.",{notify:false}); worker = null; disposeAudio(); };
     const unavailable = reason => {
+      contentBridge?.dispose();
       worker = null; clientUnavailable = true; loaded = false; cancelOrder(); arrangeServers = false;
       // Keep conversation text, unsent drafts, bookmarks and history. Only
       // transport-derived presence is invalid once its owner is retired.
@@ -134,11 +137,13 @@
     rpc = new SdkRpc(ownedWorker,{onClose:reason => {
       if (worker === ownedWorker) unavailable(reason);
     }});
+    contentBridge = new ContentBridge((method,...args) => command(method,...args));
     activateAudio = options => audio.activateGesture(options);
     disposeAudio = () => audio.dispose();
     ownedWorker.onmessage = async ({ data }) => {
       if (worker !== ownedWorker || rpc.closed || !data || typeof data !== "object") return;
       if (data.kind !== "ready" && data.kind !== "error" && rpc.phase !== "ready") return;
+      if (contentBridge.handle(data)) return;
       if (data.kind === "voice_packet") {
         // Audio packets never replace reactive chat/server state.
         audio.receive(data.packet); return;
@@ -156,6 +161,7 @@
         selectedFallback = selected?.id || null;
         try { servers = serverIndices(data.servers, capabilities.includes("server_order")); }
         catch (reason) { audio.setLocalPolicy({muted:true,deafened:true}); audio.syncVoice(null); voice = null; loaded = false; setError("The server list could not be read safely. Reload to reconnect."); return; }
+        contentBridge.state(servers,data.updates);
         welcomes = welcomeDocuments(welcomes, servers, data.updates);
         if (orderDrag && !sameOrder(orderDrag.baseline, servers.map(server => server.id))) cancelOrder();
         timeline = data.timeline;

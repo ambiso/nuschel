@@ -36,6 +36,8 @@ function refresh() {
   const updates = JSON.parse(client.poll());
   postMessage({ kind: "state", servers: JSON.parse(client.servers()), timeline: JSON.parse(client.timeline()), voice: JSON.parse(client.voice()), updates });
   drainVoice();
+  const contentWork=JSON.parse(client.content_requests());
+  if(contentWork.length)postMessage({kind:"content_work",operations:contentWork});
   for (const operation of JSON.parse(client.storage_requests())) {
     // Pages cannot overtake preceding writes. Rust retains opaque navigation
     // tickets and drops replies for old selections/connections/certificates.
@@ -82,7 +84,7 @@ async function persistServerOrder(ids) {
   orderQueue = action.catch(() => {});
   return action;
 }
-const methods = new Set(["add_server", "connect", "disconnect", "accept_certificate", "open", "browse_server", "open_direct", "send_text", "older", "join", "toggle_mute", "toggle_deaf", "audio_ready", "voice_packet", "remove_server", "dismiss_notice", "dismiss_welcome", "connect_with_password", "stop_audio", "edit_server", "set_server_order"]);
+const methods = new Set(["add_server", "connect", "disconnect", "accept_certificate", "open", "browse_server", "open_direct", "send_text", "older", "join", "toggle_mute", "toggle_deaf", "audio_ready", "voice_packet", "remove_server", "dismiss_notice", "dismiss_welcome", "connect_with_password", "stop_audio", "edit_server", "set_server_order", "content_complete", "content_request", "image_begin", "image_send", "image_cancel"]);
 onmessage = async ({ data }) => {
   try {
     if (!data || typeof data !== "object") throw new Error("Invalid browser command.");
@@ -100,7 +102,14 @@ onmessage = async ({ data }) => {
     } else {
       if (!client || !methods.has(data.method) || !Array.isArray(data.args) || data.args.length > 6) throw new Error("Unsupported browser command.");
       let value;
-      if (data.method === "set_server_order") {
+      if (data.method === "content_complete") {
+        if(typeof data.args[0]!=="string"||data.args[0].length>20||typeof data.args[1]!=="string"||data.args[1].length>2*1024*1024||new TextEncoder().encode(data.args[1]).length>2*1024*1024)throw new Error("Invalid content reply.");
+        value=client.content_complete(...data.args);
+      } else if (data.method === "image_begin" || data.method === "image_send") {
+        const raw=JSON.stringify(data.args[0]);
+        if(raw.length>2*1024*1024)throw new Error("Invalid image command.");
+        value=JSON.parse(client[data.method](raw));
+      } else if (data.method === "set_server_order") {
         value = await persistServerOrder(data.args[0]);
       } else if (data.method === "audio_ready") {
         value = client.audio_ready(JSON.stringify(data.args[0]));

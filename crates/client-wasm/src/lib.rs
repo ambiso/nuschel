@@ -8,6 +8,8 @@
 //! browser glue is only built for `wasm32-unknown-unknown`.
 
 pub mod content_broker;
+pub mod content_jobs;
+pub mod image;
 pub mod session;
 pub mod snapshot;
 pub mod storage;

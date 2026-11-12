@@ -83,6 +83,7 @@ pub enum UpdateView {
         server: String,
         token: String,
         document: nuschl_core::MessageDocument,
+        content_token: Option<String>,
     },
     Changed,
 }
@@ -241,6 +242,7 @@ mod tests {
 
 #[derive(Serialize)]
 pub struct TimelineView {
+    pub content_context: Option<String>,
     pub server: String,
     pub channel: u32,
     pub name: String,
@@ -252,6 +254,8 @@ pub struct TimelineView {
 #[derive(Serialize)]
 pub struct MessageView {
     pub serial: String,
+    pub revision: u32,
+    pub content_token: Option<String>,
     pub author: String,
     pub at_ms: i64,
     pub outgoing: bool,
@@ -263,6 +267,7 @@ pub fn timeline(client: &nuschl_client::Client) -> Option<TimelineView> {
     let server = &client.servers[server];
     let channel = &server.channels[channel];
     Some(TimelineView {
+        content_context: None,
         server: server.id.clone(),
         channel: channel.id,
         name: channel.name.clone(),
@@ -275,6 +280,8 @@ pub fn timeline(client: &nuschl_client::Client) -> Option<TimelineView> {
             .iter()
             .map(|message| MessageView {
                 serial: message.serial.to_string(),
+                revision: message.revision,
+                content_token: None,
                 author: message.author.clone(),
                 at_ms: message.observed_at_ms,
                 outgoing: message.outgoing,

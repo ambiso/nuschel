@@ -72,6 +72,8 @@ pub enum Event {
     /// reporting a Message to the shared SDK; the relay never sees plaintext.
     Text {
         target: TextTarget,
+        /// Original wire channel lifetime, captured before later queued states.
+        channel_instance: Option<u64>,
         peer: Option<User>,
         author: String,
         body: String,
@@ -103,6 +105,11 @@ const SELF_RETRIES: u8 = 5;
 struct SelfRetry {
     after: f64,
     remaining: u8,
+}
+
+fn next_channel_instance() -> u64 {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
 }
 
 fn next_user_instance() -> u64 {
@@ -492,8 +499,13 @@ impl Session {
             TextTarget::Direct(id) => self.users.get(&id).cloned(),
             _ => None,
         };
+        let channel_instance = match &target {
+            TextTarget::Channel(id) => self.channels.get(id).map(|channel| channel.instance),
+            _ => None,
+        };
         self.events.push_back(Event::Text {
             target: target.clone(),
+            channel_instance,
             peer,
             author: self.login.username.clone(),
             body: body.clone(),
@@ -501,6 +513,70 @@ impl Session {
             outgoing: true,
         });
         self.events.push_back(Event::Sent { target, body });
+        Ok(())
+    }
+
+    /// The SDK admits only fixed worker-encoded PNG/JPEG plus its own captured
+    /// caption. Every authority/limit check occurs again at actual enqueue.
+    pub fn send_inline_image(
+        &mut self,
+        target: TextTarget,
+        image: &str,
+        caption: &str,
+        expected_peer: Option<u64>,
+        expected_channel: Option<u64>,
+        expected_own: u64,
+    ) -> Result<(), String> {
+        crate::content_broker::validate_image_html(image)?;
+        if self.phase != Phase::LoggedIn
+            || !self.limits.allow_html
+            || caption.len() > MAX_CONTENT_BYTES
+            || self
+                .own
+                .and_then(|id| self.users.get(&id))
+                .is_none_or(|user| user.instance != expected_own)
+        {
+            return Err("This image belongs to an unavailable conversation.".into());
+        }
+        let mut wire = proto::TextMessage::default();
+        match &target {
+            TextTarget::Channel(id) if self.channels.get(id).is_some_and(|channel| Some(channel.instance) == expected_channel) => wire.channel_id.push(*id),
+            TextTarget::Direct(id) if self.users.get(id).is_some_and(|user| Some(user.instance) == expected_peer) => wire.session.push(*id),
+            _ => return Err("This image recipient changed. Keep the attachment and select its destination again.".into()),
+        }
+        let caption_wire = nuschl_legacy_html::legacy_body(caption, true);
+        self.limits
+            .check_text_wire(&caption_wire)
+            .map_err(|error| error.to_string())?;
+        wire.message = image.to_owned();
+        if !caption.is_empty() {
+            wire.message.push_str("<br/>");
+            wire.message.push_str(&caption_wire);
+        }
+        self.limits
+            .check_html_total(&wire.message)
+            .map_err(|error| error.to_string())?;
+        self.send(kind::TEXT_MESSAGE, &wire);
+        if self.is_closed() {
+            return Err("TLS failed while sending the image.".into());
+        }
+        let peer = match target {
+            TextTarget::Direct(id) => self.users.get(&id).cloned(),
+            _ => None,
+        };
+        self.events.push_back(Event::Text {
+            target: target.clone(),
+            channel_instance: expected_channel,
+            peer,
+            author: self.login.username.clone(),
+            body: wire.message,
+            html: true,
+            outgoing: true,
+        });
+        self.events.push_back(Event::Sent {
+            target,
+            body: caption.into(),
+        });
         Ok(())
     }
 
@@ -764,6 +840,7 @@ impl Session {
                 }
                 let channel = self.channels.entry(id).or_insert_with(|| Channel {
                     id,
+                    instance: next_channel_instance(),
                     can_enter: true,
                     ..Channel::default()
                 });
@@ -876,8 +953,15 @@ impl Session {
                     if self.events.len() >= MAX_EVENTS {
                         return self.close("The server sent too much text at once.".into());
                     }
+                    let channel_instance = match &target {
+                        TextTarget::Channel(id) => {
+                            self.channels.get(id).map(|channel| channel.instance)
+                        }
+                        _ => None,
+                    };
                     self.events.push_back(Event::Text {
                         target,
+                        channel_instance,
                         peer: peer.clone(),
                         author: author.clone(),
                         body: message.message.clone(),

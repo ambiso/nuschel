@@ -6,9 +6,12 @@
 //! A Web Worker can host it unchanged (no DOM is used).
 
 use crate::{
+    content_broker::{ImageAdmission, ImageAdmissionState, ImageBegin, ImageSend, SourceMode},
+    content_jobs::{Jobs, Origin},
+    image::{Destination, Images},
     session::{Event, Login, Session},
     snapshot,
-    storage::Storage,
+    storage::{RawCompletion, Storage, pending_document},
     voice::{self, Route},
 };
 use nuschl_client::{
@@ -19,7 +22,6 @@ use nuschl_client::{
     timeline::Page,
 };
 use nuschl_client::{model::TextTarget, timeline::IncomingMessage};
-use nuschl_content::ContentRenderer;
 use nuschl_core::{
     ChatMessage, ContentBlock, MessageDocument, SearchCursor, audio::Sound,
     bookmark::ServerBookmark,
@@ -56,7 +58,9 @@ struct Shared {
     audio_wake: RefCell<Option<js_sys::Function>>,
     talking: RefCell<HashMap<(String, u64, u32), f64>>,
     storage: RefCell<Storage>,
-    renderer: ContentRenderer,
+    deliveries: RefCell<VecDeque<RawCompletion>>,
+    jobs: RefCell<Jobs>,
+    images: RefCell<Images>,
     welcomes: RefCell<crate::welcome::Welcomes>,
     voice: RefCell<Route>,
     voice_packets: RefCell<Vec<voice::Incoming>>,
@@ -148,12 +152,26 @@ impl Shared {
                     {
                         continue;
                     }
-                    let document = self.welcomes.borrow_mut().render(
-                        &server,
-                        generation,
-                        &source,
-                        &self.renderer,
-                    );
+                    let document = self
+                        .welcomes
+                        .borrow_mut()
+                        .begin(&server, generation, &source);
+                    if let Some(view) =
+                        self.welcomes
+                            .borrow()
+                            .view(&server, generation, Some(&source), true)
+                    {
+                        let _ = self.jobs.borrow_mut().request(
+                            Origin::Welcome {
+                                server: server.clone(),
+                                generation,
+                                revision: view.token.clone(),
+                            },
+                            &source,
+                            SourceMode::Legacy,
+                            now_ms(),
+                        );
+                    }
                     Input::Server {
                         server,
                         generation,
@@ -169,6 +187,7 @@ impl Shared {
                 },
                 Event::Text {
                     target,
+                    channel_instance,
                     peer,
                     author,
                     body,
@@ -178,19 +197,13 @@ impl Shared {
                     let Some(identity) = session.borrow().history_identity() else {
                         continue;
                     };
-                    let source = if html {
-                        self.renderer
-                            .legacy_plain_text(&body)
-                            .unwrap_or_else(|_| "[Message could not be rendered]".into())
+                    let mode = if html {
+                        SourceMode::Legacy
                     } else {
-                        body
+                        SourceMode::Plain
                     };
-                    let document =
-                        self.renderer
-                            .render(&source)
-                            .unwrap_or_else(|_| MessageDocument {
-                                blocks: vec![ContentBlock::text("[Message could not be rendered]")],
-                            });
+                    let source = body;
+                    let document = pending_document();
                     let storage_key = match &target {
                         TextTarget::Channel(id) => id.to_string(),
                         TextTarget::Direct(id) => peer
@@ -222,21 +235,28 @@ impl Shared {
                         document,
                         outgoing,
                     );
-                    if let Err(reason) = self.storage.borrow_mut().append(
+                    if let Err(reason) = self.storage.borrow_mut().append_raw(
                         server.clone(),
                         generation,
                         target.clone(),
                         peer.clone(),
                         message.clone(),
+                        mode,
+                        channel_instance,
                     ) {
                         inputs.push_back(Input::HistoryError(reason));
-                        inputs.push_back(Input::Message {
-                            server,
-                            generation,
-                            target,
-                            storage_key,
-                            peer,
-                            message,
+                        self.deliveries.borrow_mut().push_back(RawCompletion {
+                            inputs: vec![Input::Message {
+                                server,
+                                generation,
+                                target,
+                                storage_key,
+                                peer,
+                                message,
+                            }],
+                            live_mode: Some(mode),
+                            channel_instance,
+                            stored_modes: Default::default(),
                         });
                     }
                     continue;
@@ -505,7 +525,9 @@ impl WebClient {
             audio_wake: RefCell::new(None),
             talking: RefCell::new(HashMap::new()),
             storage: RefCell::new(Storage::default()),
-            renderer: ContentRenderer::default(),
+            deliveries: RefCell::new(VecDeque::new()),
+            jobs: RefCell::new(Jobs::default()),
+            images: RefCell::new(Images::default()),
             welcomes: RefCell::new(crate::welcome::Welcomes::default()),
             voice: RefCell::new(Route::default()),
             voice_packets: RefCell::new(Vec::new()),
@@ -581,12 +603,14 @@ impl WebClient {
     }
 
     pub fn connect(&mut self, index: usize) {
+        self.shared.images.borrow_mut().invalidate();
         if index < self.client.servers.len() {
             self.client.connect(index, None, true);
         }
     }
 
     pub fn disconnect(&mut self, index: usize) {
+        self.shared.images.borrow_mut().invalidate();
         if index < self.client.servers.len() {
             self.client.disconnect(index);
             self.reconcile_voice();
@@ -737,6 +761,7 @@ impl WebClient {
     }
 
     pub fn remove_server(&mut self, index: usize) {
+        self.shared.images.borrow_mut().invalidate();
         if let Some(server) = self.client.servers.get(index) {
             let id = server.id.clone();
             self.client.remove_server(&id);
@@ -767,6 +792,7 @@ impl WebClient {
     }
 
     pub fn connect_with_password(&mut self, index: usize, password: String) -> Result<(), String> {
+        self.shared.images.borrow_mut().invalidate();
         if password.len() > 1024 || index >= self.client.servers.len() {
             return Err("Invalid password or server.".into());
         }
@@ -777,10 +803,12 @@ impl WebClient {
 
     /// Single-click navigation uses the shared SDK's selected timeline.
     pub fn open(&mut self, index: usize, channel: u32) -> Result<bool, String> {
+        self.shared.images.borrow_mut().invalidate();
         self.client.open(index, channel)
     }
 
     pub fn browse_server(&mut self, index: usize) -> Result<bool, String> {
+        self.shared.images.borrow_mut().invalidate();
         let Some(server) = self.client.servers.get(index) else {
             return Ok(false);
         };
@@ -793,6 +821,7 @@ impl WebClient {
     }
 
     pub fn open_direct(&mut self, index: usize, session: u32) -> Result<bool, String> {
+        self.shared.images.borrow_mut().invalidate();
         if index >= self.client.servers.len() {
             return Ok(false);
         }
@@ -800,6 +829,84 @@ impl WebClient {
             return Ok(false);
         };
         self.client.open(index, channel)
+    }
+
+    /// Capture original destination and caption; selected file bytes stay in
+    /// the UI/codec realm. Context is mandatory and issued by `timeline()`.
+    pub fn image_begin(&mut self, raw: String) -> Result<String, String> {
+        if raw.len() > nuschl_core::MAX_CONTENT_BYTES + 4096 || self.client.sending() {
+            return Err("This image draft is too large or another send is pending.".into());
+        }
+        let request: ImageBegin = serde_json::from_str(&raw).map_err(|_| "Invalid image draft.")?;
+        let destination = image_destination(&self.client)
+            .ok_or("Choose an available conversation before attaching an image.")?;
+        let limits = self
+            .client
+            .servers
+            .iter()
+            .find(|server| server.id == destination.server)
+            .and_then(|server| server.limits.clone())
+            .unwrap_or_default();
+        let budget = self
+            .shared
+            .images
+            .borrow_mut()
+            .begin(request, destination, &limits)?;
+        serde_json::to_string(&budget).map_err(|_| "Image budget could not be serialized.".into())
+    }
+
+    pub fn image_cancel(&mut self, ticket: String) {
+        self.shared.images.borrow_mut().cancel(&ticket);
+    }
+
+    pub fn image_send(&mut self, raw: String) -> Result<String, String> {
+        if raw.len() > crate::content_broker::MAX_REPLY_BYTES || self.client.sending() {
+            return Err("The image is too large or another send is pending.".into());
+        }
+        let request: ImageSend =
+            serde_json::from_str(&raw).map_err(|_| "Invalid encoded image.")?;
+        let destination = image_destination(&self.client)
+            .ok_or("This image destination is no longer available.")?;
+        let limits = self
+            .client
+            .servers
+            .iter()
+            .find(|server| server.id == destination.server)
+            .and_then(|server| server.limits.clone())
+            .unwrap_or_default();
+        let captured = self
+            .shared
+            .images
+            .borrow()
+            .validate(&request, &destination, &limits)?;
+        let connections = self.shared.connections.borrow();
+        let connection = connections
+            .get(&destination.server)
+            .filter(|connection| connection.generation == destination.generation)
+            .ok_or("This image belongs to an older connection.")?;
+        connection.session.borrow_mut().send_inline_image(
+            destination.target.clone(),
+            &request.html,
+            &captured.caption,
+            destination.peer,
+            matches!(destination.target, TextTarget::Channel(_)).then_some(destination.instance),
+            destination.own,
+        )?;
+        self.shared.pump(
+            &destination.server,
+            destination.generation,
+            &connection.socket,
+            &connection.session,
+        );
+        drop(connections);
+        self.shared.images.borrow_mut().cancel(&captured.ticket);
+        serde_json::to_string(&ImageAdmission {
+            ticket: captured.ticket,
+            attachment_revision: captured.attachment_revision,
+            draft_revision: captured.draft_revision,
+            state: ImageAdmissionState::SentToTransport,
+        })
+        .map_err(|_| "Image admission could not be serialized.".into())
     }
 
     pub fn send_text(&mut self, body: String) -> Result<(), String> {
@@ -835,7 +942,7 @@ impl WebClient {
     }
 
     pub fn storage_complete(&mut self, ticket: String, response: String) {
-        let inputs = self.shared.storage.borrow_mut().complete(
+        let completed = self.shared.storage.borrow_mut().complete_raw(
             &ticket,
             &response,
             |id, generation, identity| {
@@ -845,20 +952,154 @@ impl WebClient {
                         && server.history_identity().as_deref() == Some(identity)
                 })
             },
-            |source| {
-                self.shared
-                    .renderer
-                    .render(source)
-                    .unwrap_or_else(|_| MessageDocument {
-                        blocks: vec![ContentBlock::text("[Message could not be rendered]")],
-                    })
-            },
         );
-        self.shared.inputs.borrow_mut().extend(inputs);
+        self.shared.deliveries.borrow_mut().push_back(completed);
+    }
+
+    /// Sources leave this credential-bearing realm only under SDK-owned leases.
+    pub fn content_requests(&mut self) -> String {
+        let operations = self
+            .shared
+            .jobs
+            .borrow_mut()
+            .take(now_ms(), |origin, source| {
+                content_current(&self.client, &self.shared, origin, Some(source))
+            });
+        serde_json::to_string(&operations).unwrap_or_else(|_| "[]".into())
+    }
+
+    /// Acknowledges success, failure or cancellation. Only this exact original
+    /// source/context may install a new opaque UI derivative handle.
+    pub fn content_complete(
+        &mut self,
+        request: String,
+        response: String,
+    ) -> Result<String, String> {
+        if request.len() > 20 {
+            return Err("Invalid content request.".into());
+        }
+        let completed = self.shared.jobs.borrow_mut().complete(
+            &request,
+            (!response.is_empty()).then_some(response.as_str()),
+            now_ms(),
+            |origin, source| content_current(&self.client, &self.shared, origin, Some(source)),
+        )?;
+        let Some(completed) = completed else {
+            return Ok("null".into());
+        };
+        let token = completed.token;
+        match &completed.origin {
+            Origin::Message {
+                server,
+                generation,
+                channel,
+                instance,
+                serial,
+                revision,
+            } => {
+                if let Some(message) = self
+                    .client
+                    .servers
+                    .iter_mut()
+                    .find(|state| &state.id == server && state.generation == *generation)
+                    .and_then(|state| {
+                        state
+                            .channels
+                            .iter_mut()
+                            .find(|state| state.id == *channel && state.instance == *instance)
+                    })
+                    .and_then(|state| {
+                        state.timeline.messages.iter_mut().find(|message| {
+                            message.serial == *serial && message.revision == *revision
+                        })
+                    })
+                {
+                    message.document = MessageDocument {
+                        blocks: vec![ContentBlock::text(&completed.rendered.plain_text)],
+                    };
+                } else {
+                    return Ok("null".into());
+                }
+            }
+            Origin::Welcome {
+                server,
+                generation,
+                revision,
+            } => {
+                if !self.shared.welcomes.borrow_mut().complete(
+                    server,
+                    *generation,
+                    revision,
+                    &completed.source,
+                    token.clone(),
+                ) {
+                    return Ok("null".into());
+                }
+                self.shared.inputs.borrow_mut().push_back(Input::Server {
+                    server: server.clone(),
+                    generation: *generation,
+                    event: nuschl_client::input::ServerEvent::Welcome {
+                        source: completed.source,
+                        document: pending_document(),
+                    },
+                });
+            }
+        }
+        serde_json::to_string(&serde_json::json!({"token":token,"charge":completed.rendered.retained_bytes,"document":completed.rendered.document})).map_err(|_| "Content result could not be serialized.".into())
+    }
+
+    pub fn content_request(&mut self, token: String) -> Result<(), String> {
+        let (origin, mode) = self
+            .shared
+            .jobs
+            .borrow()
+            .origin(&token)
+            .ok_or("Content is no longer available.")?;
+        let source = content_source(&self.client, &self.shared, &origin)
+            .ok_or("Content is no longer available.")?;
+        self.shared
+            .jobs
+            .borrow_mut()
+            .request(origin, &source, mode, now_ms())
+            .map_err(str::to_owned)
     }
 
     pub fn timeline(&self) -> String {
-        serde_json::to_string(&snapshot::timeline(&self.client)).unwrap_or_else(|_| "null".into())
+        let mut view = snapshot::timeline(&self.client);
+        let context = self
+            .shared
+            .images
+            .borrow_mut()
+            .context(image_destination(&self.client));
+        if let Some(view) = &mut view {
+            view.content_context = context;
+        }
+        if let Some(view) = &mut view {
+            if let Some(server) = self
+                .client
+                .servers
+                .iter()
+                .find(|server| server.id == view.server)
+                && let Some(channel) = server
+                    .channels
+                    .iter()
+                    .find(|channel| channel.id == view.channel)
+            {
+                for message in &mut view.messages {
+                    let origin = Origin::Message {
+                        server: server.id.clone(),
+                        generation: server.generation,
+                        channel: channel.id,
+                        instance: channel.instance,
+                        serial: message.serial.parse().unwrap_or(u64::MAX),
+                        revision: message.revision,
+                    };
+                    message.content_token =
+                        self.shared.jobs.borrow().token(&origin).map(str::to_owned);
+                }
+            }
+        }
+        serde_json::to_string(&view).unwrap_or_else(|_| "null".into())
     }
 
     /// IDs, never display positions: live connection indices stay unchanged.
@@ -956,7 +1197,17 @@ impl WebClient {
             let Some(input) = input else { break };
             self.client.handle(input);
         }
+        loop {
+            let Some(delivery) = self.shared.deliveries.borrow_mut().pop_front() else {
+                break;
+            };
+            self.admit_delivery(delivery);
+        }
         self.client.settle();
+        self.shared
+            .jobs
+            .borrow_mut()
+            .retain(|origin| content_current(&self.client, &self.shared, origin, None));
         self.reconcile_voice();
         if self.client.navigation.selection().is_none() {
             if let Some(index) = self
@@ -994,6 +1245,7 @@ impl WebClient {
                             server: server.clone(),
                             token: view.token,
                             document: view.document,
+                            content_token: view.content_token,
                         });
                 }
                 snapshot::update(update)
@@ -1023,6 +1275,109 @@ impl WebClient {
 
 // Non-exported helpers keep browser devices outside the SDK/session boundary.
 impl WebClient {
+    fn admit_delivery(&mut self, delivery: RawCompletion) {
+        for input in delivery.inputs {
+            match input {
+                Input::Message {
+                    server,
+                    generation,
+                    target,
+                    storage_key,
+                    peer,
+                    message,
+                } => {
+                    if let TextTarget::Channel(id) = &target {
+                        if delivery.channel_instance.is_some_and(|instance| {
+                            self.client
+                                .servers
+                                .iter()
+                                .find(|state| state.id == server && state.generation == generation)
+                                .and_then(|state| {
+                                    state.channels.iter().find(|channel| channel.id == *id)
+                                })
+                                .is_none_or(|channel| channel.instance != instance)
+                        }) {
+                            continue;
+                        }
+                    }
+                    let source = message.message.body.clone();
+                    if let Some(receipt) = self.client.receive_message(
+                        &server,
+                        generation,
+                        target,
+                        storage_key,
+                        peer,
+                        message,
+                    ) {
+                        let origin = Origin::Message {
+                            server: receipt.server,
+                            generation,
+                            channel: receipt.channel,
+                            instance: receipt.channel_instance,
+                            serial: receipt.serial,
+                            revision: receipt.revision,
+                        };
+                        let _ = self.shared.jobs.borrow_mut().request(
+                            origin,
+                            &source,
+                            delivery.live_mode.unwrap_or(SourceMode::Marked),
+                            now_ms(),
+                        );
+                    }
+                }
+                Input::History {
+                    server,
+                    ticket,
+                    before,
+                    messages,
+                    next_before,
+                } => {
+                    let ids: Vec<i64> = messages.iter().filter_map(|message| message.id).collect();
+                    let channel_id = ticket.conversation.channel;
+                    self.client.handle(Input::History {
+                        server: server.clone(),
+                        ticket,
+                        before,
+                        messages,
+                        next_before,
+                    });
+                    if let Some(server) =
+                        self.client.servers.iter().find(|state| state.id == server)
+                        && let Some(channel) = server
+                            .channels
+                            .iter()
+                            .find(|channel| channel.id == channel_id)
+                    {
+                        for message in &channel.timeline.messages {
+                            if message.id.is_some_and(|id| ids.contains(&id)) {
+                                let mode = message
+                                    .id
+                                    .and_then(|id| delivery.stored_modes.get(&id))
+                                    .copied()
+                                    .unwrap_or(SourceMode::Marked);
+                                let origin = Origin::Message {
+                                    server: server.id.clone(),
+                                    generation: server.generation,
+                                    channel: channel.id,
+                                    instance: channel.instance,
+                                    serial: message.serial,
+                                    revision: message.revision,
+                                };
+                                let _ = self.shared.jobs.borrow_mut().request(
+                                    origin,
+                                    &message.source,
+                                    mode,
+                                    now_ms(),
+                                );
+                            }
+                        }
+                    }
+                }
+                input => self.client.handle(input),
+            }
+        }
+    }
+
     fn reconcile_voice(&mut self) {
         let view = self.shared.voice.borrow().view();
         let Some(view) = view else {
@@ -1081,4 +1436,100 @@ impl WebClient {
         self.reconcile_voice();
         Ok(())
     }
+}
+
+fn now_ms() -> u64 {
+    js_sys::Date::now().max(0.0) as u64
+}
+fn content_source(client: &Client, shared: &Shared, origin: &Origin) -> Option<String> {
+    match origin {
+        Origin::Message {
+            server,
+            generation,
+            channel,
+            instance,
+            serial,
+            revision,
+        } => {
+            let server = client
+                .servers
+                .iter()
+                .find(|state| &state.id == server && state.generation == *generation)?;
+            let channel = server
+                .channels
+                .iter()
+                .find(|state| state.id == *channel && state.instance == *instance)?;
+            channel
+                .timeline
+                .messages
+                .iter()
+                .find(|message| message.serial == *serial && message.revision == *revision)
+                .map(|message| message.source.clone())
+        }
+        Origin::Welcome {
+            server,
+            generation,
+            revision,
+        } => {
+            let server = client.servers.iter().find(|state| {
+                &state.id == server
+                    && state.generation == *generation
+                    && state.status == nuschl_client::server::Status::Connected
+            })?;
+            let source = server.welcome.as_deref()?;
+            shared
+                .welcomes
+                .borrow()
+                .view(&server.id, *generation, Some(source), true)
+                .filter(|view| &view.token == revision)?;
+            Some(source.into())
+        }
+    }
+}
+fn content_current(
+    client: &Client,
+    shared: &Shared,
+    origin: &Origin,
+    source: Option<&str>,
+) -> bool {
+    content_source(client, shared, origin)
+        .is_some_and(|current| source.is_none_or(|source| source == current))
+}
+
+fn image_destination(client: &Client) -> Option<Destination> {
+    let (index, position) = client.selected_indices()?;
+    let server = &client.servers[index];
+    if server.status != nuschl_client::server::Status::Connected || server.mls {
+        return None;
+    }
+    let channel = &server.channels[position];
+    let own = server
+        .own_session
+        .and_then(|id| server.users.get(&id))?
+        .instance;
+    let peer = match channel.target {
+        TextTarget::Channel(_) => None,
+        TextTarget::Direct(id) => Some(
+            server
+                .users
+                .get(&id)
+                .filter(|user| {
+                    channel
+                        .direct_peer
+                        .as_ref()
+                        .is_some_and(|peer| peer.instance == user.instance)
+                })?
+                .instance,
+        ),
+        _ => return None,
+    };
+    Some(Destination {
+        server: server.id.clone(),
+        generation: server.generation,
+        channel: channel.id,
+        instance: channel.instance,
+        target: channel.target.clone(),
+        peer,
+        own,
+    })
 }
