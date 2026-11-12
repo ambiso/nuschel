@@ -218,7 +218,7 @@ impl Drop for AbortSession {
     }
 }
 
-async fn session(bot: &Arc<Bot>, index: usize, detector: &mut Ducker) -> Result<(), String> {
+async fn session(bot: &Arc<Bot>, index: usize, detector: &mut impl Detector) -> Result<(), String> {
     let config = &bot.config.channels[index];
     let connection = &bot.connections[index];
     let profile = Profile::open(Some(
@@ -356,6 +356,40 @@ async fn session(bot: &Arc<Bot>, index: usize, detector: &mut Ducker) -> Result<
     result
 }
 
+/// What a Mumble session needs from its speech detector: `Ducker` in
+/// production. Only `Unavailable` (an unconfirmed child exit) ends a session.
+trait Detector {
+    async fn hear(&mut self, sender: u32, opus: &[u8], threshold: f32)
+    -> Result<bool, Unavailable>;
+    async fn forget(&mut self, sender: u32) -> Result<(), Unavailable>;
+    async fn disable(&mut self) -> Result<(), Unavailable>;
+    fn suspended(&self) -> bool;
+    fn notice(&self) -> Option<&'static str>;
+}
+
+impl Detector for Ducker {
+    async fn hear(
+        &mut self,
+        sender: u32,
+        opus: &[u8],
+        threshold: f32,
+    ) -> Result<bool, Unavailable> {
+        Ducker::hear(self, sender, opus, threshold).await
+    }
+    async fn forget(&mut self, sender: u32) -> Result<(), Unavailable> {
+        Ducker::forget(self, sender).await
+    }
+    async fn disable(&mut self) -> Result<(), Unavailable> {
+        Ducker::disable(self).await
+    }
+    fn suspended(&self) -> bool {
+        Ducker::suspended(self)
+    }
+    fn notice(&self) -> Option<&'static str> {
+        Ducker::notice(self)
+    }
+}
+
 const DETECTOR_UNAVAILABLE: &str =
     "The speech detector could not be stopped; ducking is unavailable on this connection.";
 
@@ -365,7 +399,7 @@ fn unavailable(Unavailable(error): Unavailable) -> String {
 }
 
 /// The connection's state for the web page, with at most one fixed detector notice.
-fn publish(bot: &Bot, index: usize, view: &View, detector: &Ducker) {
+fn publish(bot: &Bot, index: usize, view: &View, detector: &impl Detector) {
     bot.connections[index].update(&bot.changes, |status| {
         status.connected = view.own.is_some();
         status.listeners = view.listeners();
@@ -663,5 +697,345 @@ mod tests {
             ["!web", "new"]
         );
         assert_eq!(plain_text("a &lt;b&gt; &amp;"), "a <b> &");
+    }
+
+    /// Real TLS sessions against an owned stock Mumble server on a loopback
+    /// port (`NUSCHL_TEST_MURMUR` names its binary; these run only when it is
+    /// supplied, with `--include-ignored`). The detector is a stand-in that
+    /// fails as told: an unconfirmed child exit cannot be produced with a real
+    /// process. tests/musicbot_duck_faults.py drives real worker faults.
+    mod real_session {
+        use super::*;
+        use crate::{config::Config, player::Player, tokens::Tokens};
+        use std::{
+            path::{Path, PathBuf},
+            process::{Child, Stdio},
+        };
+
+        struct Murmur {
+            process: Child,
+            port: u16,
+            _directory: tempfile::TempDir,
+        }
+
+        impl Murmur {
+            fn start() -> Self {
+                let binary = std::env::var_os("NUSCHL_TEST_MURMUR")
+                    .expect("NUSCHL_TEST_MURMUR must name an owned mumble-server");
+                let directory = tempfile::tempdir().unwrap();
+                let port = std::net::TcpListener::bind("127.0.0.1:0")
+                    .unwrap()
+                    .local_addr()
+                    .unwrap()
+                    .port();
+                let root = directory.path();
+                let ini = root.join("murmur.ini");
+                std::fs::write(
+                    &ini,
+                    format!(
+                        "database={}\nport={port}\nhost=127.0.0.1\nautobanAttempts=0\n\
+                         logfile={}\npidfile={}\nbandwidth=72000\nusers=20\n",
+                        root.join("murmur.sqlite").display(),
+                        root.join("murmur.log").display(),
+                        root.join("murmur.pid").display(),
+                    ),
+                )
+                .unwrap();
+                let process = std::process::Command::new(binary)
+                    .arg("-ini")
+                    .arg(&ini)
+                    .arg("-fg")
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .spawn()
+                    .unwrap();
+                let started = std::time::Instant::now();
+                while std::net::TcpStream::connect(("127.0.0.1", port)).is_err() {
+                    assert!(
+                        started.elapsed() < Duration::from_secs(30),
+                        "Murmur did not start"
+                    );
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+                Self {
+                    process,
+                    port,
+                    _directory: directory,
+                }
+            }
+        }
+
+        impl Drop for Murmur {
+            fn drop(&mut self) {
+                let _ = self.process.kill();
+                let _ = self.process.wait();
+            }
+        }
+
+        fn options(port: u16, name: &str, pin: Option<String>, profile: &Path) -> ConnectOptions {
+            let mut server = ServerBookmark::new(name, "127.0.0.1", port, name).unwrap();
+            server.certificate_sha256 = pin;
+            ConnectOptions {
+                voice_route: Default::default(),
+                server,
+                identity: Profile::open(Some(profile.to_owned()))
+                    .unwrap()
+                    .identity()
+                    .unwrap(),
+                password: None,
+                force_tcp: true,
+                relay_only: false,
+                muted: false,
+                deafened: false,
+                channel: None,
+                resend: Vec::new(),
+                message_rate: MessageRate::default(),
+                required: Default::default(),
+                crypto: None,
+            }
+        }
+
+        /// The server's certificate, as an unpinned client is told it.
+        async fn pin(port: u16, profile: &Path) -> String {
+            let (_commands, receiver) = mpsc::channel(4);
+            let (events, _events) = mpsc::channel(256);
+            match connection::run(options(port, "Probe", None, profile), receiver, events).await {
+                Err(nuschl_session::Error::Certificate { sha256, .. }) => sha256,
+                other => panic!("expected the certificate question, got {other:?}"),
+            }
+        }
+
+        /// A bot of one channel on the server, ducking on.
+        fn bot(directory: &Path, port: u16, pin: &str) -> Arc<Bot> {
+            let config = Config::parse(
+                &format!(
+                    r#"
+[web]
+listen = "127.0.0.1:8474"
+public_url = "http://127.0.0.1:8474"
+[audio]
+ducking = true
+[[subsonic]]
+name = "library"
+url = "http://127.0.0.1/library"
+api_key_file = "key"
+[[channel]]
+name = "music"
+host = "127.0.0.1"
+port = {port}
+username = "DJ"
+certificate_sha256 = "{pin}"
+"#
+                ),
+                directory,
+            )
+            .unwrap();
+            let changes = Changes::default();
+            let players = vec![Arc::new(Player::new(
+                "music".into(),
+                40,
+                config.audio.ducking(),
+                changes.clone(),
+            ))];
+            let connections = vec![Connection::new(
+                "music".into(),
+                format!("127.0.0.1:{port}"),
+                0,
+            )];
+            Arc::new(Bot {
+                state_directory: directory.into(),
+                web_assets: None,
+                codec_worker: PathBuf::from("/nonexistent/nuschl-musicbot-codec-worker"),
+                libraries: Arc::new(Vec::new()),
+                players,
+                connections,
+                tokens: Tokens::load(directory.join("tokens.json")).unwrap(),
+                changes,
+                persistence: Mutex::new(()),
+                config,
+            })
+        }
+
+        /// Fails every heard packet as told; counts what it was asked.
+        struct StandIn {
+            unconfirmed: bool,
+            heard: Arc<std::sync::atomic::AtomicUsize>,
+        }
+
+        impl Detector for StandIn {
+            async fn hear(&mut self, _: u32, _: &[u8], _: f32) -> Result<bool, Unavailable> {
+                self.heard
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                if self.unconfirmed {
+                    Err(Unavailable("synthetic unconfirmed exit".into()))
+                } else {
+                    // What a recovered failure looks like to the session.
+                    Ok(false)
+                }
+            }
+            async fn forget(&mut self, _: u32) -> Result<(), Unavailable> {
+                Ok(())
+            }
+            async fn disable(&mut self) -> Result<(), Unavailable> {
+                Ok(())
+            }
+            fn suspended(&self) -> bool {
+                false
+            }
+            fn notice(&self) -> Option<&'static str> {
+                None
+            }
+        }
+
+        struct Talker {
+            commands: mpsc::Sender<Command>,
+            events: mpsc::Receiver<SessionEvent>,
+            session: u32,
+            _connection: AbortSession,
+        }
+
+        impl Talker {
+            async fn join(port: u16, pin: &str, profile: &Path) -> Self {
+                let (commands, receiver) = mpsc::channel(64);
+                let (sender, mut events) = mpsc::channel(1024);
+                let task = tokio::spawn(connection::run(
+                    options(port, "Talker", Some(pin.into()), profile),
+                    receiver,
+                    sender,
+                ));
+                let connection = AbortSession(task.abort_handle());
+                let session = loop {
+                    match tokio::time::timeout(Duration::from_secs(60), events.recv()).await {
+                        Ok(Some(SessionEvent::Connected { session, .. })) => break session,
+                        Ok(Some(_)) => {}
+                        other => panic!("the talker did not connect: {other:?}"),
+                    }
+                };
+                Self {
+                    commands,
+                    events,
+                    session,
+                    _connection: connection,
+                }
+            }
+
+            /// The session of the user called `name`, once it is on the server.
+            async fn session_of(&mut self, name: &str) -> u32 {
+                loop {
+                    match tokio::time::timeout(Duration::from_secs(60), self.events.recv()).await {
+                        Ok(Some(SessionEvent::User(user))) if user.name == name => {
+                            break user.session;
+                        }
+                        Ok(Some(_)) => {}
+                        other => panic!("{name} did not appear: {other:?}"),
+                    }
+                }
+            }
+
+            fn talk(&self, packets: u64) {
+                for sequence in 0..packets {
+                    let packet = VoicePacket {
+                        sender: 0,
+                        sequence: sequence * 2,
+                        opus: SILENT_OPUS.to_vec(),
+                        end: sequence + 1 == packets,
+                        volume: 1.0,
+                    };
+                    let _ = self.commands.try_send(Command::Voice { target: 0, packet });
+                }
+            }
+
+            /// Whether `session` left the server within `wait`.
+            async fn left(&mut self, session: u32, wait: Duration) -> bool {
+                let deadline = Instant::now() + wait;
+                loop {
+                    match tokio::time::timeout_at(deadline, self.events.recv()).await {
+                        Ok(Some(SessionEvent::UserRemoved(removed))) if removed == session => {
+                            return true;
+                        }
+                        Ok(Some(_)) => {}
+                        Ok(None) => panic!("the talker's own session ended"),
+                        Err(_) => return false,
+                    }
+                }
+            }
+        }
+
+        /// Runs the bot's session with `detector` until the talker's voice has
+        /// reached it, and returns the talker, the bot's session ID and the
+        /// running session.
+        async fn bot_hearing(
+            murmur: &Murmur,
+            directory: &Path,
+            detector: StandIn,
+        ) -> (Talker, u32, tokio::task::JoinHandle<Result<(), String>>) {
+            let pin = pin(murmur.port, &directory.join("probe")).await;
+            let state = directory.join("bot");
+            std::fs::create_dir(&state).unwrap();
+            let bot = bot(&state, murmur.port, &pin);
+            let mut talker = Talker::join(murmur.port, &pin, &directory.join("talker")).await;
+            let heard = detector.heard.clone();
+            let running = tokio::spawn(async move {
+                let mut detector = detector;
+                session(&bot, 0, &mut detector).await
+            });
+            let dj = talker.session_of("DJ").await;
+            assert_ne!(dj, talker.session);
+            // Talk until the session hands the voice to its detector.
+            let started = Instant::now();
+            while heard.load(std::sync::atomic::Ordering::Relaxed) == 0 {
+                assert!(
+                    started.elapsed() < Duration::from_secs(30),
+                    "the bot heard nothing"
+                );
+                talker.talk(5);
+                if running.is_finished() {
+                    break;
+                }
+                sleep(Duration::from_millis(100)).await;
+            }
+            (talker, dj, running)
+        }
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        #[ignore = "needs an owned stock Mumble server: NUSCHL_TEST_MURMUR"]
+        async fn an_unconfirmed_detector_exit_ends_the_real_tls_session() {
+            let murmur = Murmur::start();
+            let directory = tempfile::tempdir().unwrap();
+            let detector = StandIn {
+                unconfirmed: true,
+                heard: Default::default(),
+            };
+            let (mut talker, dj, running) = bot_hearing(&murmur, directory.path(), detector).await;
+            let result = tokio::time::timeout(Duration::from_secs(10), running)
+                .await
+                .expect("the session did not end")
+                .unwrap();
+            assert_eq!(result.unwrap_err(), DETECTOR_UNAVAILABLE);
+            assert!(
+                talker.left(dj, Duration::from_secs(10)).await,
+                "the bot's TLS session stayed on the server"
+            );
+        }
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        #[ignore = "needs an owned stock Mumble server: NUSCHL_TEST_MURMUR"]
+        async fn a_recovered_detector_failure_keeps_the_same_tls_session() {
+            let murmur = Murmur::start();
+            let directory = tempfile::tempdir().unwrap();
+            let heard = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let detector = StandIn {
+                unconfirmed: false,
+                heard: heard.clone(),
+            };
+            let (mut talker, dj, running) = bot_hearing(&murmur, directory.path(), detector).await;
+            let before = heard.load(std::sync::atomic::Ordering::Relaxed);
+            talker.talk(50);
+            assert!(!talker.left(dj, Duration::from_secs(3)).await);
+            assert!(!running.is_finished(), "the session ended");
+            assert!(heard.load(std::sync::atomic::Ordering::Relaxed) > before);
+            running.abort();
+        }
     }
 }
