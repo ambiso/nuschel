@@ -18,7 +18,9 @@ TX `epoch` and RX `receive_epoch`. TX-only changes do not configure/reset Workle
 Main → codec-worker configure:
 `{kind:"configure",epoch:TX,capture:boolean,bitrate:number,receive_epoch:RX,playback:boolean}`.
 The existing TX capture gates/credits/epoch remain strict. RX authorization is
-independent: only matching authorized RX may enqueue/render. Actual RX revocation
+independent: only matching authorized RX may enqueue/render. Every playback
+false→true authorization uses a fresh RX epoch, so delayed disabled controls from
+another port cannot clear newly authorized packets. Actual RX revocation
 clears receivers; mic-only TX changes must not clear still-authorized RX.
 
 Main → Worklet control:
@@ -138,3 +140,12 @@ Focused Nix tests pass 70 native worker tests (5 diagnostic tests ignored) and
 7 audio component tests. Actual WASM codec artifact:
 `/nix/store/0ad60z2nas0l24pqw0q51z3lzx2vdppw-nuschl-web-audio-codec`.
 This is component evidence; direct-port browser activation is still pending.
+
+
+The activated production pipeline is documented in `browser-audio.md`. Global
+packet/capture inbox credits survive revocation until exact ACK or worker death;
+RX and TX epoch changes alone never release stopped-worker backlog slots. Main
+also mints a fresh RX on every playback re-enable, including context resume.
+Thirty Main/Worklet and twelve actual-WASM worker checks pass, followed by the
+actual confined controller and exact packaged App/private-Murmur proofs. The
+component checkpoint above remains historical evidence, not the latest artifact.

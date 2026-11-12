@@ -726,21 +726,45 @@ The media worker uses per-speaker adaptive jitter buffers and Opus loss concealm
       Unit tests also prove rejection cannot create a native speaker or advance
       its arrival clock. This checks packet packing, not entropy authenticity;
       worker activation and confined-browser proof remain open below.
-- [ ] Complete browser sample-clock playout integration (active browser-audio
-      owner; isolated Worklet controller integrated with 27 component tests).
-      Keep RX authorization separate from TX epochs so mic mute/bitrate changes
-      preserve listening; deafen/route/connection revocation must flush playback.
-      Wire the bounded direct codec-worker/Worklet port with one unacknowledged
-      render, exact epoch/generation/request/frame matching, bounded packet
-      admission and late/stalled reply handling. The old 1,000 packet/s aggregate
-      limit cannot admit 16 legitimate 100 packet/s speakers. Verify 48 kHz context,
-      variable-duration packets, stream ends/restarts, suspend/resume, privacy and
-      actual confined-browser playback under production CSP before closing this.
-      Source activation is integrated with 28 main/Worklet and six actual-WASM
-      worker tests. Review follow-ups remain: setup messages must not discard fresh
-      packets already accepted for the new RX, and rapid TX epochs must not grant
-      new encode credits while old work is unacknowledged. Both are assigned to
-      the browser owner before final integration/runtime proof.
+- [ ] Integrate the verified clocked browser playout checkpoint (`1d1cf926`,
+      `c5a81933`, `9827d211`; active browser-audio owner). Production source now wires shared native
+      jitter/FEC/PLC through actual-WASM playout and a direct bounded Worklet
+      port, with separate RX authorization and TX epochs. Mic-only changes keep
+      listening; route/deafen/connection revocation clears it. Global 16 RX/two
+      codec TX credits survive epoch changes until exact ACK; unsolicited or
+      stale capture replies cannot grant current credits or transmit.
+      Native/actual-WASM six-case independent oracles, 30 main/Worklet tests and
+      twelve worker/WASM checks pass. Confined Chromium/private Murmur controller
+      passes RX continuity, actual PCM and privacy; exact packaged App proof also
+      passes production CSP, live-call reorder/text/privacy and 20 packets with
+      zero timeline snapshots. Every playback re-enable uses a fresh RX epoch
+      so delayed disabled barriers cannot discard newly authorized data. No
+      per-packet UI PCM/state forwarding or stacked startup hold. Sixteen aligned
+      non-silent C-reference streams at 10/20/120 ms measure max 0.96/1.66/4.57 ms
+      per render here; no universal scheduling/device quality claim. See
+      `docs/browser-audio.md` and the source-bound handoff.
+- [ ] Review inherited unknown-first-packet duration estimation separately.
+      The policy initially assumes 20 ms before a decoder observation; a single
+      non-ended 120 ms packet waits for the next packet. Deterministic clocked
+      startup is 40/30/130 ms for regular 10/20/120 ms packets, versus 10 ms for
+      one ended 120 ms packet. These exclude sender/codec/device delay. Preserve
+      native policy equivalence unless a separately measured change is approved.
+- [ ] Audit acknowledged SDK TX-send backlog across rapid epoch changes.
+      Codec TX jobs now retain their global two-credit bound until ACK, but
+      the separate `txJobs` RPC map still clears on reset. An indefinitely
+      unresolved old SDK send could coexist with newer route sends across
+      repeated resets; stale results cannot transmit/release current credits,
+      but aggregate RPC backlog needs its own bound/replacement proof. App RPC
+      promises additionally reject after 15 s without cancel acknowledgment or
+      terminating the SDK worker: that synthetic rejection cannot establish the
+      old worker inbox was consumed. Bound or replace that whole worker lifecycle,
+      preserving audio consent/route generations and stale-completion isolation.
+- [ ] Complete browser scheduling/device/reference receive parity beyond the
+      scoped clocked pipeline fixtures: suspended/background tabs, Safari and
+      Firefox, physical device latency/AEC, hostile entropy decode failures,
+      long multi-speaker loss/reorder and reference Mumble jitter/PLC behavior.
+      The node silence stress and private Chromium results are not universal
+      real-time/perceptual guarantees. Keep all retained baseline failures.
 - [x] Match Mumble's explicit `OPUS_SET_PHASE_INVERSION_DISABLED(1)` receive
       setting. The pinned, minimally patched opus-pure 0.2.3 exposes its existing
       synthesis control with upstream/generic defaults unchanged; only native

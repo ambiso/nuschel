@@ -46,13 +46,45 @@ also fixed same-origin resources. The browser's audio and permission services
 are system-service boundaries.
 
 Capture is mono 48 kHz in 20 ms frames. Encoded output is capped at 960 bytes.
-Decode validates packet duration before allocation, accepting at most 120 ms
-per packet. Speaker state is capped at 16, each playback queue at 120 ms, and
-both decoder jobs and worklet transfers at 16. Capture and acknowledged SDK
-sends have two credits each. Encode/decode results older than 120 ms are
-ignored. SDK send acknowledgment has a 250 ms deadline; a stalled route closes
-capture. Old epoch completions cannot release new epoch credits. Worker
-heartbeat failure tears down media and requires explicit retry.
+Receive validates full Opus framing before speaker/timing/gain admission and
+accepts 10–120 ms durations in 10 ms units. Sixteen independent stereo decoders
+share the reviewed Rust adaptive jitter policy with native playback: reordered
+packets retain their gain, exact missing spans use FEC or PLC, and end/reset
+semantics preserve cached PCM. Concealment retains the preceding known gain;
+the lost packet's original gain may be unavailable. Full packing validation is
+not entropy authentication.
+
+A direct MessageChannel connects the codec Worker and AudioWorklet. Actual
+48 kHz rendered frames grant one 480-frame/10 ms render at a time, with a fixed
+960-frame/20 ms transport reserve. No decoded PCM traverses the UI thread and
+clocked playback adds no second per-speaker startup hold. Exact RX epoch, clock
+generation, request and absolute-frame matching rejects stale/duplicate replies.
+An elapsed deadline never releases an unacknowledged render: output stays silent
+until its reply or worker failure. A fully late reply triggers a bounded FIFO
+rebuffer barrier instead of a catch-up decode burst. A 2.5 s rendered stall fails
+the lane; the worker's wall-clock heartbeat is checked separately.
+
+RX authorization has its own epoch. Microphone mute, bitrate changes and capture
+transport failure invalidate TX while preserving still-authorized listening and
+its decoded cache. Deafen, destination/connection changes, suspension and actual
+RX revocation flush playback. Revocation does not release unacknowledged inbox
+credits: packet jobs remain capped at 16 globally and codec capture jobs at two,
+even during repeated epoch changes. Only exact matching ACKs or worker termination
+release those slots; old capture ACKs never grant current Worklet credits or
+transmit stale PCM. The two acknowledged SDK send slots and 250 ms deadline are
+separate; a stalled route closes capture. Encoder results older than 120 ms are
+dropped. Decoder packets are queued, not eagerly decoded into timed UI replies.
+
+Per speaker there are at most 64 encoded packets of 1024 bytes and 120 ms of
+cached decoded stereo; at most 16 speakers are live. Admission allows 2000
+packets/s globally and 200 per speaker, with at most 16 new decoder creations/s.
+Each render does at most one packet/FEC/PLC decode per speaker, so the worst
+legal burst is 16 × 120 ms decoded internally; the transferred batch is still
+only 10 ms per speaker (61,440 PCM bytes maximum). Worklet's persistent f64
+transport ring occupies 15,360 bytes; its retained legacy test mixer has another
+153,600-byte scratch allocation. Clipping occurs after wide mixing/folding.
+No PCM scratch is allocated during the render callback; validation/codec/message
+allocation stays outside it. These are not universal real-time CPU guarantees.
 
 These are application bounds rather than a hard CPU or memory quota enforced
 by the browser. A malicious packet remains subject to the browser's own worker
@@ -139,3 +171,67 @@ This changes the default; persistent bitrate controls and a separate stereo musi
 preset remain future work. Existing echo/noise processing and mono VoIP behavior
 are unchanged. Mumble's upstream accounting distinguishes audio bitrate from
 framing/transport overhead; see its [AudioInput implementation](https://github.com/mumble-voip/mumble/blob/v1.5.939/src/mumble/AudioInput.cpp).
+
+
+## Clocked playout evidence and limits
+
+`tests/opus_playout.py` compares explicit native and actual-WASM actions with an
+independent libopus decoder at fixed gain and unfitted delay. All six scenarios
+pass the unchanged 35 dB gate, including reorder/FEC/PLC/restart, every 10–120 ms
+duration, a 120 ms packet followed by 10/20 ms gaps, and malformed packing before
+a queued valid packet. The latest malformed case measures 71.26 dB native and
+70.18 dB WASM; the 20 ms loss measures 81.59/83.68 dB. Earlier failing fixtures
+remain retained rather than overwritten.
+
+`tests/web_playout_worker.mjs CODEC_DIRECTORY` executes production worker source,
+actual Rust WASM and actual PlaybackProcessor with a deterministic sample clock.
+Twelve checks cover configure-order permutations with interleaved fresh packets,
+TX-only continuity, RX flush, delayed old disabled barriers after re-enable,
+packet gain, bounded admission, exact stereo PCM, stalls and measured buffering. The separate main/Worklet suite has 30 passing
+checks, including 20 rapid TX/RX changes under a stopped worker and rejection of
+unsolicited capture acknowledgments.
+
+Realized startup is measured separately from target buffer size and transport
+reserve. On an explicit 480-frame clock, regular 10/20/120 ms packets first yield
+scheduled PCM at 40/30/130 ms after the first arrival; a single ended 120 ms
+packet begins at 10 ms, retains all twelve blocks, then restarts correctly.
+These numbers exclude sender packetization, decoder lookahead, browser scheduling
+and device latency. The inherited policy initially estimates unknown packet
+duration as 20 ms; a non-ended single 120 ms packet therefore waits for another
+packet. Improving that first-packet estimate is a separate policy review, not a
+hidden retuning in this refactor.
+
+On this host, actual-WASM memory stayed at 5,832,704 bytes in the 16-speaker
+stress runs. The non-silent independent libopus 10 ms packet and its 20/120 ms
+aggregates were decoded in aligned bursts by all sixteen speakers. Test-only
+wrappers count actual packet/FEC/PLC calls (cached blocks are excluded below).
+Across 240 renders per duration, costs were:
+
+| Packet duration | Aligned decode bursts | Decode p95 | Decode max | Renders over 10/20 ms |
+| --- | ---: | ---: | ---: | ---: |
+| 10 ms | 240 | 0.69 ms | 0.96 ms | 0 / 0 |
+| 20 ms | 120 | 1.05 ms | 1.66 ms | 0 / 0 |
+| 120 ms | 25 | 4.55 ms | 4.57 ms | 0 / 0 |
+
+A separate cold simultaneous 16 × 120 ms tone decode took 5.44 ms. This compares
+bounded work with the 10 ms cadence/20 ms reserve; it is not a physical-device,
+adversarial-entropy, or browser scheduling guarantee. Independent clock tests
+also deliberately expire deadlines: they remain silent with one request pending,
+trim partial lateness, and require the ready barrier after fully late replies.
+
+The updated confined Chromium 156 controller proof uses the actual packaged
+codec, current SDK, private Murmur1.5.939 and same-origin CSP. It verifies
+continuous measured output through a microphone-only mute with an unchanged
+RX epoch, exact deafen silence, late permission disposal, rapid mute/deaf privacy
+and muted reconnect. Evidence is under
+`~/.cache/nuschl-output-quality/jitter-browser-exact/`. Its final source is
+`9827d211` (documentation-only descendants do not change the runtime). The exact
+packaged App at `/nix/store/sgh58hpc4x2r78sdqnb53y3sj9qrnkgj-nuschl-web-app-with-notices`
+also passes the production-CSP UI/private-server test: RMS 0.06762, deafen zero,
+20 audio-only packets with zero timeline replacements, live-call reorder retaining
+microphone/generation/draft, text and mute/stop controls. Its proof is
+`~/.cache/nuschl-output-quality/jitter-packaged-app-final/proof.json`.
+This does not establish
+background-tab/Safari/Firefox scheduling, physical device AEC, every malformed
+entropy stream, or full reference-Mumble jitter/PLC perceptual equivalence.
+See `browser-playout-port.md` for the internal clock/epoch/budget contract.
