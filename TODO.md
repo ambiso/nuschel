@@ -965,6 +965,12 @@ listed below. Plugin data remains the explicit gap.
       complete welcome-rendering path, including safe link detection. Earlier
       scoped welcome fixes below do not close this newly reported case; retain
       existing sanitization and explicit safe-link activation.
+- [ ] Web server welcome-document parity: `client-wasm` currently discards
+      `ServerSync.welcome_text` and the snapshot/App has no welcome surface.
+      This omits notices rather than reproducing the native marker symptom.
+      Add bounded SDK-worker rendering, exact generation/source cache and dismiss
+      leases, and the existing safe document presentation. Current native exact
+      domain proof passes (no new native fix claimed); see `docs/welcome-domain.md`.
 - [x] Stock-server welcome document rendering (2026-11-12): the native adapter
       discarded the correct worker document and displayed its internal storage
       markers (`bNuschl/b`, link directives) as plain text. It now keeps the typed
