@@ -381,7 +381,7 @@
               "aarch64-apple-darwin"
             ];
           };
-        desktopCrates = "-p nuschl -p nuschl-content-worker -p nuschl-crypto-worker -p nuschl-math-worker -p nuschl-media-worker -p nuschl-storage-worker -p nuschl-transfer-worker -p nuschl-update-worker --features nuschl-update-worker/ed25519,nuschl-update-worker/mldsa44";
+        desktopCrates = "-p nuschl -p nuschl-content-worker -p nuschl-crypto-worker -p nuschl-math-worker -p nuschl-media-worker -p nuschl-storage-worker -p nuschl-transfer-worker";
         crossCommon = {
           version = "0.1.0";
           inherit src dummySrc;
@@ -394,6 +394,9 @@
           ];
         };
         mingw = pkgs.pkgsCross.mingwW64;
+        windowsVerifiers = import ./nix/cross-updaters.nix {
+          inherit pkgs crossToolchain;
+        };
         windowsPackage = buildCrossPackage ((crane.mkLib mingw).overrideToolchain crossToolchain) (
           crossCommon
           // {
@@ -401,6 +404,8 @@
             __CRANE_EXPORT_CARGO_TARGET_X86_64_PC_WINDOWS_GNU_RUNNER = "${pkgs.coreutils}/bin/false";
             CARGO_TARGET_X86_64_PC_WINDOWS_GNU_RUSTFLAGS = "-C target-feature=+crt-static -L native=${mingw.windows.pthreads}/lib";
             postInstall = ''
+              cp ${windowsVerifiers.ed25519}/bin/nuschl-update-verify-ed25519.exe "$out/bin/"
+              cp ${windowsVerifiers.mldsa44}/bin/nuschl-update-verify-mldsa44.exe "$out/bin/"
               for program in nuschl nuschl-content-worker nuschl-crypto-worker nuschl-math-worker nuschl-media-worker nuschl-storage-worker nuschl-transfer-worker nuschl-update-verify-ed25519 nuschl-update-verify-mldsa44; do
                 test -f "$out/bin/$program.exe"
               done
@@ -426,35 +431,62 @@
         cargoZigbuild = pkgs.cargo-zigbuild.overrideAttrs (old: {
           patches = (old.patches or [ ]) ++ [ ./nix/cargo-zigbuild-macos-version.patch ];
         });
+        macBuilder = (crane.mkLib pkgs).overrideToolchain crossToolchain;
+        macBuildArgs = arch: {
+          nativeBuildInputs = crossCommon.nativeBuildInputs ++ [
+            cargoZigbuild
+            pkgs.zig
+          ];
+          CARGO_BUILD_TARGET = "${arch}-apple-darwin";
+          cargoBuildCommand = "cargoWithProfile zigbuild --target ${arch}-apple-darwin";
+          cargoCheckCommand = "true";
+          SDKROOT = macSdk;
+          MACOSX_DEPLOYMENT_TARGET = macMinimum;
+          preBuild = ''
+            export ZIG_GLOBAL_CACHE_DIR="$TMPDIR/zig-cache"
+            export CARGO_ZIGBUILD_CACHE_DIR="$TMPDIR/zigbuild-cache"
+          '';
+        };
+        macMinimumCheck = ''
+          for program in "$out"/bin/*; do
+            [ -f "$program" ] || continue
+            minimum=$(${pkgs.llvmPackages.llvm}/bin/llvm-otool -l "$program" | sed -n 's/^ *minos //p' | head -1)
+            if [ "$minimum" != "${macMinimum}" ]; then
+              echo "$program requires macOS $minimum, expected ${macMinimum}" >&2
+              exit 1
+            fi
+          done
+        '';
+        macVerifier =
+          arch: feature:
+          buildCrossPackage macBuilder (
+            crossCommon
+            // macBuildArgs arch
+            // {
+              pname = "nuschl-macos-${arch}-verify-${feature}";
+              cargoExtraArgs = "-p nuschl-update-worker --no-default-features --features nuschl-update-worker/${feature} --bin nuschl-update-verify-${feature}";
+              postInstall = ''
+                test -f "$out/bin/nuschl-update-verify-${feature}"
+                test "$(find "$out/bin" -maxdepth 1 -type f | wc -l)" -eq 1
+              ''
+              + macMinimumCheck;
+            }
+          );
         macSlice =
           arch:
-          buildCrossPackage ((crane.mkLib pkgs).overrideToolchain crossToolchain) (
+          buildCrossPackage macBuilder (
             crossCommon
+            // macBuildArgs arch
             // {
               pname = "nuschl-macos-${arch}";
-              nativeBuildInputs = crossCommon.nativeBuildInputs ++ [
-                cargoZigbuild
-                pkgs.zig
-              ];
-              CARGO_BUILD_TARGET = "${arch}-apple-darwin";
-              cargoBuildCommand = "cargoWithProfile zigbuild --target ${arch}-apple-darwin";
-              cargoCheckCommand = "true";
-              SDKROOT = macSdk;
-              MACOSX_DEPLOYMENT_TARGET = macMinimum;
-              preBuild = ''
-                export ZIG_GLOBAL_CACHE_DIR="$TMPDIR/zig-cache"
-                export CARGO_ZIGBUILD_CACHE_DIR="$TMPDIR/zigbuild-cache"
-              '';
               postInstall = ''
-                for program in "$out"/bin/*; do
-                  [ -f "$program" ] || continue
-                  minimum=$(${pkgs.llvmPackages.llvm}/bin/llvm-otool -l "$program" | sed -n 's/^ *minos //p' | head -1)
-                  if [ "$minimum" != "${macMinimum}" ]; then
-                    echo "$program requires macOS $minimum, expected ${macMinimum}" >&2
-                    exit 1
-                  fi
+                cp ${macVerifier arch "ed25519"}/bin/nuschl-update-verify-ed25519 "$out/bin/"
+                cp ${macVerifier arch "mldsa44"}/bin/nuschl-update-verify-mldsa44 "$out/bin/"
+                for program in nuschl nuschl-content-worker nuschl-crypto-worker nuschl-math-worker nuschl-media-worker nuschl-storage-worker nuschl-transfer-worker nuschl-update-verify-ed25519 nuschl-update-verify-mldsa44; do
+                  test -f "$out/bin/$program"
                 done
-              '';
+              ''
+              + macMinimumCheck;
             }
           );
         macUniversal =
@@ -530,6 +562,12 @@
           exePath = "/bin/nuschl-update-sign";
         };
         packages.windows = windowsPackage;
+        packages.windows-update-ed25519 = windowsVerifiers.ed25519;
+        packages.windows-update-mldsa44 = windowsVerifiers.mldsa44;
+        packages.macos-x86_64-update-ed25519 = macVerifier "x86_64" "ed25519";
+        packages.macos-x86_64-update-mldsa44 = macVerifier "x86_64" "mldsa44";
+        packages.macos-aarch64-update-ed25519 = macVerifier "aarch64" "ed25519";
+        packages.macos-aarch64-update-mldsa44 = macVerifier "aarch64" "mldsa44";
         packages.macos-universal = macUniversal;
         packages.macos-app = macApp;
         packages.macos-aarch64 = macSlice "aarch64";
