@@ -108,3 +108,27 @@ test('live Canvas memory and count leases release idempotently', async t => {
   assert.ok(small.every(Boolean)); assert.equal(paintCover(canvas(), tiny), null);
   small.forEach(release => release());
 });
+
+
+test('delayed timer dispatch cannot admit expired responses or cached queued jobs', async t => {
+  const { loadCover } = await fresh();
+  let now = 0;
+  t.mock.method(performance, 'now', () => now);
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const calls = [];
+  fetching(t, url => new Promise(resolve => calls.push({ url, resolve })));
+  const cached = loadCover('art/0/cached', 1, undefined, 'page:0');
+  calls[0].resolve(response(good)); await cached; await tick();
+  const a = loadCover('art/0/a', 1, undefined, 'page:0').catch(error => error.message);
+  const b = loadCover('art/0/b', 1, undefined, 'page:0').catch(error => error.message);
+  const queued = loadCover('art/0/cached', 1, undefined, 'page:0').catch(error => error.message);
+  assert.equal(calls.length, 3);
+  now = 10001; // Timers intentionally have not dispatched.
+  calls[1].resolve(response(good)); calls[2].resolve(response(good));
+  assert.ok((await Promise.all([a,b,queued])).every(value => value.includes('timed out')));
+  await tick(); await tick();
+  assert.equal(calls.length, 3);
+  const retry = loadCover('art/0/a', 1, undefined, 'page:0');
+  assert.equal(calls.length, 4); // Expired response did not populate the cache.
+  calls[3].resolve(response(good)); assert.equal((await retry).width, 1);
+});
