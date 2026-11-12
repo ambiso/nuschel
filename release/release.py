@@ -13,6 +13,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import stat
 import subprocess
 import sys
@@ -259,6 +260,8 @@ def execute(publish=False, *, confirm=None):
             private_directory(stage.parent)
             private_directory(stage)
             require(record['identity'] == signed_identity(stage), 'Remembered signed release changed; prepare again.')
+            gh = shutil.which('gh')
+            require(gh is not None, 'GitHub CLI is unavailable; enter the refreshed direnv shell before publishing.')
             flake = 'git+' + ROOT.as_uri() + '?rev=' + selection['commit']
             require(backend.select_product(flake, 'update-signer') == record['signer'], 'Exact-tag signer changed.')
             signer = signer_path(record['signer'])
@@ -274,7 +277,7 @@ def execute(publish=False, *, confirm=None):
                 verify_stage(stage, signer)
                 backend.run(['git', '-C', ROOT, 'push', '--no-follow-tags', 'origin',
                              'refs/tags/' + selection['tag'] + ':refs/tags/' + selection['tag']], timeout=300)
-                backend.publish(argparse.Namespace(stage=stage, signer=signer, gh='gh'))
+                backend.publish(argparse.Namespace(stage=stage, signer=signer, gh=gh))
             record['published'] = True
             remember(root, record)
             return stage

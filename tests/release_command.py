@@ -53,6 +53,12 @@ class ReleaseCommand(unittest.TestCase):
         shutil.copyfile(self.fixture.secret, self.key)
         self.key.chmod(0o600)
         self.patch(patch.dict(os.environ, {'HOME': str(self.home), 'XDG_CACHE_HOME': str(self.cache)}))
+        fixture_bin = self.area / 'fixture-bin'
+        fixture_bin.mkdir()
+        fake_gh = fixture_bin / 'gh'
+        fake_gh.write_text('#!/bin/sh\nexit 99 # All calls must reach the mocked upload boundary.\n')
+        fake_gh.chmod(0o700)
+        self.patch(patch.dict(os.environ, {'PATH': str(fixture_bin) + os.pathsep + os.environ['PATH']}))
         self.patch(patch.object(front, 'ROOT', self.repo))
         self.patch(patch.object(front, 'backend', self.local))
         self.git('remote', 'add', 'origin', 'git@github.com:fixture/project.git')
@@ -74,7 +80,7 @@ class ReleaseCommand(unittest.TestCase):
             if args[0] == 'git' and 'push' in args:
                 self.remote_calls.append(args)
                 return ''
-            if args[0] != 'gh':
+            if Path(args[0]).name != 'gh':
                 return real(args, **kwargs)
             self.remote_calls.append(args)
             stage = Path(self.pointer()['stage'])
@@ -197,6 +203,15 @@ class ReleaseCommand(unittest.TestCase):
         self.assertTrue(self.pointer()['published'])
         with self.assertRaisesRegex(ValueError, 'already published'):
             front.execute(True, confirm=lambda details: True)
+
+    def test_missing_github_cli_refuses_before_publish_confirmation_or_tag_push(self):
+        self.prepare()
+        confirmation = unittest.mock.Mock(return_value=True)
+        with patch.object(front.shutil, 'which', return_value=None):
+            with self.assertRaisesRegex(ValueError, 'GitHub CLI is unavailable'):
+                front.execute(True, confirm=confirmation)
+        confirmation.assert_not_called()
+        self.assertFalse(self.remote_calls)
 
     def test_publish_cancel_tamper_missing_pointer_and_unrelated_stage_are_local_refusals(self):
         with self.assertRaisesRegex(ValueError, 'No successfully signed'):
