@@ -50,6 +50,19 @@ checkpoints. A background filesystem watcher alone does not advance a session.
 
 Current integration checkpoint (2026-11-12):
 
+- **Shared character limits and owned send refusals are integrated through
+  `cda33042`.** Both adapters and the shared SDK use one sparse/default policy,
+  UTF-16 server caps, independent local byte ceilings and one first-party
+  formatter. Typed refusal reasons and revisioned notice/error ownership preserve
+  newer errors. Root passes all eight combined distribution/check outputs at
+  `3f1a41ff`, bundled notice readers and the combined session suite (99 passed,
+  one existing ignored). All nine browser runtime assets exactly match the
+  actual App-tested product: 12 independent private TLS wire receipts, Unicode
+  boundaries, total HTML with text cap zero, reconnect and raised-cap retry pass.
+  Alert/draft clearing is local acceptance, explicitly distinguished from the
+  held server reply and subsequent receipt. Rich XML normalization and generic
+  native actor-refusal correlation remain open below. Root evidence:
+  `~/.cache/nuschl-integration-20261112/combined-limits/handoff.json`.
 - **Native ACL/group editing, initial codec/limit state and login-rejection
   ordering are integrated through `049f067c`.** All eight combined distribution
   and check outputs and actual bundled Linux/web notice readers pass. The
@@ -1345,7 +1358,7 @@ listed below. Plugin data remains the explicit gap.
       legacy defaults. Opus availability stays unknown until CodecVersion.
       Shared/client/session reset and sparse-codec regressions pass; this is
       distinct from the adapter sparse-field fix and remaining UTF-16/HTML work.
-- [ ] Complete the shared server-limit/refusal follow-up from independent review:
+- [x] Complete the shared server-limit/refusal follow-up from independent review:
       enforce HTML total `image_message_length` even when text length is zero;
       count advertised legacy text caps in UTF-16 units while retaining separate
       hard application byte ceilings. Centralize defaults/sparse updates in the
@@ -1353,9 +1366,11 @@ listed below. Plugin data remains the explicit gap.
       Preserve absent/zero/false fields, reset current-connection snapshots and
       show negotiated Opus as unknown until CodecVersion actually arrives.
       Expire and clear only the send-owned refusal after a matching success;
-      newer unrelated or identical-text notices must survive. Hash owner has
-      frozen setter/typed-refusal checkpoints and is implementing the remaining
-      limit/formatter changes; compiled App raised-cap retry proof is still due.
+      newer unrelated or identical-text notices must survive. Shared/model,
+      adapter, SDK, UI and graph changes are integrated; actual compiled App
+      raised-cap retry/held-reply proof and independent root distribution,
+      session-union, source and runtime-asset checks pass. Full rich-XML and
+      asynchronous actor-refusal attribution remain separate open items below.
 - [ ] Match the remaining legacy rich-HTML text budget, including XML
       normalization and counting text after stripping image `src` values.
       Enforcing the total image cap alone does not establish full Murmur parity;
