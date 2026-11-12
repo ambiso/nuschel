@@ -1699,6 +1699,10 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
       manual metadata renewal, verify the downloaded pair, update the protected
       latest ledger and assign the next deadline before the maximum 30-day expiry.
       No cron/reminder service or automatic publication is implemented or implied.
+- [ ] Fix the newly exercised per-crate RTC probe build input: its workspace-
+      relative include_bytes VP8 fixture is outside an isolated crate source.
+      Declare the exact fixture in its Nix crate override and verify actual
+      encoded transport; do not silently replace the real multi-packet frame.
 - [ ] Resolve the standalone RTC probe's previously missing third-party notices:
       its old package installed only EUPL and no inventory selected its actual
       str0m/dimpl/RustCrypto closure. Add accurate standalone native scopes and
