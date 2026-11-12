@@ -65,19 +65,31 @@ async function open(username,width,height){
   if(width<=760)await page.getByRole("button",{name:"Close navigation",exact:true}).click();
   return page;
 }
+// The face the browser actually drew a node's text with (diagnostic evidence).
+async function platformFonts(page,expressions){
+  const cdp=await page.context().newCDPSession(page);
+  try{
+    await cdp.send("DOM.enable");await cdp.send("CSS.enable");await cdp.send("DOM.getDocument",{depth:0});const faces={};
+    for(const [name,expression] of Object.entries(expressions)){
+      const {result}=await cdp.send("Runtime.evaluate",{expression});const {nodeId}=await cdp.send("DOM.requestNode",{objectId:result.objectId});
+      faces[name]=(await cdp.send("CSS.getPlatformFontsForNode",{nodeId})).fonts.map(font=>`${font.familyName}:${font.glyphCount}`);
+    }
+    return faces;
+  }finally{await cdp.detach();}
+}
 async function expand(page){const more=page.getByRole("button",{name:"Show more",exact:true});for(let i=0;i<await more.count();i++)await more.nth(i).click();}
 try{
   const sender=await open("math-sender",1280,800),phone=await open("math-phone",390,844);
   const fraction=String.raw`$$\frac{1}{\sqrt{x^2+1}}$$`,matrix=String.raw`$$\begin{pmatrix}a&b\\c&d\end{pmatrix}$$`;
   const wide="$$"+Array(100).fill("a").join("+")+"$$";
-  const text=["Private formula proof",String.raw`Inline $a^2+b^2=c^2$ next.`,fraction,matrix,wide,
-    "Literal `$code$` stays literal.","```tex",String.raw`$$\frac{not}{math}$$`,"```",
+  const text=["Private formula proof",String.raw`Inline $a^2+b^2=c^2$ next.`,fraction,matrix,
+    "Advance `iiiiiiiiii` `MMMMMMMMMM` iiiiiiiiii MMMMMMMMMM",wide,"Literal `$code$` stays literal.","```tex",String.raw`$$\frac{not}{math}$$`,"```",
     String.raw`Malformed $$\notAnAvailableCommand{x}$$`,String.raw`Loop $$\def\loop{\loop}\loop$$`,
     String.raw`Resource $$\includegraphics{/canary-math}$$`,
     String.raw`Style $$\style{background:url(/canary-style)}{x}$$`,
     String.raw`Text $$\text{<img src=/canary-text>}$$`].join("\n");
   await sender.getByLabel("Message",{exact:true}).fill(text);await sender.getByRole("button",{name:"Send",exact:true}).click();
-  let coldApp;
+  let coldApp;const fonts={};
   for(const page of [sender,phone]){
     await page.locator("article").filter({hasText:"Private formula proof"}).waitFor({timeout:20000});await expand(page);
     if(retirementProof&&page===phone){
@@ -96,14 +108,31 @@ try{
     assert.ok((await page.locator(".code-block").textContent()).includes(String.raw`$$\frac{not}{math}$$`));
     assert.equal(await page.locator(".code-block math").count(),0);
     // A code span is inline code: its backticks are Markdown syntax (hidden),
-    // its text is drawn in a monospace face (every glyph the same advance),
-    // nothing in it is a formula, and a selection copies the line as shown
-    // (as the desktop's copy does): "Literal $code$ stays literal.".
+    // its text is drawn in a monospace face, nothing in it is a formula, and a
+    // selection copies the line as shown (as the desktop's copy does):
+    // "Literal $code$ stays literal.".
     const literal=page.locator("article .text").filter({hasText:"stays literal."});
     const inline=literal.locator(".inline-code");
     assert.equal(await inline.count(),1);assert.equal(await inline.textContent(),"$code$");
-    const advances=await inline.evaluate(e=>{const node=e.firstChild,widths=[];for(let i=0;i<node.data.length;i++){const r=document.createRange();r.setStart(node,i);r.setEnd(node,i+1);widths.push(r.getBoundingClientRect().width);}return widths;});
-    assert.ok(advances.length===6&&Math.max(...advances)-Math.min(...advances)<=.5,JSON.stringify(advances));
+    // Measure only once no face is still loading (local system fonts are
+    // resolved when text is laid out; a web font would finish loading first).
+    assert.equal(await page.evaluate(()=>document.fonts.ready.then(()=>document.fonts.status)),"loaded");
+    // Monospace, measured on rendered message text (nothing injected): ten
+    // narrow and ten wide glyphs advance alike in a code span. The same
+    // measure on the proportional text beside them must tell them apart, or
+    // it would prove nothing; a face without hinted (whole-pixel) advances
+    // gives fractional widths, which the same comparison covers.
+    const advance=await page.locator("article .text").filter({hasText:"Advance iiiiiiiiii"}).evaluate(e=>{
+      const run=(text,code)=>{for(const span of e.querySelectorAll("span")){const node=span.firstChild,at=node?.data.indexOf(text);if(span.classList.contains("inline-code")===code&&at>=0){const r=document.createRange();r.setStart(node,at);r.setEnd(node,at+text.length);return r.getBoundingClientRect().width;}}return 0;};
+      return {code:[run("iiiiiiiiii",true),run("MMMMMMMMMM",true)],prose:[run("iiiiiiiiii",false),run("MMMMMMMMMM",false)]};
+    });
+    const glyphs=await inline.evaluate(e=>{const node=e.firstChild,widths=[];for(let i=0;i<node.data.length;i++){const r=document.createRange();r.setStart(node,i);r.setEnd(node,i+1);widths.push(r.getBoundingClientRect().width);}return widths;});
+    const faces=await platformFonts(page,{code:String.raw`[...document.querySelectorAll("article .text .inline-code")].find(e=>e.textContent==="$code$")`,
+      prose:String.raw`[...document.querySelectorAll("article .text span:not(.inline-code)")].find(e=>e.textContent.includes("iiiiiiiiii MMMMMMMMMM"))`});
+    const evidence=JSON.stringify({advance,glyphs,faces});fonts[page===sender?"sender":"phone"]={advance,glyphs,faces};
+    assert.ok(advance.prose[0]>0&&advance.prose[1]>=1.5*advance.prose[0],"proportional control did not discriminate: "+evidence);
+    assert.ok(advance.code[0]>0&&Math.abs(advance.code[1]-advance.code[0])<=.5,"code span is not monospace: "+evidence);
+    assert.ok(glyphs.length===6&&glyphs.every(width=>Math.abs(width-advance.code[1]/10)<=.25),"code span glyphs differ from its monospace advance: "+evidence);
     assert.equal(await literal.locator("math,.math-formula").count(),0);
     const copied=await literal.evaluate(e=>{const s=getSelection();s.removeAllRanges();const r=document.createRange();r.selectNodeContents(e);s.addRange(r);const text=s.toString();s.removeAllRanges();return text;});
     assert.equal(copied,"Literal $code$ stays literal.");
@@ -171,7 +200,7 @@ try{
   assert.deepEqual(errors,[]);assert.deepEqual(canaries,[]);
   assert.ok(requests.every(url=>url.startsWith(origin+"/")||url.startsWith(origin.replace("http:","ws:")+"/")));
   for(const page of pages){const state=await page.evaluate(()=>__mathProof);assert.deepEqual(state.violations,[]);assert.equal(state.captures,0);for(const keys of state.packetKeys)assert.deepEqual(keys,["display","id","tex"]);}
-  const report={passed:true,site,csp,geometries,fractionBounds,formula_jobs:jobs,coldApp,retirement,checks:["real App/SDK/private Murmur text", "actual pinned Temml core Worker", "fraction/root/matrix/scripts", "inline and display", "code grammar stays literal", "original source copy without host clipboard", "macro/malformed recovery", "resource/style canaries inert", "320/390/1280 widths", "keyboard horizontal formula scroll", "font/theme native reflow without parser rerun", "no microphone calls"]};
+  const report={passed:true,site,csp,geometries,fractionBounds,formula_jobs:jobs,inline_code_fonts:fonts,coldApp,retirement,checks:["real App/SDK/private Murmur text", "actual pinned Temml core Worker", "fraction/root/matrix/scripts", "inline and display", "code grammar stays literal", "inline code monospace against a proportional control", "original source copy without host clipboard", "macro/malformed recovery", "resource/style canaries inert", "320/390/1280 widths", "keyboard horizontal formula scroll", "font/theme native reflow without parser rerun", "no microphone calls"]};
   await writeFile(resolve(output,"proof.json"),JSON.stringify(report,null,2));console.log(JSON.stringify({passed:true,formula_jobs:jobs,checks:report.checks}));
 }catch(error){
   await writeFile(resolve(output,"failure.json"),JSON.stringify({error:String(error),errors,canaries,states:await Promise.all(pages.map(page=>page.evaluate(()=>({text:document.body.textContent,tags:[...document.querySelectorAll("math *")].map(node=>node.localName),proof:__mathProof})).catch(()=>null)))},null,2));throw error;

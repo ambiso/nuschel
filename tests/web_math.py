@@ -27,13 +27,23 @@ def main():
     if args.prepare_browser:
         if not args.chromium or not args.font_dir:
             parser.error("--prepare-browser requires --chromium and --font-dir")
-        report = prepare_browser(args.output / "browser", args.chromium, shutil.which("bwrap"), args.font_dir)
         # A fresh fontconfig intentionally has no host aliases. Give both UI
         # text and mathematics their intended cached local system-font family.
         aliases = {"sans-serif": "DejaVu Sans", "ui-sans-serif": "DejaVu Sans",
                    "system-ui": "DejaVu Sans", "Inter": "DejaVu Sans",
                    "serif": "DejaVu Serif", "monospace": "DejaVu Sans Mono",
                    "math": "DejaVu Math TeX Gyre"}
+        # An alias to an absent family silently falls back to another face
+        # (monospace code drawn proportionally), so refuse such a font dir.
+        files = {"DejaVu Sans": "DejaVuSans.ttf", "DejaVu Serif": "DejaVuSerif.ttf",
+                 "DejaVu Sans Mono": "DejaVuSansMono.ttf",
+                 "DejaVu Math TeX Gyre": "DejaVuMathTeXGyre.ttf"}
+        missing = sorted(f"{family} ({files[family]})" for family in set(aliases.values())
+                         if not (args.font_dir / files[family]).is_file())
+        if missing:
+            parser.error(f"--font-dir {args.font_dir} lacks the aliased families: "
+                         + ", ".join(missing) + "; use the full DejaVu font set")
+        report = prepare_browser(args.output / "browser", args.chromium, shutil.which("bwrap"), args.font_dir)
         config = args.output / "browser/fonts.conf"
         text = config.read_text().replace("</fontconfig>", "".join(
             f"<alias><family>{generic}</family><prefer><family>{family}</family></prefer></alias>"
