@@ -12,7 +12,7 @@ import time
 import uuid
 from pathlib import Path
 
-from accessibility import items, start_registry
+from accessibility import items, snapshot, start_registry
 from gnome_session import GnomeSession
 from local_murmur import eventually, free_port
 from local_nuschld import Nuschld
@@ -73,6 +73,22 @@ def run(args):
             assert before["permissions"] & 1 == 0, before
             alice.close()
             alice = None
+            reader = Client(
+                args.binaries,
+                "127.0.0.1",
+                server.port,
+                pin,
+                "SuperUser",
+                root / "baseline",
+                ["--require-nuschl", "--password-file", str(server.password)],
+            )
+            try:
+                reader.send(kind="acl_draft", channel=0, request=1)
+                baseline = reader.wait(
+                    lambda event: event["kind"] == "acl_reply" and event["request"] == 1
+                )["acl"]
+            finally:
+                reader.close()
             shell.start()
 
             def spawn(command, env, log):
@@ -126,6 +142,7 @@ def run(args):
                             "port": server.port,
                             "username": "SuperUser",
                             "certificate_sha256": pin,
+                            "auto_connect": False,
                         }
                     ]
                 )
@@ -152,7 +169,6 @@ def run(args):
                     str(args.binaries / "nuschl"),
                     "--profile-dir",
                     str(profile),
-                    f"mumble://SuperUser@127.0.0.1:{server.port}/?policy=nuschl",
                 ],
                 env=env,
                 stdout=(args.output / "desktop.log").open("w"),
@@ -191,6 +207,18 @@ def run(args):
             def text_contains(text):
                 return any(text in name for _, _, name, _ in items(application))
 
+            def activate(name):
+                node = wait(name, "push button")
+                assert node.call("Component", "GrabFocus")[0]
+                time.sleep(0.15)
+                origin = json.loads(
+                    shell.eval(
+                        "JSON.stringify((()=>{const w=global.get_window_actors().map(a=>a.meta_window).find(w=>w.get_title().startsWith('Nuschl'));const b=w.get_buffer_rect();return {x:b.x,y:b.y};})())"
+                    )
+                )
+                x, y, width, height = node.extents()
+                shell.click(origin["x"] + x + width // 2, origin["y"] + y + height // 2)
+
             def type_field(name, text):
                 field = wait(name)
                 assert field.call("Component", "GrabFocus")[0]
@@ -198,10 +226,19 @@ def run(args):
                 shell.chord("Control_L", "a")
                 shell.type(text)
 
-            # Login refusal opens the existing retry form; no password in argv,
-            # stored bookmark or screenshot. The native UI submits the secret.
+            # Enter the credential before the first connection. No password in
+            # argv, stored bookmark or screenshot: the native UI submits it.
+            activate("Server settings")
             type_field("Server password", server.SUPERUSER_PASSWORD)
-            wait("Save and connect", "push button").press()
+            activate("Save and connect")
+            eventually(
+                lambda: any(
+                    role == "push button"
+                    and name.startswith("E2EE admin bootstrap; Connected")
+                    for _, role, name, _ in items(application)
+                ),
+                "native SuperUser connection did not complete",
+            )
             row = eventually(
                 lambda: next(
                     (
@@ -229,15 +266,22 @@ def run(args):
                 lambda: text_contains("Edit a local rule or group"),
                 "E2EE native ACL query did not load",
             )
-            wait("@admin", "push button").press()
+            # Root also has an @admin ACL rule; select the group within its
+            # actual list rather than a same-labelled rule in the other list.
+            group_row = next(
+                node
+                for _, node, role, name in snapshot(wait("ACL groups", "list box"))
+                if role == "push button" and name == "@admin"
+            )
+            group_row.press()
             type_field("Registered group member", "Offline Alice")
-            wait("Resolve member", "push button").press()
+            activate("Resolve member")
             eventually(
                 lambda: text_contains(f"Resolved Offline Alice (#{account})"),
                 "E2EE native offline lookup did not resolve",
             )
-            wait("Add member", "push button").press()
-            wait("Save permissions", "push button").press()
+            activate("Add member")
+            activate("Save permissions")
             eventually(
                 lambda: text_contains("Permissions saved and confirmed"),
                 "E2EE native promotion was not confirmed",
@@ -246,7 +290,7 @@ def run(args):
             stop(app)
             app = None
 
-            def verify():
+            def verify(expected_channel=None):
                 user = Client(
                     args.binaries,
                     "127.0.0.1",
@@ -257,6 +301,11 @@ def run(args):
                     ["--require-nuschl"],
                 )
                 try:
+                    if expected_channel is not None:
+                        assert (
+                            user.channels.get(expected_channel, {}).get("name")
+                            == "Native admin bootstrap proof"
+                        ), user.channels
                     user.send(kind="permissions", channel=0)
                     granted = user.wait(
                         lambda event: (
@@ -270,6 +319,34 @@ def run(args):
                             event["kind"] == "acl_reply" and event["request"] == 77
                         )
                     )
+                    assert reply["acl"]["entries"] == baseline["entries"], (
+                        "promotion changed ACL rule order/flags/permissions"
+                    )
+                    assert reply["acl"]["inherit_acls"] == baseline["inherit_acls"]
+                    original_groups = {
+                        group["name"]: group for group in baseline["groups"]
+                    }
+                    observed_groups = {
+                        group["name"]: group for group in reply["acl"]["groups"]
+                    }
+                    assert set(original_groups) == set(observed_groups)
+                    for name, original in original_groups.items():
+                        observed = observed_groups[name]
+                        if name == "admin":
+                            assert {
+                                key: value
+                                for key, value in observed.items()
+                                if key != "add"
+                            } == {
+                                key: value
+                                for key, value in original.items()
+                                if key != "add"
+                            }
+                            assert observed["add"] == sorted(
+                                set(original["add"] + [account])
+                            )
+                        else:
+                            assert observed == original
                     group = next(
                         group
                         for group in reply["acl"]["groups"]
@@ -281,12 +358,78 @@ def run(args):
                     user.close()
 
             granted, group = verify()
+            promoted = Client(
+                args.binaries,
+                "127.0.0.1",
+                server.port,
+                pin,
+                "Offline Alice",
+                root / "alice",
+                ["--require-nuschl"],
+            )
+            try:
+                promoted.send(
+                    kind="create_channel",
+                    parent=0,
+                    name="Native admin bootstrap proof",
+                    temporary=False,
+                )
+                result = promoted.wait(
+                    lambda event: (
+                        event["kind"] == "permission_denied"
+                        or (
+                            event["kind"] == "channel"
+                            and event["channel"]["name"]
+                            == "Native admin bootstrap proof"
+                        )
+                    )
+                )
+                assert result["kind"] == "channel", result
+                created = result["channel"]["id"]
+            finally:
+                promoted.close()
+            control = Client(
+                args.binaries,
+                "127.0.0.1",
+                server.port,
+                pin,
+                "Unpromoted control",
+                root / "control",
+                ["--require-nuschl"],
+            )
+            try:
+                control.send(kind="permissions", channel=0)
+                denied = control.wait(
+                    lambda event: (
+                        event["kind"] == "permissions" and event["channel"] == 0
+                    )
+                )
+                assert denied["permissions"] & 1 == 0
+                control.send(
+                    kind="create_channel",
+                    parent=0,
+                    name="Unpromoted creation must fail",
+                    temporary=False,
+                )
+                rejection = control.wait(
+                    lambda event: (
+                        event["kind"] == "permission_denied"
+                        or (
+                            event["kind"] == "channel"
+                            and event["channel"]["name"]
+                            == "Unpromoted creation must fail"
+                        )
+                    )
+                )
+                assert rejection["kind"] == "permission_denied", rejection
+            finally:
+                control.close()
             assert server.config.read_text() == original_config, (
                 "security/config changed during bootstrap"
             )
             server.stop()
             server.start()
-            persisted, persisted_group = verify()
+            persisted, persisted_group = verify(created)
             proof = {
                 "passed": True,
                 "security_from_first_start": "e2ee",
@@ -301,6 +444,11 @@ def run(args):
                 "admin_group": group,
                 "after_restart": persisted,
                 "persisted_admin_group": persisted_group,
+                "baseline_acl_preserved": baseline,
+                "ordinary_admin_created_channel": created,
+                "unpromoted_control": denied,
+                "unpromoted_create_refusal": rejection,
+                "permanent_channel_persisted": True,
                 "public_servers_or_host_devices": False,
             }
             (args.output / "proof.json").write_text(json.dumps(proof, indent=2) + "\n")
