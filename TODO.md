@@ -2,12 +2,13 @@
 
 Current focus (user, 2026-11-12): **unmute-to-first-speech latency, stereo receive
 and output fidelity, and hybrid update readiness**. Independent owners now cover
-iOS environment/archive verification, web welcome documents and the native
+iOS environment readiness, live welcome updates and the native
 ACL/group editor.
 The relay DNS/kernel checks and explicit-deny correction are integrated.
 The measured playback clipping correction and SuperUser bootstrap guide
 are integrated. Transmit quality evidence and the exact native welcome-domain
-regression are integrated; the missing web welcome surface remains open.
+regression are integrated, along with the browser's initial welcome surface
+and central text-size correction. Live welcome updates remain in progress.
 Full Mumble ACL/group editing parity is explicitly queued below. Native action
 authority, content/math worker retirement and
 the standalone server/RTC per-crate build migration are integrated with scoped
@@ -32,6 +33,23 @@ outside the current task's scope.
 
 Current integration checkpoint (2026-11-12):
 
+- **Initial browser welcome and text-size fixes are integrated through
+  `99931b5e`.** The SDK worker produces bounded typed documents; exact-source
+  dismissal tokens, reconnect/replacement, inert resource canaries, bold domains,
+  code and keyboard dismissal pass against the compiled App and owned Murmur.
+  Actual 14/16/20px settings, persisted text size and phone/desktop bounds pass.
+  All eight combined distribution/check outputs and both bundled notice readers
+  pass; all 11 production source files and ten runtime assets match the tested
+  product exactly. The long-name 320px/20px screenshot was also reviewed.
+  Live ServerConfig updates and broader browser parity remain open. Root evidence:
+  `~/.cache/nuschl-integration-20261112/web-welcome/handoff.json`.
+- **Xcode archive verification is integrated through `a12405a9`.** The confined
+  read-only verifier checks the Apple Software Update certificate profile,
+  signature, current signed CRLs, full payload and Xcode 16.2/SDK 18.2 plists.
+  All 18 real-media/parser tests pass, including real tamper and expired-CRL
+  refusals. Root independently passes ten parser and 19 capability tests.
+  Native Apple acceptance, installed macOS, Xcode execution, Simulator graphics
+  and a working iOS app remain open; see docs/ios-vm.md.
 - **Filtered native capture is integrated through `ff695f9e`.** The actual
   converter now uses the existing memory-safe mono Speex engine with rational
   clocks and capture-side timestamp compensation. All 31 quality/clock/initial
@@ -1070,29 +1088,40 @@ listed below. Plugin data remains the explicit gap.
 - [x] Channel descriptions, user comments and avatars through `RequestBlob` (23);
       parse in the content worker; decode images with a memory-safe decoder in a worker.
 - [x] Inline images in legacy HTML messages through the content worker.
-- [ ] Reproduce the reported join/welcome-notice formatting bug (user,
+- [x] Cover the reported join/welcome-notice formatting case (user,
       2026-11-12): `<b>something.de</b>` appears as `bsomething.de/b` on joining
       a server. Preserve supported legacy HTML formatting faithfully: display
       `something.de` in bold, without literal tag names or storage markers.
       Include a domain inside emphasis in regression coverage and inspect the
-      complete welcome-rendering path, including safe link detection. Earlier
-      scoped welcome fixes below do not close this newly reported case; retain
-      existing sanitization and explicit safe-link activation.
-- [ ] Integrate the implemented web welcome-document checkpoint: bounded
+      complete welcome-rendering path, including safe link detection. The exact
+      sample now passes in the packaged native client and compiled browser App
+      against private Murmur, including linked emphasis and escaped literal tags.
+      Native rendering was already fixed; this adds regression evidence rather
+      than claiming a new native correction. The original server's complete raw
+      notice was not captured. Sanitization and explicit activation are retained.
+- [x] Integrate the implemented web welcome-document checkpoint: bounded
       SDK-worker rendering, generation/exact-source dismissal leases, once-only
       typed document updates and a bounded mobile panel are implemented and
       scoped tests pass. Actual private stock Murmur + compiled App/CSP checks
       cover exact bold domains, inert resources, 320/390/900/1280 bounds,
       keyboard dismissal, reconnect/replacement and stale tokens. Native exact
-      domain proof already passes; no new native fix claimed. Source integration
-      remains pending until parent review; see `docs/welcome-domain.md`.
+      domain proof already passes; no new native fix claimed. Parent source,
+      runtime-asset, distribution and notice checks pass; see
+      `docs/welcome-domain.md` and the integration checkpoint above.
 - [ ] Live `ServerConfig.welcome_text` parity: source audit finds both native
       and browser handlers currently discard this optional field, while stock
       Mumble's `MainWindow::msgServerConfig` logs nonempty welcomes. Initial
       `ServerSync` delivery is covered separately. Add authenticated bounded
       updates with source/dismissal guards and private protocol fixtures before
       claiming live welcome-configuration parity; no public-server test needed.
-- [ ] Integrate the separate central browser text-size correction: Settings
+- [ ] Preserve omitted fields in sparse non-welcome `ServerConfig` updates.
+      Source review finds browser updates can reset omitted message/image limits
+      and both native/browser updates can restore omitted recording permission
+      to true. Retain the last authenticated value for absent optional fields;
+      explicit zero/default values must retain their protocol meaning. Test
+      restricted recording plus unrelated bandwidth/HTML updates and reconnect
+      defaults in both adapters. Welcome-only suppression is a separate fix.
+- [x] Integrate the separate central browser text-size correction: Settings
       previously changed body font size while rem-sized text kept the root's
       16px. `html` now uses the same preference variable; actual compiled App
       assertions cover 14/16/20px roots, message text 12.6/14.4/18px, persistence
