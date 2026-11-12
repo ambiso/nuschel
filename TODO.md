@@ -2,8 +2,8 @@
 
 Current focus (user, 2026-11-12): **unmute-to-first-speech latency, stereo receive
 and output fidelity, and hybrid update readiness**. Independent owners now cover
-the TLS certificate report, sparse server-configuration limits and the native
-ACL/group editor. iOS Recovery/archive evidence is retained for the next stage.
+iOS environment readiness, sparse server-configuration limits and the native
+ACL/group editor.
 The relay DNS/kernel checks and explicit-deny correction are integrated.
 The measured playback clipping correction and SuperUser bootstrap guide
 are integrated. Transmit quality evidence and the exact native welcome-domain
@@ -1547,16 +1547,6 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
    - [x] Persist channel listeners for registered users (2026-11-11): stored with
          their volume, restored after `ServerSync` with Listen and the limits checked
          again (Murmur does not check), removed with the user or channel.
-   - [ ] Investigate the deployed nuschl.eu certificate prompt (user, 2026-11-12):
-         desktop shows "Confirm server certificate" with `UnknownIssuer`.
-         Native code already verifies unpinned chains with WebPKI; the module
-         requires explicit `hostName` plus `tls.useACMEHost`/`tls.enableACME` to
-         select the voice listener's certificate. Verify the deployment selects
-         the intended trusted full chain, retaining chain/name/expiry validation.
-         Distinguish a self-signed/default leaf from missing intermediates; do
-         not assume nginx HTTPS certificate selection applies to the voice port.
-         Owned loopback fixtures only; existing private module lifecycle proof
-         does not establish the current public deployment's configuration.
    - [x] TLS reload on SIGHUP and `minimum_tls_version = "1.3"` (2026-11-11): new
          handshakes get the new certificate, a broken one keeps the old one. The
          NixOS module's manual `certificateFile` credentials are copied at start,
