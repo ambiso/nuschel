@@ -50,6 +50,18 @@ checkpoints. A background filesystem watcher alone does not advance a session.
 
 Current integration checkpoint (2026-11-12):
 
+- **Native voice-status and stable server controls are integrated through
+  `3b74c859`.** The shared projection distinguishes destination intent from
+  observed speaking, codec/admin/bandwidth restrictions, pending acknowledgements
+  and reconnect. Rail actions bind stable server IDs; row/footer/consent actions
+  check endpoint and lifetime, with immediate same-connection privacy stops.
+  Root passes the combined native package, formatting, 96 desktop tests and
+  bundled notices. All three rendered voice/view source files exactly match the
+  final child: 23 private transitions, 16 real-zoom label/action geometry checks,
+  held ACK, retained rail callbacks and codec-header controls plus the full
+  two-Murmur audio/privacy/crash-recovery suite. The remaining actor fence,
+  default-bucket convergence, unmute delay and VAD drift stay open. Evidence:
+  `~/.cache/nuschl-integration-20261112/native-status/handoff.json`.
 - **Shared character limits and owned send refusals are integrated through
   `cda33042`.** Both adapters and the shared SDK use one sparse/default policy,
   UTF-16 server caps, independent local byte ceilings and one first-party
@@ -1487,7 +1499,7 @@ listed below. Plugin data remains the explicit gap.
 
 ### 6. Desktop UI for these features
 
-- [ ] Integrate the verified native multi-server voice status revision (user,
+- [x] Integrate the verified native multi-server voice status revision (user,
       2026-11-12). Source distinguishes microphone destination, observed Speaking,
       listening/deafened, codec/admin/bandwidth restrictions, pending acknowledgements
       and reconnect. Every relevant connected/pending server is named with a
@@ -1499,8 +1511,9 @@ listed below. Plugin data remains the explicit gap.
       routing/ACK plus a separate owned TLS codec-advertisement header fixture),
       16 positive name/action geometry
       checks at 100–200% in narrow/default windows with a long Unicode name, plus the
-      original complete two-server audio/privacy/crash-recovery suite. Pending root
-      distribution integration; see docs/voice-status.md. The old package reproduced
+      original complete two-server audio/privacy/crash-recovery suite. Root native
+      package/fmt, 96 units, notice reader and exact view/voice source checks pass;
+      see docs/voice-status.md. The old package reproduced
       three semantic failures; literal stale text-cache behavior was not established.
 - [ ] Reconcile rapid self mute/deafen intent with server acknowledgements at
       stock Mumble's default control bucket. The private status baseline hit a
