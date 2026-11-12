@@ -2008,6 +2008,7 @@ fn conversation(
                     )
                     .child(
                         div()
+                            .id("chat-history-scrollbar-area")
                             .absolute()
                             .top_0()
                             .bottom_0()
@@ -2019,7 +2020,7 @@ fn conversation(
                             // its first move changes the retained scroll offset.
                             .capture_any_mouse_down(cx.listener(|this, event, _, _| {
                                 if event.button == MouseButton::Left {
-                                    this.chat_motion.cancel();
+                                    this.cancel_chat_scroll();
                                 }
                             }))
                             .child(
