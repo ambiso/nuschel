@@ -5,9 +5,11 @@ Uses actual migration and moderation notices, never injected UI state. Long
 unbroken paths and Unicode destinations must not displace fixed controls.
 """
 import json
+import os
 import time
 from accessibility import items, snapshot
-from local_murmur import eventually
+from local_murmur import Murmur, eventually
+from mumble_client import Client
 import frame_timing
 
 SERVER_NAME = "Community-" + "verylongunbrokentoken" * 4 + "-日本語-👩🏽‍💻"
@@ -33,7 +35,8 @@ def run(args, root, shell, registry, bots, profile, port, pin, shot):
     assert "The experimental Nuschel end-to-end identity was archived at" in full,full
     assert str(profile) in full,"full unbroken absolute path was lost"
     assert (profile / "data/keys.nuschel-v1/layout-evidence").read_text()=="synthetic, not a key\n"
-    for label,width,sidebar in [("wide",1280,240),("narrow",900,200),("expanded-sidebar",1280,360)]:
+    cases = [] if "layout-controls" in args.scenes.split(",") else [("wide",1280,240),("narrow",900,200),("expanded-sidebar",1280,360)]
+    for label,width,sidebar in cases:
         for percent,steps in [(100,0),(125,2),(150,3),(200,5)]:
             shell.chord("Control_L","0")
             shell.place("Nuschl",40,40,width,800)
@@ -100,7 +103,56 @@ def run(args, root, shell, registry, bots, profile, port, pin, shot):
     dismiss=eventually(lambda:named("push button","Dismiss notice"),"Dismiss missing")
     dismiss.call("Component","GrabFocus");shell.key("Return")
     eventually(lambda:named("push button","Dismiss notice") is None,"keyboard dismissal failed")
-    records.append({"keyboard_dismissed":True})
+    records.append({"keyboard_dismissed":True});report.write_text(json.dumps(records,indent=2))
+    # A separate actual server notice exercises pointer hit testing, after
+    # the first warning was genuinely dismissed with the keyboard.
+    password=root/"layout-moderator-password"
+    password.write_text(Murmur.SUPERUSER_PASSWORD);password.chmod(0o600)
+    moderator=Client(args.binaries,"127.0.0.1",port,pin,"SuperUser",root/"layout-moderator",["--password-file",str(password)])
+    bots.append(moderator)
+    session=eventually(lambda:next((user["session"] for user in bots[0].users.values() if user["name"]=="Andi"),None),"Andi absent before pointer notice")
+    reason="layout-pointer-dismiss: "+"/private/unbroken-token"*30
+    moderator.send(kind="moderate",session=session,action="kick",reason=reason)
+    current=eventually(lambda:named("status bar","Connection notice"),"moderation notice absent")
+    eventually(lambda:any(reason in name for _,_,_,name in snapshot(current)),"full moderation reason inaccessible")
+    dismiss=eventually(lambda:named("push button","Dismiss notice"),"pointer Dismiss missing")
+    dismiss.call("Component","GrabFocus")
+    time.sleep(.2)
+    geometry=json.loads(shell.eval("JSON.stringify((()=>{const w=global.get_window_actors().map(a=>a.meta_window).find(w=>w.get_title().startsWith('Nuschl'));const b=w.get_buffer_rect();return {x:b.x,y:b.y};})())"))
+    x,y=dismiss.centre();shell.click(geometry["x"]+x,geometry["y"]+y)
+    eventually(lambda:named("push button","Dismiss notice") is None,"actual pointer dismissal failed")
+    records.append({"pointer_dismissed":True,"reason":reason});report.write_text(json.dumps(records,indent=2))
+    # Shared compact controls and modal scroll/reveal remain usable at both
+    # ordinary and narrow/high-zoom sizes; no microphone test is activated.
+    for width,percent,steps in [(1280,100,0),(900,200,5)]:
+        shell.chord("Control_L","0");shell.place("Nuschl",40,40,width,800)
+        for _ in range(steps):shell.chord("Control_L","equal");time.sleep(.1)
+        settings=eventually(lambda:named("push button","Settings"),"Settings action absent")
+        settings.press()
+        dialog=eventually(lambda:named("dialog","Settings"),"Settings dialog absent")
+        done=eventually(lambda:named("push button","Done"),"compact Done absent")
+        done.call("Component","GrabFocus")
+        eventually(lambda:inside(done.extents(),dialog.extents()),"Done escaped Settings")
+        assert done.extents()[2] < 130*percent/100,"short button expanded into a full-width action"
+        controls=[node for _,node,role,_ in snapshot(dialog) if role=="push button"]
+        last=controls[-1]
+        last.call("Component","GrabFocus")
+        eventually(lambda:inside(last.extents(),dialog.extents()),f"last Settings action {last.name} was not revealed")
+        records.append({"modal":"Settings","width":width,"zoom":percent,"last_control":last.name,"bounds":last.extents(),"dialog":dialog.extents()})
+        shell.key("Escape")
+        eventually(lambda:named("dialog","Settings") is None,"Settings Escape did not close")
+        add=eventually(lambda:named("push button","Add a server"),"Add server absent")
+        add.press()
+        dialog=eventually(lambda:named("dialog","Add or connect to a Mumble server"),"server form absent")
+        cancel=eventually(lambda:named("push button","Cancel"),"server Cancel absent")
+        cancel.call("Component","GrabFocus")
+        records.append({"modal":"Server diagnostic","width":width,"zoom":percent,"cancel":cancel.extents(),"dialog":dialog.extents(),"focused":cancel.focused})
+        report.write_text(json.dumps(records,indent=2));shot(f"server-form-{width}-{percent}")
+        eventually(lambda:inside(cancel.extents(),dialog.extents()),"server form Cancel was not revealed")
+        records.append({"modal":"Server form","width":width,"zoom":percent,"cancel":cancel.extents(),"dialog":dialog.extents()})
+        cancel.press()
+        eventually(lambda:named("dialog","Add or connect to a Mumble server") is None,"Cancel did not close server form")
+    shell.chord("Control_L","0");shell.place("Nuschl",40,40,1280,800)
     # Reuse compositor timing sweeps, without custom production measurement.
     window=shell.window("Nuschl");w,h=window["width"],window["height"]
     sizes=[[round(w-(w-900)*(1-abs(i-30)/30)),round(h-(h-620)*(1-abs(i-30)/30))] for i in range(61)]
@@ -109,14 +161,14 @@ def run(args, root, shell, registry, bots, profile, port, pin, shot):
     log=args.output/"frames.log"
     if log.exists():records[-1]["frames"]=frame_timing.summarize(frame_timing.read_log(log),*records[-1]["resize_span"])
     report.write_text(json.dumps(records,indent=2))
-    print("Layout: long actual migration path, Unicode voice destinations, viewport bounds, 12 resize/zoom cases and keyboard dismissal passed.",flush=True)
+    print(f"Layout: {len(cases)*4} width/zoom cases; keyboard/pointer dismissal and Settings/server-form focus checks passed.",flush=True)
 
 
 def performance(args, shell, profile, shot):
     """Same real long-notice fixture before/after, with frame-timing builds."""
     log = args.output / "frames.log"
     eventually(log.exists, "frame-timing executable required; no timings were logged")
-    measured = {}
+    measured = {"host": {"load_average": os.getloadavg(), "cpus": os.cpu_count(), "limits": "No other owned build/test jobs during benchmark; unowned host workloads remain running."}}
     for percent, steps in [(100, 0), (125, 2)]:
         shell.chord("Control_L", "0")
         shell.place("Nuschl", 40, 40, 1280, 800)

@@ -12,7 +12,8 @@ use std::{cell::Cell, rc::Rc};
 /// A control's retained focus state; no text/layout cache or global registry.
 struct FocusState {
     handle: FocusHandle,
-    focused: Rc<Cell<bool>>,
+    reveal: Rc<Cell<bool>>,
+    _focus: Subscription,
 }
 
 #[derive(IntoElement)]
@@ -26,23 +27,28 @@ impl RenderOnce for Focusable {
         let state = window.use_keyed_state(
             SharedString::from(format!("{}:focus-reveal", self.id)),
             cx,
-            |_, cx| FocusState {
-                handle: cx.focus_handle(),
-                focused: Rc::default(),
+            |window, cx| {
+                let handle = cx.focus_handle();
+                let subscription = cx.on_focus(&handle, window, |state: &mut FocusState, _, cx| {
+                    state.reveal.set(true);
+                    cx.notify();
+                });
+                FocusState {
+                    handle,
+                    reveal: Rc::default(),
+                    _focus: subscription,
+                }
             },
         );
         let state = state.read(cx);
         let handle = state.handle.clone();
         let observed = state.handle.clone();
-        let focused = state.focused.clone();
+        let reveal = state.reveal.clone();
         self.child.track_focus(&handle).relative().child(
             canvas(
                 move |bounds, window, _| {
-                    let now = observed.is_focused(window);
-                    if now && !focused.replace(now) {
+                    if reveal.replace(false) && observed.is_focused(window) {
                         window.request_autoscroll(bounds);
-                    } else {
-                        focused.set(now);
                     }
                 },
                 |_, _, _, _| {},

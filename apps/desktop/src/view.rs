@@ -2525,6 +2525,8 @@ fn update_bar(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement> {
             .id("update-bar")
             .role(Role::Status)
             .flex_shrink_0()
+            .w_full()
+            .min_w_0()
             .px_4()
             .py(px(6.))
             .flex()
@@ -2535,13 +2537,7 @@ fn update_bar(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement> {
             .border_color(tint(ACCENT, 0x55))
             .text_sm()
             .child(icon("star", 16., color(ACCENT_HOVER)))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .child(text!(text).with_id("update-text")),
-            )
+            .child(layout::label("update-text", text))
             .when_some(action, |bar, action| bar.child(action))
             .into_any_element(),
     )
@@ -3181,58 +3177,53 @@ fn composer(
                 )),
         )
         .child(
-            div()
-                .flex()
-                .gap_3()
+            layout::row()
                 .px_1()
                 .text_xs()
                 .text_color(color(TEXT_FAINT))
-                .child(crate::typing::LiveStatus {
-                    id: "typing-status".into(),
-                    label: typing.clone().map(SharedString::from),
-                    child: match typing {
-                        Some(typing) => div()
-                            .min_w_0()
-                            .truncate()
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(color(if linked { ACCENT_HOVER } else { TEXT_MUTED }))
-                            .child(text!(typing).with_id("typing-label"))
-                            .into_any_element(),
-                        None => div()
-                            .flex_shrink_0()
-                            .child(
-                                text!(if channel_name.starts_with("@ ") {
-                                    format!("Message {}", channel_name.trim_start_matches("@ "))
-                                } else {
-                                    format!("Message #{channel_name}")
-                                })
-                                .with_id("composer-target"),
-                            )
-                            .into_any_element(),
-                    },
-                })
-                .child(div().flex_1())
-                // The hints give way (with an ellipsis) in narrow windows.
                 .child(
-                    div().min_w_0().truncate().child(
-                        text!(if this.settings.enter_sends {
-                            "Enter to send · Shift+Enter for a new line"
-                        } else {
-                            "Enter for a new line · Ctrl/Cmd+Enter to send"
-                        })
-                        .with_id("composer-hint"),
-                    ),
+                    layout::flexible()
+                        .flex_grow(2.)
+                        .child(crate::typing::LiveStatus {
+                            id: "typing-status".into(),
+                            label: typing.clone().map(SharedString::from),
+                            child: match typing {
+                                Some(typing) => div()
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(color(if linked {
+                                        ACCENT_HOVER
+                                    } else {
+                                        TEXT_MUTED
+                                    }))
+                                    .child(layout::label("typing-label", typing))
+                                    .into_any_element(),
+                                None => layout::label(
+                                    "composer-target",
+                                    if channel_name.starts_with("@ ") {
+                                        format!("Message {}", channel_name.trim_start_matches("@ "))
+                                    } else {
+                                        format!("Message #{channel_name}")
+                                    },
+                                ),
+                            },
+                        }),
                 )
-                .child(
-                    div().min_w_0().truncate().child(
-                        text!(if this.history_enabled {
-                            "Local history on · no end-to-end encryption"
-                        } else {
-                            "Local history off"
-                        })
-                        .with_id("history-default"),
-                    ),
-                ),
+                .child(layout::label(
+                    "composer-hint",
+                    if this.settings.enter_sends {
+                        "Enter to send · Shift+Enter for a new line"
+                    } else {
+                        "Enter for a new line · Ctrl/Cmd+Enter to send"
+                    },
+                ))
+                .child(layout::label(
+                    "history-default",
+                    if this.history_enabled {
+                        "Local history on · no end-to-end encryption"
+                    } else {
+                        "Local history off"
+                    },
+                )),
         )
         .into_any_element()
 }

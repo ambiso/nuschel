@@ -348,7 +348,7 @@ def main():
             murmur.ini.write_text(murmur.ini.read_text() + "messagelimit=1000\nmessageburst=1000\n")
             bot_options = ["--message-limit", "1000", "--message-burst", "1000"]
         murmur.seed()
-        layout_scene = bool({"layout", "layout-performance"} & set(args.scenes.split(",")))
+        layout_scene = bool({"layout", "layout-controls", "layout-performance"} & set(args.scenes.split(",")))
         if layout_scene:
             murmur.ini.write_text(murmur.ini.read_text() + "suggestPushToTalk=true\n")
             from layout_regression import CHANNEL_NAME
@@ -532,7 +532,7 @@ def main():
                            f" k.notify_keyval(t + 30000, {keyval}Control_L, {state}RELEASED); 'ok'")
                 time.sleep(0.4)
 
-            if "layout" in scenes:
+            if {"layout", "layout-controls"} & scenes:
                 from layout_regression import run as run_layout
                 run_layout(args, root, shell, registry, bots, profile, port, pin, shot)
             if "layout-performance" in scenes:
