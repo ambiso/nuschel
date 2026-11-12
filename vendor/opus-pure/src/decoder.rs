@@ -928,6 +928,10 @@ impl OpusDecoder {
         if packet.is_empty() {
             return self.decode_plc(frame_size, output);
         }
+        // Validate the complete framing before any fallback or leading PLC can
+        // advance decoder state. A plausible TOC alone is not a valid packet
+        // (e.g. code 1 with an odd-sized CBR payload).
+        let (_, frames, _) = repacketizer::parse_packet(packet, false)?;
         let toc = packet[0];
         let mode = mode_from_toc(toc);
         if mode == OpusMode::CeltOnly || self.prev_mode == Some(OpusMode::CeltOnly) {
@@ -950,7 +954,6 @@ impl OpusDecoder {
             *v = 0.0;
         }
 
-        let (_, frames, _) = crate::repacketizer::parse_packet(packet, false)?;
         let payload = frames[0];
 
         let bandwidth = bandwidth_from_toc(toc);
