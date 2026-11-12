@@ -78,6 +78,27 @@ pub fn encode(key: &PublicKey) -> Result<Vec<u8>, Error> {
 mod tests {
     use super::*;
     #[test]
+    fn embedded_production_trust_is_the_reviewed_public_only_pair() {
+        let bytes = include_bytes!("../update-trust.json");
+        // deny_unknown_fields rejects seed/private material in either document
+        // layer; parse also checks exact component sizes and the pair-bound ID.
+        let document: Document = serde_json::from_slice(bytes).unwrap();
+        assert_eq!(document.format, FORMAT_VERSION);
+        assert_eq!(document.algorithm, ALGORITHM_NAME);
+        let keys = parse(bytes).unwrap();
+        assert_eq!(keys.len(), 1);
+        assert_eq!(
+            crate::hex(&keys[0].id()),
+            "dbc40ac478b51573eaebebb0a40532bec7cf2a87282a98ae08f1a25ee5b42535"
+        );
+        #[cfg(feature = "client")]
+        assert_eq!(crate::trusted_keys().unwrap(), keys);
+        let mut with_seed: serde_json::Value = serde_json::from_slice(bytes).unwrap();
+        with_seed["keys"][0]["seed"] = "not-public-material".into();
+        assert!(parse(&serde_json::to_vec(&with_seed).unwrap()).is_err());
+    }
+
+    #[test]
     fn trust_metadata_rejects_unknown_duplicate_and_wrong_pair_identifiers() {
         let key = PublicKey::from_bytes(&[1; PUBLIC_BYTES]).unwrap();
         let bytes = encode(&key).unwrap();

@@ -37,12 +37,13 @@ permissions, playback and self-update. Mark the Mac artifact untested/experiment
   Linux actual-worker and private Windows LPAC/GUI fixtures pass; both verifier
   programs are packaged and signer/test tools are excluded. This is local runtime
   evidence, not a successful remote release or native macOS validation.
-- [ ] Enrol the real hybrid public key pair in source, retain protected backups,
-  and provision the matching CI signing secret using the reviewed tool. No key
-  material or secret availability was verified by this audit. The implementation
-  owner tool now specifies the private v2 JSON format and
-  `UPDATE_HYBRID_SIGNING_KEY`; `crates/update/update-trust.json` deliberately has no
-  enrolled public pair. No legacy-key fallback remains.
+- [x] Enrol the dedicated production hybrid public pair in source (2026-11-12),
+  key ID `dbc40ac478b51573eaebebb0a40532bec7cf2a87282a98ae08f1a25ee5b42535`.
+  This is public-only enrollment; historical fixture results remain scoped to
+  their recorded trust/source snapshots. No legacy-key fallback remains.
+- [ ] Retain protected private-key backups and provision/verify the matching
+  `UPDATE_HYBRID_SIGNING_KEY` CI secret using the reviewed tool. Public source
+  enrollment does not verify secret availability or authorize a release by itself.
 - [x] Choose `0.1.0` as the normal early-preview version. The eventual tag must be
   `v0.1.0`, matching the workspace and package versions; this decision has not
   created that tag.

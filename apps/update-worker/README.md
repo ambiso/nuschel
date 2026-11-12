@@ -11,14 +11,18 @@ against the identical pair-bound transcript, and exit. The parent requires both
 successful exits and exact request-bound replies. It discovers fixed filenames
 beside the application; neither the manifest nor an adjacent key file chooses a
 worker or trust root. There is no minisign fallback. Production accepts only
-`crates/update/update-trust.json` compiled into the program; that file deliberately
-has **no enrolled keys**. No production secret or CI enrollment was created.
+`crates/update/update-trust.json` compiled into the program. On 2026-11-12 the
+dedicated production public pair was enrolled with key ID
+`dbc40ac478b51573eaebebb0a40532bec7cf2a87282a98ae08f1a25ee5b42535`.
+This public-only source enrollment does not provision or verify a CI signing secret.
+Earlier fixture/audit results used unenrolled or temporary-public-key sources;
+their historical scope is unchanged.
 
 The operator tool supports `keygen`, `public-key`, `key-status`, `sign`, `verify`
 and authentication-only `authenticate`. It is an explicit offline/CI tool, excluded from client payloads. Its
 combined verification is a publication check, not the runtime's process boundary.
 
-## Concrete operator step (execute only when enrollment is approved)
+## Operator key creation and future rotation (only when explicitly authorized)
 
 Use an external private directory, outside the repository. The tool requires
 explicit paths and refuses to overwrite existing outputs. On Unix it creates
@@ -39,8 +43,9 @@ nix run --cores 2 --max-jobs 2 .#update-signer -- key-status \
 Both commands print only the public algorithm/version and stable key-pair ID.
 The public file contains the complete public pair and no seed fields. Review
 and enroll that public-only file as `crates/update/update-trust.json` after reviewing the
-final integrated migration. That file deliberately contains no enrolled keys
-yet. Never enroll the private file. Root-key rotation
+final integrated migration. Initial production enrollment is now complete; do not
+regenerate or overwrite the existing pair when following this reference. Never
+enroll the private file. Root-key rotation
 will require explicitly pinned pair sets and an overlap release, not a public
 key supplied by an untrusted download.
 

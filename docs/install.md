@@ -172,8 +172,10 @@ Two different kinds of signing are involved:
   from `crates/update/update-trust.json` can authorize runtime updates. Two
   separately confined fixed-algorithm workers must both accept `update.json.sig`
   over the exact raw `update.json`. There is no minisign/adjacent-key fallback.
-  The public store is deliberately unenrolled and no secret has been provisioned
-  by this implementation, so publication remains blocked. Missing/incomplete
+  The dedicated production public pair was enrolled on 2026-11-12 (key ID
+  `dbc40ac478b51573eaebebb0a40532bec7cf2a87282a98ae08f1a25ee5b42535`).
+  Matching CI secret provisioning remains a separate operator step; enrollment
+  alone does not establish publication readiness. Missing/incomplete
   runtime notices also block signing. See the [operator and verification
   instructions](../apps/update-worker/README.md). Metadata expires within 30 days;
   trusted periodic refresh is necessary even if binaries do not change. No

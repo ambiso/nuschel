@@ -109,3 +109,8 @@ Curated-source tests read the already cached exact published crates; set
 `NUSCHL_LICENSE_CRATE_SOURCES` if they are in a different vendor/registry root.
 Use a disk-backed TMPDIR for fixtures. None of these tests needs a host
 microphone, camera, audio output, clipboard or public Mumble server.
+
+Production trust update (2026-11-12): the dedicated public pair is now enrolled
+in `crates/update/update-trust.json`. Statements above about absent enrollment
+describe the recorded historical work, not the current source trust store.
+This does not establish CI secret availability, a remote release or new platform proof.

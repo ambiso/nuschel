@@ -3,9 +3,9 @@
 The offline `release/refresh-update.py` helper renews the validity of the same
 authenticated release without rebuilding or fetching binaries. It writes a new
 review directory only. It never uploads assets, creates/enrolls keys, edits client
-state, changes a clock, or schedules a signing job. Production public trust is
-still deliberately unenrolled; these instructions do not authorize enrollment or
-publication. Initial publication uses the normal release preparation, not renewal
+state, changes a clock, or schedules a signing job. Production public trust was
+enrolled on 2026-11-12; these instructions do not authorize key rotation or
+publication, and do not establish matching CI secret availability. Initial publication uses the normal release preparation, not renewal
 of a legacy/minisign document.
 
 `released` is the signed **metadata issuance time**, also used by clients for
