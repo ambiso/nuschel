@@ -793,7 +793,8 @@ impl Client {
 
     /// Open one profile comment. The content worker renders a body already held
     /// or the body that later answers this hash-only request, without reopening.
-    pub fn open_comment(&mut self, index: usize, session: u32) {
+    /// A matching UI cache source avoids re-parsing an already prepared body.
+    pub fn open_comment(&mut self, index: usize, session: u32, cached_source: Option<&str>) {
         let Some(server) = self
             .servers
             .get(index)
@@ -810,6 +811,7 @@ impl Client {
                 && interest.session == session
                 && interest.instance == user.instance
         });
+        let render_existing = !same && user.comment.as_deref() != cached_source;
         if !same {
             self.comment_interest = Some(CommentInterest {
                 server: server.id.clone(),
@@ -820,7 +822,7 @@ impl Client {
                 sent: false,
             });
         }
-        self.refresh_comment_interest(true);
+        self.refresh_comment_interest(render_existing);
     }
 
     /// A native UI calls this before applying a batch with its still-visible
@@ -3569,8 +3571,8 @@ mod tests {
         let user = comment_user(7, 70, &hash, None);
         client.handle(document_event(&id, ServerEvent::User(user.clone())));
         assert!(blob_requests(&recorder).is_empty());
-        client.open_comment(0, 7);
-        client.open_comment(0, 7);
+        client.open_comment(0, 7, None);
+        client.open_comment(0, 7, None);
         client.retain_comment_interest(Some((0, 7)));
         assert_eq!(
             blob_requests(&recorder),
@@ -3626,7 +3628,7 @@ mod tests {
             &id,
             ServerEvent::User(comment_user(7, 70, &hash, None)),
         ));
-        client.open_comment(0, 7);
+        client.open_comment(0, 7, None);
         client.retain_comment_interest(None);
         client.handle(document_event(
             &id,
@@ -3640,13 +3642,13 @@ mod tests {
                 .iter()
                 .any(|update| matches!(update, Update::Rendered { .. }))
         );
-        client.open_comment(0, 7);
+        client.open_comment(0, 7, None);
         recorder.rendered.lock().unwrap().clear();
         client.handle(document_event(
             &id,
             ServerEvent::User(comment_user(8, 80, &hash, None)),
         ));
-        client.open_comment(0, 8);
+        client.open_comment(0, 8, None);
         client.handle(document_event(
             &id,
             ServerEvent::User(comment_user(7, 70, &hash, Some("late previous profile"))),
@@ -3674,7 +3676,7 @@ mod tests {
             &id,
             ServerEvent::User(comment_user(7, 70, &hash, Some("old body"))),
         ));
-        client.open_comment(0, 7);
+        client.open_comment(0, 7, None);
         recorder.rendered.lock().unwrap().clear();
         client.handle(document_event(
             &id,
@@ -3689,7 +3691,7 @@ mod tests {
                 .iter()
                 .any(|update| matches!(update, Update::Rendered { .. }))
         );
-        client.open_comment(0, 7);
+        client.open_comment(0, 7, None);
         recorder.rendered.lock().unwrap().clear();
         client.disconnect(0);
         client.retain_comment_interest(Some((0, 7)));

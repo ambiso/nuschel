@@ -1125,7 +1125,14 @@ impl Desktop {
     }
 
     pub fn render_comment(&mut self, server: usize, session: u32) {
-        self.client.open_comment(server, session);
+        let cached_source = self
+            .client
+            .servers
+            .get(server)
+            .and_then(|view| self.ui.get(&view.id))
+            .and_then(|ui| ui.comments.get(&session))
+            .map(|(source, _)| source.as_str());
+        self.client.open_comment(server, session, cached_source);
     }
 }
 
