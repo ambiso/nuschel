@@ -25,12 +25,18 @@ has not acknowledged them, the status also says awaiting server. This distinctio
 is important when a stock server drops rapid controls under its shared message
 bucket. Audio-device detail remains available in the footer tooltip, and each
 server's reported health issue opens audio settings for that server. The fixed
-signal glyph means connection status; it is not a measured quality score.
+signal glyph is green only when the projection has a supported voice context.
+Chat/TLS alone, an unknown codec and unsupported/E2EE-only voice cannot produce a
+green Voice connected heading. It describes supported membership, not device
+readiness, active capture or a measured quality score.
 
-Rows and focus identities use stable server ID, generation and own presence rather
-than a runtime vector position. Navigation and disconnect actions resolve the named
-connection again. Actions that enable audio also validate the captured own presence
-and acknowledged channel lifetime. The second-server question captures the shown
+Rail tiles, their focus identities, navigation/context/keyboard callbacks and voice
+rows use stable server identity rather than a runtime vector position. Row bindings
+include generation, saved endpoint and own presence. Navigation and disconnect
+actions resolve the named connection again. Actions that enable audio also validate
+captured own presence and acknowledged channel lifetime. Privacy stops resolve the
+current named ID/generation/endpoint even if an automatic reconnect replaced its
+own presence; they do not wait for the old presence. The second-server question captures the shown
 places and microphone destination/active sets. Approval is rejected if those facts
 changed; cancellation never unmutes anything. An auto-reconnect can preserve the
 outer generation, so own presence and channel instances are checked too.
@@ -51,7 +57,13 @@ microphone. It never uses a host audio socket or profile. The test covers PTT id
 versus real encoded audio, secondary deafen, consent cancel/move, server-enforced
 mute/deafen, rapid controls, text/voice selection divergence, channel/name changes,
 auto-reconnect, stale consent rejection, removal of an earlier runtime index and
-targeted disconnect. Positive geometry and focus checks cover narrow/default
+targeted disconnect. A pre-removal accessible rail object must still select the same
+saved server after a completed render; keyboard selection and persisted context
+edits check the same identity. A briefly stopped **owned** Murmur holds a real deafen
+ACK, then resumes in a finally block, proving the pending badge/text. A separate
+owned TLS/framing fixture omits CodecVersion initially, then advertises false/true
+Opus values to exercise negotiating/unavailable/supported headings. That fixture
+does not establish codec/media interoperability. Positive geometry and focus checks cover narrow/default
 windows, real native zoom, long Unicode names and visible label/action bounds.
 
 The original cached package reproduced three semantic failures: idle PTT was called
@@ -75,3 +87,11 @@ connection/context change between the UI check and actor execution remains a
 separate authority follow-up. Cross-server privacy stops are not routed through an
 unrelated server scope. No hardware-readiness, physical microphone or full network
 reliability guarantee follows from these private fixtures.
+
+The frozen source passed 96 desktop unit tests. The final private GUI run passed
+23 recorded state transitions and 16 positive name/action geometry checks across
+1280×800 and 860×520 at 100/125/150/200%, including the long Unicode name. The
+original two-server audio/privacy suite also passed on that exact native source,
+including independent playback, PTT-only destinations, consent, privacy stops and
+media-worker recovery. Runtime proof uses the exact native leaf with cached
+packaged sibling helpers; root distribution integration remains a separate gate.

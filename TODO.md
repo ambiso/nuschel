@@ -1482,8 +1482,12 @@ listed below. Plugin data remains the explicit gap.
       listening/deafened, codec/admin/bandwidth restrictions, pending acknowledgements
       and reconnect. Every relevant connected/pending server is named with a
       server-scoped disconnect (voice and chat), stable ID/presence/channel bindings
-      and revalidated multi-server consent. Private source proof: 94 desktop units,
-      19 actual two-Murmur state/wire transitions, 16 positive name/action geometry
+      and revalidated multi-server consent. Rail navigation/context/keyboard identities
+      survive an earlier bookmark removal; pending deafen retains its privacy badge,
+      and unsupported/chat-only sessions no longer claim Voice connected. Private
+      source proof: 96 desktop units, 23 recorded private transitions (real two-Murmur
+      routing/ACK plus a separate owned TLS codec-advertisement header fixture),
+      16 positive name/action geometry
       checks at 100–200% in narrow/default windows with a long Unicode name, plus the
       original complete two-server audio/privacy/crash-recovery suite. Pending root
       distribution integration; see docs/voice-status.md. The old package reproduced
