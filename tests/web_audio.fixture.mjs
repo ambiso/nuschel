@@ -8,10 +8,11 @@ globalThis.AudioContext=class extends RealAudioContext {
 const config=await fetch("/fixture-config.json").then(response=>response.json());
 const username=new URL(location).searchParams.get("username")||"browser-audio";
 const worker=new Worker("/sdk.worker.js",{type:"module"});
-let next=0,voice=null,servers=[],audioState={},analyser;
+let next=0,voice=null,servers=[],audioState={},analyser,receivedCount=0;
 const pending=new Map(),received=[],sent=[],errors=[],events=[];
 function request(method,args=[]) {
   const id=++next;
+  if(method!=="voice_packet"&&method!=="audio_ready")events.push({kind:"command",id,method,localMuted:servers[0]?.muted,localDeafened:servers[0]?.deafened});
   return new Promise((resolve,reject)=>{
     const timer=setTimeout(()=>{pending.delete(id);reject(new Error("SDK command timeout: "+method));},10000);
     pending.set(id,{resolve:value=>{clearTimeout(timer);resolve(value);},reject:error=>{clearTimeout(timer);reject(error);}});
@@ -33,11 +34,14 @@ worker.onmessage=({data})=>{
     if(job){if(data.error)job.reject(new Error(data.error));else job.resolve(data.value);}return;
   }
   if(data.kind==="voice_packet"){
+    receivedCount++;
     if(received.length<400)received.push({...data.packet,opus:Array.from(data.packet.opus)});
     audio.receive(data.packet);return;
   }
   if(data.kind==="state"){
     servers=data.servers;voice=data.voice;audio.syncVoice(voice);
+    events.push({kind:"state",muted:servers[0]?.muted,deafened:servers[0]?.deafened,voice:voice?{...voice}:null});
+    if(events.length>500)events.shift();
     const first=servers[0];
     if(first?.certificate&&!trusting){trusting=true;request("accept_certificate",[0,first.certificate]).catch(error=>errors.push(error.message));}
     return;
@@ -68,7 +72,7 @@ function measure(){
     finite:samples.every(Number.isFinite),samples:Array.from(samples),sink:{type:audio.ctx.sinkId?.type}};
 }
 window.fixture={request,audio,measure,received,sent,errors,events,
-  snapshot:()=>({voice,servers,audio:audioState,received:received.length,sent:sent.length,errors:[...errors],sink:{type:audio.ctx?.sinkId?.type}}),
+  snapshot:()=>({voice,servers,audio:audioState,received:receivedCount,sent:sent.length,errors:[...errors],events:events.slice(-100),sink:{type:audio.ctx?.sinkId?.type}}),
   close:async()=>{await audio.dispose();worker.terminate();},
 };
 document.getElementById("loaded").textContent="ready";

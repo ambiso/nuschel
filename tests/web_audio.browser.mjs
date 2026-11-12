@@ -63,7 +63,7 @@ try {
   assert.equal((await state(b)).audio.microphone,false);
   await a.getByRole("button",{name:"Microphone",exact:true}).click();
   await a.waitForFunction(()=>fixture.snapshot().voice?.can_transmit&&fixture.snapshot().audio.microphone,null,{timeout:20000});
-  await b.waitForFunction(()=>fixture.received.length>=25,null,{timeout:20000});
+  await b.waitForFunction(()=>fixture.snapshot().received>=25,null,{timeout:20000});
   await b.waitForFunction(()=>fixture.measure()?.rms>0.001,null,{timeout:15000});
   const initial=await b.evaluate(()=>fixture.measure());assert.ok(initial.finite);assert.equal(initial.sink.type,"none");
   const captured=await b.evaluate(()=>fixture.received.filter(p=>!p.end).map(p=>p.opus).slice(0,50));
@@ -77,8 +77,8 @@ try {
   await b.waitForFunction(()=>fixture.measure()?.rms>0.001);assert.equal((await state(b)).audio.microphone,false);
   await a.getByRole("button",{name:"Microphone",exact:true}).click();
   await a.waitForFunction(()=>fixture.snapshot().voice?.muted&&!fixture.snapshot().audio.microphone);
-  await new Promise(resolve=>setTimeout(resolve,150));const stopped=await b.evaluate(()=>fixture.received.length);
-  await new Promise(resolve=>setTimeout(resolve,350));assert.equal(await b.evaluate(()=>fixture.received.length),stopped,"muted capture kept transmitting");
+  await new Promise(resolve=>setTimeout(resolve,150));const stopped=await b.evaluate(()=>fixture.snapshot().received);
+  await new Promise(resolve=>setTimeout(resolve,350));assert.equal(await b.evaluate(()=>fixture.snapshot().received),stopped,"muted capture kept transmitting");
   // Real asynchronous permission result, deliberately delayed AFTER the browser
   // has supplied its fake track. A newer mute must stop rather than attach it.
   await a.evaluate(()=>{
@@ -92,7 +92,7 @@ try {
   await a.getByRole("button",{name:"Microphone",exact:true}).click();
   await a.waitForFunction(()=>Boolean(fixture.releaseCapture));
   await a.getByRole("button",{name:"Mute microphone",exact:true}).click();
-  await a.waitForFunction(()=>fixture.snapshot().voice?.muted);
+  await a.waitForFunction(()=>fixture.snapshot().voice?.muted&&fixture.snapshot().servers[0]?.muted);
   await a.evaluate(()=>{navigator.mediaDevices.getUserMedia=fixture.originalCapture;fixture.releaseCapture();});
   await a.waitForFunction(()=>fixture.delayedStream.getTracks().every(track=>track.readyState==="ended"));
   assert.equal((await state(a)).audio.microphone,false);
@@ -101,8 +101,8 @@ try {
   await a.waitForFunction(()=>fixture.snapshot().voice?.can_transmit&&fixture.snapshot().audio.microphone);
   await a.getByRole("button",{name:"Deafen",exact:true}).click({clickCount:4,delay:30});
   await a.waitForFunction(()=>fixture.snapshot().voice?.muted&&!fixture.snapshot().voice.deafened&&!fixture.snapshot().audio.microphone);
-  await new Promise(resolve=>setTimeout(resolve,200));const rapid=await b.evaluate(()=>fixture.received.length);
-  await new Promise(resolve=>setTimeout(resolve,250));assert.equal(await b.evaluate(()=>fixture.received.length),rapid,"rapid policy changes leaked queued capture");
+  await new Promise(resolve=>setTimeout(resolve,200));const rapid=await b.evaluate(()=>fixture.snapshot().received);
+  await new Promise(resolve=>setTimeout(resolve,250));assert.equal(await b.evaluate(()=>fixture.snapshot().received),rapid,"rapid policy changes leaked queued capture");
   // Disconnect/reconnect leaves the new generation muted and without old consent.
   const oldGeneration=(await state(a)).voice.connection_generation;
   const id=(await state(a)).servers[0].id;
