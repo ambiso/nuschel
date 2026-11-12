@@ -244,3 +244,54 @@ Unrelated branches have no implicit release ordering. A new tagged release must
 also sort above the previously published development version; increment the
 workspace release version rather than relabeling a newer development build with
 an older release number. Actual package revision changes remain explicit.
+
+## Pure exported-source interface
+
+The pure entrypoints are `packaging/linux/version.nix` (`mkVersion`) and
+`packaging/linux/default.nix` (`mkPackages`). The latter takes `pkgs`, `toolchain`,
+`craneLib`, actual unfiltered `sourceInfo`, optional `versionMetadata`,
+`nativeNotices`, `desktopFiles`, `appstreamXML` (or explicit `null` until the shared
+metadata is present), and an explicit maintainer for publication. It takes the
+application tree **only** from `sourceInfo.outPath`. It returns `versions`,
+`nativeStage`, `deb`, `archBin`, `debSource`, `debSourceCheck`, `metadataTests`, and
+`assetBinding`. The coordinator registers the flake attrs; this library never
+moves a bookmark or edits a lockfile.
+
+Notice/desktop inputs are not accepted merely by name: a bounded binding check
+compares them with the canonical source helpers, requires the actual Cargo.lock,
+and records their hashes plus the actual source NarHash. Non-null AppStream must
+match the tracked shared XML. The final stage checks the installed bytes against
+that attestation. This is not a legal or runtime certification.
+
+A path/GitHub export need not contain `.git`, `revCount`, or an authenticated
+commit timestamp. Missing official metadata therefore gives deterministic,
+explicitly unpublished local versions: Debian `base~local.n<source-identity>` and
+Arch `baselocal.n<source-identity>`, with normalized epoch 1. They sort below the
+corresponding tagged release; arbitrary local snapshots have no promised update
+ordering. Unknown Git revision stays `null`. The identity comes from the actual
+unfiltered source NarHash, not a guessed revision or path-copy modification time.
+`aptRepository` is absent for these local builds.
+
+For official version ordering, prepare a **separate public sidecar outside the
+source**; embedding its own source hash would be circular. Schema 1 has exactly
+`schema`, `kind`, `base_version`, `source_nar_hash`, `source_revision`, `sequence`,
+`commit_epoch`, `commit_stamp`, `tag`, and `package_revision`. The pure function
+checks types/bounds, version/tag policy, the actual NarHash, and the revision when
+sourceInfo provides it. The exporter supplies the fixed commit date, never a
+current clock; pure Nix does not authenticate a date or Git tag from a path mtime.
+
+`packaging/linux/export-version.py --repo <owned-repository> --revision <full-sha>
+--exported-source <immutable-sourceInfo.outPath> --mode development --output
+<new-outside-source.json>` verifies the full tracked Git membership, bytes,
+executable/link modes and source NarHash before writing the sidecar. It refuses
+untracked/missing content, escape links, mutable exports, mismatched NarHash and
+checkpoint overwrite. Release mode additionally requires the exact workspace
+version's local tag target; signature/enrollment authority remains with the
+release operator. Prior published source/package arguments enforce ancestry and
+actual distro ordering. No private key or account is used by this tool.
+
+The release script can pass that fixed sourceInfo and JSON into the **same pure
+lib builder**, without Git or a new flake input inside evaluation/derivations.
+An official sidecar makes `aptRepository` available as an unsigned preparation
+artifact; it does not close source-license, clean-build, install/runtime, signing
+or publication gates. `versions.publicationReady` deliberately remains false.
