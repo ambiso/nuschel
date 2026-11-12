@@ -182,13 +182,14 @@ class Reference:
 
 class PrivatePulse:
     """Only two virtual null sinks. No module-udev-detect or host session bus."""
-    def __init__(self, binaries, root, rate):
+    def __init__(self, binaries, root, rate, *, channels=2):
+        assert channels in (1, 2)
         self.bin, self.root = binaries, root
         self.socket = root / "pulse" / "native"
         self.socket.parent.mkdir(mode=0o700)
         script = root / "default.pa"
         script.write_text(f"load-module module-native-protocol-unix socket={self.socket} auth-anonymous=1\n"
-                          f"load-module module-null-sink sink_name=speakers rate={rate} channels=2 channel_map=front-left,front-right\n"
+                          f"load-module module-null-sink sink_name=speakers rate={rate} channels={channels} channel_map={'mono' if channels == 1 else 'front-left,front-right'}\n"
                           "load-module module-null-sink sink_name=mic rate=48000 channels=1\n"
                           "set-default-sink speakers\nset-default-source mic.monitor\n")
         self.process = subprocess.Popen([str(binaries / "pulseaudio"), "-n", "--daemonize=no", "--use-pid-file=no",
@@ -217,7 +218,7 @@ class PrivatePulse:
             self.process.wait(timeout=5)
 
 
-def playback(binary, pulse, packets, path, volume=1., packet_frames=FRAME, monitor_rate=RATE, specifications=None):
+def playback(binary, pulse, packets, path, volume=1., packet_frames=FRAME, monitor_rate=RATE, specifications=None, monitor_channels=2):
     """Actual worker receive→jitter→mix→device→private monitor, muted microphone."""
     worker = start(binary, pulse, muted=True, settings={"echo_cancellation": "off"})
     recorder = None
@@ -229,10 +230,10 @@ def playback(binary, pulse, packets, path, volume=1., packet_frames=FRAME, monit
             specifications.extend(entry["sample_specification"] for entry in json.loads(info.stdout))
         with path.open("wb") as sink:
             recorder = subprocess.Popen([str(pulse.bin / "parec"), f"--server=unix:{pulse.socket}",
-                "--device=speakers.monitor", "--raw", "--format=float32le", f"--rate={monitor_rate}", "--channels=2",
+                "--device=speakers.monitor", "--raw", "--format=float32le", f"--rate={monitor_rate}", f"--channels={monitor_channels}",
                 "--latency-msec=20"], stdout=sink, stderr=subprocess.DEVNULL, start_new_session=True)
             deadline = time.monotonic() + 5
-            while path.stat().st_size < monitor_rate // 4 * 2 * 4:
+            while path.stat().st_size < monitor_rate // 4 * monitor_channels * 4:
                 if recorder.poll() is not None or time.monotonic() >= deadline:
                     raise RuntimeError("private monitor failed")
                 time.sleep(.02)
@@ -248,8 +249,8 @@ def playback(binary, pulse, packets, path, volume=1., packet_frames=FRAME, monit
             recorder.wait(timeout=5)
         worker.stop()
     raw = path.read_bytes()
-    if len(raw) % 8:
-        raise RuntimeError("partial stereo monitor frame")
+    if len(raw) % (monitor_channels * 4):
+        raise RuntimeError("partial monitor frame")
     return struct.unpack(f"<{len(raw) // 4}f", raw)
 
 

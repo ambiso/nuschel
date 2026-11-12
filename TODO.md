@@ -667,8 +667,12 @@ The media worker uses per-speaker adaptive jitter buffers and Opus loss concealm
       Native currently clips its 48 kHz stereo mix before the eventual mono-device
       LR average; Worklet mono folds wide LR before its final clip. Stock Mumble
       maps channels while accumulating, then clips output. Add an independent
-      overshoot/cancellation fixture and actual mono-sink proof before deciding
-      the smallest safe correction, including fallback-reference consistency.
+      overshoot/cancellation fixture now proves the discrepancy on negotiated
+      private 1ch 48k output: 14.13 dB agreement vs stock order at unity, and exactly
+      silent steady output at gain 4 despite reference RMS 0.469. Quiet control
+      passes 66.10 dB. Preserve this baseline; next fold the wide mix for actual
+      mono devices before the current 48 kHz clip, with fallback-reference proof.
+      Non-48 kHz SRC/final-clip ordering remains a separate reference/device gap.
 
 - [x] Preserve legitimate per-speaker decoded headroom until the final mix.
       Native and browser queues now store raw finite PCM with per-frame gain,

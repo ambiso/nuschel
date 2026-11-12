@@ -505,3 +505,30 @@ its own reference/device fixture; it is not certified by these phase tests.
 
 Startup/unmute latency has another owner. Playback-only changes must preserve its
 timing/consent gates; no latency shortcut may keep a muted microphone recording.
+
+
+## Native mono-device order baseline
+
+Stock Mumble 35dce9e sets a mono device's LR weights to 0.5/0.5
+(`AudioOutput.cpp430`), maps un-clipped stereo while summing contributors
+(line 827), then clips the device output (line 856). Nuschl's frozen phase-control
+worker instead clips the 48 kHz stereo mix and only later averages LR in its
+mono-device converter. These operations differ under valid decoded overshoot.
+
+`tests/output_mono.py` runs the actual worker against an independently negotiated
+private `s16le 1ch 48000Hz` sink and same-rate mono monitor, never the host audio
+server. Reference libopus explicitly uses Mumble's phase-inversion setting.
+An identical quiet LR marker aligns time before the loud case; gain is never
+fitted. Legal source peak 0.99 decodes to 1.2804. At unity, output agrees with
+stock mono order by only 14.13 dB, while agreeing with the old clipping order at
+75.86 dB. At gain 4 the old path becomes exactly silent in the steady measurement
+window, losing a reference RMS 0.46895 signal. The quiet control passes 66.10 dB.
+`~/.cache/nmono-base/proof.json` preserves every case; the earlier exploratory
+no-marker run is retained separately at `~/.cache/nmono-old/proof.json`.
+
+The scoped correction is to fold the full f64 mix for actual one-channel devices
+before the existing 48 kHz mix clip, duplicating that mono into the existing LR
+ring. Stereo and SRC clip placement stay unchanged. The fallback reference then
+contains the same folded/clipped mono handed to playback, with the existing
+frame clocks and filter-delay compensation. This does not establish the broader
+non-48 kHz SRC/final-clip ordering or full stock-device equivalence.
