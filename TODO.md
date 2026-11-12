@@ -5,9 +5,9 @@ VAD false triggering first**. Unmute onset delay and the brief playback gap on
 every mute/unmute remain active but lower priority. The DSP owner is moving from
 matched-worker diagnostics to a bounded production correction with quiet-speech
 and immediate-onset controls; the independent startup owner reviews and validates
-that correction before a playback-lifetime rewrite. Native volume sliders/meter,
-image quality and font rendering have separate reviewable checkpoints; their
-integration follows the urgent VAD fix. Voice-host ACME, rail/footer spacing,
+that correction before a playback-lifetime rewrite. Native volume sliders/meter
+are integrated; image quality and font rendering retain separate reviewable
+checkpoints. Voice-host ACME, rail/footer spacing,
 native voice status and the native ACL/group editor are integrated with the
 remaining gates below. Installed macOS/Xcode and Simulator remain open.
 The relay DNS/kernel checks and explicit-deny correction are integrated.
@@ -55,6 +55,17 @@ checkpoints. A background filesystem watcher alone does not advance a session.
 
 Current integration checkpoint (2026-11-12):
 
+- **Continuous volume controls and local microphone-test meter are integrated
+  and pushed through `13ec6d77`.** Cubic slider travel preserves stored linear
+  gains, with smooth dragging, keyboard/accessibility controls and coalesced
+  writes. The local test shows level and speech confidence, calibrated gate
+  markers and an explicit warning when it records while calls are muted.
+  Root passes packaging, formatting and 113 desktop tests; core/media retain
+  their 36/89 passing checks. The desktop matches the GUI-tested binary and
+  the media worker matches the final VAD replay. At 900 px/200% zoom the direction
+  hints require one ordinary scroll. Evidence:
+  `~/.cache/nuschl-sliders-final-merge/handoff.json` and
+  `~/.cache/nuschl-integration-20261112/sliders-root/`.
 - **Native VAD detector agreement and calibration are integrated through
   `27ccab41`.** A persistent existing Sonora/WebRTC RNN and RNNoise both see the
   pre-local-suppression/pre-gain signal; both must agree. RNNoise suppression,
@@ -611,6 +622,11 @@ Later (reported):
 - [x] Disclose LLM assistance in the README (user, 2026-11-12), following
       `../nook/README.md`: warning badge and a short AI-assistance section with
       verification limits, committed at `a598b2d8`.
+- [x] Add root `AGENTS.md` and link it from the README (user, 2026-11-12).
+      Implementation boundaries, scoped exceptions, aggregate worker-output
+      validation, concurrency ownership, private tests and evidence rules are
+      explicit. Current agents have been notified; source docs remain the
+      detailed architecture references.
 - [ ] Add a compact draggable **Talking UI** window (user, 2026-11-12), like
       Mumble's: show current speakers with clear server/channel context using
       the existing actual speech events; retain mute/deafen semantics, stable

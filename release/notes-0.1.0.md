@@ -33,5 +33,9 @@ end-to-end encrypted. Video calls, screen sharing, local speech models, hosted
 identity recovery, and mobile apps remain unfinished. The browser client supports
 text chat and local history; browser voice, video and MLS remain unfinished.
 
+Brief incoming-audio gaps on mute/unmute and some first-speech startup delays
+remain under investigation. Voice detection has improved on the tested noise
+samples; further quiet-speech and device testing is still needed.
+
 Please report problems with the platform, release version and reproduction steps.
 Avoid including private conversations, identity keys or server credentials.
