@@ -114,6 +114,10 @@ def main():
         run([products["llvm"] + "/llvm-lipo", str(binary), "-verify_arch", "x86_64", "arm64"])
         report = run([products["codesign"], "verify", "--config-file", "/dev/null", str(binary)])
         (out / (program + "-signature.log")).write_text(report)
+        info = run([products["codesign"], "print-signature-info", "--config-file", "/dev/null", str(binary)])
+        flags = re.findall(r"flags: CodeSignatureFlags\(([^\n]+)\)", info)
+        assert len(flags) == 2 and all("ADHOC" in flag for flag in flags)
+        (out / (program + "-signature-info.log")).write_text(info)
         proof["files"]["macos/" + program] = {"sha256": sha(binary), "ad_hoc_signature_verified": True}
     resources = plistlib.loads((macos / "Contents/_CodeSignature/CodeResources").read_bytes())
     checked_resources = set()
