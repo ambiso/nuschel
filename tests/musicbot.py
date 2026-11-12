@@ -310,7 +310,8 @@ def drain(client):
 
 
 def session_of(client, name):
-    for _ in range(100):
+    # A fresh debug RSA identity can take longer than the network handshake.
+    for _ in range(600):
         for user in list(client.users.values()):
             if user["name"] == name:
                 return user["session"]
@@ -451,6 +452,49 @@ def presence_comments(client, sessions, link):
         assert f'href="{public_url}"' in comment, comment
         assert "!web" in comment and "private message" in comment, comment
         assert "/u/" not in comment and link not in comment, "public comment leaked a bearer link"
+
+
+def channel_subscription_playback(link, alice, bob, dj):
+    state = api(link)
+    players = {player["name"]: index for index, player in enumerate(state["players"])}
+    channels = {channel["name"]: index for index, channel in enumerate(state["channels"])}
+    music, lobby = players["music"], players["lobby"]
+    for player in (music, lobby):
+        command(link, "pause", player=player)
+        command(link, "clear", player=player)
+        command(link, "skip", player=player)
+    command(link, "attach", player=lobby, channel=channels["lobby"])
+    command(link, "attach", player=music, channel=channels["music"])
+    alice.send(kind="join", channel=LOBBY)
+    eventually(lambda: alice.users.get(alice.session),
+               lambda user: user is not None and user.get("channel") == LOBBY,
+               "both users staying outside Music")
+    eventually(lambda: api(link), lambda state:
+               state["channels"][channels["music"]]["listeners"] == 0
+               and state["players"][music]["listeners"] == 0, "empty Music channel")
+    drain(alice), drain(bob)
+    command(link, "resume", player=music)
+    command(link, "add", player=music, kind="song", library=0, id="s2", index=None)
+    waiting = eventually(lambda: api(link), lambda state:
+                         state["players"][music]["current"] is not None,
+                         "music waiting without listeners")
+    assert waiting["players"][music]["current"]["position_ms"] == 0, waiting
+    assert not audio_from(bob, dj, 0.3) and not audio_from(alice, dj, 0.3)
+    bob.send(kind="listen", channel=MUSIC, listen=True)
+    eventually(lambda: api(link), lambda state:
+               state["channels"][channels["music"]]["listeners"] == 1
+               and state["players"][music]["listeners"] == 1,
+               "channel subscription counted as listener")
+    heard = audio_from(bob, dj, 15)
+    assert 140 <= len(heard) <= 160 and heard[-1]["end"], len(heard)
+    assert not audio_from(alice, dj, 1), "an unsubscribed Lobby user heard Music"
+    assert bob.users[bob.session]["channel"] == LOBBY, bob.users[bob.session]
+    bob.send(kind="listen", channel=MUSIC, listen=False)
+    eventually(lambda: api(link), lambda state:
+               state["channels"][channels["music"]]["listeners"] == 0
+               and state["players"][music]["listeners"] == 0,
+               "removed channel subscription stops counting")
+    return len(heard)
 
 
 def track_identity(state, entry):
@@ -783,10 +827,12 @@ def main():
                 assert any(item["library_name"] == "Plain" and item["entry"]["track"]["title"]
                            for item in removed_library_history["items"]), removed_library_history
                 presence_comments(alice, connected(alice), link)
+                subscription_audio = channel_subscription_playback(link, alice, bob, session_of(alice, "DJ"))
                 print(json.dumps({"full_song": len(full), "seek_remainder": len(remainder),
                                   "music": len(heard_alice), "lobby": len(heard_bob), "shared": shared,
                                   "deployment_remainder": len(deployed_audio), "sse_viewers": 2,
-                                  "music_history": deployed_history["id"], "history_pagination": True}))
+                                  "music_history": deployed_history["id"], "history_pagination": True,
+                                  "channel_subscription_audio": subscription_audio}))
             finally:
                 try:
                     bot.stop()

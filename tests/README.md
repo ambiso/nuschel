@@ -11,7 +11,7 @@ Screenshots are copied into the test result.
 
 `nix build .#checks.x86_64-linux.vm-musicbot` exercises the packaged bot against
 stock Murmur and a local Subsonic fixture. `musicbot.py` checks shared/separate
-audio, seeking, ducking, public comments, history pagination and restart recovery
+audio, channel-subscription playback, seeking, ducking, public comments, history pagination and restart recovery
 with reordered/removed libraries. Run instructions are in
 [musicbot.md](../docs/musicbot.md).
 

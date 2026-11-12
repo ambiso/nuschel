@@ -129,7 +129,7 @@ impl View {
             .values()
             .filter(|user| {
                 Some(user.session) != self.own
-                    && user.channel == channel
+                    && (user.channel == channel || user.listening.contains(&channel))
                     && !user.deafened
                     && !user.self_deafened
             })
@@ -558,6 +558,35 @@ mod tests {
         let mut deaf = user(4, 5);
         deaf.self_deafened = true;
         view.users.insert(4, deaf);
+        assert_eq!(view.listeners(), 1);
+    }
+
+    #[test]
+    fn channel_subscriptions_count_remote_users_once() {
+        let mut view = View {
+            own: Some(1),
+            ..View::default()
+        };
+        let mut bot = user(1, 5);
+        bot.listening.insert(5);
+        view.users.insert(1, bot);
+        let mut resident = user(2, 5);
+        resident.listening.insert(5);
+        view.users.insert(2, resident);
+        let mut remote = user(3, 6);
+        remote.listening.insert(5);
+        view.users.insert(3, remote);
+        let mut elsewhere = user(4, 7);
+        elsewhere.listening.insert(6);
+        view.users.insert(4, elsewhere);
+        assert_eq!(view.listeners(), 2);
+        view.users.get_mut(&3).unwrap().self_deafened = true;
+        assert_eq!(view.listeners(), 1);
+        view.users.get_mut(&3).unwrap().self_deafened = false;
+        view.users.get_mut(&3).unwrap().deafened = true;
+        assert_eq!(view.listeners(), 1);
+        view.users.get_mut(&3).unwrap().deafened = false;
+        view.users.get_mut(&3).unwrap().listening.remove(&5);
         assert_eq!(view.listeners(), 1);
     }
 

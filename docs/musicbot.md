@@ -25,6 +25,9 @@ bot in Mumble. It works with any Mumble server, stock Murmur as well as `nuschld
   client certificate. Every channel starts with its own queue. On the web page a
   channel can play another channel's queue instead: then both hear the same song,
   encoded once and sent to both. Channels may be on different servers.
+  People may also subscribe to listen to the bot's channel while staying in
+  another channel. These subscriptions count as listeners and keep the queue
+  playing; others in their current channel do not receive the music.
 - **Queues.** Drag songs, albums or playlists from the library into the queue,
   then drag entries to reorder them. The move handles also accept Alt+Up/Down.
   Remove entries, clear upcoming tracks, skip, pause and set the volume. The player
