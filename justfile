@@ -109,7 +109,7 @@ readme-screenshot:
 
 # Regenerate after changing dependencies/manifests, including new local vendors.
 crate2nix:
-    nix run --inputs-from . nixpkgs#crate2nix -- generate -f Cargo.toml -o nix/crate2nix/Cargo.nix -h nix/crate2nix/crate-hashes.json
+    nix run --cores 2 --max-jobs 2 --inputs-from . nixpkgs#crate2nix -- generate -f Cargo.toml -o nix/crate2nix/Cargo.nix -h nix/crate2nix/crate-hashes.json
     python3 nix/crate2nix-inputs.py > nix/crate2nix/inputs.sha256
 
 fmt:
