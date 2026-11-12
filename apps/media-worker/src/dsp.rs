@@ -213,11 +213,18 @@ impl CapturePipeline {
             *scaled = sample * SCALE;
         }
         // RNNoise's speech output can confidently classify periodic machinery
-        // as speech. Keep its suppression, and use the WebRTC RNN that already
-        // ships with our gain controller for the independent voice decision.
+        // as speech. Keep its suppression, and also require the WebRTC RNN that
+        // already ships with our gain controller to agree on voice activity.
         // Its FloatS16 input is the same stable front-end tap, before NS/gain.
-        let voice = self.voice_detector.analyze(&self.input);
-        self.denoise.process_frame(&mut self.output, &self.input);
+        let webrtc_voice = self.voice_detector.analyze(&self.input);
+        let rnnoise_voice = self.denoise.process_frame(&mut self.output, &self.input);
+        // Require agreement: WebRTC rejects confidently speech-like machinery,
+        // while RNNoise preserves its rejection of steady broadband noise.
+        let voice = if webrtc_voice.is_finite() && rnnoise_voice.is_finite() {
+            webrtc_voice.min(rnnoise_voice)
+        } else {
+            0.
+        };
         if self.noise_suppression {
             for (sample, clean) in frame.iter_mut().zip(self.output.iter()) {
                 *sample = clean / SCALE;
@@ -392,7 +399,6 @@ impl Gate {
 #[cfg(test)]
 mod tests {
     use super::*;
-
     fn speech_like(frame: usize) -> [f32; FRAME] {
         // A voiced, amplitude-modulated harmonic series that RNNoise treats as speech.
         std::array::from_fn(|index| {
