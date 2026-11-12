@@ -3,6 +3,7 @@
 {
   projectRoot ? ../.,
   packagePath ? "/nix/store/n3cw1mrbi7c7wzb1ry0qhd70vw18r2ik-nuschl-0.1.0",
+  trustedCaFile ? null,
 }:
 let
   flake = builtins.getFlake (toString projectRoot);
@@ -37,12 +38,11 @@ pkgs.testers.runNixOSTest {
         };
         settings.autoban.attempts = 0;
       };
-      # All fixture authority material is generated inside the guest. This test
-      # uses the normal publisher/verifier, with its CA bundle selected at runtime.
-      security.pki.caBundle = lib.mkForce "/run/pki-fixture/root.pem";
+      # Only a PUBLIC fixture root enters the store. Its private key is generated
+      # in owned disk scratch and copied into the guest at runtime by the driver.
+      security.pki.certificateFiles = lib.optional (trustedCaFile != null) trustedCaFile;
       security.acme = {
         acceptTerms = true;
-        preliminarySelfsigned = false;
         defaults = {
           email = "fixture@example.test";
           webroot = "/var/lib/acme/challenge";
@@ -50,10 +50,17 @@ pkgs.testers.runNixOSTest {
       };
       # Keep the actual NixOS ACME target, post-run hook and unit sandbox. Replace
       # only the issuer command with an offline marker; it never invokes lego.
-      systemd.services."acme-voice.test".script = lib.mkForce ''
+      systemd.services."acme-order-renew-voice.test".script = lib.mkForce ''
         touch /tmp/out/renewed
       '';
       systemd.services.nuschl.wantedBy = lib.mkForce [ ];
+      # Keep the credential mount alive long enough to inspect access under
+      # the actual helper/server UIDs. The publisher itself is unchanged.
+      systemd.services.nuschl-tls-refresh.serviceConfig.ExecStartPre = "${pkgs.coreutils}/bin/sleep 1";
+      systemd.timers.nuschl-tls-refresh.timerConfig = {
+        OnBootSec = lib.mkForce "2s";
+        OnUnitInactiveSec = lib.mkForce "5s";
+      };
       environment.systemPackages = [
         pkgs.openssl
         pkgs.python3
@@ -69,8 +76,22 @@ pkgs.testers.runNixOSTest {
       };
     };
   testScript = ''
+    import os
+    from pathlib import Path
+
+    fixture = Path(os.environ["NUSCHL_PKI_FIXTURE_DIRECTORY"])
     start_all()
     server.wait_for_unit("multi-user.target")
-    server.succeed("true")
+    server.succeed("install -d -m0700 /root/pki-fixture")
+    for name in ("root.pem", "root.key"):
+        server.copy_from_host(str(fixture / name), "/root/pki-fixture/" + name)
+    try:
+        server.succeed("python3 ${./server_pki_vm.py} guest", timeout=240)
+    finally:
+        server.succeed("journalctl -u nuschl -u nuschl-tls-refresh --no-pager > /root/pki-fixture/journal.txt")
+        server.copy_from_machine("/root/pki-fixture/journal.txt")
+        server.succeed("test ! -f /root/pki-fixture/proof.json || cp /root/pki-fixture/proof.json /tmp/pki-proof.json")
+        if server.succeed("test -f /tmp/pki-proof.json && echo yes || true").strip() == "yes":
+            server.copy_from_machine("/tmp/pki-proof.json")
   '';
 }
