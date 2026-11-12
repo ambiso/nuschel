@@ -534,6 +534,7 @@ pub struct WebClient {
     shared: Rc<Shared>,
     recovery: VecDeque<(Origin, SourceMode)>,
     recovery_selection: Option<(String, u64, u32, u64)>,
+    recovery_until: u64,
 }
 
 #[wasm_bindgen]
@@ -580,6 +581,7 @@ impl WebClient {
             shared,
             recovery: VecDeque::new(),
             recovery_selection: None,
+            recovery_until: 0,
         })
     }
 
@@ -1397,6 +1399,7 @@ impl WebClient {
     fn recover_selected_content(&mut self) {
         self.recovery.clear();
         self.recovery_selection = selected_lifetime(&self.client);
+        self.recovery_until = now_ms().saturating_add(120_000);
         let Some((server, channel)) = self.client.selected_indices() else {
             return;
         };
@@ -1422,7 +1425,14 @@ impl WebClient {
                 .select(selected.map(|(server, _, channel, _)| (server, channel)));
             return;
         }
-        while let Some((origin, mode)) = self.recovery.front().cloned() {
+        if now_ms() >= self.recovery_until {
+            self.recovery.clear();
+            return;
+        }
+        while self.shared.jobs.borrow().recovery_credit() {
+            let Some((origin, mode)) = self.recovery.front().cloned() else {
+                break;
+            };
             // Cursor carries identities/modes only. Original authority and raw
             // source are rechecked at admission; navigation never rebinds work.
             let Some(source) = content_source(&self.client, &self.shared, &origin) else {
@@ -1458,12 +1468,16 @@ impl WebClient {
         // Source equality verifies the already identified receipt, never finds a
         // different row. Existing representation cannot be overwritten by a page.
         let mode = *message.source_format.get_or_insert(mode);
-        if self
-            .shared
-            .jobs
-            .borrow_mut()
-            .request(origin.clone(), source, mode, now_ms())
-            .is_err()
+        let selected = self.recovery_selection.as_ref().is_some_and(|(server, generation, channel, instance)| matches!(&origin, Origin::Message { server: id, generation: epoch, channel: target, instance: lifetime, .. } if id == server && epoch == generation && target == channel && lifetime == instance))
+            && self.recovery_selection == selected_lifetime(&self.client);
+        let deferred = selected && !self.shared.jobs.borrow().recovery_credit();
+        if deferred
+            || self
+                .shared
+                .jobs
+                .borrow_mut()
+                .request(origin.clone(), source, mode, now_ms())
+                .is_err()
         {
             // Queue pressure is not a parser failure. Preserve any readable
             // derivative and never consume failure-handle/derivative capacity.
@@ -1475,13 +1489,16 @@ impl WebClient {
                         )],
                     };
                 }
-                if self.recovery_selection == selected_lifetime(&self.client)
+                if selected
                     && self.recovery.len() < nuschl_client::timeline::MAX_TIMELINE
                     && !self
                         .recovery
                         .iter()
                         .any(|(candidate, _)| candidate == &origin)
                 {
+                    if self.recovery.is_empty() {
+                        self.recovery_until = now_ms().saturating_add(120_000);
+                    }
                     self.recovery.push_back((origin, mode));
                 }
             }

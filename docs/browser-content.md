@@ -157,10 +157,20 @@ are conservatively charged. Mounted views pin that charge; admission under a
 fully pinned budget becomes an explicit negative result instead of an automatic
 rehydration loop. Disposing the bridge permanently consumes its page owner and
 keeps retained view charges; disposal is not evidence that native canvases or a
-Worker have exited. SDK derivative metadata is separately capped at 4096 handles
-and 16 MiB of plain derivatives, with evicted model derivatives cleared. Refused
-work retains only bounded retry metadata and a source digest, not another raw
-source copy.
+Worker have exited. SDK successful derivative metadata is separately capped at 4096 handles
+and 16 MiB of plain derivatives, with evicted model derivatives cleared. A
+separate 128-entry failure budget cannot evict successful previews. Queue
+refusal preserves readable documents and stores no failure handle. Explicit
+navigation and selected arrivals hold at most 1000 row identities/modes in a
+two-minute recovery cursor, feed
+only available worker credit, and discard that cursor when its original
+selection or lifetime changes. Raw sources stay in their original SDK rows.
+Selected derivatives receive eviction preference within the same global caps;
+if the selected conversation alone exceeds a cap its oldest entries can leave.
+SDK scheduling is numeric FIFO, with separate monotonic 60-second queue and
+12-second posted execution bounds. Neither bound is extended by new arrivals;
+posted cancellation still retains its credit until an actual acknowledgment.
+Expiration of rehydration never destroys a still-readable successful derivative.
 
 The send API is `image_begin({context, caption, attachment_revision,
 draft_revision})`, using the current snapshot's mandatory `content_context`.

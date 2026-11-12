@@ -481,6 +481,10 @@ impl Jobs {
         }
     }
 
+    pub fn recovery_credit(&self) -> bool {
+        self.pending.len() < MAX_POSTED_JOBS
+    }
+
     pub fn select(&mut self, selected: Option<(String, u32)>) {
         self.selected = selected;
     }
