@@ -2,8 +2,9 @@
 
 Current focus (user, 2026-11-12): **unmute-to-first-speech latency, stereo receive
 and output fidelity, and hybrid update readiness**. Independent owners now cover
-the browser initialization watchdog, stale menu target/focus guards and native
-macOS CI validation. SDK request retirement, bounded menus, native packet-gain
+the browser initialization watchdog, stale menu target/focus guards and the
+standalone server/RTC per-crate build migration. Native macOS static CI
+verification is prepared; its actual execution remains open. SDK request retirement, bounded menus, native packet-gain
 ownership and frozen cross archives have scoped proofs integrated. Browser playout, hash-only document delivery, CELT concealment,
 Windows profile-preserving updater relaunch and the metadata-refresh procedure
 are integrated with scoped proofs; final browser/device/distribution checks stay open.
@@ -933,7 +934,8 @@ listed below. Plugin data remains the explicit gap.
       hidden documents, reconnect and typing. Focus-only navigation reuses cached
       geometry; an eight-second profiler observation checks quiet intervals and
       zero idle geometry work. See `docs/desktop-document-links.md` for evidence
-      and limits. The hash-only retrieval/render follow-up above remains open.
+      and limits. Hash-only retrieval/render is now verified above; the separate
+      legacy hash/body normalization audit remains open.
 - [x] `UserStats` (22) for the connection-info dialog.
       Profile bandwidth units corrected (2026-11-12, `d8f5999d`): the protocol
       statistic is bytes/second, so divide by 125 for kbit/s. Server bandwidth
