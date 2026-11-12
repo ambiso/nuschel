@@ -83,22 +83,14 @@ impl Node {
 }
 
 impl Graph {
-    /// CPAL's default input is an alias which follows PipeWire metadata. It is
-    /// not a real registry node, and need not match pipewire-pulse's default.
-    pub fn source(&self, source: &str) -> Option<&Node> {
-        let default = default_source_alias(source);
-        let source = if default {
-            self.default_source.as_deref()?
-        } else {
-            source
-        };
-        self.nodes.iter().find(|node| {
-            node.name == source && (!default || node.class.starts_with("Audio/Source"))
-        })
-    }
-
-    pub fn source_identity(&self, source: &str) -> Option<(String, String)> {
-        let node = self.source(source)?;
+    /// For the native PipeWire default device only. A real PulseAudio source
+    /// may happen to have an alias-like name; exact graph walks never resolve it.
+    pub fn default_source_identity(&self) -> Option<(String, String)> {
+        let source = self.default_source.as_deref()?;
+        let node = self
+            .nodes
+            .iter()
+            .find(|node| node.name == source && node.class.starts_with("Audio/Source"))?;
         Some((node.name.clone(), node.label()))
     }
 
@@ -127,7 +119,7 @@ impl Graph {
     /// Walk upstream from the source named `source` (a PipeWire `node.name`).
     pub fn upstream(&self, source: &str) -> Upstream {
         let mut found = Upstream::default();
-        let Some(mut current) = self.source(source) else {
+        let Some(mut current) = self.nodes.iter().find(|node| node.name == source) else {
             return found;
         };
         let mut visited = vec![current.id];
@@ -480,12 +472,14 @@ mod tests {
     fn native_default_aliases_find_upstream_processing_without_pulse() {
         let graph = rnnoise_after_echo_cancel();
         for alias in ["input_default", "source_default"] {
+            assert!(default_source_alias(alias));
+            let (name, label) = graph.default_source_identity().unwrap();
             assert_eq!(
-                graph.upstream(alias),
+                graph.upstream(&name),
                 graph.upstream("effect_output.rnnoise")
             );
             assert_eq!(
-                graph.source_identity(alias),
+                Some((name, label)),
                 Some((
                     "effect_output.rnnoise".into(),
                     "Noise Canceling source".into()
@@ -498,6 +492,23 @@ mod tests {
     }
 
     #[test]
+    fn real_source_named_like_an_alias_keeps_exact_graph_semantics() {
+        let mut graph = rnnoise_after_echo_cancel();
+        graph.nodes.push(node(
+            90,
+            "input_default",
+            "Plain Pulse source",
+            "Audio/Source",
+            None,
+        ));
+        assert_eq!(graph.upstream("input_default"), Upstream::default());
+        assert_eq!(
+            graph.default_source_identity().unwrap().0,
+            "effect_output.rnnoise"
+        );
+    }
+
+    #[test]
     fn changed_native_default_and_node_names_do_not_reuse_old_processing() {
         let mut graph = rnnoise_after_echo_cancel();
         graph.default_property(
@@ -505,7 +516,10 @@ mod tests {
             Some("default.audio.source"),
             Some(r#"{"name":"alsa_input.usb-mic"}"#),
         );
-        assert_eq!(graph.upstream("input_default"), Upstream::default());
+        assert_eq!(
+            graph.default_source_identity().unwrap().0,
+            "alsa_input.usb-mic"
+        );
         let source = graph.nodes.iter_mut().find(|node| node.id == 61).unwrap();
         source.name = "new-filter-source".into();
         graph.default_property(
@@ -513,10 +527,10 @@ mod tests {
             Some("default.audio.source"),
             Some(r#"{"name":"new-filter-source"}"#),
         );
-        let found = graph.upstream("input_default");
+        let found = graph.upstream(&graph.default_source_identity().unwrap().0);
         assert!(found.noise.is_some() && found.echo.is_some());
         assert_eq!(
-            graph.source_identity("input_default").unwrap().0,
+            graph.default_source_identity().unwrap().0,
             "new-filter-source"
         );
     }
@@ -559,7 +573,7 @@ mod tests {
         let mut graph = rnnoise_after_echo_cancel();
         for name in ["missing-node", "Firefox", "echo-cancel-sink"] {
             graph.default_source = Some(name.into());
-            assert!(graph.source_identity("input_default").is_none());
+            assert!(graph.default_source_identity().is_none());
             assert_eq!(graph.upstream("input_default"), Upstream::default());
         }
     }

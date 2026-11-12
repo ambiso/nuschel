@@ -1174,7 +1174,7 @@ fn upstream_processing(
         if default {
             resolved = graph
                 .as_ref()
-                .and_then(|graph| graph.source_identity(source));
+                .and_then(|graph| graph.default_source_identity());
             if resolved.is_none()
                 && graph
                     .as_ref()
@@ -1540,10 +1540,10 @@ mod tests {
             .expect("explicit private metadata output path");
         let (found, resolved) = super::upstream_processing("input_default", false, true);
         let graph = crate::graph::snapshot().expect("fixture native PipeWire is available");
-        let expected = graph.source_identity("input_default");
+        let expected = graph.default_source_identity();
         assert!(expected.is_some(), "fixture publishes an effective source");
         assert_eq!(resolved, expected);
-        assert_eq!(found, graph.upstream("input_default"));
+        assert_eq!(found, graph.upstream(&resolved.as_ref().unwrap().0));
         std::fs::write(
             output,
             serde_json::to_vec_pretty(&serde_json::json!({
