@@ -8,6 +8,7 @@ import {resolve,extname,sep} from "node:path";
 import {pathToFileURL} from "node:url";
 const [site,relayUrl,port,wrapper,playwright,output]=process.argv.slice(2);
 assert.ok(site&&relayUrl&&port&&wrapper&&playwright&&output);
+const retirementProof=process.env.NUSCHL_MATH_RETIREMENT_PROOF==="1";
 const relay=new URL(relayUrl);assert.equal(relay.hostname,"127.0.0.1");assert.equal(relay.protocol,"ws:");
 const directory=resolve(site);await mkdir(output,{recursive:true});let origin;
 let csp="default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; worker-src 'self'; manifest-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
@@ -20,7 +21,9 @@ const server=createServer(async(req,res)=>{
     const mounted=pathname.startsWith("/app/")?pathname.slice(4):pathname;
     const path=resolve(directory,"."+mounted);assert.ok(path===directory||path.startsWith(directory+sep));
     const target=extname(mounted)?path:resolve(path,"index.html");
-    const body=await readFile(target);
+    let body=await readFile(target);
+    if(retirementProof&&/math-render-worker-[^/]+\.js$/.test(target)&&new URL(req.url,"http://127.0.0.1").searchParams.get("private_cold_math")==="yes")await new Promise(done=>setTimeout(done,2500));
+    if(retirementProof&&/math-render-worker-[^/]+\.js$/.test(target))body=Buffer.concat([body,Buffer.from(`\nself.addEventListener("message",event=>{if(event.data?.__private_math_stall__!==true)return;console.log("PRIVATE_APP_MATH_STALL_BEGIN");const until=performance.now()+3500;while(performance.now()<until){};console.log("PRIVATE_APP_MATH_STALL_END");});`)]);
     res.writeHead(200,{"Content-Type":types[extname(target)]||"application/octet-stream","Content-Security-Policy":csp,"Permissions-Policy":"camera=(), geolocation=(), microphone=(self)","Cross-Origin-Opener-Policy":"same-origin","Referrer-Policy":"no-referrer","X-Content-Type-Options":"nosniff"});res.end(body);
   }catch{res.writeHead(404);res.end();}
 });
@@ -43,17 +46,18 @@ async function open(username,width,height){
   const context=await browser.newContext({viewport:{width,height},colorScheme:"dark"});contexts.push(context);
   context.on("request",request=>requests.push(request.url()));
   const page=await context.newPage();pages.push(page);page.on("pageerror",e=>errors.push(e.message));
-  await page.addInitScript(()=>{
-    window.__mathProof={jobs:0,workers:0,copied:null,violations:[],captures:0,packetKeys:[]};
+  await page.addInitScript(({coldMath})=>{
+    window.__mathProof={jobs:0,workers:0,copied:null,violations:[],captures:0,packetKeys:[],terminated:0,ready:0};
     document.addEventListener("securitypolicyviolation",e=>__mathProof.violations.push(e.violatedDirective));
     Object.defineProperty(navigator,"clipboard",{value:{writeText:async text=>{__mathProof.copied=text;}}});
     navigator.mediaDevices.getUserMedia=()=>{__mathProof.captures++;return Promise.reject(new Error("Physical capture is forbidden in this fixture."));};
     const Base=window.Worker;
     window.Worker=class extends Base{
-      constructor(url,options){super(url,options);this.isMath=String(url).includes("math-render-worker");if(this.isMath)__mathProof.workers++;}
-      postMessage(message,...rest){if(this.isMath){__mathProof.jobs++;__mathProof.packetKeys.push(Object.keys(message).sort());}return super.postMessage(message,...rest);}
+      constructor(url,options){const math=String(url).includes("math-render-worker");if(math&&coldMath){url=new URL(url,location.href);url.searchParams.set("private_cold_math","yes");}super(url,options);this.isMath=math;if(math){__mathProof.workers++;__mathProof.worker=this;this.addEventListener("message",({data})=>{if(data.kind==="ready")__mathProof.ready++;});}}
+      postMessage(message,...rest){if(this.isMath&&message.tex!==undefined){__mathProof.jobs++;__mathProof.packetKeys.push(Object.keys(message).sort());}return super.postMessage(message,...rest);}
+      terminate(){if(this.isMath)__mathProof.terminated++;return super.terminate();}
     };
-  });
+  },{coldMath:retirementProof&&username==="math-phone"});
   await page.goto(`${origin}/app/#s=127.0.0.1:${port}&u=${username}`);
   if(width<=760)await page.getByRole("button",{name:"Open navigation",exact:true}).click();
   await page.getByRole("button",{name:"Trust this certificate",exact:true}).click({timeout:20000});
@@ -73,8 +77,20 @@ try{
     String.raw`Style $$\style{background:url(/canary-style)}{x}$$`,
     String.raw`Text $$\text{<img src=/canary-text>}$$`].join("\n");
   await sender.getByLabel("Message",{exact:true}).fill(text);await sender.getByRole("button",{name:"Send",exact:true}).click();
+  let coldApp;
   for(const page of [sender,phone]){
     await page.locator("article").filter({hasText:"Private formula proof"}).waitFor({timeout:20000});await expand(page);
+    if(retirementProof&&page===phone){
+      await page.waitForFunction(()=>[...document.querySelectorAll(".math-render-notice")].some(node=>node.textContent.includes("source is shown")));
+      await page.waitForFunction(()=>__mathProof.ready===1,null,{timeout:6000});
+      const coldState=await page.evaluate(()=>({workers:__mathProof.workers,terminated:__mathProof.terminated,jobs:__mathProof.jobs,retry:document.querySelectorAll(".math-retry").length,source:document.querySelectorAll(".math-fallback").length}));
+      assert.equal(coldState.workers,1);assert.equal(coldState.terminated,0);assert.ok(coldState.retry>0);assert.ok(coldState.source>0);
+      for(const formula of await page.locator(".math-formula").all()){
+        const retry=formula.getByRole("button",{name:"Render formula",exact:true});
+        if(await retry.count()){await formula.locator("summary").click();await retry.click();await formula.locator("summary").click();}
+      }
+      coldApp={passed:true,worker_response_delay_ms:2500,original_job_deadline_ms:2000,source_fallback_retry_same_owner:coldState};
+    }
     await page.waitForFunction(()=>document.querySelector("mfrac")&&document.querySelector("msqrt")&&document.querySelector("mtable")&&document.querySelector("msup"),null,{timeout:15000});
     await page.waitForFunction(()=>document.querySelectorAll(".math-render-notice").length>=2);
     assert.ok((await page.locator(".code-block").textContent()).includes(String.raw`$$\frac{not}{math}$$`));
@@ -118,10 +134,33 @@ try{
   await phone.getByRole("button",{name:"Close settings",exact:true}).click();
   await new Promise(done=>setTimeout(done,100));assert.equal(await phone.evaluate(()=>__mathProof.jobs),jobs,"appearance change reran formula parsers");
   await fractionUI.scrollIntoViewIfNeeded();await phone.screenshot({path:resolve(output,"math-light-20.png")});
+  let retirement;
+  if(retirementProof){
+    const kept=await phone.locator("mfrac").count();assert.ok(kept>0);
+    const draft="Unsent draft survives formula owner failure";await phone.getByLabel("Message",{exact:true}).fill(draft);
+    const began=new Promise(done=>phone.on("console",message=>{if(message.text()==="PRIVATE_APP_MATH_STALL_BEGIN")done();}));
+    await phone.evaluate(()=>__mathProof.worker.postMessage({__private_math_stall__:true}));await began;
+    const source=String.raw`Retirement original source $$u^2+v^2=w^2$$`;
+    await sender.getByLabel("Message",{exact:true}).fill(source);await sender.getByRole("button",{name:"Send",exact:true}).click();
+    const stalled=phone.locator("article").filter({hasText:"Retirement original source"});await stalled.waitFor();
+    await stalled.locator(".math-render-notice").filter({hasText:"unavailable"}).waitFor({timeout:5000});
+    await stalled.locator("summary").click();await stalled.getByRole("button",{name:"Reload client",exact:true}).waitFor();
+    assert.ok((await stalled.locator(".math-source-text").textContent()).includes("$$u^2+v^2=w^2$$"));
+    assert.equal(await stalled.getByRole("button",{name:"Render formula",exact:true}).count(),0);
+    assert.equal(await phone.locator("mfrac").count(),kept);assert.equal(await phone.getByLabel("Message",{exact:true}).inputValue(),draft);
+    const before=await phone.evaluate(()=>({workers:__mathProof.workers,jobs:__mathProof.jobs,terminated:__mathProof.terminated}));
+    assert.equal(before.workers,1);assert.equal(before.terminated,1);
+    await new Promise(done=>setTimeout(done,1100));
+    await sender.getByLabel("Message",{exact:true}).fill(String.raw`After retirement uncached $$q^7+r^8$$`);await sender.getByRole("button",{name:"Send",exact:true}).click();
+    const later=phone.locator("article").filter({hasText:"After retirement uncached"});await later.locator(".math-render-notice").filter({hasText:"unavailable"}).waitFor();
+    const after=await phone.evaluate(()=>({workers:__mathProof.workers,jobs:__mathProof.jobs,terminated:__mathProof.terminated}));assert.deepEqual(after,before);
+    await phone.setViewportSize({width:320,height:640});await stalled.scrollIntoViewIfNeeded();await phone.screenshot({path:resolve(output,"math-retired-320.png")});
+    retirement={passed:true,kept_fraction_nodes:kept,source_preserved:true,draft_preserved:true,retry_hidden:true,explicit_reload:true,before,after};
+  }
   assert.deepEqual(errors,[]);assert.deepEqual(canaries,[]);
   assert.ok(requests.every(url=>url.startsWith(origin+"/")||url.startsWith(origin.replace("http:","ws:")+"/")));
   for(const page of pages){const state=await page.evaluate(()=>__mathProof);assert.deepEqual(state.violations,[]);assert.equal(state.captures,0);for(const keys of state.packetKeys)assert.deepEqual(keys,["display","id","tex"]);}
-  const report={passed:true,site,csp,geometries,fractionBounds,formula_jobs:jobs,checks:["real App/SDK/private Murmur text", "actual pinned Temml core Worker", "fraction/root/matrix/scripts", "inline and display", "code grammar stays literal", "original source copy without host clipboard", "macro/malformed recovery", "resource/style canaries inert", "320/390/1280 widths", "keyboard horizontal formula scroll", "font/theme native reflow without parser rerun", "no microphone calls"]};
+  const report={passed:true,site,csp,geometries,fractionBounds,formula_jobs:jobs,coldApp,retirement,checks:["real App/SDK/private Murmur text", "actual pinned Temml core Worker", "fraction/root/matrix/scripts", "inline and display", "code grammar stays literal", "original source copy without host clipboard", "macro/malformed recovery", "resource/style canaries inert", "320/390/1280 widths", "keyboard horizontal formula scroll", "font/theme native reflow without parser rerun", "no microphone calls"]};
   await writeFile(resolve(output,"proof.json"),JSON.stringify(report,null,2));console.log(JSON.stringify({passed:true,formula_jobs:jobs,checks:report.checks}));
 }catch(error){
   await writeFile(resolve(output,"failure.json"),JSON.stringify({error:String(error),errors,canaries,states:await Promise.all(pages.map(page=>page.evaluate(()=>({text:document.body.textContent,proof:__mathProof})).catch(()=>null)))},null,2));throw error;
