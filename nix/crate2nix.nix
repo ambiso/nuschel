@@ -43,6 +43,15 @@ let
       nativeBuildInputs = [ pkgs.protobuf ];
       PROTOC = "${pkgs.protobuf}/bin/protoc";
     };
+    # The probe embeds the actual workspace fixture; isolated crate sources do
+    # not contain ../../../tests. Keep identical frame bytes as an explicit input.
+    nuschl-rtc-probe = _: {
+      postPatch = ''
+        substituteInPlace src/main.rs --replace-fail \
+          '"../../../tests/fixtures/rtc-keyframe.vp8"' \
+          '"${../tests/fixtures/rtc-keyframe.vp8}"'
+      '';
+    };
     nuschl = withLibraries;
     nuschl-media-worker = withLibraries;
     nuschl-cli = withLibraries;
