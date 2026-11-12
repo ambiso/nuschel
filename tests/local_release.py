@@ -159,6 +159,28 @@ class LocalRelease(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'archive differs'):
             local.check_products(self.stage, ledger, self.repo)
 
+    def test_ci_foreign_commit_and_failed_native_job_cannot_supply_proof(self):
+        ledger = local.load(self.stage / 'ledger.json')
+        good = {'head_sha': ledger['commit'], 'status': 'completed', 'conclusion': 'success',
+                'event': 'workflow_dispatch', 'head_repository': {'full_name': 'fixture/project'},
+                'path': '.github/workflows/build.yml', 'run_attempt': 1}
+        for wrong_source in (True, False):
+            record = dict(good)
+            if wrong_source:
+                record['head_sha'] = 'b' * 40
+            calls = []
+            def command(arguments, **kwargs):
+                calls.append(arguments)
+                self.assertEqual(arguments[1], 'api', 'must refuse before downloading any artifact')
+                if '/jobs?' in arguments[2]:
+                    return json.dumps({'jobs': [{'name': 'macos-native-verify',
+                        'head_sha': ledger['commit'], 'conclusion': 'failure'}]})
+                return json.dumps(record)
+            with patch.object(local, 'run', side_effect=command):
+                with self.assertRaises(ValueError):
+                    local.ci_evidence(self.stage, ledger, 'fixture-gh', '123', self.root / 'unused')
+            self.assertEqual(len(calls), 1 if wrong_source else 2)
+
     def test_links_and_directory_only_fanout_are_bounded(self):
         root = self.root / 'bounded'
         root.mkdir()

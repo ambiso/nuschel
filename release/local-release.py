@@ -266,7 +266,7 @@ def archive_tree(path, expected, prefix=None, *, zipped=False):
 
 
 def check_products(stage, ledger, repository):
-    flake = 'git+file://' + str(repository.resolve()) + '?rev=' + ledger['commit']
+    flake = 'git+' + repository.resolve().as_uri() + '?rev=' + ledger['commit']
     expected = {name: select_product(flake, name) for name in PRODUCTS}
     require(ledger['products'] == expected, 'selected-tag derivation/output/NAR evidence changed')
     windows = Path(expected['windows']['output'])
@@ -297,7 +297,7 @@ def prepare(args):
     export(repository, commit, source)
     version = tomllib.loads((source / 'Cargo.toml').read_text())['workspace']['package']['version']
     require(args.tag == 'v' + version, 'tag must match workspace version')
-    flake = 'git+file://' + str(repository) + '?rev=' + commit
+    flake = 'git+' + repository.as_uri() + '?rev=' + commit
     products = {}
     for name in PRODUCTS:
         if args.build:
