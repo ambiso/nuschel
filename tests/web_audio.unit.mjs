@@ -216,8 +216,12 @@ test("authenticated route targets reach only the codec and budget updates invali
 
 test("missing and malformed encoder targets cannot open capture",async()=>{
   const audio=new BrowserAudio();
-  for(const bitrate of [undefined,-1,5999,128001,Infinity,"128000"]) {
+  for(const bitrate of [undefined,-1,5999,256001,384000,510000,Infinity,"128000"]) {
     audio.syncVoice({...voice(),bitrate});assert.equal(audio.voice.bitrate,0);assert.equal(audio.captureEnabled(),false);
+  }
+  // Every requested choice the SDK can resolve to is accepted as is.
+  for(const bitrate of [64000,96000,128000,192000,256000]) {
+    audio.syncVoice({...voice(),bitrate});assert.equal(audio.voice.bitrate,bitrate);
   }
   await audio.dispose();
 });

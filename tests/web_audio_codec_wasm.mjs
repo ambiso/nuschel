@@ -12,7 +12,7 @@ initSync({module:await readFile(join(directory,"nuschl_audio_wasm_bg.wasm"))});
 const encoder=new VoiceEncoder(),decoder=new VoiceDecoder();
 const results=[];
 try {
-  for(const bitrate of [128000,24000,6000,48000,128000]) {
+  for(const bitrate of [128000,24000,6000,48000,256000,192000,128000]) {
     encoder.set_bitrate(bitrate);
     let bytes=0;
     for(let frame=0;frame<8;frame++) {
@@ -24,6 +24,6 @@ try {
     }
     results.push({bitrate,frames:8,bytes});
   }
-  for(const invalid of [0,5999,128001,0xffffffff])assert.throws(()=>encoder.set_bitrate(invalid));
+  for(const invalid of [0,5999,256001,384000,510000,0xffffffff])assert.throws(()=>encoder.set_bitrate(invalid));
   console.log(JSON.stringify({passed:true,actual_codec:directory,results}));
 } finally {encoder.free();decoder.free();}

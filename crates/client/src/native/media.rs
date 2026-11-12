@@ -66,6 +66,9 @@ pub enum Control {
     Chime(Sound),
     #[cfg(test)]
     Inspect(tokio::sync::oneshot::Sender<(bool, bool, std::time::Duration)>),
+    /// The packet epoch and the encoder target planned and pending.
+    #[cfg(test)]
+    Rates(tokio::sync::oneshot::Sender<(u64, u32, u32)>),
 }
 
 /// Voice from a server, for the mix.
@@ -224,6 +227,10 @@ async fn run_with_start(
                         let _ = reply.send((planned.capture, plan(streams.values().map(|s| &s.link)).capture, last_wait));
                         continue;
                     }
+                    Control::Rates(reply) => {
+                        let _ = reply.send((epoch, planned.bitrate, plan(streams.values().map(|s| &s.link)).bitrate));
+                        continue;
+                    }
                     other => other,
                 };
                 let had_capture = streams.values().any(|stream| speaking_to(&stream.link));
@@ -237,7 +244,7 @@ async fn run_with_start(
                         .is_some_and(|old| old.generation == *generation && speaking_to(&old.link)),
                     Control::Sound(_) | Control::Chime(_) => false,
                     #[cfg(test)]
-                    Control::Inspect(_) => unreachable!(),
+                    Control::Inspect(_) | Control::Rates(_) => unreachable!(),
                 };
                 if capture_changed {
                     // Invalidate even a packet already in the worker's IPC
@@ -276,7 +283,7 @@ async fn run_with_start(
                     Control::Sound(sound) => cues.push((sound, false)),
                     Control::Chime(sound) => cues.push((sound, true)),
                     #[cfg(test)]
-                    Control::Inspect(_) => unreachable!(),
+                    Control::Inspect(_) | Control::Rates(_) => unreachable!(),
                 }
                 // A first explicitly authorized microphone needs no debounce.
                 // Moving an active voice still settles both server changes.
@@ -656,6 +663,100 @@ mod tests {
         let (_, capture, wait) = result.await.unwrap();
         assert!(capture);
         assert_eq!(wait, SETTLE);
+        task.abort();
+        let _ = task.await;
+    }
+
+    #[tokio::test]
+    async fn a_requested_rate_change_settles_as_an_encoder_change_not_a_capture_route() {
+        let (control, input) = mpsc::unbounded_channel();
+        let (_playback, playback) = mpsc::channel(4);
+        let (events, _events) = mpsc::channel(64);
+        let (_settings, settings) = watch::channel(ClientSettings::default());
+        let (_keys, keys) = watch::channel(VoiceKeys::default());
+        let (started, mut starts) = mpsc::unbounded_channel();
+        // The actual control loop; a synthetic start failure keeps devices
+        // and every audio capability out of the test (a running worker's
+        // Configure is proven by the private runtime matrix, not here).
+        let task = tokio::spawn(run_with_start(
+            (input, playback),
+            events,
+            (settings, keys),
+            move || {
+                let _ = started.send(());
+                Err(nuschl_session::Error::Worker(
+                    "synthetic worker start".into(),
+                ))
+            },
+        ));
+        async fn rates(control: &mpsc::UnboundedSender<Control>) -> (u64, u32, u32) {
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            control.send(Control::Rates(tx)).unwrap();
+            rx.await.unwrap()
+        }
+        let target = |requested, budget| {
+            nuschl_core::bitrate::VoiceBitrate::resolve(requested, budget).effective
+        };
+        let (out, _out) = mpsc::channel(4);
+        control
+            .send(Control::Attach {
+                server: "nuschld".into(),
+                generation: 1,
+                link: link(false, false, target(128_000, 558_000), 1),
+                voice: out,
+            })
+            .unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(2), starts.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        tokio::time::sleep(SETTLE * 3).await;
+        let (epoch, planned, _) = rates(&control).await;
+        assert_eq!(planned, 128_000);
+        // The user asks for 256k: same revision, a new rate.
+        control
+            .send(Control::Update {
+                server: "nuschld".into(),
+                generation: 1,
+                link: link(false, false, target(256_000, 558_000), 1),
+                cue: None,
+            })
+            .unwrap();
+        tokio::time::sleep(SETTLE * 3).await;
+        assert_eq!(rates(&control).await, (epoch, 256_000, 256_000));
+        assert!(
+            starts.try_recv().is_err(),
+            "a rate change replaced the worker"
+        );
+        // A second talk server with a 72k budget: one encoder, the lowest rate.
+        let (other, _other) = mpsc::channel(4);
+        control
+            .send(Control::Attach {
+                server: "murmur".into(),
+                generation: 2,
+                link: link(false, false, target(256_000, 72_000), 1),
+                voice: other,
+            })
+            .unwrap();
+        tokio::time::sleep(SETTLE * 3).await;
+        let (moved, planned, _) = rates(&control).await;
+        // A new destination is a capture route change: queued audio is invalidated.
+        assert!(moved > epoch);
+        assert_eq!(planned, 48_000);
+        // A privacy change (a new revision) still invalidates, rate or not.
+        control
+            .send(Control::Update {
+                server: "murmur".into(),
+                generation: 2,
+                link: Link {
+                    revision: 1,
+                    ..link(false, false, target(64_000, 72_000), 1)
+                },
+                cue: None,
+            })
+            .unwrap();
+        tokio::time::sleep(SETTLE * 3).await;
+        assert!(rates(&control).await.0 > moved);
         task.abort();
         let _ = task.await;
     }

@@ -82,7 +82,7 @@ async function persistServerOrder(ids) {
   orderQueue = action.catch(() => {});
   return action;
 }
-const methods = new Set(["add_server", "connect", "disconnect", "accept_certificate", "open", "browse_server", "open_direct", "send_text", "older", "join", "toggle_mute", "toggle_deaf", "audio_ready", "voice_packet", "remove_server", "dismiss_notice", "dismiss_welcome", "connect_with_password", "stop_audio", "edit_server", "set_server_order"]);
+const methods = new Set(["add_server", "connect", "disconnect", "accept_certificate", "open", "browse_server", "open_direct", "send_text", "older", "join", "toggle_mute", "toggle_deaf", "audio_ready", "voice_packet", "remove_server", "dismiss_notice", "dismiss_welcome", "connect_with_password", "stop_audio", "edit_server", "set_server_order", "set_voice_bitrate"]);
 onmessage = async ({ data }) => {
   try {
     if (!data || typeof data !== "object") throw new Error("Invalid browser command.");

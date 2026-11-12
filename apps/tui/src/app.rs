@@ -24,6 +24,48 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 /// Notes kept for the status line and the plain-line mode.
 const NOTES: usize = 64;
 
+/// A change to the requested voice bitrate: saves it in the profile and hands
+/// it to the driver, answering the value now in effect.
+pub type ChangeBitrate = Box<dyn FnMut(u32) -> Result<u32, String>>;
+
+/// The requested voice bitrate (nuschl_core::bitrate) and how to change it.
+pub struct Bitrate {
+    pub requested: u32,
+    /// Set in managed.json: shown, not changed here.
+    pub managed: bool,
+    /// None (tests, no profile): the request applies to this session only.
+    pub change: Option<ChangeBitrate>,
+}
+
+impl Default for Bitrate {
+    fn default() -> Self {
+        Self {
+            requested: nuschl_core::audio::DEFAULT_VOICE_BITRATE,
+            managed: false,
+            change: None,
+        }
+    }
+}
+
+/// "96", "96k", "96 kb/s" or "96000": one of the offered choices.
+pub fn parse_bitrate(text: &str) -> Option<u32> {
+    let digits = text
+        .trim()
+        .trim_end_matches("kb/s")
+        .trim_end_matches("kbit/s")
+        .trim_end_matches(['k', 'K'])
+        .trim();
+    let value: u32 = digits.parse().ok()?;
+    let bits = if value < 1000 {
+        value.checked_mul(1000)?
+    } else {
+        value
+    };
+    nuschl_core::bitrate::VOICE_BITRATE_CHOICES
+        .contains(&bits)
+        .then_some(bits)
+}
+
 /// Milliseconds on a monotonic clock, for the SDK's timers.
 pub fn monotonic_ms() -> u64 {
     static START: std::sync::LazyLock<std::time::Instant> =
@@ -190,6 +232,8 @@ pub struct App {
     /// Local history failed and has not said it works again.
     local_history_failed: bool,
     requests: u64,
+    /// The requested voice bitrate (`/bitrate`).
+    pub bitrate: Bitrate,
 }
 
 impl App {
@@ -218,6 +262,7 @@ impl App {
             registered: BTreeSet::new(),
             local_history_failed: false,
             requests: 0,
+            bitrate: Bitrate::default(),
         }
     }
 
@@ -1584,6 +1629,7 @@ impl App {
                 }
             }
             "who" => self.who(),
+            "bitrate" | "quality" => self.bitrate_command(argument),
             "channels" | "list" => self.list_channels(),
             "mute" => self.set_mute(false),
             "deafen" | "deaf" => self.set_mute(true),
@@ -1727,6 +1773,63 @@ impl App {
         }
     }
 
+    /// The effective voice bitrate on server `index`, if it carries voice.
+    pub fn voice_bitrate(&self, index: usize) -> Option<nuschl_core::bitrate::VoiceBitrate> {
+        let server = self.client.servers.get(index)?;
+        (self.options.audio && server.status == Status::Connected && server.has_mumble_voice())
+            .then(|| self.client.voice_bitrate(index, self.bitrate.requested))
+            .flatten()
+    }
+
+    /// `/bitrate [N]`: the requested voice bitrate and what each connected
+    /// server makes of it; with N, ask for N.
+    fn bitrate_command(&mut self, argument: &str) {
+        let choices = "64, 96, 128, 192 or 256";
+        if !argument.is_empty() {
+            let Some(bitrate) = parse_bitrate(argument) else {
+                return self.warn(format!(
+                    "Choose a voice bitrate of {choices} kb/s: /bitrate 128"
+                ));
+            };
+            if self.bitrate.managed {
+                return self.warn("The voice bitrate is set by your system configuration.");
+            }
+            match self
+                .bitrate
+                .change
+                .as_mut()
+                .map_or(Ok(bitrate), |change| change(bitrate))
+            {
+                Ok(applied) => self.bitrate.requested = applied,
+                Err(error) => return self.warn(error),
+            }
+        }
+        self.say(format!(
+            "Voice bitrate: you asked for {} (mono Opus; /bitrate {choices}){}. \
+             A server's bandwidth limit can lower it, never raise it.",
+            nuschl_core::bitrate::kbps(self.bitrate.requested),
+            if self.bitrate.managed {
+                ", set by your system configuration"
+            } else {
+                ""
+            }
+        ));
+        let lines: Vec<String> = (0..self.client.servers.len())
+            .filter_map(|index| {
+                self.voice_bitrate(index).map(|bitrate| {
+                    format!(
+                        "  {}: {}",
+                        self.client.servers[index].name,
+                        bitrate.explanation()
+                    )
+                })
+            })
+            .collect();
+        for line in lines {
+            self.say(line);
+        }
+    }
+
     fn status(&mut self) {
         let Some(index) = self.current_server() else {
             return self.say("No server.");
@@ -1741,6 +1844,12 @@ impl App {
             });
             if self.options.audio {
                 line.push_str(&format!(", audio: {}", server.audio_status));
+                if let Some(bitrate) = self.voice_bitrate(index) {
+                    line.push_str(&format!(", voice {}", bitrate.summary()));
+                    if let Some(reason) = bitrate.reason() {
+                        line.push_str(&format!(" ({reason})"));
+                    }
+                }
             } else {
                 line.push_str(", voice off (--no-audio)");
             }

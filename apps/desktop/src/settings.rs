@@ -1392,6 +1392,10 @@ pub fn dialog(
                 .gap_6()
                 .child(section("MICROPHONE TEST", audio_check(this, cx)))
                 .child(section("TRANSMISSION", voice))
+                .child(section(
+                    "VOICE QUALITY",
+                    crate::bitrate::settings_rows(this, cx),
+                ))
                 .child(section("SHORTCUTS", shortcut_rows(this, cx)))
                 .child(section("PROCESSING", processing))
                 .child(section("DEVICES", devices))

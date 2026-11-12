@@ -102,7 +102,12 @@ struct Transmit {
 impl Transmit {
     /// Encode exactly 20 ms of already-processed, currently authorized PCM.
     fn encode(&mut self, samples: &[f32; 2 * FRAME]) -> Option<Vec<u8>> {
-        let max_bytes = (self.encoder.bitrate_bps as usize / 400).min(self.packet.len());
+        // The destination's per-frame allowance: every sender admits frames
+        // against this same bound (nuschl_core::bitrate).
+        let max_bytes = nuschl_core::bitrate::max_voice_frame_bytes(
+            u32::try_from(self.encoder.bitrate_bps).unwrap_or(0),
+        )
+        .min(self.packet.len());
         let count = self
             .encoder
             .encode(samples, 2 * FRAME, &mut self.packet[..max_bytes])
@@ -374,7 +379,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 only_host = host;
                 transmit.encoder.bitrate_bps = bitrate.clamp(
                     nuschl_core::audio::MIN_VOICE_BITRATE,
-                    nuschl_core::audio::DEFAULT_VOICE_BITRATE,
+                    nuschl_core::bitrate::MAX_VOICE_BITRATE,
                 ) as i32;
                 transmit.encoder.packet_loss_perc = i32::from(packet_loss_percent.clamp(1, 30));
                 let requested = requested.sanitized();
@@ -1702,6 +1707,8 @@ mod tests {
             nuschl_core::audio::DEFAULT_VOICE_BITRATE,
             24_000,
             6_000,
+            nuschl_core::bitrate::MAX_VOICE_BITRATE,
+            192_000,
             128_000,
         ] {
             tx.encoder.bitrate_bps = target as i32;
@@ -1711,6 +1718,7 @@ mod tests {
                 });
                 let packet = tx.encode(&samples).unwrap();
                 assert!(packet.len() <= (target / 400) as usize);
+                assert!(nuschl_core::bitrate::voice_frame_fits(target, packet.len()));
                 let mut output = vec![0.; 5760];
                 assert_eq!(decoder.decode(&packet, 5760, &mut output).unwrap(), 960);
             }
