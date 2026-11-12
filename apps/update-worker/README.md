@@ -165,7 +165,10 @@ corrupt half/raw-byte changes/wrong pair/legacy/v1/expired/duplicate input, prov
 mandatory AND despite one forged reply, probes private file/write/host-network
 confinement, enforces output/deadline/reaping, and completes a private loopback
 HTTP download/install/cleanup. It is available only with the `runtime-fixture`
-feature and is not distributed with the signer or clients.
+feature and is not distributed with the signer or clients. It also exercises the
+real desktop Tokio `spawn_blocking` caller context: an entered Handle is handled
+by a dedicated scoped verifier thread, not by rejecting legitimate checks or
+nesting a runtime. Thread/child failures remain fail-closed.
 
 ```sh
 nix build .#update-verifier-ed25519 .#update-verifier-mldsa44 \
@@ -183,6 +186,8 @@ harness now requires a separately built fixture tree embedding its temporary
 public pair, with explicit fixture secret/public inputs; copying a public key
 beside a production executable cannot authorize an update.
 
+Downloadable CI payloads first run `release/check-notices.py`; failed gates still
+upload diagnostic logs, while binary/static-web payloads remain blocked.
 Publication reuses independent SHA-named build artifacts and checks repository,
 commit, run ID, platform, version, hashes, safe tar members and mandatory worker
 presence before accessing a signing secret. Earlier successful attempts from the

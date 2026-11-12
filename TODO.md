@@ -782,7 +782,9 @@ listed below. Plugin data remains the explicit gap.
       deafened, WASAPI device lists, microphone and echo tests, autostart, updates. It
       found the console window beside the app. Real hardware and macOS remain.
 - [x] Windows VM control harness (`windows_vm.py`) and scripted updater regression
-      (`windows_update.py`).
+      (`windows_update.py`). The earlier updater VM evidence used minisign; the
+      migrated hybrid fixture needs a separately compiled temporary public pair
+      and a new native LPAC verification/install rerun (not yet performed).
 - [ ] Complete unattended Windows desktop/audio/sandbox regression orchestration
       and add UDP (the existing guest-forward voice check used the TCP tunnel).
 - [x] Windows and macOS sandbox profiles for media, storage and content workers.
@@ -1257,15 +1259,32 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
 
 ### Release and other targets
 
-- [x] Release workflow (one Linux runner, cross builds) with signed in-place updates
-      for Windows and macOS. Helper tools use the flake's pinned nixpkgs; Nix runs
-      use `--cores 2`. Workflow syntax checked with actionlint; signing-secret setup
-      and an actual release remain separate from workflow implementation.
-- [ ] Store `UPDATE_SIGNING_KEY` as a repository secret and back the key up. It is
-      the minisign secret key that release.yml uses to sign `update.json`, whose
-      public half (`crates/update/update-key.pub`) is built into the app: it protects
-      in-app updates and the workflow cannot publish without it. It is not operating
-      system code signing (below), and is needed either way.
+- [x] Reusable independent Linux/native+web, Windows x86_64 and macOS universal
+      build jobs, with separate gated publication. Update v2 requires Ed25519 AND
+      ML-DSA-44 in two confined fixed-algorithm processes; raw bytes, full public
+      pair, expiry and persisted anti-rollback state are bound. No minisign or
+      adjacent writable-key fallback. Actual Linux workers, a loopback install,
+      strict signer/artifact regressions and workflow syntax are tested; native
+      Windows/macOS hybrid runtime proof and an actual release remain separate.
+- [ ] Enroll the production public pair in `crates/update/update-trust.json`, back
+      up the independent private seeds and explicitly provision the matching
+      `UPDATE_HYBRID_SIGNING_KEY` repository secret with the reviewed operator
+      tool. The embedded store deliberately remains empty; no production key or
+      secret is created by tests. This protects updates independently of OS code
+      signing (below).
+- [ ] Finish source-scoped runtime notice evidence and compact packaging for all
+      native/cross/web artifacts, including both verifier feature roots and all
+      three client/audio/content WASM roots. Resolve remaining upstream/native/
+      asset terms; use combined notice text plus provenance/index to respect the
+      updater's 256-file installation bound. Do not truncate notices or silently
+      increase that bound. Payload uploads and publication fail closed on missing
+      inventories, scope or notice bytes; diagnostic logs remain downloadable.
+      Passing cargo-deny or an empty self-asserted unresolved list is insufficient.
+- [ ] Provide an operator metadata refresh procedure before signed latest metadata
+      expires (maximum 30 days), including unchanged binaries, and actionable
+      expiry/clock recovery. The tag-create workflow is not a refresh procedure;
+      no signing cron, publication or production key operation is authorized by
+      this backlog row.
 - [ ] Windows installer (Start menu entry, uninstall); today the zip is portable and
       updates itself where it was unpacked.
 - Deferred (user, 2026-11-11: **no Windows or macOS code signing for now**). The

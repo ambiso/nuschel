@@ -54,7 +54,8 @@ permissions, playback and self-update. Mark the Mac artifact untested/experiment
   client/audio/content WASM and JS/assets, beyond its existing Temml notices. Passing `cargo deny` is not a complete
   attribution inventory. Inspect the exact final archives, including helper files.
   The publisher now rejects missing/incomplete/mismatched bundled inventories;
-  this is a gate, not proof the remaining notices were recovered. Use the source
+  CI payload uploads use the same source policy and retain diagnostic logs on
+  failure; this is a gate, not proof the remaining notices were recovered. Use the source
   `release/notice-roots.json` (including both verifier features and all three WASM
   roots). Recover unresolved upstream/native/asset terms, then compact notices
   into a combined payload plus provenance/index: copying a per-crate tree can
