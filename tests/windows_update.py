@@ -239,7 +239,8 @@ def exercise_update(args):
     print(output, flush=True)
     print(guest(r'''
 $dir = "$env:LOCALAPPDATA\Programs\NuschlUpdateTest\__RUN__"
-$profile = "$env:LOCALAPPDATA\NuschlUpdateProfiles\__RUN__"
+$relativeProfile = 'profiles\profile µ'
+$profile = Join-Path $dir $relativeProfile
 New-Item -ItemType Directory -Force -Path $dir | Out-Null
 foreach ($f in __INITIAL_FILES__) {
   $destination = Join-Path $dir $f.local
@@ -248,7 +249,8 @@ foreach ($f in __INITIAL_FILES__) {
 }
 $info = New-Object Diagnostics.ProcessStartInfo
 $info.FileName = "$dir\nuschl.exe"
-$info.Arguments = '--profile-dir "' + $profile + '"'
+$info.Arguments = '--profile-dir "' + $relativeProfile + '"'
+$info.WorkingDirectory = $dir
 $info.UseShellExecute = $false
 $info.CreateNoWindow = $true
 $info.EnvironmentVariables['NUSCHL_UPDATE_URL'] = "http://127.0.0.1:__PORT__/"
@@ -267,6 +269,12 @@ $p = [Diagnostics.Process]::Start($info)
     time.sleep(25)
     vm("screenshot", str(args.output / "update-installed.png"))
     before = guest(owned_processes(args.run) + '($owned.ProcessId -join ",")')
+    before_state = guest(owned_processes(args.run) + r'''
+$profile = Join-Path (Split-Path -Parent $ownedExe) 'profiles\profile µ'
+(Get-FileHash -LiteralPath (Join-Path $profile 'state\update-state.json') -Algorithm SHA256).Hash
+''').strip()
+    if not re.fullmatch(r"[0-9A-Fa-f]{64}", before_state):
+        raise RuntimeError("initial owned update-state hash absent")
     focus_owned(args.run)
     vm("click", *map(str, UPDATE_BUTTON))  # "Restart now" replaces the update button
     time.sleep(15)
@@ -277,13 +285,19 @@ $dir = "$env:LOCALAPPDATA\Programs\NuschlUpdateTest\__RUN__"
 "old files left: " + (Test-Path "$dir\.nuschl-old")
 "staging left: " + (Test-Path "$dir\.nuschl-update")
 "process: " + ($owned.ProcessId -join ",")
+$profile = Join-Path $dir 'profiles\profile µ'
+$pattern = '(?:^|\s)--profile-dir\s+"' + [Regex]::Escape($profile) + '"(?:\s|$)'
+if ($owned.Count -ne 1 -or $owned[0].CommandLine -cnotmatch $pattern) { throw 'restarted process lost the exact absolute owned profile' }
+$state = Join-Path $profile 'state\update-state.json'
+if ((Get-FileHash -LiteralPath $state -Algorithm SHA256).Hash -ne '__STATE_HASH__') { throw 'owned update-state changed or vanished across restart' }
+'owned absolute Unicode profile and update-state continuity: verified'
 foreach ($expected in __EXPECTED_FILES__) {
   $file = Join-Path $dir $expected.path
   if (-not (Test-Path -LiteralPath $file)) { throw 'installed manifest file missing' }
   if ((Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLowerInvariant() -ne $expected.sha256) { throw 'installed manifest hash differs' }
 }
 'complete signed file hashes: verified'
-'''.replace("__RUN__", args.run).replace("__EXPECTED_FILES__", "@(" + ",".join("@{path='" + item["path"] + "';sha256='" + item["sha256"] + "'}" for item in expected_files) + ")"))
+'''.replace("__RUN__", args.run).replace("__STATE_HASH__", before_state).replace("__EXPECTED_FILES__", "@(" + ",".join("@{path='" + item["path"] + "';sha256='" + item["sha256"] + "'}" for item in expected_files) + ")"))
     print(report, flush=True)
     assert "marker: True" in report, report
     assert "staging left: False" in report, report
@@ -292,6 +306,7 @@ foreach ($expected in __EXPECTED_FILES__) {
     previous_pids = set(before.strip().split(",")) - {""}
     current_pids = set(after.split(",")) - {""}
     assert previous_pids and current_pids and previous_pids.isdisjoint(current_pids), "Nuschl did not replace every owned process"
+    assert "owned absolute Unicode profile and update-state continuity: verified" in report, "profile continuity was not proved"
     assert "complete signed file hashes: verified" in report, "installed payload was not checked completely"
     print("Windows in-place update: signed manifest verified, files swapped, restarted, old files removed.")
 

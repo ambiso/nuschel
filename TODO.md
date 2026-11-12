@@ -1004,14 +1004,12 @@ listed below. Plugin data remains the explicit gap.
       cross/archive helpers too: current `crossCommon` enables both Cargo engine
       features in one workspace build, so individually featured native test
       products do not establish packaged dependency/byte equivalence.
-- [ ] Preserve an explicitly selected profile across desktop updater relaunch
-      (active Windows/updater owner). Production `relaunch()` currently drops
-      `--profile-dir`, so a successful install/hash/PID check can silently restart
-      into the default profile. Record an absolute explicit profile at startup
-      and forward only that argument. Verify relative paths, spaces/Unicode,
-      unchanged anti-rollback state and actual Windows GUI restart; the earlier
-      mechanical-only GUI run does not establish profile continuity. A narrow
-      source fix and fresh successful guest proof await review/integration.
+- [ ] Preserve an explicitly selected profile across updater restart. The first
+      GUI run applied/restarted and verified all files but revealed that relaunch
+      dropped `--profile-dir` and opened the default guest profile. A profile-only
+      absolute native-argument fix is under verification; do not replay one-shot
+      URLs, offers or autostart. The strengthened harness must prove exact owned
+      relative/space/Unicode profile selection and update-state continuity.
 - [ ] Complete unattended Windows desktop/audio/sandbox regression orchestration
       and add UDP (the existing guest-forward voice check used the TCP tunnel).
 - [x] Windows and macOS sandbox profiles for media, storage and content workers.
