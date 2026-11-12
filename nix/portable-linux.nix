@@ -150,8 +150,7 @@ let
         install -Dm644 ${projectRoot}/crates/protocol/proto/LICENSE.mumble "$out/usr/share/licenses/nuschl/Mumble-BSD"
         ${lib.optionalString (appstreamXML != null) ''
           mkdir -p "$out/usr/share/metainfo"
-          substitute ${appstreamXML} "$out/usr/share/metainfo/org.nuschl.Nuschl.metainfo.xml" \
-            --replace-fail @VERSION@ ${lib.escapeShellArg version}
+          install -Dm644 ${appstreamXML} "$out/usr/share/metainfo/org.nuschl.Nuschl.metainfo.xml"
         ''}
         python3 ${../packaging/linux/audit-stage.py} --stage "$out" \
           --project-root ${projectRoot} --revision ${lib.escapeShellArg revision} \
