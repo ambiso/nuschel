@@ -148,5 +148,10 @@ let
   };
 in
 {
-  inherit app wasm audioWasm contentWasm;
+  inherit
+    app
+    wasm
+    audioWasm
+    contentWasm
+    ;
 }
