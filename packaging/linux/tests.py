@@ -8,6 +8,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -90,9 +91,18 @@ class Packaging(unittest.TestCase):
 
     def test_stage_privileged_modes_are_rejected(self):
         stage = self.root / 'stage'; (stage / 'usr').mkdir(parents=True)
-        path = stage / 'usr/privileged'; path.write_text('fixture'); path.chmod(0o4755)
-        with self.assertRaisesRegex(ValueError, 'privileged mode'):
-            deb.validate(stage, 'amd64', (2, 41), ARGS.readelf)
+        path = stage / 'usr/privileged'; path.write_text('fixture')
+        # Nix correctly forbids creating a real SUID file. Inject only the
+        # candidate's stat metadata; never weaken that OS restriction.
+        real_stat = Path.stat
+        def candidate_stat(candidate, *args, **kwargs):
+            result = real_stat(candidate, *args, **kwargs)
+            if candidate == path:
+                result = os.stat_result((result.st_mode | 0o4000, *tuple(result)[1:]))
+            return result
+        with patch.object(Path, 'stat', candidate_stat):
+            with self.assertRaisesRegex(ValueError, 'privileged mode'):
+                deb.validate(stage, 'amd64', (2, 41), ARGS.readelf)
 
     def test_stage_cannot_supply_maintainer_scripts_or_special_paths(self):
         stage = self.root / 'stage'; (stage / 'DEBIAN').mkdir(parents=True)
