@@ -190,3 +190,163 @@ first run, `-213223`, had a broken phase locator and is void.
 - Is the echo strongest right after unmute or after returning to the app, and
   does it fade within seconds? Or is it constant?
 - Any crackling while the mic is on (WebKit bug 326286)?
+
+## Follow-up (C055)
+
+Root's decisions: Opus stays on `Application::Audio`, and there is no default
+MediaStream output route that could keep the VPIO or input hardware alive
+while muted. The applied-processing display was approved and is implemented
+in `ppxmvvop` (`web/app/src/voice-processing.js` and a Settings section).
+Unknown values are shown as unknown. It does not change any audio behaviour.
+
+## Design only: iOS capture-scoped MediaStream playback route
+
+Status: **not implemented, default off.** It needs root review and the
+physical proof below before any default enable. The Chromium fixture above
+remains **inconclusive**, and nothing here is based on a measured iOS result.
+
+### Invariants
+
+- **R1.** The stream route exists only while `captureRunning === true`.
+  Reaching that state already requires the explicit Unmute gesture, the
+  server's acknowledgment, a consent bound to this destination, a live track
+  and a running context (`audio.js:22-26, 207`).
+- **R2.** `this.output` (the playback GainNode) has exactly one sink:
+  `ctx.destination` or the route's `MediaStreamAudioDestinationNode`. It is
+  never connected to both.
+- **R3.** Leaving is synchronous within the calling JS task. It pauses the
+  `<audio>` element, sets `srcObject = null`, stops every track of
+  `dest.stream`, disconnects `output` from `dest` and reconnects
+  `ctx.destination`. Leaving **precedes** the capture `track.stop()`, so the
+  WebKit renderer releases the VPIO speaker bus before capture ends.
+- **R4.** A generation counter binds every asynchronous `play()` result. A
+  late resolution after leaving is ignored. A rejection while still in the
+  route leaves the route and reports it; it never retries without capture.
+- **R5.** Epochs and consent are unchanged. Deafen still sets gain 0 and
+  revokes the RX epoch before the route is left (`audio.js:185-193`). The
+  route holds no decoded PCM of its own beyond the element renderer's buffer,
+  which `pause()` and `srcObject = null` discard.
+- **R6.** Opt-in only: a `mediaStreamRoute` constructor option, default
+  `false`, set from an explicit experimental Settings toggle. With the option
+  off, behaviour is byte-for-byte today's.
+
+### State machine (BrowserAudio, `web/app/src/audio.js`)
+
+`route ∈ {context, stream}`, plus `routeGeneration`, `routeDest` and
+`routeElement`.
+
+| From | Event (existing call site) | Guard | Action | To |
+|---|---|---|---|---|
+| context | `applyPolicy()` turns capture on (`audio.js:207-214`) | option on ∧ `playbackEnabled()` | `enterStreamRoute()`: create a fresh dest and `new Audio()`, set `srcObject`, disconnect `output`→destination, connect `output`→dest, `generation++`, `play()` | stream |
+| stream | `stopCapture()` (`audio.js:164`): mute and deafen via `setLocalPolicy` (129), `syncVoice` destination, mute or deafen (110, 117), transport stall (289, 295), `track.onended` (146), context not running or interrupted (45), `fail()` (306), `dispose()` (314) | — | `leaveStreamRoute()` as the **first** statement, then the existing body | context |
+| stream | `resetMedia()` sets `captureRunning = false` (`audio.js:198`; `track.onmute` 147, `syncVoice` changes 120, worker `ready` 257) | — | `leaveStreamRoute()` | context |
+| stream | `applyPolicy()` turns capture off (`audio.js:208-213`) | — | `leaveStreamRoute()` before `configureWorker` | context |
+| stream | `play()` rejects, with the generation unchanged | — | `leaveStreamRoute()`, `status("capturing")` with route `"context"` | context |
+| any | `play()` settles with a stale generation | — | ignore | unchanged |
+
+`status()` (`audio.js:17-21`) adds `route` so Settings can show
+"Playback route: Web Audio / voice-processing stream". App.svelte owns only
+the opt-in toggle and that display. Starting the element without a fresh
+gesture is permitted by WebKit, because a MediaStream-source element may play
+while the document is capturing (`Source/WebCore/html/MediaElementSession.cpp:507-511`).
+
+### WebKit evidence that leaving releases the VPIO (WebKit `5ec99402`)
+
+1. `pause()`, an ended or disabled track, or a null `srcObject` stops the
+   renderer: `AudioTrackPrivateMediaStream::updateRenderer` →
+   `stopRenderer` → `renderer->stop()`
+   (`Source/WebCore/platform/mediastream/AudioTrackPrivateMediaStream.cpp:160-166, 183-192`).
+2. The renderer removes its source
+   (`cocoa/AudioMediaStreamTrackRendererCocoa.cpp:80-85`). The unit stops when
+   no source remains (`cocoa/AudioMediaStreamTrackRendererUnit.cpp:189-208, 243-248`).
+3. The GPU-process unit's `stop()` unregisters the VPIO speaker producer
+   (`Source/WebKit/GPUProcess/webrtc/RemoteAudioMediaStreamTrackRendererInternalUnitManager.cpp:288-293`).
+   That calls `setIsRenderingAudio(false)` (`CoreAudioCaptureUnit.cpp:909-920`).
+4. Once capture has also stopped, `shouldContinueRunning()` is false
+   (`BaseAudioCaptureUnit.h:148`), so `stopRunning()` calls `stopInternal()`
+   and `cleanupAudioUnit()` (`BaseAudioCaptureUnit.cpp:265-295`;
+   `CoreAudioCaptureUnit.cpp:862-885`). The AudioUnit object may be kept
+   uninitialized for 3 s for reuse (`CoreAudioCaptureUnit.cpp:286-300`).
+5. The failure signature: if a renderer were still registered after capture
+   stopped, WebKit would keep the unit running and mute the uplink instead,
+   calling `kAUVoiceIOProperty_MuteOutput` and
+   `AVAudioApplication.setInputMuted` after 500 ms. It would log
+   `CoreAudioCaptureUnit::updateMutedState muteUplinkOutput=1`
+   (`CoreAudioCaptureUnit.cpp:748-777`; `CoreAudioCaptureUnit.mm:245-254`).
+
+Source reasoning alone is not proof. All of these steps cross IPC
+asynchronously, and shipping iOS may differ from `main`.
+
+### Physical observations required on mute
+
+- The iOS microphone indicator (orange dot) and the Control Center privacy
+  entry go from active to "recently" within the same time as the current
+  `ctx.destination` route, in 20 of 20 mute cycles.
+- Safari's page capture indicator clears.
+- In device logs (macOS Console with the iPhone attached, WebKit GPU process,
+  category WebRTC): `AudioMediaStreamTrackRendererUnit::stop` precedes the
+  capture unit stop, and **no** `updateMutedState muteUplinkOutput=1` appears
+  after a mute.
+- Playback of the other speakers continues through Web Audio, and deafen
+  still gives exact silence.
+
+### Physical iPhone proof plan (required before any default enable)
+
+This needs explicit device scope from the user and synthetic speech only.
+
+- **Setup:** an owned private Murmur and relay. The far end is a desktop
+  Nuschl on headphones whose transmit source is a synthetic speech file; it
+  records what it receives from the iPhone. Use a quiet room and fixed iPhone
+  volumes (50% and 100%).
+- **Matrix:**
+  - devices: at least two iPhone models;
+  - iOS: the current version, the previous major, and one release in the
+    26.2-27 range (WebKit bug 326286);
+  - browsers: Safari, one third-party iOS browser, and a home-screen web app;
+  - output: loudspeaker, earpiece (if selectable), wired headphones and
+    AirPods;
+  - route: option off vs on, in randomized order, with at least 5 trials
+    each.
+- **Measures:**
+  - echo level returned to the far end during far-end-only speech, and the
+    relative reduction on vs off;
+  - near-end speech preservation under double talk, using a second speaker
+    playing a near-end speech file;
+  - residual in 0-2 s vs 5-10 s after unmute (convergence);
+  - glitches or pitch changes at route entry, since a VPIO reconfiguration
+    on producer registration is expected;
+  - crackle relative to baseline.
+- **Lifecycle:**
+  - 20 mute/unmute cycles with the indicator observations above;
+  - deafen and undeafen;
+  - an incoming phone call, Siri, background and foreground, screen lock;
+  - AirPods connect and disconnect mid-call;
+  - a destination or channel change while unmuted.
+- **Pass:**
+  - every mute releases the indicator exactly like baseline;
+  - echo returned on the loudspeaker improves materially (target ≥ 10 dB
+    median), with no regression on headphones;
+  - no new audible artefacts;
+  - all existing epoch and consent tests still pass.
+
+  Any indicator or log evidence that the input stays alive while muted is an
+  automatic fail.
+
+### Synthetic checks possible before the physical run
+
+- `tests/web_audio.unit.mjs`, with a fake context, destination and `Audio`:
+  - R1-R4 under mute, deafen, interruption, stall, destination change and
+    four rapid deafen toggles;
+  - a stale `play()` after leaving;
+  - a rejected `play()`.
+- `tests/web_audio.browser.mjs` (confined Chromium, fake media): with the
+  option on, entry on unmute and exit on mute (element paused, `srcObject`
+  null, dest track `ended`), no doubled output, and unchanged behaviour with
+  the option off. These are functional checks only: they prove nothing about
+  echo cancellation or iOS.
+
+### Proposed sentence for `docs/browser-audio.md` (shared; not edited)
+
+"Settings shows the echo cancellation, noise suppression and automatic gain
+values the browser reported for the most recent microphone use, as on, off or
+unknown; these are reports, not measured echo removal."
