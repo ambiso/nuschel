@@ -172,7 +172,7 @@ Removing only the DNS IP exception makes startup DNS fail; restoring the
 original unit recovers. The fixture adds only a bounded diagnostic pre-start
 program and IPAccounting; the application and module policy are real.
 
-The first actual run exposed an existing explicit-deny precedence bug: a broad
+An actual private VM run exposed an existing explicit-deny precedence bug: a broad
 operator allowance returned before an overlapping explicit denial. The corrected
 policy checks explicit `deny_networks` first, then allows operator overrides of
 **built-in** special ranges, then applies built-in refusals. IPv4/IPv6, mapped

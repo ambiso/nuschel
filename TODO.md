@@ -2,8 +2,9 @@
 
 Current focus (user, 2026-11-12): **unmute-to-first-speech latency, stereo receive
 and output fidelity, and hybrid update readiness**. Independent owners now cover
-capture SRC fidelity, private relay DNS validation and the native ACL/group
-editor. The measured playback clipping correction and SuperUser bootstrap guide
+capture SRC fidelity, web welcome documents and the native ACL/group editor.
+The relay DNS/kernel checks and explicit-deny correction are integrated.
+The measured playback clipping correction and SuperUser bootstrap guide
 are integrated. Transmit quality evidence and the exact native welcome-domain
 regression are integrated; the missing web welcome surface remains open.
 Full Mumble ACL/group editing parity is explicitly queued below. Native action
@@ -30,6 +31,16 @@ outside the current task's scope.
 
 Current integration checkpoint (2026-11-12):
 
+- **Relay DNS and explicit-deny verification is integrated through `aaff9293`.**
+  Six real module configurations/eight invariant categories, nine unit tests,
+  seven integration tests and both private NixOS VM cases pass. The VM verifies
+  actual cgroup BPF filtering, DNS-dependent stock-Murmur login/UDP, resolver
+  tunnel refusal and remove/restore recovery. Explicit denies now precede
+  operator allowances; listening denied aliases receive zero relay packets
+  against positive direct controls. The root relay binary matches the actual
+  VM-tested binary exactly and formatting passes. IPv6 policy has unit/eval
+  coverage; these runtime cases use IPv4. No public service was contacted or
+  deployed. Root evidence: `~/.cache/nuschl-integration-20261112/relay-dns/handoff.json`.
 - **Playback clipping/reference correction is integrated through `89806ef2`.**
   The reviewed wide ring/device clip and actual quantized-output fallback pass
   76 native tests, 20 independent C-reference/clock cases, the unchanged spectral
@@ -46,14 +57,15 @@ Current integration checkpoint (2026-11-12):
   stock-Mumble group-editor route applies to compatible-mode servers; Nuschl's
   own full editors and E2EE bootstrap remain unfinished. See docs/server.md.
   Relay module tests integrated at `936c9eeb` independently pass six actual
-  configurations/eight invariant categories; the private DNS/BPF VM run is active.
+  configurations/eight invariant categories; the later private DNS/BPF proof is
+  now integrated above.
 - **Shared-checkout relay commits are repaired.** `24a810a0` and `8a84f4b9`
   are consolidated into relay-only `7ed9b7b2`; the accidentally captured TODO
   milestone update is a separate docs-only `f8a69fa1`. A before/after comparison
   proves identical final files. The default kernel exception is only resolved's
   dedicated `127.0.0.53` when enabled, with explicit custom resolver addresses.
   Independent module/runtime validation and clearer dedicated-address guidance
-  are in progress; no deployment or push was performed by this integration.
+  are now integrated above; no deployment or push was performed by this integration.
 - **Native action authority and the Audio transmit profile are integrated through
   `95a1a27f`.** All 17 authority production files match the reviewed private-server
   source exactly. Its 87 desktop, 107 client and 79 session tests and real permission
@@ -305,16 +317,16 @@ Ground rules (see `SECURITY.md`, `tests/README.md`, `docs/architecture.md`):
 
 ## Now: open reports and review findings
 
-- [ ] Explicit relay destination denies must take precedence over configured
+- [x] Explicit relay destination denies take precedence over configured
       allow networks. The private DNS/BPF VM found `deny_networks` containing
       `192.168.1.254/32` was bypassed by `allow_networks = ["192.168.1.0/24"]`:
       the relay attempted a connection and returned Unreachable instead of
-      AddressRefused. Source review confirms `Policy::allows` checks allowed
-      networks before the combined explicit/built-in refusal list. Separate
-      explicit denies, check them first, then retain operator exceptions for
-      built-in private ranges. Cover overlapping IPv4/IPv6 and mapped addresses
-      plus the actual VM refusal; preserve the failing trial. Delegated to the
-      relay owner; keep open until integrated and verified.
+      AddressRefused. The integrated correction separates explicit denies and
+      checks them first while retaining operator exceptions for built-in private
+      ranges. Nine units/seven integration tests pass, covering overlapping
+      IPv4/IPv6 and mapped/boundary cases. Both actual VM cases refuse a listening
+      denied alias before any target packets are sent. The failed trial is
+      preserved; root source/binary/format checks match the tested product.
 
 Reported while testing (2026-11-10/11):
 
