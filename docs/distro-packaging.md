@@ -169,3 +169,78 @@ requires it and the module package. ALSA likewise needs `/usr/share/alsa`; witho
 it the worker cannot load `alsa.conf`, and with it configuration loads (the
 private namespace deliberately has no physical card). These are public,
 role-specific data paths; no whole `/etc` or home grant is proposed.
+
+## Builder interfaces and local validation artifacts
+
+These modules are libraries for the coordinator's flake wiring; the public flake
+outputs are not yet registered:
+
+- `nix/portable-linux.nix` takes pinned `pkgs`, `toolchain`, application
+  `projectRoot`, exact `revision`, actual `nativeNotices`, desktop integration and
+  optional concrete AppStream XML. `stage` contains `/usr`; `programs` exposes the
+  nine final leaves. Application and packaging-builder hashes are separate when
+  staging a frozen application branch before packaging is merged.
+- `packaging/debian/package.nix` takes that audited stage plus an explicit version,
+  maintainer and source epoch. It emits the `.deb`, validation/control metadata
+  and its checksum. The local fixture maintainer must be replaced before release.
+- `packaging/arch/package.nix` emits the deterministic FHS archive, local `-bin`
+  recipe, actual `makepkg --printsrcinfo` output and package. No signing-tool
+  feature, Nix runtime closure, self-updater or external upload is introduced.
+- `packaging/debian/source.nix` takes a **tracked frozen source export**, the exact
+  cached Cargo vendor, actual notice and desktop inputs, source revision and
+  explicit package/maintainer/suite metadata. It emits genuine unsigned `.dsc`,
+  orig/Debian tarballs and `_source.changes`; its `debian/rules` compiles all nine
+  executables offline, with verifier features built separately. Original icons
+  and required corresponding-source archives are explicit quilt binary inputs;
+  no prebuilt application/helper is used as source.
+
+The source upload redistributes more than a runtime package. `SOURCE-NOTICES.json`
+inventories every registry source, including build/dev and unselected-platform
+packages, original notice bytes and exact-revision curated supplements. Missing
+source grants remain explicit publication blockers. A runtime notice pass does
+not certify the larger source archive, or legal compatibility/completeness.
+The local source package has **not** passed a clean distro source rebuild.
+
+`packaging/debian/apt-repository.nix` creates an unsigned local APT pool, Packages
+indexes and Release metadata from the exact `.deb`. Its explicit publication
+epoch creates a seven-day Valid-Until; refresh metadata before publication rather
+than extending an old signature indefinitely. It does not load a key or contact
+an account/server. The operator must first close the install/runtime/source and
+notice gates, then sign Release into InRelease and Release.gpg using an explicitly
+selected **outside-Nix** keyring/key. Never put a private key in a derivation or
+Nix store. Publish the exact pool/index/signature files together. Client deb822
+configuration uses the operator's actual HTTPS repository URI, suite and a
+repository-specific `Signed-By: /usr/share/keyrings/nuschl-archive.gpg`.
+
+For a PPA, inspect the locally generated source files, supply the compatible
+compiler through the declared Launchpad build dependencies, and test that clean
+source build. Standard `debsign -k<explicit-key> *_source.changes` and `dput
+<explicit-PPA> *_source.changes` are separate operator actions, after review and
+account/key enrollment. No packaging build invokes them. Launchpad's resulting
+binaries are an external rebuild; a signed APT repository can distribute the
+**exact Nix-built binaries** instead. These provenance paths must not be conflated.
+
+## Version ordering
+
+A short Git SHA identifies source but is not a version counter. Earlier local
+prototype artifacts named only `+git<sha>` are validation fixtures and must not
+be uploaded as a development update sequence.
+
+`packaging/linux/version.py` reads the exact frozen commit from complete Git
+history (rejecting shallow history and ignoring replace refs). Tagged release
+mode requires the exact `v<workspace-version>` tag target and uses that release
+version. Development mode emits, for example,
+`0.1.0+git<count>.<commit-UTC-timestamp>.g<shortSHA>` for Debian and
+`0.1.0.r<count>.<commit-UTC-timestamp>.g<shortSHA>` for Arch. Count is ordered
+before timestamp/SHA; even a descendant with an earlier committer clock sorts
+newer. No current clock is used. The coordinator supplies this deterministic
+public metadata as explicit inputs to the Nix assemblers; no Rust relink is
+needed to change package metadata.
+
+Official development updates must descend from the previous published source;
+pass its revision and package versions to the tool. It validates ancestry and
+actual `dpkg --compare-versions`/`vercmp` ordering, rejecting rollback or reuse.
+Unrelated branches have no implicit release ordering. A new tagged release must
+also sort above the previously published development version; increment the
+workspace release version rather than relabeling a newer development build with
+an older release number. Actual package revision changes remain explicit.
