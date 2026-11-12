@@ -1657,19 +1657,29 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
       Windows helpers passed the full native hybrid/LPAC adversarial fixture
       (`tests/build_cache_cross.py`, `docs/build-cache.md`). No signer/fixture
       feature enters distributed engines; complete notice scopes stay unchanged.
-- [ ] Rebuild and validate complete current-head Windows/macOS desktop archives
-      after separate verifier wiring: all nine programs, byte-identical copied
-      helpers, exact scoped notices, macOS lipo/signing and Windows GUI
-      apply/restart/profile continuity. Existing GUI proof used the former
-      both-feature helpers; helper-only runtime tests do not prove new archives.
-- [ ] Complete macOS signature validation beyond a successful cross build.
-      The frozen universal app builds, but pinned rcodesign 0.29's generic
-      verifier rejects its ad-hoc signatures while parsing the empty CMS wrapper
-      and reports its own verifier limitations. Preserve that failed gate.
-      Independent bounded CodeDirectory/page/Info.plist/CodeResources checks are
-      being developed as test evidence; they do not establish native Apple
-      `codesign`, Gatekeeper or runtime acceptance. Do not bypass publisher policy
-      or relabel the original tool error as a passing verification.
+- [x] Build and inspect complete Windows/macOS desktop archives at frozen source
+      `c26529d3` (merged `0c1452be`, same tree as `39ea7132`): all nine programs,
+      exact independent helper copies/pre-sign universal lipo, system imports,
+      macOS 14.2/version/bundle metadata, source-bound notices and real release
+      tar/ZIP/manifest preparation. Windows has 15 files, Mac 18, below 256.
+      A public-only fixture shares the exact production dependency cache and
+      eight worker/helper bytes; native LPAC plus actual signed GUI apply/restart
+      passes all 16 hashes and absolute Unicode-profile/update-state continuity.
+      See docs/reviews/2026-11-12-cross-distributions.json for precise limits.
+- [ ] Revalidate the eventual tagged release source/CI artifacts after later
+      code/dependency changes; frozen-source local proofs do not establish every
+      later package or a successful remote all-system CI run/publication.
+- [ ] Validate the universal app with Apple's native codesign/Gatekeeper tooling
+      and exercise native macOS Seatbelt/audio/update behavior. Pinned rcodesign
+      0.29's generic verifier rejects its own empty ad-hoc CMS wrapper and warns
+      that it is buggy. Raw failures stay retained; independent bounded checks of
+      actual code pages/Info.plist/CodeResources pass 11 real tampering tests,
+      but do not establish Apple acceptance or publisher identity. No producer or
+      publication policy was relaxed to work around the tool.
+- [ ] Narrow the final cross Cargo source filter to real referenced inputs:
+      unreferenced docs/reviews JSON can still change final products/notices even
+      while dependency derivations stay cached. Preserve all actually included
+      runtime JSON, test vectors, schemas/assets and notice authority inputs.
 - [ ] Windows installer (Start menu entry, uninstall); today the zip is portable and
       updates itself where it was unpacked.
 - Deferred (user, 2026-11-11: **no Windows or macOS code signing for now**). The

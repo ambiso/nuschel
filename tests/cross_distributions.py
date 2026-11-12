@@ -96,6 +96,14 @@ def main():
         mac_ml=p.macos-aarch64-update-mldsa44.outPath;
         mac_x86_ed=p.macos-x86_64-update-ed25519.outPath;
         mac_x86_ml=p.macos-x86_64-update-mldsa44.outPath;
+        windows_features={ed25519=p.windows-update-ed25519.crateFeatures;
+                          mldsa44=p.windows-update-mldsa44.crateFeatures;};
+        windows_providers={ed25519=map(x: x.pname or x.name)(p.windows-update-ed25519.dependencies);
+                           mldsa44=map(x: x.pname or x.name)(p.windows-update-mldsa44.dependencies);};
+        mac_commands={x86_ed=p.macos-x86_64-update-ed25519.buildPhase;
+                      x86_ml=p.macos-x86_64-update-mldsa44.buildPhase;
+                      arm_ed=p.macos-aarch64-update-ed25519.buildPhase;
+                      arm_ml=p.macos-aarch64-update-mldsa44.buildPhase;};
         llvm="${pkgs.llvmPackages.llvm}/bin"; objdump="${pkgs.binutils}/bin/objdump";
         codesign="${pkgs.rcodesign}/bin/rcodesign"; zip="${pkgs.zip}/bin/zip"; }'''
     products = json.loads(run(["nix", "eval", "--impure", "--json", "--expr",
@@ -104,6 +112,17 @@ def main():
     proof = {"source_revision": match[1], "flake": args.flake, "source_binding": source_evidence,
              "proof_scope": "local frozen-source production products; no CI or native macOS claim",
              "products": products, "files": {}}
+    for algorithm, other, provider, excluded in (("ed25519", "mldsa44", "ed25519-dalek", "ml-dsa"),
+                                                ("mldsa44", "ed25519", "ml-dsa", "ed25519-dalek")):
+        features = products["windows_features"][algorithm]
+        providers = " ".join(products["windows_providers"][algorithm])
+        assert algorithm in features and not {other, "signer", "runtime-fixture"}.intersection(features)
+        assert provider in providers and excluded not in providers
+    for name, command in products["mac_commands"].items():
+        algorithm = "ed25519" if name.endswith("ed") else "mldsa44"
+        other = "mldsa44" if algorithm == "ed25519" else "ed25519"
+        assert "--no-default-features" in command and f"--features nuschl-update-worker/{algorithm}" in command
+        assert f"nuschl-update-worker/{other}" not in command and "signer" not in command and "runtime-fixture" not in command
     for root in (windows, macos):
         assert root.is_dir() and not root.is_symlink()
         assert not any(path.is_symlink() for path in root.rglob("*"))

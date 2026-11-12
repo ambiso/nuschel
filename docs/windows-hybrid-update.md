@@ -117,8 +117,8 @@ immutable. The private seeds stayed in a sibling mode-0600 key file, never in
 either source archive, Nix store, guest or public proof. Only temporary public
 trust entered the fixture source. The app had no configured server/voice session.
 
-The official cross builder currently enables both verifier Cargo features in one
-workspace build. Its entry points are fixed to their respective algorithm, but
+At that original GUI snapshot, the official cross builder enabled both verifier
+Cargo features in one workspace build. Its entry points are fixed to their respective algorithm, but
 these individually featured test products do not prove feature-graph or binary
 equivalence for every eventual official archive. Exact packaged-helper/import and
 archive/runtime validation remains a release gate after later changes, including
@@ -126,3 +126,46 @@ the separately integrated audio fixes outside this snapshot. Physical Windows
 hardware, native macOS Seatbelt/updater execution, production enrollment and an
 actual release remain separate. The old minisign GUI run is not used as evidence
 for this current hybrid path.
+
+
+## Frozen merged cross-distribution revalidation
+
+Source `c26529d3` freezes merged `0c1452be` (the same tree later named
+`39ea7132`). The real production Windows package and both-architecture universal
+macOS app built from this source. Windows all-nine/import/source-notice checks
+pass. The updated builder produces independent Ed25519 and ML-DSA feature roots;
+its actual packaged helper bytes match the separate products.
+
+A fresh private fixture copied that entire tracked tree and changed only
+`crates/update/update-trust.json` to one temporary public pair. Private seeds stayed
+in a sibling mode-0600 file outside both source snapshots, store and guest.
+Production and fixture select the exact same dependency derivation/artifact, with
+no manual override. Production took 835 seconds; the public-only final fixture
+305 seconds. All eight fixture helper/worker EXEs are byte-identical to production;
+only the desktop EXE contains the temporary public pair.
+
+The existing, explicitly selected Windows guest passed the full native adversarial
+LPAC suite using those exact packaged helpers, then the actual GUI update flow.
+The process changes from PID 6020 to 1480, all 16 signed file hashes match, the
+marker arrives and staging/retired files disappear. A relative space/Unicode
+profile reappears as the same absolute profile after restart, with identical
+persisted update-state SHA. The captured raw update manifest/signature also pass
+ordinary host verification with the same temporary public pair. The clean restarted
+screenshot was visually inspected. Cleanup leaves zero `nuschl.exe` processes and
+the owned VM shuts down cleanly (QEMU exit 0). There was no configured voice server
+or host device access.
+
+The real source-bound tar/ZIP/update producer checks also pass for both platforms,
+with 15 Windows and 18 Mac installation files. On Mac the independent pre-sign
+helper copies and universal bytes match; final ad-hoc signing legitimately changes
+signature bytes. Pinned rcodesign's generic verifier exposes its documented empty-
+CMS bug. Independent test-only CodeDirectory code-page/Info.plist/CodeResources
+checks and real tampering regressions provide scoped integrity evidence; native
+Apple tooling, Seatbelt, media and self-update remain untested. No production
+signature policy was changed.
+
+[The current structured record](reviews/2026-11-12-cross-distributions.json) retains
+exact products, archive/hash data, source authority, public-only cache provenance
+and the original failing Mac-tool diagnostic. These local frozen-source results
+are not first remote CI/release evidence, physical Windows proof, native Mac
+acceptance or production trust enrollment.

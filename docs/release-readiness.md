@@ -32,10 +32,11 @@ permissions, playback and self-update. Mark the Mac artifact untested/experiment
 
 ## Gates before publication
 
-- [ ] Merge and validate the hybrid updater, its two confined verifier executables,
-  CI signer and tests. Include both verifiers in every desktop platform package;
-  exclude the signing tool from client installations. Do not publish with the old
-  minisign-only path or turn verification off to get an artifact.
+- [x] Merge the strict hybrid-v2 runtime, two independently featured/confined
+  verifier processes, explicit signer and source/provenance publication gates.
+  Linux actual-worker and private Windows LPAC/GUI fixtures pass; both verifier
+  programs are packaged and signer/test tools are excluded. This is local runtime
+  evidence, not a successful remote release or native macOS validation.
 - [ ] Enrol the real hybrid public key pair in source, retain protected backups,
   and provision the matching CI signing secret using the reviewed tool. No key
   material or secret availability was verified by this audit. The implementation
@@ -63,7 +64,7 @@ permissions, playback and self-update. Mark the Mac artifact untested/experiment
   private interoperability/confinement checks. CI package builds do not replace
   private NixOS/Windows VM evidence or native Mac testing. Record remaining native
   accessibility/audio/hardware gaps without calling them tested.
-- [ ] Verify the signed manifest with the exact embedded public pair, verify the
+- [ ] Verify the eventual production signed manifest with the enrolled embedded public pair, verify the
   complete installation file sets and hashes, and exercise update installation
   with disposable profiles. Hybrid migration invalidates the old minisign fixture
   as proof for the new signature path.
@@ -88,10 +89,23 @@ permissions, playback and self-update. Mark the Mac artifact untested/experiment
   cleanup. Fix the discovered lost-profile restart and prove exact absolute
   selection from a relative space/Unicode profile plus unchanged update-state SHA.
   Exact official-feature helper bytes also pass the native adversarial suite.
-- [ ] Validate final current-head cross/archive products after later changes.
-  The builder still enables both engine features together; the recorded fixture
-  executes those exact products but does not claim independent feature graphs or
-  equivalence to every subsequent package. macOS runtime remains separate.
+- [x] Inspect complete frozen-source cross/archive products at `c26529d3`
+  (merged `0c1452be`; same tree as `39ea7132`). Both separately featured Windows
+  engines and all four Darwin engine slices are present in full nine-program
+  distributions. Actual source-bound notice/original-byte checks, Windows imports,
+  Mac minOS/bundle metadata/universal helper copies and real release tar/ZIP/update
+  preparation pass (15 Windows/18 Mac files). Private Windows native LPAC and
+  complete signed GUI update/profile continuity pass using a public-only source
+  fixture and the exact production helper bytes. See [the structured proof](reviews/2026-11-12-cross-distributions.json).
+- [ ] Recheck the eventual release/tag source and first actual remote CI run
+  after later code changes; this frozen local proof cannot authenticate future
+  packages or replace operator key enrollment and publication approval.
+- [ ] Perform native Apple codesign/Gatekeeper and macOS runtime verification.
+  Pinned rcodesign 0.29's verifier reports its known empty-CMS bug on these ad-hoc
+  binaries. Raw failures remain; independently bounded SHA-256 page and bundle
+  special-slot checks pass 11 real-byte tampering cases. This is scoped integrity
+  evidence, not Apple acceptance, Developer ID, notarisation or publisher identity.
+  Production signer/publisher behavior was not changed to bypass this test tool.
 - [ ] Review README/install/security/release notes against the final artifacts:
   early-development status; compatible TLS/Mumble voice; MLS experiments and
   historical-key limits; no completed RTC video/screen-sharing claim; Linux via

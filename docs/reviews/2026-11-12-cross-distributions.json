@@ -1,12 +1,15 @@
 {
   "format": 1,
   "date": "2026-11-12",
-  "status": "in_progress",
+  "status": "scoped_archive_and_windows_runtime_checks_passed",
   "source": {
     "source_revision": "c26529d3df26d9d4e23755bc7c3a7907f5055237",
     "tree_sha256": "5a8bdafd28e757c34e330c45d60a3babd34e5539fbded0231f3bb5cb6a551027",
     "production_trust_sha256": "d6ad4266f8de5d48b9264944510c9799ff62ec21507c54fc94644e381c99c945",
-    "fixture": false
+    "fixture": false,
+    "git_tree": "51d390d163e07462210512b945d6ffd128c44d67",
+    "equivalent_merged_revision": "39ea7132",
+    "equivalent_merged_git_tree": "51d390d163e07462210512b945d6ffd128c44d67"
   },
   "fixture_source": {
     "source_revision": "c26529d3df26d9d4e23755bc7c3a7907f5055237",
@@ -35,16 +38,24 @@
   },
   "gates": {
     "windows_production_build": "passed",
-    "macos_production_build": "running",
-    "archive_and_notice_checks": "pending",
-    "windows_gui_fixture": "pending",
-    "windows_imports_helpers_notices": "passed"
+    "macos_production_build": "passed",
+    "all_nine_imports_helpers_and_notice_bytes": "passed",
+    "real_tar_zip_update_producer_and_prepare": "passed_with_local_provenance_only",
+    "independent_adhoc_code_pages_and_bundle_slots": "passed",
+    "rcodesign_generic_verify": "failed_known_empty_cms_bug_retained",
+    "native_windows_lpac": "passed_exact_packaged_helper_bytes",
+    "windows_gui_update_profile_continuity": "passed_public_only_fixture",
+    "native_apple_verification_and_macos_runtime": "not_run",
+    "first_remote_ci_release_and_production_enrollment": "not_done"
   },
   "limits": [
-    "Not a GitHub workflow or release",
-    "Production public trust remains unenrolled",
-    "Native macOS execution remains untested",
-    "Only explicitly selected existing Windows guest may be used; no host devices or public servers"
+    "Frozen source c26529d3 only; subsequent code/dependency changes require matching artifact validation",
+    "Local build-info is explicitly local evidence, not a GitHub workflow/run",
+    "Ad-hoc CodeDirectory integrity does not authenticate a publisher or establish Apple codesign/Gatekeeper acceptance",
+    "Native macOS Seatbelt/media/updater behavior and physical Windows hardware untested",
+    "Winsock10107 network initialization unavailable under LPAC is not a socket-level denial claim",
+    "Production trust remains unenrolled; only fresh fixture public pair entered separate source/store; private seeds stayed sibling0600 outside source/store/guest",
+    "No production signature/publisher policy change, release, tag, remote workflow, host device or public server used"
   ],
   "source_binding": {
     "revision": "c26529d3df26d9d4e23755bc7c3a7907f5055237",
@@ -323,5 +334,790 @@
     "derivations": 8,
     "dependency_pass_rebuilt": false,
     "note": "one main product, two independent verifier leaves, their update library and notices; production dependency derivation identical"
+  },
+  "production_archives": {
+    "source_revision": "c26529d3df26d9d4e23755bc7c3a7907f5055237",
+    "flake": "git+file:///home/ambiso/Projects/nuschl-cross-distributions?rev=c26529d3df26d9d4e23755bc7c3a7907f5055237",
+    "source_binding": {
+      "revision": "c26529d3df26d9d4e23755bc7c3a7907f5055237",
+      "git_archive_sha256": "5a8bdafd28e757c34e330c45d60a3babd34e5539fbded0231f3bb5cb6a551027",
+      "exported_files": 1619,
+      "all_path_bytes_and_executable_bits_verified": true
+    },
+    "proof_scope": "local frozen-source production products; no CI or native macOS claim",
+    "products": {
+      "codesign": "/nix/store/4v42jnnqd559lhy39a1f2qdyqpv1x65f-rcodesign-0.29.0/bin/rcodesign",
+      "ed": "/nix/store/8f7giq29rxsx3kb290n9l3d1y705x3cy-rust_nuschl-update-worker-0.1.0-x86_64-w64-mingw32",
+      "llvm": "/nix/store/19bnwrkj363vlbi4l02i6bs33xyvimql-llvm-21.1.8/bin",
+      "mac_arm": "/nix/store/rdd8329faanhsw0mbmgn0wmnrp9vc9hj-nuschl-macos-aarch64-0.1.0",
+      "mac_command": "mkdir -p \"$out/bin\"\nfor program in nuschl nuschl-content-worker nuschl-crypto-worker nuschl-math-worker nuschl-media-worker nuschl-storage-worker nuschl-transfer-worker nuschl-update-verify-ed25519 nuschl-update-verify-mldsa44; do\n  llvm-lipo -create /nix/store/vrzr29byq5ivgl81r6ka6m6k0hrz5yn3-nuschl-macos-x86_64-0.1.0/bin/$program /nix/store/rdd8329faanhsw0mbmgn0wmnrp9vc9hj-nuschl-macos-aarch64-0.1.0/bin/$program \\\n    -output \"$out/bin/$program\"\n  llvm-lipo \"$out/bin/$program\" -verify_arch x86_64 arm64\ndone\nif llvm-otool -L \"$out/bin/nuschl\" | grep -qE '^[[:space:]]+/nix/store/'; then\n  echo \"macOS binary depends on a Nix store library\" >&2\n  exit 1\nfi\n",
+      "mac_commands": {
+        "arm_ed": "runHook preBuild\ncargo --version\ncargoBuildLog=$(mktemp cargoBuildLogXXXX.json)\ncargoWithProfile zigbuild --target aarch64-apple-darwin --message-format json-render-diagnostics -p nuschl-update-worker --no-default-features --features nuschl-update-worker/ed25519 --bin nuschl-update-verify-ed25519  >\"$cargoBuildLog\"\n\nrunHook postBuild\n",
+        "arm_ml": "runHook preBuild\ncargo --version\ncargoBuildLog=$(mktemp cargoBuildLogXXXX.json)\ncargoWithProfile zigbuild --target aarch64-apple-darwin --message-format json-render-diagnostics -p nuschl-update-worker --no-default-features --features nuschl-update-worker/mldsa44 --bin nuschl-update-verify-mldsa44  >\"$cargoBuildLog\"\n\nrunHook postBuild\n",
+        "x86_ed": "runHook preBuild\ncargo --version\ncargoBuildLog=$(mktemp cargoBuildLogXXXX.json)\ncargoWithProfile zigbuild --target x86_64-apple-darwin --message-format json-render-diagnostics -p nuschl-update-worker --no-default-features --features nuschl-update-worker/ed25519 --bin nuschl-update-verify-ed25519  >\"$cargoBuildLog\"\n\nrunHook postBuild\n",
+        "x86_ml": "runHook preBuild\ncargo --version\ncargoBuildLog=$(mktemp cargoBuildLogXXXX.json)\ncargoWithProfile zigbuild --target x86_64-apple-darwin --message-format json-render-diagnostics -p nuschl-update-worker --no-default-features --features nuschl-update-worker/mldsa44 --bin nuschl-update-verify-mldsa44  >\"$cargoBuildLog\"\n\nrunHook postBuild\n"
+      },
+      "mac_ed": "/nix/store/j0frm8bxrkvz1wszwxx3l2d5nzglynbr-nuschl-macos-aarch64-verify-ed25519-0.1.0",
+      "mac_ml": "/nix/store/pqiyc44cmd2d9gh47nq6x9ccrvnd9sb4-nuschl-macos-aarch64-verify-mldsa44-0.1.0",
+      "mac_x86_ed": "/nix/store/3iipgw9jhpgn1vxp3c28qv69zj9ad6xr-nuschl-macos-x86_64-verify-ed25519-0.1.0",
+      "mac_x86_ml": "/nix/store/pb17rr9iwvwhcy3gfym0sssywmbf3bac-nuschl-macos-x86_64-verify-mldsa44-0.1.0",
+      "macos": "/nix/store/sh9x0wd1cbqifg64iqhxswl5ipkdlc8k-nuschl-macos-app",
+      "ml": "/nix/store/80s4bv3y0ynkqr2nnfzkgh18rfkq87ch-rust_nuschl-update-worker-0.1.0-x86_64-w64-mingw32",
+      "objdump": "/nix/store/fi98g122a3kzbschgvbvsqvpyxrmqvvl-binutils-wrapper-2.46/bin/objdump",
+      "universal": "/nix/store/93pql7jy3k95fl4sqnk9z6piwdfw47l7-nuschl-macos-universal",
+      "windows": "/nix/store/n2zn1yx1d79wvvxs7nkcib7bywas6ff9-nuschl-windows-x86_64-w64-mingw32-0.1.0",
+      "windows_features": {
+        "ed25519": [
+          "curve25519-dalek",
+          "ed25519",
+          "ed25519-dalek"
+        ],
+        "mldsa44": [
+          "ml-dsa",
+          "mldsa44"
+        ]
+      },
+      "windows_providers": {
+        "ed25519": [
+          "rust_curve25519-dalek-4.1.3-x86_64-w64-mingw32",
+          "rust_ed25519-dalek-2.2.0-x86_64-w64-mingw32",
+          "rust_hex-0.4.3-x86_64-w64-mingw32",
+          "rust_nuschl-sandbox-windows-0.1.0-x86_64-w64-mingw32",
+          "rust_nuschl-update-0.1.0-x86_64-w64-mingw32",
+          "rust_serde-1.0.229-x86_64-w64-mingw32",
+          "rust_serde_json-1.0.154-x86_64-w64-mingw32",
+          "rust_thiserror-2.0.21-x86_64-w64-mingw32",
+          "rust_zeroize-1.9.1-x86_64-w64-mingw32"
+        ],
+        "mldsa44": [
+          "rust_hex-0.4.3-x86_64-w64-mingw32",
+          "rust_ml-dsa-0.1.2-x86_64-w64-mingw32",
+          "rust_nuschl-sandbox-windows-0.1.0-x86_64-w64-mingw32",
+          "rust_nuschl-update-0.1.0-x86_64-w64-mingw32",
+          "rust_serde-1.0.229-x86_64-w64-mingw32",
+          "rust_serde_json-1.0.154-x86_64-w64-mingw32",
+          "rust_thiserror-2.0.21-x86_64-w64-mingw32",
+          "rust_zeroize-1.9.1-x86_64-w64-mingw32"
+        ]
+      },
+      "zip": "/nix/store/2562wqrkss8xv8z2blaa4cvgg2yknlkq-zip-3.0/bin/zip"
+    },
+    "files": {
+      "windows/nuschl.exe": {
+        "sha256": "2d22b3a7140c9e08c278ba99c2c33522fe7d69faf354dd24fee7d5336df60138",
+        "imports": [
+          "DLL Name: kernel32.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: bcryptprimitives.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: advapi32.dll",
+          "DLL Name: api-ms-win-shcore-scaling-l1-1-1.dll",
+          "DLL Name: comctl32.dll",
+          "DLL Name: d3d11.dll",
+          "DLL Name: d3dcompiler_47.dll",
+          "DLL Name: dcomp.dll",
+          "DLL Name: dwmapi.dll",
+          "DLL Name: dwrite.dll",
+          "DLL Name: dxgi.dll",
+          "DLL Name: gdi32.dll",
+          "DLL Name: imm32.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: ntdll.dll",
+          "DLL Name: ole32.dll",
+          "DLL Name: oleaut32.dll",
+          "DLL Name: shell32.dll",
+          "DLL Name: uiautomationcore.dll",
+          "DLL Name: user32.dll",
+          "DLL Name: winmm.dll",
+          "DLL Name: api-ms-win-core-synch-l1-2-0.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: ntdll.dll",
+          "DLL Name: oleaut32.dll",
+          "DLL Name: api-ms-win-core-winrt-l1-1-0.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: ole32.dll",
+          "DLL Name: advapi32.dll",
+          "DLL Name: api-ms-win-core-winrt-error-l1-1-0.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: oleaut32.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: icuuc.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: ntdll.dll",
+          "DLL Name: ole32.dll",
+          "DLL Name: shell32.dll",
+          "DLL Name: userenv.dll",
+          "DLL Name: ws2_32.dll",
+          "DLL Name: KERNEL32.dll",
+          "DLL Name: msvcrt.dll",
+          "DLL Name: ntdll.dll",
+          "DLL Name: advapi32.dll",
+          "DLL Name: bcrypt.dll",
+          "DLL Name: kernel32.dll"
+        ]
+      },
+      "windows/nuschl-content-worker.exe": {
+        "sha256": "68b64de93fdc9f36933360116a749a275a1ff74c716e391dfb62de2fbf80cab0",
+        "imports": [
+          "DLL Name: bcryptprimitives.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: advapi32.dll",
+          "DLL Name: api-ms-win-core-synch-l1-2-0.dll",
+          "DLL Name: api-ms-win-security-base-l1-2-2.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: ntdll.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: ole32.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: advapi32.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: ntdll.dll",
+          "DLL Name: userenv.dll",
+          "DLL Name: KERNEL32.dll",
+          "DLL Name: msvcrt.dll"
+        ]
+      },
+      "windows/nuschl-crypto-worker.exe": {
+        "sha256": "44c215c38e270377489d76afb7ae3827fb86d9804b20bd50e6122674371dc563",
+        "imports": [
+          "DLL Name: bcryptprimitives.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: advapi32.dll",
+          "DLL Name: api-ms-win-core-synch-l1-2-0.dll",
+          "DLL Name: api-ms-win-security-base-l1-2-2.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: ntdll.dll",
+          "DLL Name: ole32.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: advapi32.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: ntdll.dll",
+          "DLL Name: userenv.dll",
+          "DLL Name: ADVAPI32.dll",
+          "DLL Name: bcrypt.dll",
+          "DLL Name: KERNEL32.dll",
+          "DLL Name: msvcrt.dll"
+        ]
+      },
+      "windows/nuschl-math-worker.exe": {
+        "sha256": "b6972e820b9dae9ee11b695aca83a81815e10716fc0c9d74d39db39f8e25cbe1",
+        "imports": [
+          "DLL Name: bcryptprimitives.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: advapi32.dll",
+          "DLL Name: api-ms-win-core-synch-l1-2-0.dll",
+          "DLL Name: api-ms-win-security-base-l1-2-2.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: ntdll.dll",
+          "DLL Name: ole32.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: advapi32.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: ntdll.dll",
+          "DLL Name: userenv.dll",
+          "DLL Name: KERNEL32.dll",
+          "DLL Name: msvcrt.dll"
+        ]
+      },
+      "windows/nuschl-media-worker.exe": {
+        "sha256": "f16e929b573534ea61382d06642d401f5076303e8ee0dfce14a1a0d338c0f64f",
+        "imports": [
+          "DLL Name: bcryptprimitives.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: mmdevapi.dll",
+          "DLL Name: ole32.dll",
+          "DLL Name: advapi32.dll",
+          "DLL Name: api-ms-win-core-synch-l1-2-0.dll",
+          "DLL Name: api-ms-win-security-base-l1-2-2.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: ntdll.dll",
+          "DLL Name: oleaut32.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: ole32.dll",
+          "DLL Name: api-ms-win-core-winrt-error-l1-1-0.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: oleaut32.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: advapi32.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: ntdll.dll",
+          "DLL Name: ole32.dll",
+          "DLL Name: userenv.dll",
+          "DLL Name: KERNEL32.dll",
+          "DLL Name: msvcrt.dll"
+        ]
+      },
+      "windows/nuschl-storage-worker.exe": {
+        "sha256": "95bb6cb7400aea487f96b476002bbaa51dd865449c420262b1caed4b5ee87c6e",
+        "imports": [
+          "DLL Name: bcryptprimitives.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: advapi32.dll",
+          "DLL Name: api-ms-win-core-synch-l1-2-0.dll",
+          "DLL Name: api-ms-win-security-base-l1-2-2.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: ntdll.dll",
+          "DLL Name: ole32.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: advapi32.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: ntdll.dll",
+          "DLL Name: shell32.dll",
+          "DLL Name: userenv.dll",
+          "DLL Name: ws2_32.dll",
+          "DLL Name: ADVAPI32.dll",
+          "DLL Name: bcrypt.dll",
+          "DLL Name: KERNEL32.dll",
+          "DLL Name: msvcrt.dll"
+        ]
+      },
+      "windows/nuschl-transfer-worker.exe": {
+        "sha256": "fe74bc6ca26c5c4d7bbd78f9ebd50ed43dbb23697a26f33576943b36c5d1a757",
+        "imports": [
+          "DLL Name: bcryptprimitives.dll",
+          "DLL Name: advapi32.dll",
+          "DLL Name: api-ms-win-core-synch-l1-2-0.dll",
+          "DLL Name: api-ms-win-security-base-l1-2-2.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: ntdll.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: ole32.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: advapi32.dll",
+          "DLL Name: iphlpapi.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: ntdll.dll",
+          "DLL Name: userenv.dll",
+          "DLL Name: ws2_32.dll",
+          "DLL Name: ADVAPI32.dll",
+          "DLL Name: bcrypt.dll",
+          "DLL Name: KERNEL32.dll",
+          "DLL Name: msvcrt.dll"
+        ]
+      },
+      "windows/nuschl-update-verify-ed25519.exe": {
+        "sha256": "d36187a199ad9633e054378b21dcb764c5928eabdc73955e7499cce0eaef7cde",
+        "imports": [
+          "DLL Name: KERNEL32.dll",
+          "DLL Name: msvcrt.dll",
+          "DLL Name: ntdll.dll",
+          "DLL Name: USERENV.dll",
+          "DLL Name: WS2_32.dll",
+          "DLL Name: api-ms-win-core-synch-l1-2-0.dll",
+          "DLL Name: bcryptprimitives.dll",
+          "DLL Name: advapi32.dll",
+          "DLL Name: api-ms-win-security-base-l1-2-2.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: psapi.dll",
+          "DLL Name: ole32.dll",
+          "DLL Name: api-ms-win-core-winrt-error-l1-1-0.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: oleaut32.dll",
+          "DLL Name: advapi32.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: userenv.dll"
+        ]
+      },
+      "windows/nuschl-update-verify-mldsa44.exe": {
+        "sha256": "2a26dcb4e44b67d7f702638d111be83c5725566869b473048520d48b6fa44e38",
+        "imports": [
+          "DLL Name: KERNEL32.dll",
+          "DLL Name: msvcrt.dll",
+          "DLL Name: ntdll.dll",
+          "DLL Name: USERENV.dll",
+          "DLL Name: WS2_32.dll",
+          "DLL Name: api-ms-win-core-synch-l1-2-0.dll",
+          "DLL Name: bcryptprimitives.dll",
+          "DLL Name: advapi32.dll",
+          "DLL Name: api-ms-win-security-base-l1-2-2.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: psapi.dll",
+          "DLL Name: ole32.dll",
+          "DLL Name: api-ms-win-core-winrt-error-l1-1-0.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: oleaut32.dll",
+          "DLL Name: advapi32.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: userenv.dll"
+        ]
+      },
+      "macos/nuschl": {
+        "sha256": "f10b081dc88325a079b574cfae44c88835ed3dd65060a225bb7e6468fcbc0542",
+        "code_directory_integrity": [
+          {
+            "cpu": "0x1000007",
+            "identifier": "org.nuschl.Nuschl",
+            "code_pages": 6899,
+            "code_directory_sha256": "6b72428f12f3a74967fa15d04232fa5b9110c0a9d60ef0d6a86fc49c93c3f806",
+            "code_limit": 28256352,
+            "special_slots": 3,
+            "slice_offset": 16384,
+            "signature_offset": 28256352,
+            "directory_offset": 36,
+            "hashes_offset": 202,
+            "ad_hoc_no_cms_identity": true
+          },
+          {
+            "cpu": "0x100000c",
+            "identifier": "org.nuschl.Nuschl",
+            "code_pages": 6350,
+            "code_directory_sha256": "6d93415e3771529b3f6028369ca7d8bbb65ed507201fa050bb91eef24a10201b",
+            "code_limit": 26008752,
+            "special_slots": 3,
+            "slice_offset": 28508160,
+            "signature_offset": 26008752,
+            "directory_offset": 36,
+            "hashes_offset": 202,
+            "ad_hoc_no_cms_identity": true
+          }
+        ],
+        "rcodesign_verify_exit": 1,
+        "rcodesign_known_empty_cms_failure": true,
+        "native_apple_signature_verification": "not run"
+      },
+      "macos/nuschl-content-worker": {
+        "sha256": "262d16921a6df9171c383b41b53524957fe7084c80a82094312b661332612b3d",
+        "code_directory_integrity": [
+          {
+            "cpu": "0x1000007",
+            "identifier": "nuschl-content-worker",
+            "code_pages": 1806,
+            "code_directory_sha256": "9b31930e459507d03ecdbcf50b210ab24c1c0b2526832726481a3f931b304942",
+            "code_limit": 7396656,
+            "special_slots": 2,
+            "slice_offset": 16384,
+            "signature_offset": 7396656,
+            "directory_offset": 36,
+            "hashes_offset": 174,
+            "ad_hoc_no_cms_identity": true
+          },
+          {
+            "cpu": "0x100000c",
+            "identifier": "nuschl-content-worker",
+            "code_pages": 1723,
+            "code_directory_sha256": "c8f11a7bc019cbe2d9558995927e5850dae93beb48033c6ab9c0f3821921884a",
+            "code_limit": 7057136,
+            "special_slots": 2,
+            "slice_offset": 7487488,
+            "signature_offset": 7057136,
+            "directory_offset": 36,
+            "hashes_offset": 174,
+            "ad_hoc_no_cms_identity": true
+          }
+        ],
+        "rcodesign_verify_exit": 1,
+        "rcodesign_known_empty_cms_failure": true,
+        "native_apple_signature_verification": "not run"
+      },
+      "macos/nuschl-crypto-worker": {
+        "sha256": "1cf5ca4f86c52e1e324125463d15fa8312b13f2835ffa9b2e2983cdc69540fc3",
+        "code_directory_integrity": [
+          {
+            "cpu": "0x1000007",
+            "identifier": "nuschl-crypto-worker",
+            "code_pages": 2043,
+            "code_directory_sha256": "a2beb6a18f2d97358df7270bc8038be197350255b6d6e2ae261b8e55da03e524",
+            "code_limit": 8365136,
+            "special_slots": 2,
+            "slice_offset": 16384,
+            "signature_offset": 8365136,
+            "directory_offset": 36,
+            "hashes_offset": 173,
+            "ad_hoc_no_cms_identity": true
+          },
+          {
+            "cpu": "0x100000c",
+            "identifier": "nuschl-crypto-worker",
+            "code_pages": 1513,
+            "code_directory_sha256": "551bfe2dc4e46d40400aa94d869446ffb2904351be016bdc553c89955a540dea",
+            "code_limit": 6196032,
+            "special_slots": 2,
+            "slice_offset": 8454144,
+            "signature_offset": 6196032,
+            "directory_offset": 36,
+            "hashes_offset": 173,
+            "ad_hoc_no_cms_identity": true
+          }
+        ],
+        "rcodesign_verify_exit": 1,
+        "rcodesign_known_empty_cms_failure": true,
+        "native_apple_signature_verification": "not run"
+      },
+      "macos/nuschl-math-worker": {
+        "sha256": "dad9b34c15ac7b910711eb18646638d26302e892ce855eafa3597e7245a1ab9b",
+        "code_directory_integrity": [
+          {
+            "cpu": "0x1000007",
+            "identifier": "nuschl-math-worker",
+            "code_pages": 9778,
+            "code_directory_sha256": "df8f44e32e8e78a0f14eb2b4f494bd36f896359c4226052eba6890ba3c3af09b",
+            "code_limit": 40047200,
+            "special_slots": 2,
+            "slice_offset": 16384,
+            "signature_offset": 40047200,
+            "directory_offset": 36,
+            "hashes_offset": 171,
+            "ad_hoc_no_cms_identity": true
+          },
+          {
+            "cpu": "0x100000c",
+            "identifier": "nuschl-math-worker",
+            "code_pages": 9186,
+            "code_directory_sha256": "7ef15e5aa6676400b76d358581adbe2d8a304c1efb816b0947d7321e87f66403",
+            "code_limit": 37623664,
+            "special_slots": 2,
+            "slice_offset": 40386560,
+            "signature_offset": 37623664,
+            "directory_offset": 36,
+            "hashes_offset": 171,
+            "ad_hoc_no_cms_identity": true
+          }
+        ],
+        "rcodesign_verify_exit": 1,
+        "rcodesign_known_empty_cms_failure": true,
+        "native_apple_signature_verification": "not run"
+      },
+      "macos/nuschl-media-worker": {
+        "sha256": "3d88aa665c636a9dfeedf6658b650b79af37d1d1d84bd52000780bdcf8224111",
+        "code_directory_integrity": [
+          {
+            "cpu": "0x1000007",
+            "identifier": "nuschl-media-worker",
+            "code_pages": 961,
+            "code_directory_sha256": "8c2777ccbf5d3ff956d36dbb532049bffab1e0ca8496031c73a5a9ce18b4a166",
+            "code_limit": 3934480,
+            "special_slots": 2,
+            "slice_offset": 16384,
+            "signature_offset": 3934480,
+            "directory_offset": 36,
+            "hashes_offset": 172,
+            "ad_hoc_no_cms_identity": true
+          },
+          {
+            "cpu": "0x100000c",
+            "identifier": "nuschl-media-worker",
+            "code_pages": 759,
+            "code_directory_sha256": "e3be7d7af92f6abe33434ac9f8d44fa7d619817801b1aaae752e5b29e15bc3f1",
+            "code_limit": 3107760,
+            "special_slots": 2,
+            "slice_offset": 3997696,
+            "signature_offset": 3107760,
+            "directory_offset": 36,
+            "hashes_offset": 172,
+            "ad_hoc_no_cms_identity": true
+          }
+        ],
+        "rcodesign_verify_exit": 1,
+        "rcodesign_known_empty_cms_failure": true,
+        "native_apple_signature_verification": "not run"
+      },
+      "macos/nuschl-storage-worker": {
+        "sha256": "7ff0d2d4e88f0e09eda32de54873bfec06a34d94de9f78871bce237f55102232",
+        "code_directory_integrity": [
+          {
+            "cpu": "0x1000007",
+            "identifier": "nuschl-storage-worker",
+            "code_pages": 2221,
+            "code_directory_sha256": "154f899e88be6c47dc2fd5d51d8f2de7bc7635eab070361ce942c6897a064265",
+            "code_limit": 9095936,
+            "special_slots": 2,
+            "slice_offset": 16384,
+            "signature_offset": 9095936,
+            "directory_offset": 36,
+            "hashes_offset": 174,
+            "ad_hoc_no_cms_identity": true
+          },
+          {
+            "cpu": "0x100000c",
+            "identifier": "nuschl-storage-worker",
+            "code_pages": 2108,
+            "code_directory_sha256": "58961d878832710e77f9a74bc7c8de2802a82924338b4d25e98fa21e4bc6e979",
+            "code_limit": 8630544,
+            "special_slots": 2,
+            "slice_offset": 9191424,
+            "signature_offset": 8630544,
+            "directory_offset": 36,
+            "hashes_offset": 174,
+            "ad_hoc_no_cms_identity": true
+          }
+        ],
+        "rcodesign_verify_exit": 1,
+        "rcodesign_known_empty_cms_failure": true,
+        "native_apple_signature_verification": "not run"
+      },
+      "macos/nuschl-transfer-worker": {
+        "sha256": "faa7b21b7dc1bad69924f3a1b2dab32fadcccf1cb51e9e8ff17a1648f655246b",
+        "code_directory_integrity": [
+          {
+            "cpu": "0x1000007",
+            "identifier": "nuschl-transfer-worker",
+            "code_pages": 1405,
+            "code_directory_sha256": "945ef81c47fd4a088dfae8565284376edf6ef050f52a8bb9c649d2900cd90d56",
+            "code_limit": 5752528,
+            "special_slots": 2,
+            "slice_offset": 16384,
+            "signature_offset": 5752528,
+            "directory_offset": 36,
+            "hashes_offset": 175,
+            "ad_hoc_no_cms_identity": true
+          },
+          {
+            "cpu": "0x100000c",
+            "identifier": "nuschl-transfer-worker",
+            "code_pages": 1327,
+            "code_directory_sha256": "67dadf3cbdd3f6445481097db9f3316f525bd775f832973b0484c14449f735a1",
+            "code_limit": 5434784,
+            "special_slots": 2,
+            "slice_offset": 5832704,
+            "signature_offset": 5434784,
+            "directory_offset": 36,
+            "hashes_offset": 175,
+            "ad_hoc_no_cms_identity": true
+          }
+        ],
+        "rcodesign_verify_exit": 1,
+        "rcodesign_known_empty_cms_failure": true,
+        "native_apple_signature_verification": "not run"
+      },
+      "macos/nuschl-update-verify-ed25519": {
+        "sha256": "c39d09516ce5c70423aaa2c096e9f6aea4c0a3b81eef4d8bbb1d378dccac206f",
+        "code_directory_integrity": [
+          {
+            "cpu": "0x1000007",
+            "identifier": "nuschl-update-verify-ed25519",
+            "code_pages": 138,
+            "code_directory_sha256": "ee205e3f571e2c8dacfa049afa5985fb9b99d7dab2ee22dc69eff05be3774a75",
+            "code_limit": 563360,
+            "special_slots": 2,
+            "slice_offset": 16384,
+            "signature_offset": 563360,
+            "directory_offset": 36,
+            "hashes_offset": 181,
+            "ad_hoc_no_cms_identity": true
+          },
+          {
+            "cpu": "0x100000c",
+            "identifier": "nuschl-update-verify-ed25519",
+            "code_pages": 126,
+            "code_directory_sha256": "002a68be3f704068f8d454448fa7f572f6cfac2c7e3cc94b89301d3184ed1e10",
+            "code_limit": 513632,
+            "special_slots": 2,
+            "slice_offset": 606208,
+            "signature_offset": 513632,
+            "directory_offset": 36,
+            "hashes_offset": 181,
+            "ad_hoc_no_cms_identity": true
+          }
+        ],
+        "rcodesign_verify_exit": 1,
+        "rcodesign_known_empty_cms_failure": true,
+        "native_apple_signature_verification": "not run"
+      },
+      "macos/nuschl-update-verify-mldsa44": {
+        "sha256": "978e6d43fb90a44ca20a2ae530a2c0b0c020e438621e22e65dd0b5fdbe74f5fb",
+        "code_directory_integrity": [
+          {
+            "cpu": "0x1000007",
+            "identifier": "nuschl-update-verify-mldsa44",
+            "code_pages": 121,
+            "code_directory_sha256": "e05ec35f33ee061715347ab22ca4b09bf9fe448678682b4ecd8d9325c2786279",
+            "code_limit": 494688,
+            "special_slots": 2,
+            "slice_offset": 16384,
+            "signature_offset": 494688,
+            "directory_offset": 36,
+            "hashes_offset": 181,
+            "ad_hoc_no_cms_identity": true
+          },
+          {
+            "cpu": "0x100000c",
+            "identifier": "nuschl-update-verify-mldsa44",
+            "code_pages": 121,
+            "code_directory_sha256": "1a00e4303f6145a87b84897540c64ed308e85df5d3a11ba8f0e2ee37a15a3c09",
+            "code_limit": 493552,
+            "special_slots": 2,
+            "slice_offset": 524288,
+            "signature_offset": 493552,
+            "directory_offset": 36,
+            "hashes_offset": 181,
+            "ad_hoc_no_cms_identity": true
+          }
+        ],
+        "rcodesign_verify_exit": 1,
+        "rcodesign_known_empty_cms_failure": true,
+        "native_apple_signature_verification": "not run"
+      }
+    },
+    "macos_bundle_metadata": {
+      "CFBundleExecutable": "nuschl",
+      "CFBundleIdentifier": "org.nuschl.Nuschl",
+      "CFBundleName": "Nuschl",
+      "CFBundleDisplayName": "Nuschl",
+      "CFBundlePackageType": "APPL",
+      "CFBundleIconFile": "Nuschl",
+      "CFBundleShortVersionString": "0.1.0",
+      "CFBundleVersion": "0.1.0",
+      "LSMinimumSystemVersion": "14.2",
+      "NSHighResolutionCapable": true,
+      "NSMicrophoneUsageDescription": "Nuschl sends your voice to the people in your channel.",
+      "NSAudioCaptureUsageDescription": "Nuschl removes what your speakers play from your microphone, so others do not hear it. The sound stays on this Mac."
+    },
+    "windows-x86_64": {
+      "file_count": 15,
+      "install_tar_sha256": "ddf5e700f9fb10a7f600e97919991dc09ec966f6a2ee6b6891592ad6a5ef90bc",
+      "notice_scope": "windows-x86_64",
+      "notice_check": "passed",
+      "zip_sha256": "eec7e85f8eb6c9e3f7c18b42a2757335e48a936dba5476a5e36972e5bbd4a86d"
+    },
+    "macos-universal": {
+      "file_count": 18,
+      "install_tar_sha256": "714c5bbe83660a201943181725f2ac45e74316b3eadf992d06a910b9407713b4",
+      "notice_scope": "macos-universal",
+      "notice_check": "passed",
+      "zip_sha256": "0c064ce2289432ce931c91690bbdaa5a4607de51a06bbbfe8b906f9631b7c627"
+    },
+    "result": "scoped_archive_checks_passed",
+    "limits": [
+      "local build evidence is not a GitHub CI run",
+      "no native macOS execution",
+      "rcodesign0.29 generic verifier reports its known empty-CMS bug; raw failures retained",
+      "independent CodeDirectory integrity is not Apple codesign/Gatekeeper acceptance or publisher identity",
+      "final macOS signing changes signature bytes; exact helper copies verified in slices and pre-sign universal",
+      "unsigned update preparation exercises the real producer but grants no client acceptance",
+      "production trust remains unenrolled; GUI fixture is a separately recorded public-trust-only build"
+    ]
+  },
+  "macos_build": {
+    "pid": 1187963,
+    "elapsed_seconds": 795.0566215515137,
+    "minimum_tmp_free": 22476152832,
+    "exit_code": 0,
+    "aborted": false
+  },
+  "fixture_build": {
+    "pid": 2145709,
+    "elapsed_seconds": 305.02156591415405,
+    "minimum_tmp_free": 22476152832,
+    "exit_code": 0,
+    "aborted": false
+  },
+  "native_windows": {
+    "guest_state": "/home/ambiso/vms/nuschel-windows",
+    "guest_status": {
+      "qemu": true,
+      "agent_seen_seconds_ago": 4.893403768539429
+    },
+    "stages": [
+      "PASS: actual desktop Tokio spawn_blocking context retains strict two-worker acceptance",
+      "PASS: two real confined engines, either-component corruption, raw bytes, wrong pair, absent trust, legacy/downgrade, expiry, duplicate fields",
+      "PASS: actual sandbox file/write/network probes, mandatory AND despite one forged answer, bounded output and timeout/reaping",
+      "PASS: private HTTP hybrid manifest -> remembered version -> checked download -> atomic install -> cleanup"
+    ],
+    "lpac_profiles": {
+      "nuschl.update.ed25519": "S-1-15-2-1989256401-3508689084-1431988978-1814057566-1231614371-3620298582-839552138",
+      "nuschl.update.mldsa44": "S-1-15-2-374717483-368650577-3729692836-1784765076-2849111345-3774312655-894586323"
+    },
+    "keys": "generated only inside a temporary guest directory; no production trust enrollment",
+    "binaries": [
+      {
+        "path": "/nix/store/931xmnpbj8xw2xl17y19rdyq6z82m6pc-nuschl-windows-x86_64-w64-mingw32-0.1.0/bin/nuschl-update-verify-ed25519.exe",
+        "sha256": "d36187a199ad9633e054378b21dcb764c5928eabdc73955e7499cce0eaef7cde"
+      },
+      {
+        "path": "/nix/store/931xmnpbj8xw2xl17y19rdyq6z82m6pc-nuschl-windows-x86_64-w64-mingw32-0.1.0/bin/nuschl-update-verify-mldsa44.exe",
+        "sha256": "2a26dcb4e44b67d7f702638d111be83c5725566869b473048520d48b6fa44e38"
+      },
+      {
+        "path": "/nix/store/p09yx6j5gd4q0vv6rjm9wfd3qnmkgzby-rust_nuschl-update-worker-0.1.0-x86_64-w64-mingw32/bin/nuschl-update-runtime-fixture.exe",
+        "sha256": "7e4c7c46c3d86f85fdba7e255f28cb38a72b873bcc2ddd5bfc1deb2043e3280a"
+      }
+    ],
+    "limits": [
+      "Windows VM, not physical hardware or macOS",
+      "No desktop UI restart proof from this fixture",
+      "LPAC uses production profiles and both fixed algorithm launchers",
+      "Observed Winsock initialization denial 10107 is handled narrowly; this is not a socket-level success/denial claim"
+    ]
+  },
+  "windows_gui": {
+    "result": "pass",
+    "owned_run": "b10875fb4d3f4b7991fe9e1c304bbff2",
+    "source_revision": "c26529d3df26d9d4e23755bc7c3a7907f5055237",
+    "fixture_source": {
+      "source_revision": "c26529d3df26d9d4e23755bc7c3a7907f5055237",
+      "fixture_only": true,
+      "changed_files": [
+        "crates/update/update-trust.json"
+      ],
+      "public_trust_sha256": "a866652ffc8405b7d20a4cdaba503a41f73e54d082a6ba6922a8747582776c37",
+      "secret_mode": "0o600",
+      "secret_location": "sibling keys directory, outside both source snapshots; never copied into store or guest",
+      "signer": "/nix/store/li1vj81blzvv9y9kgc9pyh60yvwxzw85-rust_nuschl-update-worker-0.1.0/bin/nuschl-update-sign"
+    },
+    "fixture_build": {
+      "pid": 2145709,
+      "elapsed_seconds": 305.02156591415405,
+      "minimum_tmp_free": 22476152832,
+      "exit_code": 0,
+      "aborted": false
+    },
+    "manifest_sha256": "d52e97fac7807fc8c5cce0b3e26f0856fd372e27f81c30d910620404b23c9654",
+    "signature_sha256": "50835fea92badd4fb908283688ac320597595a98f1e6ef7f694a48f17587c88b",
+    "installed_file_count": 16,
+    "desktop_started_pid": 6020,
+    "desktop_restarted_pid": 1480,
+    "absolute_relative_space_unicode_profile_and_update_state_continuity": true,
+    "complete_signed_file_hashes": true,
+    "old_and_staging_removed": true,
+    "remaining_nuschl_processes_after_owned_cleanup": 0,
+    "trust": "temporary public pair only; no production enrollment"
+  },
+  "independent_macho_tests": {
+    "result": "passed",
+    "real_signed_binary_tamper_tests": 11,
+    "pinned_rcodesign_source": "/nix/store/j4lfy29r8sw38d6sx892p6ck5m2j1qin-source",
+    "pinned_rcodesign_version": "0.29.0",
+    "upstream_tag": "apple-codesign/0.29.0",
+    "diagnosis": "embedded_signature_builder.rs emits empty CMS wrapper; verify.rs unconditionally parses it as SignedData; original failing command and raw diagnostics retained",
+    "policy": "test-only additional integrity evidence; producer and publisher unchanged; not Apple or publisher-identity verification"
+  },
+  "owned_vm": {
+    "state": "stopped",
+    "qemu_exit_code": 0,
+    "remaining_nuschl_processes_before_shutdown": 0,
+    "guest": "explicit existing Windows11 VM; restricted forwards; no audio backend"
+  },
+  "evidence_directory": "/home/ambiso/.cache/nuschl-cross-distributions",
+  "evidence_files": [
+    "source-binding-proof.json",
+    "source-binding-tests-2.log",
+    "fixture-cache-equality.json",
+    "windows-build-status.json",
+    "macos-build-status.json",
+    "fixture-build-status.json",
+    "production-archives.log",
+    "production-archives-final/proof.json",
+    "macho-tests.log",
+    "native/proof.json",
+    "native/guest.log",
+    "gui.log",
+    "gui/proof.json",
+    "gui/update.json",
+    "gui/update.json.sig",
+    "gui/fixture-public.json",
+    "gui/update-offered.png",
+    "gui/update-installed.png",
+    "gui/update-restarted.png",
+    "vm-daemon.log"
+  ],
+  "screenshots": {
+    "update-offered.png": "3242208197a01ae246be0fa5fcf47c44b353adbc3bd960bbc670d50c8dc2cc6b",
+    "update-installed.png": "50d0680fae9c97a09ff05854d7e300c8c5fc759431af6208710d33528f4ccfed",
+    "update-restarted.png": "30b91250016a6ee89f5016d5dc5df0830fc194b179b6ed9e02d3013384604ef7"
   }
 }

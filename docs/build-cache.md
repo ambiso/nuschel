@@ -104,10 +104,49 @@ Local evidence under `~/.cache/nuschl-build-cache/`:
 - `equality/run-2/proof.json`: source/flag invariance after separate-product wiring.
 - `equality/run-3/proof.json`: also proves retained vendored source still invalidates both dependency caches (`a346bf08`).
 
-A full current-head cross desktop/archive build and GUI restart using the new
-separate products remains a distribution validation gate. The earlier GUI
-profile-continuity proof used the former both-feature helpers; it does not prove
-these final new archive bytes. Native macOS Seatbelt/updater execution, physical
-platform media, broad Crane migration, production trust enrollment and first
-external CI/release remain separate open work. No production keys, publication,
-remote workflow or host device access were used for these tests.
+## Complete frozen distribution proof
+
+The separate products are now integrated into complete distributions at frozen
+`c26529d3` (merged `0c1452be`, same Git tree as `39ea7132`). The Windows product
+build passed in 835 seconds and both Mac slices/universal app in 795 seconds.
+Actual source-bound release tar/ZIP and update preparation checks pass: Windows
+15 installation files, Mac 18, with all nine programs and full notice bytes.
+Windows helpers are byte-identical to separate products. Both Mac slices preserve
+their exact helper bytes and the universal pre-sign helper equals actual lipo;
+final signing changes signature metadata as expected. Bundle version/identifier,
+minOS14.2 and system-only dynamic imports were inspected.
+
+The GUI fixture changes only the public trust JSON in a separate source copy.
+Its dependency derivation is exactly the production one, with no cache override:
+`n4mvfqv4ny9zhrnfgwkxsxvmlbia3hln`, a 956 MiB artifact produced once. The fixture
+final/library/notice leaves took 305 seconds. All eight worker/helper EXEs remain
+byte-identical to production; only the desktop embeds the temporary public pair.
+Native LPAC and actual GUI signed installation/restart pass, including all 16
+installed hashes and absolute space/Unicode profile/update-state continuity.
+The guest is shut down cleanly; keys remain outside source/store/guest.
+
+Run `tests/cross_distributions.py` with an exact full-revision local Git flake,
+a matching tracked-source snapshot and a new disk output directory. It compares
+every exported path/byte/executable bit to that Git archive before loading the
+source authority. Seven actual Git-tampering regressions cover this binding.
+See [the structured proof](reviews/2026-11-12-cross-distributions.json).
+
+The pinned rcodesign0.29 generic verifier fails on its own empty ad-hoc CMS wrapper
+and warns that its verification command is buggy. The original failure remains
+in the evidence. `tests/cross_macho.py` therefore supplies explicitly test-only,
+bounded inspection of the exact emitted format, using Apple's published
+[Mach-O loader](https://github.com/apple-oss-distributions/xnu/blob/main/EXTERNAL_HEADERS/mach-o/loader.h),
+[CodeDirectory format](https://github.com/apple-oss-distributions/xnu/blob/main/osfmk/kern/cs_blobs.h)
+and [special-slot semantics](https://github.com/apple-oss-distributions/Security/blob/main/OSX/libsecurity_codesigning/lib/codedirectory.h).
+It requires both architectures, SHA-256 code-page coverage, strict ADHOC/no CMS
+identity, and correct main Info.plist/CodeResources/requirements slots. Eleven
+real produced-byte tampering cases pass. Unknown forms fail closed. This is
+additional scoped integrity evidence, not Apple's codesign/Gatekeeper verification
+or authenticated publisher identity; production signer/publisher rules did not
+change. Native Apple tooling/runtime and first external CI/release remain open.
+
+Unreferenced docs/reviews JSON still changes final cross product/notice paths,
+although the real dependency derivations stay cached. Narrowing final source
+filtering without losing actual embedded assets/policy inputs remains in TODO.
+The broader per-crate migration and production trust enrollment are also separate
+open work. No remote publication or host device access occurred.
