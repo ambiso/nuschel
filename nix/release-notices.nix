@@ -8,6 +8,7 @@
   webRuntimeNotices,
 }:
 let
+  inherit (pkgs) lib;
   roots = builtins.fromJSON (builtins.readFile (projectRoot + "/release/notice-roots.json"));
   scopes = builtins.fromJSON (builtins.readFile (projectRoot + "/release/notice-scopes.json"));
   forScope =
