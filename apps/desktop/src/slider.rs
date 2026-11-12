@@ -235,21 +235,23 @@ impl Setting {
     }
 }
 
-/// Where a slider is shown. A slider acts only while its owner still shows
-/// it: the same menu (a menu's invocation is new each time one opens), or
-/// Settings.
+/// Where a slider is shown, by the invocation of the menu or of Settings that
+/// shows it: each is new each time one opens. A slider acts only while that
+/// same opening shows it, so a callback kept from an earlier one (a drag, a
+/// key, an assistive technology's request) never acts in a later one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Owner {
     Menu(u64),
-    Settings,
+    Settings(u64),
 }
 
 impl Owner {
-    /// Whether this owner is showing: `menu` is the open menu's invocation.
-    pub fn alive(self, menu: Option<u64>, settings_open: bool) -> bool {
+    /// Whether this owner is showing: `menu` and `settings` are the
+    /// invocations of the open menu and of open Settings.
+    pub fn alive(self, menu: Option<u64>, settings: Option<u64>) -> bool {
         match self {
             Owner::Menu(invocation) => menu == Some(invocation),
-            Owner::Settings => settings_open,
+            Owner::Settings(invocation) => settings == Some(invocation),
         }
     }
 }
@@ -408,12 +410,18 @@ impl Edits {
 }
 
 impl Desktop {
+    /// The invocations of the open menu and of open Settings.
+    pub(crate) fn slider_owners(&self) -> (Option<u64>, Option<u64>) {
+        (
+            self.menu.as_ref().map(|menu| menu.invocation),
+            self.settings_open.then_some(self.settings_invocation),
+        )
+    }
+
     /// Whether `target`'s owner still shows it.
     fn slider_live(&self, target: &Target) -> bool {
-        target.owner.alive(
-            self.menu.as_ref().map(|menu| menu.invocation),
-            self.settings_open,
-        )
+        let (menu, settings) = self.slider_owners();
+        target.owner.alive(menu, settings)
     }
 
     fn slider_press(&mut self, target: &Target, value: f32, cx: &mut Context<Self>) {
@@ -826,7 +834,7 @@ mod tests {
     fn a_dragged_sensitivity_reaches_the_worker_ten_times_a_second_and_always_last() {
         let mut world = World::default();
         let target = Target {
-            owner: Owner::Settings,
+            owner: Owner::Settings(1),
             setting: Setting::Sensitivity,
         };
         let start = Instant::now();
@@ -884,16 +892,16 @@ mod tests {
         world.preview(&ada.setting, 0.3, Input::Pointer, start);
         // Another menu's slider (or the same person's in a later menu) is not this drag.
         for other in [user("grace", 3), user("ada", 4), Target {
-            owner: Owner::Settings,
+            owner: Owner::Settings(1),
             setting: Setting::SoundVolume,
         }] {
             assert!(!world.edits.dragging(&other));
             let effects = world.edits.release(&other, start);
-        world.run(effects);
+            world.run(effects);
         }
         assert_eq!(world.saves, 0);
         // The menu closed (another opened): the drag is committed, once.
-        world.tick(start + TICK, |owner| owner.alive(Some(4), false));
+        world.tick(start + TICK, |owner| owner.alive(Some(4), None));
         assert_eq!(world.saves, 1);
         assert!(!world.edits.dragging(&ada));
         assert_eq!(world.disk.volume_for(Some("ada")), 0.3);
@@ -918,11 +926,60 @@ mod tests {
 
     #[test]
     fn a_stale_menu_owner_is_not_alive() {
-        assert!(Owner::Menu(5).alive(Some(5), false));
-        assert!(!Owner::Menu(5).alive(Some(6), true), "a newer menu is another owner");
-        assert!(!Owner::Menu(5).alive(None, true), "a closed menu edits no one");
-        assert!(Owner::Settings.alive(None, true));
-        assert!(!Owner::Settings.alive(Some(5), false));
+        assert!(Owner::Menu(5).alive(Some(5), None));
+        assert!(
+            !Owner::Menu(5).alive(Some(6), Some(5)),
+            "a newer menu is another owner"
+        );
+        assert!(
+            !Owner::Menu(5).alive(None, Some(5)),
+            "a closed menu edits no one"
+        );
+        assert!(Owner::Settings(2).alive(None, Some(2)));
+        assert!(
+            !Owner::Settings(2).alive(Some(2), None),
+            "closed Settings edits no one"
+        );
+        assert!(
+            !Owner::Settings(1).alive(None, Some(2)),
+            "reopened Settings is another owner"
+        );
+    }
+
+    #[test]
+    fn reopened_settings_never_resumes_an_old_drag() {
+        let mut world = World::default();
+        let first = Target {
+            owner: Owner::Settings(1),
+            setting: Setting::Sensitivity,
+        };
+        let start = Instant::now();
+        let effects = world.edits.press(first.clone(), start);
+        world.run(effects);
+        world.preview(&first.setting, 0.7, Input::Pointer, start);
+        // Escape closes Settings mid-drag: what was heard is saved, once.
+        let effects = world.edits.commit(start);
+        world.run(effects);
+        world.tick(start + TICK, |owner| owner.alive(None, None));
+        assert_eq!((world.saves, world.disk.audio.vad_sensitivity), (1, 0.7));
+        // Settings opens again: the first opening's slider is stale. The
+        // desktop acts on a move only for a live owner it is dragging, on a
+        // key only for a live owner.
+        let shown = |owner: Owner| owner.alive(None, Some(2));
+        assert!(!shown(first.owner) && !world.edits.dragging(&first));
+        let effects = world.edits.release(&first, start + TICK * 2);
+        world.run(effects);
+        world.tick(start + TICK * 3, shown);
+        assert_eq!(world.saves, 1, "a stale release saves nothing more");
+        // The new opening's slider drags anew.
+        let second = Target {
+            owner: Owner::Settings(2),
+            ..first.clone()
+        };
+        assert!(shown(second.owner) && !world.edits.dragging(&second));
+        let effects = world.edits.press(second.clone(), start + TICK * 4);
+        world.run(effects);
+        assert!(world.edits.dragging(&second) && !world.edits.dragging(&first));
     }
 
     #[test]

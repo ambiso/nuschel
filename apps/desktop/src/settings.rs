@@ -434,7 +434,7 @@ fn slider(
             name: name.into(),
             value: setting.get(&this.settings),
             target: crate::slider::Target {
-                owner: crate::slider::Owner::Settings,
+                owner: crate::slider::Owner::Settings(this.settings_invocation),
                 setting,
             },
             read_only,

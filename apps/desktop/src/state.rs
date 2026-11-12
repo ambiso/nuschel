@@ -247,6 +247,8 @@ pub struct Desktop {
     /// What the system configuration (managed.json) sets; read-only here.
     pub managed: ManagedSettings,
     pub settings_open: bool,
+    /// New each time Settings opens (see `slider::Owner`).
+    pub settings_invocation: u64,
     /// Theme, fonts and zoom (see crate::appearance).
     pub appearance: crate::appearance::Appearance,
     /// The local audio check, alive while Settings is open.
@@ -532,6 +534,7 @@ impl Desktop {
             settings,
             managed,
             settings_open: false,
+            settings_invocation: 0,
             appearance: crate::appearance::Appearance::new(window, cx),
             preview: None,
             slider_edits: Default::default(),
@@ -1402,6 +1405,9 @@ impl Desktop {
         }
     }
     pub fn open_settings(&mut self) {
+        if !self.settings_open {
+            self.settings_invocation += 1;
+        }
         self.settings_open = true;
         self.autostart = Some(crate::autostart::enabled());
         self.driver
@@ -1555,11 +1561,10 @@ impl Desktop {
                     .timer(crate::slider::TICK)
                     .await;
                 let pending = this.update(cx, |this, _| {
-                    let menu = this.menu.as_ref().map(|menu| menu.invocation);
-                    let open = this.settings_open;
+                    let (menu, settings) = this.slider_owners();
                     let effects = this
                         .slider_edits
-                        .tick(std::time::Instant::now(), |owner| owner.alive(menu, open));
+                        .tick(std::time::Instant::now(), |owner| owner.alive(menu, settings));
                     this.apply_slider_effects(effects);
                     this.slider_edits.armed()
                 });
