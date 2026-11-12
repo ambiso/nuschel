@@ -47,7 +47,11 @@ fn dump() {
     let (mut queued, mut ring) = RingBuffer::<[f64; 2]>::new(input.len() + 1024);
     queued.push_entire_slice(&input).unwrap();
     queued.push_entire_slice(&[[0.; 2]; 1024]).unwrap();
-    let (mut reference, mut read) = RingBuffer::<f32>::new((input.len() + 2048) * 2);
+    let (mut reference, read) = RingBuffer::<f32>::new((input.len() + 2048) * 2);
+    let mut read = Some(read);
+    if std::env::var_os("NUSCHL_OUTPUT_DROP_REFERENCE").is_some() {
+        drop(read.take());
+    }
     let mut converter = PlaybackConverter::new(2, rate);
     let mut output = Vec::with_capacity(output_frames as usize * 2);
     let mut cursor = 0;
@@ -71,7 +75,7 @@ fn dump() {
         .collect();
     std::fs::write(output_path, raw).unwrap();
     if let Some(path) = std::env::var_os("NUSCHL_OUTPUT_REFERENCE") {
-        let raw: Vec<u8> = std::iter::from_fn(|| read.pop().ok())
+        let raw: Vec<u8> = std::iter::from_fn(|| read.as_mut().and_then(|read| read.pop().ok()))
             .flat_map(f32::to_le_bytes)
             .collect();
         std::fs::write(&path, raw).unwrap();

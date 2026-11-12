@@ -97,6 +97,12 @@ impl PlaybackConverter {
         f32: FromSample<T>,
     {
         let dry = self.render(data, ring);
+        // The consumer is dropped when a system monitor is available or own AEC
+        // is unnecessary. One atomic read avoids all unused reverse-SRC work;
+        // the output waveform/render state above is independent of this choice.
+        if played.is_abandoned() {
+            return (dry, 0);
+        }
         // Read the actually quantized CPAL samples, not a pre-map/pre-clip copy.
         // Other speaker slots are silent, not averaged into the front-LR pair.
         let channels = self.channels;
@@ -465,6 +471,41 @@ mod tests {
                     "no one-frame clock drift at{rate}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn absent_fallback_consumer_never_advances_reverse_filter_or_changes_device_audio() {
+        for rate in [44_100, 96_000] {
+            let (mut queued, mut input) = RingBuffer::new(1024);
+            let (mut other_queued, mut other_input) = RingBuffer::new(1024);
+            queued.push_entire_slice(&[[2., -0.125]; 1024]).unwrap();
+            other_queued
+                .push_entire_slice(&[[2., -0.125]; 1024])
+                .unwrap();
+            let (mut abandoned, consumer) = RingBuffer::<f32>::new(1024);
+            drop(consumer);
+            let (mut active, _consumer) = RingBuffer::<f32>::new(1024);
+            let mut idle = PlaybackConverter::new(2, rate);
+            let mut control = PlaybackConverter::new(2, rate);
+            let unchanged = idle.reference_delay();
+            let mut output = [0_f32; 2];
+            let mut expected = [0_f32; 2];
+            let allocations = allocation_counter::measure(|| {
+                assert_eq!(
+                    idle.pull(&mut output, &mut input, &mut abandoned),
+                    (false, 0)
+                );
+                assert!(control.pull(&mut expected, &mut other_input, &mut active).1 > 0);
+            });
+            assert_eq!(allocations.count_total, 0);
+            assert_eq!(output, expected);
+            assert_eq!(idle.reference_delay(), unchanged);
+            assert_ne!(
+                control.reference_delay(),
+                unchanged,
+                "active rational phase must advance"
+            );
         }
     }
 }
