@@ -56,6 +56,27 @@ pub fn voice_bitrate(max_bandwidth: u32) -> u32 {
     }
 }
 
+/// The voice gate's speech-probability thresholds: a closed gate opens at
+/// `open` or above, an open one stays open down to `close`. The media worker's
+/// gate and the Settings meter both use this, so the meter's markers cannot
+/// drift from what actually opens the gate.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GateThresholds {
+    pub open: f32,
+    pub close: f32,
+}
+
+/// Thresholds for a voice activity sensitivity (0 = only clear speech, 1 = very
+/// sensitive), clamped to 0..=1 as the gate always has.
+pub fn gate_thresholds(sensitivity: f32) -> GateThresholds {
+    let sensitivity = sensitivity.clamp(0., 1.);
+    let open = 0.9 - 0.6 * sensitivity;
+    GateThresholds {
+        open,
+        close: (open - 0.3).max(0.05),
+    }
+}
+
 pub const MAX_DEVICE_OVERRIDES: usize = 64;
 
 /// 20 ms of digital silence as one Opus packet (CELT, fullband, mono). It
@@ -188,6 +209,21 @@ impl Sound {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn gate_thresholds_keep_the_gates_arithmetic() {
+        for step in 0..=100 {
+            let sensitivity = step as f32 / 100.;
+            let open = 0.9 - 0.6 * sensitivity;
+            let thresholds = gate_thresholds(sensitivity);
+            assert_eq!(thresholds.open.to_bits(), open.to_bits());
+            assert_eq!(thresholds.close.to_bits(), (open - 0.3).max(0.05).to_bits());
+            assert!(thresholds.close < thresholds.open);
+        }
+        assert_eq!(gate_thresholds(-1.), gate_thresholds(0.));
+        assert_eq!(gate_thresholds(2.), gate_thresholds(1.));
+        assert_eq!(gate_thresholds(1.).close, 0.05);
+    }
+
     use super::*;
     #[test]
     fn default_voice_target_reserves_overhead_and_never_exceeds_a_server_budget() {

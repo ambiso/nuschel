@@ -346,10 +346,10 @@ impl Gate {
 
     /// New thresholds and mode; an open gate and its hangover carry over.
     fn configure(&mut self, settings: &AudioSettings) {
-        let sensitivity = settings.vad_sensitivity.clamp(0., 1.);
+        let thresholds = nuschl_core::audio::gate_thresholds(settings.vad_sensitivity);
         self.mode = settings.transmit;
-        self.open_threshold = 0.9 - 0.6 * sensitivity;
-        self.close_threshold = (self.open_threshold - 0.3).max(0.05);
+        self.open_threshold = thresholds.open;
+        self.close_threshold = thresholds.close;
         self.release_frames = settings.ptt_release_ms / 10;
     }
 
