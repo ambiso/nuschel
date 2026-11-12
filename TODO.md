@@ -1846,16 +1846,23 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
           session; voice (WebAudio, getUserMedia, datagrams through the tunnel);
           IndexedDB storage and identity in a Worker; its version requirement; the
           Svelte build in the Nix site package; a real-browser test; WebTransport.
-    - [ ] Bound content-worker retirement/retry before activating the browser
-          content broker. `ContentService.stopWorker()` requests termination and
-          immediately permits replacement; per-instance job/byte bounds do not
-          establish an aggregate bound across still-retiring workers. A throwing
-          `terminate()` also interrupts `expire`/`rejectAll` before promise cleanup
-          (source findings, not a reproduced browser resource-exhaustion proof).
-          Preserve ordinary invalid-image recovery and queued cancellation, while
-          preventing retry/cancel loops from multiplying unresolved owners. Use
-          actual stalled-worker evidence and distinguish logical retirement from
-          physical exit; this producer is currently unused by the App.
+    - [ ] Integrate the verified content-owner retirement proof/docs. Source
+          `191a8d8d`/`732e31c2` is integrated; the final factory-release follow-up
+          `82903f9f` and actual-WASM fixtures `6d427430` complete the scoped guard.
+          One page/module owner shares global eight-job/16 MiB budgets across
+          facades. Active cancel/dispose settles only its consumer while retaining
+          original slot/bytes/deadline until exact actual ACK; healthy same-worker
+          reuse and ordinary invalid-image recovery remain. Queued cancellation
+          cannot reset startup or cancel another facade. Fatal/stuck retirement
+          permanently consumes that owner, always settles cleanup despite thrown
+          terminate, and exposes only detached frozen diagnostics.
+          All 17 units and original actual-WASM code/image/canary checks pass.
+          Real private-browser normal/throwing-terminate cases hold cancelled
+          8 MiB active + queued 8 MiB through the original 8 s deadline; 20 new
+          facades cannot spawn/reuse capacity. An actual late old-WASM error is
+          ignored after failed termination. No synchronous physical-exit claim,
+          no automatic replacement, no App/broker activation. See
+          `docs/browser-content.md` and the source-bound handoff.
     - [ ] Apply the same retirement/credit discipline to the active browser
           formula renderer. `MathRenderService.cancel()` currently terminates
           and replaces an active worker; routine component cancellation or its

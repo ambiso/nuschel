@@ -27,7 +27,8 @@ Worker. Its Promise methods are:
   forward arbitrary supplied HTML. The thumbnail contains RGBA pixels only.
 - `decodeImage(Uint8Array, {signal})` returns one bounded RGBA image block. It
   accepts supplied bytes rather than a URL, path or URI.
-- `cancelAll()` revokes pending work; `dispose()` additionally prevents reuse.
+- `cancelAll()` revokes this facade's consumers; `dispose()` additionally prevents
+  that facade's reuse. Other facades retain their own work on the shared owner.
 
 Original plain text is retained exactly in `marked_text`/`plain_text`, including
 newlines. Legacy normalization uses the same marked representation as native
@@ -66,19 +67,46 @@ allocation limits before producing pixels; message images are at most 360×270
 and composer thumbnails at most 128×128. A streaming bounded JSON writer stops
 reply serialization before allocating an oversized JSON string.
 
-The service admits at most eight jobs and 16 MiB of aggregate queued/active
-source data. Only one job is posted to the codec Worker at a time. An image is
-copied only after admission; transferring the copy never detaches the caller's
-attachment. Every job has an eight-second deadline including queue time; worker
-startup has a separate fifteen-second ceiling. A late result cannot win merely
-because its timeout callback was delayed: completion checks the monotonic
-absolute deadline again.
+One lazy owner is shared by every ContentService facade in this page/module.
+It admits at most eight jobs and 16 MiB of aggregate queued/active source data,
+including a cancelled active job until its real acknowledgment. The first
+admitted consumer selects the worker factory/startup configuration; later
+facades cannot reset it or manufacture another owner. The factory closure is
+released once consumed; there is no strong registry of idle/disposed facades.
+Only active/queued jobs retain client references. Each source image is copied
+only after admission, without detaching the caller's buffer.
 
-Aborting an active job terminates its Worker. Old Worker events are ignored
-against the current instance. A malformed response rejects the pending queue;
-a caller can retry in a fresh Worker. Ordinary invalid images return a bounded
-error and permit subsequent work. A WASM trap terminates that instance rather
-than reusing potentially unusable Rust execution state.
+Only one job is posted to the worker at a time. Jobs retain the original
+absolute eight-second deadline, including queue time; worker startup has one
+original fifteen-second ceiling. A late result or ready signal cannot win
+because its timer callback was delayed: both paths check the monotonic absolute
+deadline again. Shorter consumer deadlines can expire while a loader continues
+to its own bound; new arrivals never extend either original deadline.
+
+Queued cancellation releases never-posted work immediately. Active cancellation
+rejects the consumer immediately but leaves a tombstone: its job/byte reservation
+and original deadline remain until an exact real result/error acknowledgment.
+The derivative is discarded, and the same responsive worker can serve the next
+consumer. Ordinary invalid-image errors likewise reuse it. Cancellation/disposal
+of one facade cannot cancel another's consumers. A healthy idle worker remains
+warm for later facades, with no idle polling or automatic recreation.
+
+A true active/startup deadline, trap/fatal, invalid owner response, post failure
+or worker error permanently retires this page's shared owner. Queued consumers
+are settled and listeners/timers cleaned even if terminate() throws. The owner
+permit stays consumed; no new facade or repeated retry can spawn a replacement.
+The numeric `bytes` diagnostic conservatively retains the retired active input's
+charge, while active/queued consumer diagnostics become empty. Failed termination
+is recorded separately. Diagnostics expose only detached frozen id/size/deadline
+snapshots, never mutable packets, client references or settlement callbacks.
+
+`Worker.terminate()` requests shutdown, not synchronous physical exit. Permanent
+logical retirement prevents new posts/results from reentering the service while
+the native worker may still run. It does not guarantee that previously submitted
+work/network traffic has ceased. A future consumer should show safe source
+fallback and explicit reload for this unavailable owner; automatic replacement
+requires its own aggregate ownership bound. The SDK broker and App recovery UX
+remain separate work, and are not activated by this guard.
 
 The Nix content module links with a 256 MiB maximum linear memory. This bounds
 the WASM heap, not total browser process memory or the caller's original file.
@@ -89,8 +117,10 @@ quota. Rendering and image work must not be moved into the TLS/voice Worker.
 ## Verification
 
 `node --test tests/web_content.unit.mjs` checks production service queue and byte
-budgets, active/waiting cancellation, timeout recovery, old Worker events,
-forged replies, resource-bearing images, invalid RGBA and UTF-8 span boundaries.
+budgets shared across facades, active cancellation tombstones/real ACK reuse,
+queued cancellation, absolute startup/active deadline races, no-replacement
+retirement, failed terminate/factory/post paths, detached diagnostics, forged
+replies, resource-bearing images, invalid RGBA and UTF-8 span boundaries.
 These scheduler tests deliberately use a test Worker; they do not claim image
 codec execution.
 
@@ -119,3 +149,44 @@ an invalid image passed. Script, CSS and remote-image canaries caused no resourc
 requests or CSP violations. Eight production scheduler/reply-boundary tests also
 passed. This is isolated content proof, not yet a stock-server-to-App attachment
 or browser clipboard integration claim, and no mobile browser hardware was used.
+
+
+## One-owner retirement evidence
+
+The focused service suite now passes 17 checks:
+
+```sh
+node --test tests/web_content.unit.mjs
+```
+
+Tests load the actual production service in fresh test VM module realms; there
+is no public production reset/owner-replacement option. They exercise global
+eight-job/16 MiB limits, first-factory/options behavior, canceled active credit
+retention, exact ACK reuse, disposal scoping, delayed timer/ready/result races,
+throwing termination and diagnostic reads that cannot mutate capacity or settle
+consumers. The protocol validation and invalid-image recovery gates remain.
+
+The original actual-WASM image/code/legacy/canvas/canary fixture still passes.
+`tests/web_content_retirement.browser.mjs SOURCE CODEC WRAPPER PLAYWRIGHT OUTPUT`
+adds ordinary fault tasks to the served worker prefix for testing, then uses the
+real already-initialized WASM realm. Healthy cancellation and disposal reuse one
+worker; an eight-job synchronous cross-facade fill rejects the ninth. During a
+12-second blocked worker task, a cancelled 8 MiB active image plus queued 8 MiB
+retains 16 MiB until the original 8-second deadline. Retirement settles consumers,
+reserves the active 8 MiB conservatively, and rejects 20 new facades without
+another post or worker. Normal and throwing-terminate modes are separate fresh
+pages; no physical-exit acknowledgment is asserted.
+
+In the throwing-terminate case, the actual old worker continues and returns a
+real WASM invalid-image error after retirement. The service ignores that late
+reply and never reopens its reservation. Both modes pass under same-origin CSP,
+with original text/newlines, typed code/image output, exact RGBA, invalid-image
+reuse, resource canaries and no host devices. The generated module still has
+35 initial/4096 maximum memory pages (256 MiB); its bytes match the previously
+reviewed codec. This bounds WASM linear memory, not total process/caller memory.
+
+Final proofs, exact source/artifact hashes and invocations are recorded in
+`~/.cache/nuschl-content-retirement/handoff.json`; `browser-final/proof.json`
+contains the deadline/late-reply observations and `positive/proof.json` retains
+the original codec/canary gate. These scoped producer checks do not establish
+full attachment/broker operation or platform-independent browser scheduling.
