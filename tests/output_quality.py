@@ -56,7 +56,7 @@ def compare(expected, observed):
     }
 
 
-def delay_only(expected, observed, limit=2 * RATE):
+def delay_only(expected, observed, limit=None, rate=RATE):
     """Integer delay search; no scaling, warping or channel-dependent alignment.
 
     A coarse quiet-onset marker avoids periodic-carrier correlation aliases.
@@ -69,7 +69,9 @@ def delay_only(expected, observed, limit=2 * RATE):
                 return at
         raise ValueError("no active alignment marker")
     coarse = onset(observed) - onset(expected)
-    offset, width = RATE // 3, RATE // 4
+    if limit is None:
+        limit = 2 * rate
+    offset, width = rate // 3, rate // 4
     end = min(limit, len(observed) - offset - width)
     if end < 0 or len(expected) < offset + width:
         raise ValueError("recording shorter than alignment probe")
@@ -200,24 +202,35 @@ class PrivatePulse:
                 raise RuntimeError("private Pulse did not start")
             time.sleep(.02)
 
+    def ctl(self, *arguments, json_output=False):
+        command = [str(self.bin / "pactl"), f"--server=unix:{self.socket}"]
+        if json_output:
+            command.append("--format=json")
+        result = subprocess.run([*command, *arguments],capture_output=True,text=True,check=True,timeout=10)
+        return json.loads(result.stdout) if json_output else result.stdout
+
     def stop(self):
         if self.process.poll() is None:
             os.killpg(self.process.pid, signal.SIGTERM)
             self.process.wait(timeout=5)
 
 
-def playback(binary, pulse, packets, path, volume=1., packet_frames=FRAME):
+def playback(binary, pulse, packets, path, volume=1., packet_frames=FRAME, monitor_rate=RATE, specifications=None):
     """Actual worker receive→jitter→mix→device→private monitor, muted microphone."""
     worker = start(binary, pulse, muted=True, settings={"echo_cancellation": "off"})
     recorder = None
     try:
         worker.wait(lambda e: e.get("kind") == "status" and e.get("ready"), "playback not ready")
+        if specifications is not None:
+            info = subprocess.run([str(pulse.bin / "pactl"), f"--server=unix:{pulse.socket}",
+                "--format=json", "list", "sink-inputs"],capture_output=True,text=True,check=True,timeout=10)
+            specifications.extend(entry["sample_specification"] for entry in json.loads(info.stdout))
         with path.open("wb") as sink:
             recorder = subprocess.Popen([str(pulse.bin / "parec"), f"--server=unix:{pulse.socket}",
-                "--device=speakers.monitor", "--raw", "--format=float32le", "--rate=48000", "--channels=2",
+                "--device=speakers.monitor", "--raw", "--format=float32le", f"--rate={monitor_rate}", "--channels=2",
                 "--latency-msec=20"], stdout=sink, stderr=subprocess.DEVNULL, start_new_session=True)
             deadline = time.monotonic() + 5
-            while path.stat().st_size < RATE // 4 * 2 * 4:
+            while path.stat().st_size < monitor_rate // 4 * 2 * 4:
                 if recorder.poll() is not None or time.monotonic() >= deadline:
                     raise RuntimeError("private monitor failed")
                 time.sleep(.02)

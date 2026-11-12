@@ -9,6 +9,7 @@ use crate::{
     capture_queue::CaptureQueue,
     dsp::{CapturePipeline, FRAME, RATE},
     mixer::{Mixer, Voice},
+    playback::PlaybackConverter,
     probe::EchoProbe,
     reference::{self, Clock, Played, ReferenceConverter, Stamper, Step, Timeline},
     sounds::Effects,
@@ -1498,7 +1499,7 @@ where
                     .saturating_duration_since(timestamp.callback);
                 played
                     .stamper
-                    .anchor(clock.now_shifted(Duration::ZERO, ahead));
+                    .anchor(clock.now_shifted(Duration::ZERO, ahead + converter.delay()));
                 let (dry, handed) = converter.pull(data, &mut ring, &mut played.samples);
                 played.stamper.advance(handed);
                 if dry {
@@ -1510,79 +1511,6 @@ where
             None,
         )
         .map_err(|error| error.to_string())
-}
-
-/// 48 kHz stereo playback to the device's rate and channel count. Runs on the
-/// device thread: it must not lock, allocate or block (see the tests).
-struct PlaybackConverter {
-    channels: usize,
-    step: f64,
-    position: f64,
-    previous: [f32; 2],
-    next: [f32; 2],
-}
-
-impl PlaybackConverter {
-    fn new(channels: usize, rate: u32) -> Self {
-        Self {
-            channels,
-            step: f64::from(RATE) / f64::from(rate),
-            position: 0.,
-            previous: [0.; 2],
-            next: [0.; 2],
-        }
-    }
-
-    /// Fill a device buffer, copying each 48 kHz sample it takes (silence
-    /// when the ring ran dry) into `played`. Returns whether the ring ran dry
-    /// and how many samples went into `played`.
-    fn pull<T>(
-        &mut self,
-        data: &mut [T],
-        ring: &mut Consumer<[f32; 2]>,
-        played: &mut Producer<f32>,
-    ) -> (bool, u64)
-    where
-        T: SizedSample + FromSample<f32>,
-    {
-        let mut dry = false;
-        let mut handed = 0;
-        for frame in data.chunks_exact_mut(self.channels) {
-            let sample = std::array::from_fn::<_, 2, _>(|channel| {
-                self.previous[channel]
-                    + (self.next[channel] - self.previous[channel]) * self.position as f32
-            });
-            // CPAL's portable config does not expose a speaker mask. One channel
-            // deliberately folds LR; >=2 maps front-left/right and silences extras.
-            frame.fill(T::from_sample(0.));
-            frame[0] = T::from_sample(if self.channels == 1 {
-                (sample[0] + sample[1]) * 0.5
-            } else {
-                sample[0]
-            });
-            if self.channels >= 2 {
-                frame[1] = T::from_sample(sample[1]);
-            }
-            self.position += self.step;
-            while self.position >= 1. {
-                self.position -= 1.;
-                self.previous = self.next;
-                self.next = ring.pop().unwrap_or_else(|_| {
-                    dry = true;
-                    [0.; 2]
-                });
-                let reference = if self.channels == 1 {
-                    [(self.next[0] + self.next[1]) * 0.5; 2]
-                } else {
-                    self.next
-                };
-                if played.push_entire_slice(&reference).is_ok() {
-                    handed += 1;
-                }
-            }
-        }
-        (dry, handed)
-    }
 }
 
 fn stream_config(host: &cpal::Host, supported: cpal::SupportedStreamConfig) -> cpal::StreamConfig {

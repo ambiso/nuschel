@@ -48,9 +48,8 @@ Proofs and exact tool paths are in `~/.cache/nuschl-output-quality/`:
 `native-final-baseline/proof.json`, `web-baseline.json`, `measurement-tests.log`.
 The worker was `/nix/store/ra83a3r8jjaari1yd1fvqa77y2vfs3j8-nuschl-0.1.0/libexec/nuschl/nuschl-media-worker`;
 reference libopus was 1.6.1. Browser WASM was the existing
-`5xzl4a7iwmpm3q3i0pyjpwrg05l4xd16-nuschl-web-audio-codec` artifact. Current source
-retains the same receive behavior. No new production fix is represented by this
-baseline checkpoint.
+`5xzl4a7iwmpm3q3i0pyjpwrg05l4xd16-nuschl-web-audio-codec` artifact. Those artifacts represent the historical baseline; the later correction
+checkpoints below describe changed receive behavior.
 
 ## Stereo/gain correction checkpoint
 
@@ -59,7 +58,8 @@ queues and playback rings hold LR frames; decoder sample capacity doubles while
 queue duration remains 200 ms per speaker and the playback target stays measured
 in frames. Browser decode replies explicitly carry two channels and their frame
 count; the controller checks the exact interleaved length before forwarding.
-Worklet storage remains 120 ms per speaker (now two scalar samples per frame).
+Worklet storage is bounded at 200 ms per speaker after the packet-duration
+correction below (two scalar samples per frame).
 Mono input Opus is duplicated by the stereo decoder. Mono output deliberately
 averages LR; native outputs with at least two channels map front-left/right and
 silence additional channels because portable CPAL does not supply a speaker mask.
@@ -244,12 +244,89 @@ reference Speex quality 3; the largest measured alias-level difference is
 0.014 dB around a -94 dB floor. The 48 kHz path bypasses resampling, matching
 Mumble's rate-equal condition.
 
-This candidate is not yet a production converter or committed dependency.
-A minimal documented vendor patch and a preallocated exact-ratio adapter require
-review before integration. Callback allocation/underrun/source-consumption and
-AEC reference timing still need testing in that actual adapter. Evidence:
+The reviewed patch is now committed under `vendor/speexdsp-resampler`; original
+copyright, license, registry checksum and VCS metadata are preserved alongside
+`NUSCHL-PATCH.md`. The production adapter is described next. No C dependency,
+SIMD path or additional transitive crate is introduced. Evidence:
 `resample-speex-patched-final/proof.json`, `speex-rust-review/metadata.json`,
 `speex-rust-review/original-lr.json`, and `speex-patched-review/` in the owned cache.
+
+## Production filtered converter
+
+`apps/media-worker/src/playback.rs` replaces linear interpolation with the reviewed
+scalar Speex quality-3 implementation when rates differ. Equal 48 kHz rates bypass
+SRC, as in Mumble. Initialization allocates the state and fixed planar input/output
+buffers before stream construction. Processing consumes the library's reported
+source-frame count with its exact rational clock; 22,050 and 11,025 Hz are never
+rounded to fixed 10 ms output counts. It produces only frames requested by the
+current device callback, with no future output prefetch, allocation or lock.
+
+The same stereo/mono/channel mapping applies after filtering. The fallback AEC
+reference retains the consumed source LR and adds the library's reported digital
+filter group delay to its playback anchor; this models SRC as part of the known
+render path without changing microphone sequencing or Step/MAX_HOLD. Unit tests
+compare declared delay to actual impulse peaks, retain channel/frame accounting,
+and prove no allocation while underrunning and recovering from 8 to 384 kHz.
+The existing callback allocator test also remains active.
+
+The actual converter passes `tests/output_resample.py --require-reference`:
+fixed-gain stereo agreement 135.8–156.2 dB against source-matched reference PCM,
+maximum error 1.04e-7, invariant contiguous/irregular callbacks, and ten-second
+fractional clocks. The gate requires at least 100 dB agreement and maximum error
+2e-6 for this source-matched filter, not a fitted gain or a perceptual claim.
+`tests/output_device_rates.py` additionally runs the actual live worker on private
+Pulse sinks. It verifies client **and monitor** negotiate exactly 22,050, 44,100
+and 96,000 Hz so server resampling cannot masquerade as the new converter.
+Encoded stereo carrier errors are below 0.001 dB and LR separation exceeds 71 dB
+in that fixture. Endpoint fractional delay is kept separate from amplitude.
+
+The source suite passes 56 tests, with two pre-existing ignored tests plus the
+explicit ignored PCM-extraction fixture. Existing private 48 kHz DSP regressions pass
+with the filtered source, including echo routing/probe, double talk, clipping and
+sound isolation. The jitter run had one silent 20 ms window over 3020 ms with
+five dropped packets, within its existing limits. A new integrated distribution
+and full reference-Mumble/device/listening proof remain pending.
+
+Final leaf: `1gxvvpx47f1s4vw1srnrc2ky03hwcm92-rust_nuschl-media-worker-0.1.0-linked`
+(the private runtime proofs used behavior-identical `fjsqrmjz...` before the final
+reference-clock unit was added).
+Evidence: `resample-adapter-gated/proof.json`, `private-device-rates/proof.json`
+and `filtered-dsp-regressions.log`. The source graph is based on integrated updater
+checkpoint `d1480f2c`; lock/generated edits add only the reviewed SRC package.
+
+A stricter newly added 44.1 kHz-render/48 kHz-capture echo check exposed an
+active reliability follow-up alongside this bounded SRC quality checkpoint. Separate new-source attempts
+removed only 2.32/0.09 dB against the unchanged 15 dB requirement; one frozen
+pre-SRC run removed 19 dB. A paired comparison on one unchanged private daemon,
+loopback, seed and timing then measured:
+
+| Order | Frozen pre-SRC | Filtered source | Pass at ≥15 dB and ≤25% transmitted |
+| --- | --- | --- | --- |
+| 1 | 12.88 dB, 30.1% transmitted | — | No |
+| 2 | — | 19.20 dB, 9.6% | Yes |
+| 3 | — | 32.39 dB, 0% | Yes |
+| 4 | 37.20 dB, 0% | — | Yes |
+
+This establishes substantial pre-existing variation and does not establish a
+consistent SRC regression. All these runs explicitly reported the system-recorded
+monitor, never fallback. Only the fallback anchor receives playback filter delay;
+monitor timestamps remain untouched. Keep the stricter assertion. The untouched
+monitor `ReferenceConverter` still linearly converts 44.1→48 kHz; its signal fidelity
+and timestamp relationship remain candidates, not diagnosed causes. Its new exact
+frame-count/chunk test passes at 11,025/22,050/44,100/96,000 Hz; that rules out those
+specific counter/boundary hypotheses but does not certify reconstruction quality. Do not substitute passing output
+spectra or 48 kHz echo tests for stable non-48 AEC. Evidence is retained in
+`private-device-rates-echo/`, `old-src-echo-baseline/` and `paired-src-echo/`.
+
+## Remaining reference decoder setting
+
+Stock Mumble sets `OPUS_SET_PHASE_INVERSION_DISABLED(1)` after decoder creation.
+Locked opus-pure's CELT decode currently passes `disable_inv=false` and has no
+obvious public control. The earlier reference-libopus fixtures use defaults, so
+matching those does not establish matching this stock setting. Low-bitrate
+intensity-stereo, high-band energy and mono-fold fixtures must use the explicit
+stock control before choosing a minimal safe API change. This is a separate
+codec task; no unmeasured phase-control change is hidden in the SRC adapter.
 
 ## Implementation sequence
 

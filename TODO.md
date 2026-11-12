@@ -596,35 +596,35 @@ The media worker uses per-speaker adaptive jitter buffers and Opus loss concealm
       retention are corrected through `769c479b`; the detailed remaining physical
       device, cold-graph, noise-classifier and playback-continuity work remains
       listed below. Private synthetic timings do not complete this investigation.
-- [ ] Audit receive/output fidelity against stock Mumble with independent decoded
-      PCM fixtures before claiming 1:1 quality. Native Mixer and browser VoiceDecoder
-      stereo preservation is corrected; continue examining
-      per-speaker gain, mixing/clamping, resampling, jitter and packet-loss
-      concealment separately. Compare high-bitrate mono/stereo, simultaneous
-      speakers and deterministic loss/reordering, then the actual output path;
-      codec bitrate alone does not establish playback fidelity. Active reference
-      audit (`docs/output-quality.md`): baseline actual native/browser stereo
-      collapsed to identical LR, and Worklet clipping preceded attenuation. The
-      source correction preserves stereo native/WASM/Worklet and requested gain;
-      independent private 48 kHz native mono/stereo/overshoot fixtures now pass,
-      along with actual browser voice/privacy and existing native DSP regressions.
-      Filtered non-48 kHz conversion, browser jitter/PLC, actual browser stereo
-      destination capture and matched complete reference-Mumble output remain open.
-      Legal 120 ms Opus packets are separately covered: corrected native decoded
-      queue from an accidental 100 ms to its documented 200 ms, corrected jitter
-      tick advancement for variable durations, and retained browser packet tails
-      across its startup hold. Independent native/WASM 120 ms stereo PCM passes.
-      Non-48 kHz audit confirms material linear-SRC errors: at 44.1 kHz the
-      15.435 kHz passband is -3.06 dB and a synthetic 23→21.1 kHz alias is -7.14 dB
-      versus reference Speex quality-3 -85.14 dB; 96 kHz imaging is -11.28 dB
-      versus -93.96 dB. Exact-ratio Sonora candidate was measured and rejected
-      (insufficient passband/alias rejection), not silently integrated. Reviewed
-      scalar Rust Speex candidate matches source-reference PCM at 135.8–156.2 dB
-      with zero f32-process allocations, including ten-second 11,025/22,050 Hz
-      clocks, after a cache-only reviewed buffer-reuse/channel-base correction.
-      Vendor/dependency and actual converter/callback/AEC integration are still
-      pending; no production SRC improvement is claimed from the probe alone.
-      These scoped results do not establish absolute perceptual equivalence.
+- [ ] Complete receive/output parity against stock Mumble with independent PCM
+      and device proofs before claiming 1:1 quality. The stereo/gain source
+      checkpoint preserves native/browser LR and volume; independent native
+      mono/stereo/overshoot/120 ms fixtures and browser voice/privacy checks pass.
+      Native queue duration and variable-packet tick advancement are corrected;
+      browser storage retains full 120 ms packet tails across its startup hold.
+      The linear-SRC audit found 44.1 kHz passband loss of 3.06 dB and synthetic
+      aliasing at -7.14 dB versus reference Speex quality-3 -85.14 dB. Sonora's
+      fixed32-tap candidate was measured and rejected. The reviewed scalar Rust
+      Speex vendor and exact-ratio adapter now pass direct stereo reference PCM
+      at 135.8–156.2 dB, including ten-second 11,025/22,050 Hz clocks and exact
+      callback chunks. Callback allocation/underrun/delay units and private
+      negotiated 22.05/44.1/96 kHz output pass. A stricter 44.1 kHz-render/48 kHz
+      capture AEC reliability gate remains open: separate new-SRC attempts removed
+      0.09–2.32 dB, but an unchanged-graph ABBA comparison gave old/new/new/old
+      12.88/19.20/32.39/37.20 dB. This exposes baseline variability rather than a
+      consistent SRC regression. Keep the 15 dB gate and investigate monitor
+      conversion/timestamps; do not claim stable non-48 kHz AEC. Integrated distribution checks,
+      browser sequence-clock jitter/PLC, actual browser stereo destination capture,
+      matched complete reference-Mumble multispeaker/loss playback and physical
+      listening remain open. See `docs/output-quality.md`; bitrate and synthetic
+      tone SNR alone do not establish perceptual equivalence.
+- [ ] Match/test Mumble's explicit `OPUS_SET_PHASE_INVERSION_DISABLED(1)` receive
+      setting before claiming codec parity: locked opus-pure currently passes
+      `disable_inv=false` to CELT decoding and has no obvious public control.
+      Add low-bitrate intensity-stereo and mono-fold fixtures with that exact
+      stock setting, then identify the smallest safe control/API change. Current
+      reference fixtures use libopus defaults; they do not close this setting gap.
+
 
 ### Optional local speech (requested 2026-11-11)
 

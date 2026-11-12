@@ -6,6 +6,7 @@ mod graph;
 mod jitter;
 mod live;
 mod mixer;
+mod playback;
 mod probe;
 mod reference;
 mod sounds;

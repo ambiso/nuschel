@@ -274,6 +274,45 @@ mod tests {
     }
 
     #[test]
+    fn non48_reference_clocks_and_irregular_callback_boundaries_stay_exact() {
+        for rate in [11_025, 22_050, 44_100, 96_000] {
+            let input: Vec<_> = (0..rate)
+                .flat_map(|i| {
+                    let value = (i as f32 * 0.03).sin() * 0.2;
+                    [value, -0.5 * value]
+                })
+                .collect();
+            let convert = |chunks: &[usize]| {
+                let (mut ring, mut out) = RingBuffer::new(96_064);
+                let mut converter = ReferenceConverter::new(2, rate);
+                let mut cursor = 0;
+                let mut count = 0;
+                let mut index = 0;
+                while cursor < input.len() {
+                    let take = (chunks[index % chunks.len()] * 2).min(input.len() - cursor);
+                    count +=
+                        converter.push(input[cursor..cursor + take].iter().copied(), &mut ring);
+                    cursor += take;
+                    index += 1;
+                }
+                assert_eq!(count, 48_000, "one second remains one second at {rate}");
+                let values: Vec<_> = std::iter::from_fn(|| out.pop().ok()).collect();
+                assert_eq!(
+                    values.len(),
+                    96_000,
+                    "reference timestamps count frames, not scalars"
+                );
+                values
+            };
+            assert_eq!(
+                convert(&[rate as usize]),
+                convert(&[1, 127, 480, 37, 256]),
+                "{rate}"
+            );
+        }
+    }
+
+    #[test]
     fn mono_devices_give_a_mono_reference_at_48_khz() {
         let (mut ring, mut out) = RingBuffer::new(256);
         let mut converter = ReferenceConverter::new(1, 24_000);

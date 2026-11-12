@@ -80,6 +80,7 @@ def main():
     parser.add_argument('--engine', choices=['converter','sonora','speex-rust'], default='converter')
     parser.add_argument('--speex-library', required=True, type=Path)
     parser.add_argument('--output', required=True, type=Path)
+    parser.add_argument('--require-reference',action='store_true',help='gate this source-matched adapter against fixed-gain stereo reference PCM')
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
     speex = Speex(args.speex_library)
@@ -127,12 +128,16 @@ def main():
                     'delta_db': actual_db - reference_db, 'chunk_exact': True, 'duration_seconds': seconds,
                     'full_fixed_gain_reference': compare(expected[:len(results[0])],results[0])})
         cases.append({'rate': rate, 'case': 'delay', **peak_positions, 'chunk_exact': True})
-    report = {'engine': args.engine, 'test_binary': str(args.test_binary), 'reference_library': str(args.speex_library),
+    gated = [case['full_fixed_gain_reference'] for case in cases if 'full_fixed_gain_reference' in case]
+    passed = all(case['fixed_gain_snr_db'] >= 100 and case['max_abs_error'] <= 2e-6 for case in gated)
+    report = {'reference_gate_passed': passed, 'engine': args.engine, 'test_binary': str(args.test_binary), 'reference_library': str(args.speex_library),
         'reference_quality': 3, 'host_devices': False, 'gain': 1, 'cases': cases,
         'limits': ['Source-matched Speex resampler comparison, not full reference-Mumble output.',
                    'No subjective/perceptual or hardware-quality guarantee.']}
     (args.output / 'proof.json').write_text(json.dumps(report, indent=2) + '\n')
     print(json.dumps(report), flush=True)
+    if args.require_reference and not passed:
+        raise SystemExit(1)
 
 
 if __name__ == '__main__':
