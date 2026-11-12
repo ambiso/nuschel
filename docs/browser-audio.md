@@ -72,7 +72,11 @@ credits: packet jobs remain capped at 16 globally and codec capture jobs at two,
 even during repeated epoch changes. Only exact matching ACKs or worker termination
 release those slots; old capture ACKs never grant current Worklet credits or
 transmit stale PCM. The two acknowledged SDK send slots and 250 ms deadline are
-separate; a stalled route closes capture. Encoder results older than 120 ms are
+separate; a stalled route closes capture without releasing its unacknowledged
+SDK slots. SDK command timeout permanently retires/terminates the owned lane
+before synthetic promise rejection; it does not recycle a live worker's inbox.
+See `sdk-rpc.md` for the 128-command bound, unavailable UI and asynchronous native
+shutdown limits. Encoder results older than 120 ms are
 dropped. Decoder packets are queued, not eagerly decoded into timed UI replies.
 
 Per speaker there are at most 64 encoded packets of 1024 bytes and 120 ms of

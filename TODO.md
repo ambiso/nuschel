@@ -751,16 +751,30 @@ The media worker uses per-speaker adaptive jitter buffers and Opus loss concealm
       startup is 40/30/130 ms for regular 10/20/120 ms packets, versus 10 ms for
       one ended 120 ms packet. These exclude sender/codec/device delay. Preserve
       native policy equivalence until a separately measured correction is reviewed.
-- [ ] Audit acknowledged SDK TX-send backlog across rapid epoch changes.
-      Codec TX jobs now retain their global two-credit bound until ACK, but
-      the separate `txJobs` RPC map still clears on reset. An indefinitely
-      unresolved old SDK send could coexist with newer route sends across
-      repeated resets; stale results cannot transmit/release current credits,
-      but aggregate RPC backlog needs its own bound/replacement proof. App RPC
-      promises additionally reject after 15 s without cancel acknowledgment or
-      terminating the SDK worker: that synthetic rejection cannot establish the
-      old worker inbox was consumed. Bound or replace that whole worker lifecycle,
-      preserving audio consent/route generations and stale-completion isolation.
+- [x] Integrate the verified bounded SDK-RPC retirement checkpoint (browser
+      owner; `3fb219f7`, `d15780fa`, `854582b5` plus final proof/docs). Global two
+      SDK audio-send credits now survive epoch changes and the 250 ms capture
+      timeout until a real reply or permanently retired owner settlement. The
+      generic 128-command adapter closes its owner and requests termination
+      before synthetic rejection, revokes voice/consent, ignores stale owned
+      callbacks and offers Unavailable/Reload without clearing draft/cache.
+      36 scoped unit checks pass. Real private Chromium stall fixture fills
+      exactly 128 total/two audio requests, then proves no new posts/results,
+      stopped tracks and retained selectable draft/bookmarks/certificate/history
+      through the late worker tail. Ordinary calling/text/order/CSP pass too.
+      Physical thread exit is not synchronous: the deliberate 17 s tail can run
+      after the scheduled 15 s retirement. Preserve all three stronger failed
+      assertions and the measured close delay; see `docs/sdk-rpc.md`.
+- [ ] Bound any future automatic SDK-worker replacement across retiring owners.
+      The current fix permanently closes the old owner and does not auto-spawn.
+      `Worker.terminate()` has no physical-exit acknowledgment; a future retry
+      must not multiply still-retiring workers/inboxes or restore old consent.
+      No guarantee is made about previously submitted network traffic delivery.
+- [ ] Add a bounded SDK initialization watchdog. The initial `init`/`ready`
+      handshake currently has no request ID, so a worker stuck before ready
+      without an RPC cannot trigger the per-command 15 s retirement timer.
+      Preserve saved data/consent and distinguish startup failure from a transient
+      command error; do not treat a timeout as physical exit acknowledgment.
 - [ ] Complete browser scheduling/device/reference receive parity beyond the
       scoped clocked pipeline fixtures: suspended/background tabs, Safari and
       Firefox, physical device latency/AEC, hostile entropy decode failures,
