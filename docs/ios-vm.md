@@ -346,15 +346,28 @@ Its 10,317 bytes have SHA-256
 `d38a7d1f71bfc39723000a13375bd824c9dfac41818cabeed6acc816e0422edd`.
 The Apple catalog was 509,149 compressed / 7,051,224 decoded bytes, SHA-256
 `818e1dd43f59c226f27426468875281f7cf1870cbd69b90665db000d3e7a8f76`.
-Only tiny metadata was fetched; no installer package was downloaded.
+That initial inspection fetched only metadata. A later bounded package download
+completed at the declared size but failed its whole-file checksum check, as below.
 
 The proposed [InstallAssistant.pkg](https://swcdn.apple.com/content/downloads/13/30/140-88558-A_TN3FIE7J63/p61cqj3ktmcqilz3q64ls4ekp1os9c8qbp/InstallAssistant.pkg)
-is **13,654,790,295 bytes**, expected catalog SHA-1
+is **13,654,790,295 bytes**, with catalog `Digest` value
 `10632733f9b4ab1397fffc98b53e6790e4c2c1b0`. Its `.pkm` declares
-`com.apple.pkg.InstallAssistant.macOSSonoma`. Whole-package SHA-256, appropriate
-Apple package-signing policy and payload validation are still required after a
-separately bounded acquisition. Metadata hashes do not replace artifact checks.
-The next stages remain acquisition/authentication, then a reviewed target-disk/APFS
+`com.apple.pkg.InstallAssistant.macOSSonoma`.
+
+The bounded download retained the exact HTTPS URL, response size and ETag, but
+its whole-file SHA-1 is `a8b796d408b5b3870be14161b43042b8bfca40f9`, not the catalog
+value. Its local SHA-256 is
+`ecc36bf172105f8c3325ceeb4e5ab8cc297260be806eac10b21b784ff40d8173`.
+Excluding the final 1,024 bytes also does not reproduce the catalog value.
+The file remains quarantined as `InstallAssistant-14.8.9.pkg.partial`; it was
+not renamed, extracted, mounted, executed or copied into the guest. The original
+failure remains in `acquisition.json` and `acquisition.stderr`. A confined
+read-only fingerprint pass completed separately; no blind retry was attempted.
+Signed prefix authentication is not complete payload authentication. Establish
+the discrepancy and independently verify the signed entry/chunk integrity before
+using this artifact; the checksum requirement has not been bypassed.
+
+The next stages remain artifact authentication, then a reviewed target-disk/APFS
 and installation plan. The exact checker rejects Recovery 14.6.1 even with
 otherwise matching Xcode/SDK/runtime listings; no version check was relaxed.
 

@@ -1,5 +1,9 @@
 # The Nuschl server (`nuschld`)
 
+For a complete NixOS deployment walkthrough and a review of the combined
+voice/web/witness configuration, start with the [operator guide](server-operators.md).
+This page covers the server's configuration, administration and protocol details.
+
 `nuschld` is a Mumble-compatible server: protocol 1.5, with the legacy UDP voice
 format for 1.4 and 1.3 clients. Stock Mumble clients use it like a stock Murmur:
 certificates and passwords, channels, ACLs and groups with Murmur's semantics, text,

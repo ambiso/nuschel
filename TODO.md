@@ -329,8 +329,11 @@ installed macOS guest, Xcode execution and Simulator graphics remain unproven.
          blank 80 GiB, persistent (only Recovery/OpenCore use temporary snapshots).
    - [ ] Acquire/authenticate the exact candidate Sonoma 14.8.9/23J631 installer:
          official Apple product 140-88558 metadata identifies a 13,654,790,295-byte
-         package, expected catalog SHA-1 recorded in docs/ios-vm.md. No package
-         downloaded; actual SHA-256/signature/payload checks remain. Exact profile
+         package. Exact-size download is quarantined after whole-file SHA-1
+         differs from the catalog Digest; local SHA-256 and original failure are
+         recorded in docs/ios-vm.md. Resolve the discrepancy and verify signed
+         payload/chunk integrity before use; no retry, extraction or guest copy.
+         Full artifact authentication remains open. Exact profile
          repinned from 14.5; Recovery 14.6.1 is explicitly rejected as that candidate.
          Review target disk/APFS and installation before destructive steps. Recovery
          exposes a basic IONDRV framebuffer, no IOAccelerator; Metal, installed-OS

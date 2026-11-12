@@ -117,7 +117,9 @@ itself, or uses the system's echo cancellation on Linux when it finds one.
 
 `nuschld` is Nuschl's server. Stock Mumble clients (1.3 to 1.5) use it like the
 standard Mumble server, and it can import an existing one with its users, channels
-and permissions. On NixOS:
+and permissions. The [NixOS operator guide](docs/server-operators.md) covers TLS,
+web access, firewall rules, administrator setup, witnesses and backups. A minimal
+NixOS server starts with:
 
 ```nix
 imports = [ inputs.nuschl.nixosModules.default ];
@@ -131,11 +133,11 @@ services.nuschl = {
 It keeps its data in SQLite, or in PostgreSQL (`database.type = "postgresql"` with
 `database.createLocally = true`).
 
-There are two security modes. **Compatible**, the only one today, admits stock Mumble
+There are two security modes. **Compatible** admits stock Mumble
 clients: messages and voice are encrypted on the way, as with any Mumble server, but
-the server can read them. **End-to-end** mode will admit only Nuschl clients and keep
-the server out of conversations; it is not finished, and the server refuses to start
-with it.
+the server can read them. Experimental **end-to-end** mode accepts registered
+Nuschl devices for MLS text and refuses stock clients. Voice is disabled in that
+mode until encrypted media is implemented; use compatible mode for voice.
 
 Configuration, administration, importing a Mumble server, and running it without
 Nix: [docs/server.md](docs/server.md).
