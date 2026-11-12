@@ -70,22 +70,32 @@ pub fn verify_hybrid(
         signature.mldsa44(),
         &message,
     )?;
-    // This blocking API runs in the updater's dedicated thread. Refuse nesting
-    // rather than panicking or blocking an application's async reactor.
+    let run = move || -> Result<(), Error> {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+        runtime.block_on(async {
+            // Independently reap both children, including when one rejects.
+            let ed_result = one(&workers.ed25519, false, ed).await;
+            let ml_result = one(&workers.mldsa44, true, ml).await;
+            ed_result?;
+            ml_result
+        })
+    };
+    // Desktop invokes this blocking API from Tokio spawn_blocking, which still
+    // carries a current Handle. A scoped dedicated thread avoids nesting a
+    // Runtime::block_on (or dropping its runtime) in any entered async context.
     if tokio::runtime::Handle::try_current().is_ok() {
-        return Err(Error::Verifier);
+        std::thread::scope(|scope| {
+            std::thread::Builder::new()
+                .name("nuschl-update-verify".into())
+                .spawn_scoped(scope, run)?
+                .join()
+                .map_err(|_| Error::Verifier)?
+        })?;
+    } else {
+        run()?;
     }
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()?;
-    runtime.block_on(async {
-        // Each path is independently launched, waited and reaped even if the
-        // other rejects. No worker consumes its sibling's answer or signature.
-        let ed_result = one(&workers.ed25519, false, ed).await;
-        let ml_result = one(&workers.mldsa44, true, ml).await;
-        ed_result?;
-        ml_result
-    })?;
     manifest::parse(raw, now)
 }
 

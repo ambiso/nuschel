@@ -47,6 +47,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             nuschl_update::verify_hybrid(bytes, signature.as_bytes(), keys, paths, now)
         };
     verify(&raw, &signed, std::slice::from_ref(&key), &workers)?;
+    // The real desktop calls check() from spawn_blocking; such a thread still
+    // has a Tokio Handle and must not be mistaken for an illegal async nesting.
+    let rt = tokio::runtime::Builder::new_current_thread().build()?;
+    let (blocking_raw, blocking_signature, blocking_key, blocking_workers) = (
+        raw.clone(),
+        signed.as_bytes().to_vec(),
+        key.clone(),
+        workers.clone(),
+    );
+    rt.block_on(async move {
+        tokio::task::spawn_blocking(move || {
+            assert!(tokio::runtime::Handle::try_current().is_ok());
+            nuschl_update::verify_hybrid(
+                &blocking_raw,
+                &blocking_signature,
+                &[blocking_key],
+                &blocking_workers,
+                now,
+            )
+        })
+        .await
+    })??;
+    println!(
+        "PASS: actual desktop Tokio spawn_blocking context retains strict two-worker acceptance"
+    );
     let mut ed = *signed.ed25519();
     ed[0] ^= 1;
     let bad_ed = Signature::from_components(&key, &ed, signed.mldsa44())?;

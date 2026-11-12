@@ -24081,6 +24081,12 @@ rec {
             packageId = "thiserror 2.0.21";
           }
           {
+            name = "tokio";
+            packageId = "tokio";
+            optional = true;
+            features = [ "rt" ];
+          }
+          {
             name = "zeroize";
             packageId = "zeroize";
           }
@@ -24094,7 +24100,7 @@ rec {
         features = {
           "ed25519" = [ "dep:curve25519-dalek" "dep:ed25519-dalek" ];
           "mldsa44" = [ "dep:ml-dsa" ];
-          "runtime-fixture" = [ "signer" "nuschl-update/client" "dep:tempfile" "dep:sha2" ];
+          "runtime-fixture" = [ "signer" "nuschl-update/client" "dep:tempfile" "dep:sha2" "dep:tokio" ];
           "signer" = [ "ed25519" "mldsa44" "dep:getrandom" "ml-dsa/rand_core" ];
         };
         resolvedDefaultFeatures = [ "default" "ed25519" "mldsa44" "runtime-fixture" "signer" ];
