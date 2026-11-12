@@ -116,3 +116,25 @@ worker with packet ACK cap; revoke/reopen and new-generation barrier; incorrect
 rate; finite extreme opposing headroom; mono fold; variable quantum lengths;
 bounded memory and rendering cost. Existing PcmMixer and PlaybackProcessor proofs
 must remain green. Actual WASM/worker/private-browser/CSP tests are a separate gate.
+
+## Admission component checkpoint
+
+Before browser activation, native Mixer and WASM VoicePlayout validate full Opus
+packing before creating a speaker or changing arrival/sequence/gain state. The
+public validator is allocation-free; it does not authenticate entropy content.
+The separate packet-duration gate retains Mumble's 10–120 ms integer tick range.
+The worker can use VoicePlayout.validate_packet before allocating a decoder.
+
+Six independent, fixed-gain/unfitted-delay libopus action fixtures pass in both
+the actual WASM artifact and native component: ordered FEC, reorder/loss/FEC/PLC/
+restart, all 10–120 ms durations, 120 ms followed by 10/20 ms holes, and malformed
+packing before another queued valid packet. The 20 ms loss now reaches 81.59 dB
+(after the separate codec fix), while malformed admission reaches 71.26 dB
+instead of 6.34 dB. The unchanged quality floor is 35 dB. Frozen failures remain
+under `~/.cache/nuschl-output-quality/`; final artifacts are
+`admission-native-final/proof.json` and `admission-wasm-final/proof.json`.
+
+Focused Nix tests pass 70 native worker tests (5 diagnostic tests ignored) and
+7 audio component tests. Actual WASM codec artifact:
+`/nix/store/0ad60z2nas0l24pqw0q51z3lzx2vdppw-nuschl-web-audio-codec`.
+This is component evidence; direct-port browser activation is still pending.

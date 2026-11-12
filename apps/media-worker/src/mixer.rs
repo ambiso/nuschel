@@ -143,6 +143,7 @@ impl Mixer {
         if opus.is_empty()
             || opus.len() > MAX_OPUS_BYTES
             || !volume.is_finite()
+            || opus_pure::packet::validate(&opus).is_err()
             || duration.is_none_or(|frames| {
                 frames == 0 || frames > MAX_PACKET_SAMPLES || frames % FRAME != 0
             })
@@ -244,6 +245,40 @@ pub fn finish(
 mod tests {
     use super::*;
     use opus_pure::{Application, MAX_PACKET_BYTES, OpusEncoder};
+
+    #[test]
+    fn malformed_framing_is_rejected_before_speaker_or_timing_mutation() {
+        let now = Instant::now();
+        let malformed = || Voice {
+            stream: 1,
+            sender: 1,
+            sequence: 2,
+            opus: vec![0x09, 0],
+            end: false,
+            volume: 4.,
+        };
+        let mut injected = Mixer::default();
+        injected.push(malformed(), now).unwrap();
+        assert!(injected.speakers.is_empty());
+        let packets = tone(3, 0.2);
+        let mut clean = Mixer::default();
+        for mixer in [&mut injected, &mut clean] {
+            feed(mixer, 1, 1, &packets, 0.25);
+        }
+        let before = injected.speakers[&(1, 1)].last_packet;
+        injected
+            .push(malformed(), now + Duration::from_secs(2))
+            .unwrap();
+        assert_eq!(injected.speakers[&(1, 1)].last_packet, before);
+        assert_eq!(injected.speakers[&(1, 1)].volume, 0.25);
+        for _ in 0..12 {
+            let mut actual = [[0.; 2]; FRAME];
+            let mut expected = [[0.; 2]; FRAME];
+            injected.mix(&mut actual);
+            clean.mix(&mut expected);
+            assert_eq!(actual, expected);
+        }
+    }
 
     /// 20 ms Opus packets of a tone at `amplitude`.
     fn tone(count: usize, amplitude: f32) -> Vec<Vec<u8>> {

@@ -700,22 +700,21 @@ The media worker uses per-speaker adaptive jitter buffers and Opus loss concealm
       sequence checks and regression units pass; no target/catch-up/concealment
       budget retuning. Historical extraction trace equality remains scoped to
       that checkpoint; this correction intentionally changes those bug cases.
-- [ ] Verify integrated CELT PLC correction through native/browser playout.
-      A 120 ms packet of 10 ms CELT frames followed by a 20 ms loss previously
-      gave only 28.21 dB agreement with independent libopus. The private accepted
-      TOC-frame duration now bounds concealment pieces, improving the unchanged
-      fixture to 81.59 dB. All 332 independent CELT cases (fresh/reused scratch)
-      and the prior strict 241 production-rate cases pass. Native/browser pipeline
-      reruns remain required before closing this row; preserve baseline evidence
-      under `~/.cache/nuschl-output-quality/celt-plc/`. Public duration metadata,
-      jitter policy and direct 8/12 kHz resampling remain separate issues.
-- [ ] Reject complete malformed Opus framing before native/browser jitter or
-      speaker-state admission (active browser-audio owner). The frozen `09 00`
-      case shortens the predicted concealment span and displaces a subsequent
-      valid packet; decoder-level rejection alone does not protect the queue.
-      The reviewed allocation-free `packet::validate` API is integrated, but
-      callers still need to invoke it before sequence/time/gain state changes.
-      Preserve admission failure evidence and test valid packets after rejection.
+- [x] Verify the integrated CELT PLC correction in native/actual-WASM playout
+      components. The frozen 120 ms→20 ms loss improves 28.21→81.59 dB against
+      independent libopus at fixed gain and unfitted delay; all six independent
+      action cases pass in both engines after admission validation. The original
+      332 codec cases and prior 241 cases remain separate proofs. Preserve failed
+      evidence under `~/.cache/nuschl-output-quality/celt-plc/`; actual browser
+      worker/Worklet activation remains the open row below.
+- [x] Reject full malformed Opus framing before native/browser jitter or speaker
+      admission. Both invoke allocation-free `packet::validate` before time,
+      sequence or gain changes. The frozen `09 00` plus subsequent valid packet
+      improves 6.34→71.26 dB against independent libopus; exact frame sizes,
+      gains and rejection results now agree in native/actual-WASM components.
+      Unit tests also prove rejection cannot create a native speaker or advance
+      its arrival clock. This checks packet packing, not entropy authenticity;
+      worker activation and confined-browser proof remain open below.
 - [ ] Complete browser sample-clock playout integration (active browser-audio
       owner; isolated Worklet controller integrated with 27 component tests).
       Keep RX authorization separate from TX epochs so mic mute/bitrate changes

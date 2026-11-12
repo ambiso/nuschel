@@ -65,10 +65,7 @@ impl VoicePlayout {
         {
             return Err("invalid bounded voice packet".into());
         }
-        let frames = packet::samples_48k(opus).map_err(|error| error.to_string())?;
-        if frames == 0 || frames > MAX_PACKET_SAMPLES || frames % PLAYOUT_FRAMES != 0 {
-            return Err("invalid Mumble packet duration".into());
-        }
+        Self::validate_packet(opus)?;
         let now = Duration::from_micros(arrival_us);
         if self.last_input.is_some_and(|previous| now < previous) {
             return Err("non-monotonic arrival clock".into());
@@ -90,6 +87,20 @@ impl VoicePlayout {
             end,
             now,
         );
+        Ok(())
+    }
+
+    /// Stateless framing/duration check, also used before allocating a speaker.
+    /// This validates Opus packing, not entropy-coded content or authenticity.
+    pub fn validate_packet(opus: &[u8]) -> Result<(), String> {
+        if opus.is_empty() || opus.len() > 1024 {
+            return Err("invalid bounded voice packet".into());
+        }
+        packet::validate(opus).map_err(|error| error.to_string())?;
+        let frames = packet::samples_48k(opus).map_err(|error| error.to_string())?;
+        if frames == 0 || frames > MAX_PACKET_SAMPLES || frames % PLAYOUT_FRAMES != 0 {
+            return Err("invalid Mumble packet duration".into());
+        }
         Ok(())
     }
 
@@ -234,6 +245,27 @@ mod tests {
         assert_eq!(receiver.render().unwrap().len(), 960);
         assert!(receiver.render().unwrap().is_empty());
     }
+    #[test]
+    fn malformed_framing_cannot_change_timing_gain_or_the_following_packet() {
+        let packets = packets();
+        let mut clean = VoicePlayout::new().unwrap();
+        let mut injected = VoicePlayout::new().unwrap();
+        for receiver in [&mut clean, &mut injected] {
+            receiver.push(0, &packets[0], false, 0.25, 0).unwrap();
+            receiver.push(4, &packets[2], true, 0.5, 40_000).unwrap();
+        }
+        assert!(injected.push(2, &[0x09, 0], false, 4., 99_000).is_err());
+        // A rejected future arrival must not advance the monotonic input clock.
+        for receiver in [&mut clean, &mut injected] {
+            receiver.push(2, &packets[1], false, 0.75, 45_000).unwrap();
+        }
+        for _ in 0..12 {
+            assert_eq!(clean.render().unwrap(), injected.render().unwrap());
+            assert_eq!(clean.gain(), injected.gain());
+            assert_eq!(clean.last_render_kind(), injected.last_render_kind());
+        }
+    }
+
     #[test]
     fn loss_is_clock_driven_and_reset_discards_cached_pcm() {
         let packets = packets();
