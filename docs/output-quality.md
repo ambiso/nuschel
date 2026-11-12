@@ -424,10 +424,29 @@ multispeaker, loss/jitter or perceptual parity.
 Stock Mumble sets `OPUS_SET_PHASE_INVERSION_DISABLED(1)` after decoder creation.
 Locked opus-pure's CELT decode currently passes `disable_inv=false` and has no
 obvious public control. The earlier reference-libopus fixtures use defaults, so
-matching those does not establish matching this stock setting. Low-bitrate
-intensity-stereo, high-band energy and mono-fold fixtures must use the explicit
-stock control before choosing a minimal safe API change. This is a separate
-codec task; no unmeasured phase-control change is hidden in the SRC adapter.
+matching those does not establish matching this stock setting.
+
+The independent `tests/opus_phase.py` fixtures now explicitly compare both
+libopus CTL4046 settings on identical packets. Published Rust decode agrees with
+default libopus at 127–138 dB, but with the stock Mumble setting at only
+11.04/7.70/3.56/−2.76 dB for 16/24/32/48 kbit intensity-stereo cases. At 48 kbit,
+stock mono-fold RMS is 4.14× the default; the 128 kbit low-band control is unchanged.
+These are real synthesis differences, not entropy parsing: every final-range
+value remains identical. The low-rate streams include Hybrid→CELT transitions.
+Evidence: `phase-published/proof.json` and `phase-reference-baseline/proof.json`.
+
+The pinned opus-pure 0.2.3 vendor patch exposes the existing CELT `disable_inv`
+argument as an explicit decoder setting, default false. It preserves histories,
+reset/channel/rate behavior, entropy-bit consumption and encoder/generic defaults.
+Only three upstream files change; original license/VCS/manifests are retained
+byte-for-byte, with archive identity and patch detail in
+`vendor/opus-pure/NUSCHL-PATCH.md`. All 30 upstream API tests pass, including the
+new default/reset test at every API rate/channel count. A device-free patched
+Rust decoder matches both explicit reference modes at ≥127 dB, including an actual
+midstream reset. This is the API/graph checkpoint; receive-path activation and
+actual native/WASM proofs remain the next separate step. This control deliberately
+trades some stereo rendering quality for mono-fold behavior, matching Mumble;
+it is not universally superior stereo or a perceptual-equivalence guarantee.
 
 ## Implementation sequence
 

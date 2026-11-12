@@ -1,0 +1,154 @@
+name: CI
+
+# The point of this file is hardware. Development happens on aarch64 macOS, so
+# the x86 kernels never run there: `--target x86_64-apple-darwin` goes through
+# Rosetta, which reports SSE2 and no AVX at all, and every AVX and AVX2 path in
+# the crate is compiled and then never dispatched to. The Linux and Windows legs
+# are the only place those kernels execute, and Windows is also the only place a
+# non-Apple libm is exercised.
+
+# Every leg runs on push and on pull requests. This repository is public, where
+# none of these runners bill against an allowance — including the ARM Linux one,
+# which is free only on public repositories. `workflow_dispatch` stays so a run
+# can be started by hand without an empty commit.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A newer push makes the older run's answer stale before it finishes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # One platform failing is a result about that platform, not a reason to
+      # throw away what the other two were about to report.
+      fail-fast: false
+      matrix:
+        include:
+          # The only runner that reaches the AVX and AVX2 kernels at all.
+          - name: linux x86-64
+            os: ubuntu-latest
+            simd: sse2,avx,avx-fma,avx2,avx2-fma
+          # NEON again, but on glibc rather than Apple's libm. The CELT hashes
+          # in `tests/bitstream_stability.rs` are gated on the architecture; this
+          # is what makes that gate a checked claim rather than a guess that the
+          # architecture, and not the C library, is what they depend on.
+          - name: linux aarch64
+            os: ubuntu-24.04-arm
+            simd: neon
+          # The platform those hashes were frozen on, so this leg enforces them.
+          - name: macos aarch64
+            os: macos-latest
+            simd: neon
+          # A third libm, and the only MSVC toolchain here.
+          - name: windows x86-64
+            os: windows-latest
+            simd: sse2,avx,avx-fma,avx2,avx2-fma
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Use the current stable toolchain
+        shell: bash
+        run: |
+          rustup update stable --no-self-update
+          rustup default stable
+          rustup component add clippy
+          rustc -Vv
+
+      # Half the vector code in this crate sits behind `#[cfg(target_arch)]`,
+      # so a single lint job would compile one architecture's kernels and never
+      # see the other's. Clippy runs on each platform for that reason.
+      - name: Clippy
+        run: cargo clippy --release --all-targets -- -D warnings
+
+      # Recorded in the log on its own, because every other `simd_*` test passes
+      # whether or not the kernel it covers was the one dispatched to. This says
+      # which ones this runner actually reached.
+      - name: Report the vector kernels this runner dispatches to
+        run: cargo test --release simd_dispatch -- --nocapture
+
+      # `OPUS_PURE_REQUIRE_SIMD` turns that report into an assertion. Without it,
+      # a move to runner hardware without AVX2 would leave the suite green while
+      # silently covering nothing above SSE2 — which is exactly the coverage
+      # this job exists to add.
+      - name: Test
+        run: cargo test --release
+        env:
+          OPUS_PURE_REQUIRE_SIMD: ${{ matrix.simd }}
+
+  checks:
+    name: format, harnesses, docs, MSRV, packaging
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Use the current stable toolchain
+        run: |
+          rustup update stable --no-self-update
+          rustup default stable
+          rustup component add rustfmt clippy
+
+      - name: Formatting
+        run: |
+          cargo fmt --check
+          cargo fmt --check --manifest-path reference/rust/Cargo.toml
+
+      # The reference harnesses are how every libopus comparison in this
+      # repository was produced, and they build against the crate by path. They
+      # are not part of the library and nothing else compiles them, so without
+      # this they would rot silently and only be found by someone reaching for
+      # one mid-investigation. Building is the whole check: running them needs
+      # libopus, opus-tools and a 75 MB vector set, which is deliberately a
+      # local job.
+      - name: Reference harnesses still build
+        run: |
+          cargo build --release --manifest-path reference/rust/Cargo.toml
+          cargo clippy --release --all-targets --manifest-path reference/rust/Cargo.toml -- -D warnings
+
+      # No runner here is 32-bit x86, yet the crate builds for it (Android
+      # x86, for one), and some x86 kernels are compiled for both widths under
+      # `cfg(any(target_arch = "x86", target_arch = "x86_64"))` while others
+      # are x86-64 only. Linting that target is what keeps those `cfg`s and the
+      # dispatch sites agreeing.
+      # Clippy never links, so the target's standard library is all it needs.
+      - name: Clippy for 32-bit x86
+        run: |
+          rustup target add i686-unknown-linux-gnu
+          cargo clippy --release --all-targets --target i686-unknown-linux-gnu -- -D warnings
+
+      - name: Documentation
+        run: cargo doc --no-deps
+        env:
+          RUSTDOCFLAGS: -D warnings
+
+      # `rust-version` in Cargo.toml is what a consumer's cargo checks before it
+      # will build this crate at all, and nothing else here pins it. It tracks
+      # the current stable rather than trailing it, so this step and the stable
+      # legs agree today and diverge the moment a new stable ships -- which is
+      # exactly when the promise needs testing. `check` rather than `test`: what
+      # has to hold is the language and std surface, and the results are already
+      # covered by the stable legs. The second target is cheap because `check`
+      # never links, and it keeps the aarch64-only code under the same promise
+      # as the rest.
+      - name: MSRV (1.88.0, the declared rust-version)
+        run: |
+          rustup toolchain install 1.88.0 --profile minimal --no-self-update
+          rustup target add --toolchain 1.88.0 aarch64-unknown-linux-gnu
+          cargo +1.88.0 check --release --all-targets
+          cargo +1.88.0 check --release --all-targets --target aarch64-unknown-linux-gnu
+
+      # Builds the crate from the tarball crates.io would receive, so a file
+      # that only exists in the working tree cannot pass here and fail on
+      # publish.
+      - name: Packaging
+        run: cargo package

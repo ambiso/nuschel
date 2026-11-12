@@ -1,0 +1,12 @@
+/target
+/tmp
+Cargo.lock
+.DS_Store
+
+# Everything the reference harnesses produce: the libopus checkout and its
+# builds, the compiled C tools, and every generated stream. `reference/` itself
+# is tracked; nothing in it writes outside this directory.
+/reference/work
+/reference/rust/target
+__pycache__/
+tmp/

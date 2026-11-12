@@ -1,0 +1,47 @@
+[package]
+name = "opus-pure"
+version = "0.2.3"
+edition = "2024"
+rust-version = "1.88.0"
+description = "Pure-Rust Opus audio codec (RFC 6716) with Ogg encapsulation (RFC 7845)"
+license = "BSD-3-Clause"
+readme = "README.md"
+repository = "https://github.com/stephenberry/opus-pure"
+keywords = ["opus", "ogg", "codec", "encoder", "decoder"]
+categories = ["multimedia::audio", "multimedia::encoding"]
+# The reference harnesses and the fuzz targets are development tools, not part
+# of the library, and each is a package of its own — shipping them in the
+# `.crate` would bloat it and confuse `cargo package`'s view of the tree. The
+# fuzz targets' bodies live in `tests/common/fuzz.rs`, which is shipped, so the
+# corpus replay in `tests/fuzz_corpus.rs` still builds from the published crate.
+exclude = ["reference/", "fuzz/"]
+
+# docs.rs builds the default feature set: `probe` is explicitly not public API,
+# so rendering it would document promises the crate does not make.
+[package.metadata.docs.rs]
+all-features = false
+
+[features]
+# Internal measurement hooks for the harnesses in `reference/`. Not public API:
+# what they expose can change or disappear without a version bump. Off by default,
+# so a normal build carries none of it.
+probe = []
+
+[lib]
+# `cargo bench` should run the benchmark, not the unit tests with no `#[bench]`
+# functions in them.
+bench = false
+
+[dependencies]
+
+[dev-dependencies]
+
+[[bench]]
+name = "throughput"
+harness = false
+
+[profile.dev]
+codegen-units = 4
+
+[profile.test]
+codegen-units = 4

@@ -28388,7 +28388,7 @@ rec {
         crateName = "opus-pure";
         version = "0.2.3";
         edition = "2024";
-        sha256 = "1gm0x2dxmcs5sxffhkffadp30zmjcvpncc4qhk1drp8ichiwvyjs";
+        src = lib.cleanSourceWith { filter = sourceFilter;  src = ../../vendor/opus-pure; };
         libName = "opus_pure";
         features = {
         };
