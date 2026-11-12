@@ -2,8 +2,9 @@
 
 Current focus (user, 2026-11-12): **unmute-to-first-speech latency, stereo receive
 and output fidelity, and hybrid update readiness**. Independent owners now cover
-receive clipping/reference correspondence, relay DNS validation and SuperUser
-bootstrap guidance. Transmit quality evidence and the exact native welcome-domain
+capture SRC fidelity, private relay DNS validation and the native ACL/group
+editor. The measured playback clipping correction and SuperUser bootstrap guide
+are integrated. Transmit quality evidence and the exact native welcome-domain
 regression are integrated; the missing web welcome surface remains open.
 Full Mumble ACL/group editing parity is explicitly queued below. Native action
 authority, content/math worker retirement and
@@ -29,6 +30,23 @@ outside the current task's scope.
 
 Current integration checkpoint (2026-11-12):
 
+- **Playback clipping/reference correction is integrated through `89806ef2`.**
+  The reviewed wide ring/device clip and actual quantized-output fallback pass
+  76 native tests, 20 independent C-reference/clock cases, the unchanged spectral
+  gates, private DSP/rate checks and the existing gain regressions. At 44.1 kHz,
+  the overload comparison improves from 20.03 to 127.31 dB. All eight combined
+  build/check outputs at `700b8d24` and actual native/web notices pass; the bundled
+  media worker is byte-identical to the tested final worker. Browser runtime
+  assets remain byte-identical to the actual App-tested product. Full physical,
+  platform and end-to-end listening equivalence remain open. Root evidence:
+  `~/.cache/nuschl-integration-20261112/output-clip-order/handoff.json`.
+- **SuperUser bootstrap guidance is integrated at `700b8d24`.** The loopback
+  test verifies password setup/rotation, exact fresh ACL preservation, registered
+  account promotion, unpromoted denial and restart persistence. The documented
+  stock-Mumble group-editor route applies to compatible-mode servers; Nuschl's
+  own full editors and E2EE bootstrap remain unfinished. See docs/server.md.
+  Relay module tests integrated at `936c9eeb` independently pass six actual
+  configurations/eight invariant categories; the private DNS/BPF VM run is active.
 - **Shared-checkout relay commits are repaired.** `24a810a0` and `8a84f4b9`
   are consolidated into relay-only `7ed9b7b2`; the accidentally captured TODO
   milestone update is a separate docs-only `f8a69fa1`. A before/after comparison
