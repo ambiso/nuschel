@@ -69,8 +69,20 @@ pub fn dispatch() -> Result<bool> {
         return Err("private parent directory writable inside verifier LPAC".into());
     }
     let address = SocketAddr::from(([127, 0, 0, 1], port));
-    if TcpStream::connect_timeout(&address, Duration::from_millis(500)).is_ok() {
-        return Err("guest network reachable inside verifier LPAC".into());
+    match std::panic::catch_unwind(|| {
+        TcpStream::connect_timeout(&address, Duration::from_millis(500))
+    }) {
+        Ok(Ok(_)) => return Err("guest network reachable inside verifier LPAC".into()),
+        Ok(Err(_)) => {}
+        Err(panic) => {
+            // The pinned Windows std asserts WSAStartup success. LPAC returns
+            // WSASYSCALLFAILURE before a socket exists. Accept only this exact
+            // observed initialization denial, never an unrelated child crash.
+            let expected = "assertion `left == right` failed\n  left: 10107\n right: 0";
+            if panic.downcast_ref::<String>().map(String::as_str) != Some(expected) {
+                std::panic::resume_unwind(panic);
+            }
+        }
     }
     // Deliberately skip asymmetric verification: compromise of one algorithm
     // process still must not authorize a corrupt signature in its sibling.
