@@ -17,8 +17,8 @@ use crate::{
 };
 use nuschl_core::audio::{
     AudioDevice, DEFAULT_SERVER_BANDWIDTH, DEFAULT_VOICE_BITRATE, EchoSource, Sound, TransmitMode,
-    voice_bitrate,
 };
+use nuschl_core::bitrate::{VoiceBitrate, voice_frame_fits};
 use nuschl_core::{ChatMessage, ContentBlock, HistoryPage, MessageDocument};
 use nuschl_ipc::{LiveMediaEvent, LiveMediaRequest};
 use nuschl_protocol::nuschl::v1;
@@ -1398,7 +1398,12 @@ async fn connect_once(
     let mut voice_allowed = true;
     let mut sequence = 0;
     let mut content_gap = false;
-    let mut bitrate = voice_bitrate(DEFAULT_SERVER_BANDWIDTH);
+    // The budget this server advertised (ServerSync, then ServerConfig) and
+    // the requested target: this connection's share of the microphone is
+    // encoded and admitted at their effective rate (nuschl_core::bitrate).
+    let mut budget = DEFAULT_SERVER_BANDWIDTH;
+    let mut requested = settings.borrow().voice_bitrate;
+    let mut bitrate = VoiceBitrate::resolve(requested, budget).effective;
     // Our share of the app's microphone, once connected; detached however
     // this ends.
     let mut voice: Option<(mpsc::Receiver<media::Outgoing>, media::Attached)> = None;
@@ -1430,11 +1435,31 @@ async fn connect_once(
                 // Volumes apply to the next packet; the worker follows audio
                 // settings itself.
                 if changed.is_err() { break; }
-                if settings.borrow_and_update().relay_only != relay_only {
+                let (relay, wanted) = {
+                    let current = settings.borrow_and_update();
+                    (current.relay_only, current.voice_bitrate)
+                };
+                if relay != relay_only {
                     // A full command queue must not silently lose an opt-in.
                     // Reconnect even when ordinary auto-reconnect is disabled.
                     outcome = Some(Outcome::PrivacyReconnect);
                     break;
+                }
+                if wanted != requested {
+                    // Only the encoder follows: a request (64k or more) cannot
+                    // open or close capture, so the revision and its privacy
+                    // epochs stay. Frames queued at the old rate that exceed
+                    // the new allowance are refused below, never resent.
+                    requested = wanted;
+                    let next = VoiceBitrate::resolve(requested, budget).effective;
+                    if (next == 0) != (bitrate == 0) { voice_revision = voice_revision.wrapping_add(1); }
+                    if next != bitrate {
+                        bitrate = next;
+                        if voice.is_some() {
+                            hub.send(media::Control::Update { server: id.clone(), generation,
+                                link: media::Link { revision: voice_revision, voice_allowed, muted, deafened, bitrate, loss_percent }, cue: None });
+                        }
+                    }
                 }
             },
             changed = voice_keys.changed() => {
@@ -1493,7 +1518,7 @@ async fn connect_once(
                 let Some(media::Outgoing { revision, opus, end }) = outgoing else { voice = None; continue };
                 // Only unmuted, as the worker's supervisor routes it; nothing
                 // captured before a mute leaves.
-                if !voice_allowed || revision != voice_revision || muted || deafened || voice_keys.borrow().mute || bitrate == 0 || opus.len() > (bitrate / 400) as usize { continue; }
+                if !voice_allowed || revision != voice_revision || muted || deafened || voice_keys.borrow().mute || !voice_frame_fits(bitrate, opus.len()) { continue; }
                 let packet = nuschl_protocol::voice::VoicePacket { sender: 0, sequence, opus, end, volume: 1. };
                 sequence += 2;
                 transmitting = !end;
@@ -1613,7 +1638,8 @@ async fn connect_once(
                     }
                     own_session = Some(connected_session);
                     let own_session = connected_session;
-                    bitrate = voice_bitrate(max_bandwidth);
+                    budget = max_bandwidth;
+                    bitrate = VoiceBitrate::resolve(requested, budget).effective;
                     let (sender, receiver) = mpsc::channel(64);
                     let link = media::Link { revision: voice_revision, voice_allowed, muted, deafened, bitrate, loss_percent };
                     hub.send(media::Control::Attach { server: id.clone(), generation, link, voice: sender });
@@ -1623,7 +1649,8 @@ async fn connect_once(
                 },
                 SessionEvent::Limits(limits) => {
                     if let Some(max_bandwidth) = limits.max_bandwidth {
-                        let next = voice_bitrate(max_bandwidth);
+                        budget = max_bandwidth;
+                        let next = VoiceBitrate::resolve(requested, budget).effective;
                         if (next == 0) != (bitrate == 0) { voice_revision = voice_revision.wrapping_add(1); }
                         bitrate = next;
                         if voice.is_some() {
