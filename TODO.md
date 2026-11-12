@@ -1552,11 +1552,13 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
       Keep notice inventory/vendoring tools distinct from compiled package
       builders. Cache cleanup being complete does not mean this migration is done;
       serialize flake/graph edits with the release-notice and codec owners.
-- [ ] Keep source-dependent notice/runtime postInstall hooks out of Crane's
-      buildDepsOnly cache key. The profile-only fix changed no dependency inputs,
-      yet the unused notice postInstall path invalidated a 954 MiB artifact and
-      would repeat the nine-minute dependency build. Its private proof safely
-      reused identical-input artifacts; the production builder is not fixed.
+- [x] Keep source-dependent notice/runtime postInstall hooks out of Crane's
+      buildDepsOnly cache key. Explicit artifact-only dependency passes exclude
+      final installation hooks while final products retain notice installation.
+      Actual Windows/macOS derivation evaluation proves a source-only edit keeps
+      dependency paths and changes final products; a Windows target-flag edit
+      still changes its dependency path (`tests/build_cache.py`,
+      `docs/build-cache.md`). This is cache-key proof, not a new cross runtime test.
 - [ ] Build official cross updater verifier outputs with separate algorithm
       features, matching the native per-crate policy. `crossCommon` currently
       enables both together: actual fixed-entry-point runtime tests pass, but do
