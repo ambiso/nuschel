@@ -42,6 +42,9 @@ bot in Mumble. It works with any Mumble server, stock Murmur as well as `nuschld
   attempts per queue, newest first. It shows track details, who queued the track,
   local start/end times, transmitted duration, and whether it completed, was
   skipped, or failed. History survives restarts and loads in pages of 50.
+- **Library history.** Playback also appears in the configured Subsonic account's
+  history and play counts. Shared channels count as one play; independent queues
+  count separately. The submission rules are described below.
 - **Ducking.** While somebody in a channel speaks, the queue playing there gets
   quieter (by default to 30 % of its volume) and comes back 0.8 s after the last
   speech. It fades down in about 60 ms and up in about half a second, so nothing
@@ -337,6 +340,13 @@ separate audio, speech-only ducking, seeking, public presence comments, complete
 skipped and failed history, pagination, and restart recovery with libraries
 reordered or removed.
 
+The backend reporting check also ran against a real Navidrome 0.64.2 instance
+with a six-second FLAC and stock Murmur. Navidrome's now-playing API identified
+`nuschl-musicbot` under the configured account. Completed plays and qualifying
+skips updated its history and play count; paused enqueues, short skips and a seek
+to the end did not. Shared queues submitted once, independent queues separately,
+and a deployment restart preserved the original play timestamp without backfill.
+
 ```sh
 cargo build -p nuschl-cli -p nuschl-musicbot -p nuschl-musicbot-codec-worker
 mkdir -p prefix/bin prefix/libexec/nuschl-musicbot
@@ -351,6 +361,35 @@ python3 tests/with_local_murmur.py "$(nix build --inputs-from . nixpkgs#murmur -
 
 `nix build .#checks.x86_64-linux.vm-musicbot` runs the bot under its NixOS module
 against Murmur in a VM, then the same script.
+
+## Backend playback history
+
+The bot uses the standard Subsonic `scrobble` endpoint. After the first successful
+audio packet it sends `submission=false` to announce now-playing. When playback
+ends, it sends `submission=true` if transmitted audio reached half the advertised
+duration or four minutes, whichever is shorter. Tracks without a positive known
+duration require four minutes. Completion, skip and decoder failure use the same
+threshold; paused time, listenerless waits and audio skipped by seeking do not
+count.
+
+Reports use the library's configured account, including the account associated
+with an API key. Mumble names identify who queued a track in the bot's own History
+view; they do not create separate Subsonic users. Navidrome updates that account's
+play count, last-played time and backend history. Any external scrobbling uses the
+integrations configured for that account on the library server.
+
+Each logical queue reports once, even when several Mumble channels hear it.
+Pause and seek retain the ongoing play. Deployment restarts retain its first-audio
+Unix timestamp in milliseconds and transmitted duration; the resumed play may
+announce now-playing again, then submit once when it ends. Finished history
+restored at startup is not backfilled.
+
+One owned reporter serializes requests across queues. Failed requests are logged
+without remote diagnostics and are not retried: Subsonic provides no idempotency
+key for a submitted play. SIGTERM, Ctrl-C and web-server failure join the current
+request and drain already-finished reports within a total 30-second grace. An
+ongoing play remains in the saved queue for deployment recovery.
+
 
 ## Playback state
 

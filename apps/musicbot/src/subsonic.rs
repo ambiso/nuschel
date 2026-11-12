@@ -295,6 +295,36 @@ impl Library {
         Ok(())
     }
 
+    /// Announces playback or submits a finished play using its first audio's
+    /// Unix timestamp in milliseconds. The configured library account owns it.
+    /// During shutdown, `deadline` shortens the normal metadata timeout to the
+    /// remaining grace; it never extends the standard 30-second limit.
+    pub fn scrobble(
+        &self,
+        id: &str,
+        time: i64,
+        submission: bool,
+        deadline: Option<std::time::Instant>,
+    ) -> Result<(), Error> {
+        let request = self
+            .get("scrobble")
+            .query("id", id)
+            .query("time", time.to_string())
+            .query("submission", if submission { "true" } else { "false" });
+        let request = if let Some(deadline) = deadline {
+            let timeout = deadline
+                .checked_duration_since(std::time::Instant::now())
+                .filter(|remaining| !remaining.is_zero())
+                .ok_or(Error::Http(ureq::Error::Timeout(ureq::Timeout::Global)))?
+                .min(API_TIMEOUT);
+            request.config().timeout_global(Some(timeout)).build()
+        } else {
+            request
+        };
+        self.call(request)?;
+        Ok(())
+    }
+
     /// The server's OpenSubsonic extensions; empty for plain Subsonic servers.
     /// Asked again later while the server cannot be reached.
     fn extensions(&self) -> Option<&HashSet<String>> {
@@ -1070,6 +1100,14 @@ pub(crate) mod tests {
             library.playlist("playlist").err().unwrap(),
             library.playlists().err().unwrap(),
             library.cover_art("cover", 300).err().unwrap(),
+            library
+                .scrobble("song", 1_700_000_000_123, false, None)
+                .err()
+                .unwrap(),
+            library
+                .scrobble("song", 1_700_000_000_123, true, None)
+                .err()
+                .unwrap(),
         ];
         assert!(
             errors
@@ -1077,7 +1115,7 @@ pub(crate) mod tests {
                 .all(|error| matches!(error, Error::Status(302)))
         );
         let requests = server.requests();
-        assert_eq!(requests.len(), 10);
+        assert_eq!(requests.len(), 12);
         assert!(
             requests
                 .iter()
@@ -1166,7 +1204,7 @@ pub(crate) mod tests {
 
     #[test]
     fn metadata_art_and_decision_body_reads_obey_total_deadline() {
-        for endpoint in ["search", "art", "decision"] {
+        for endpoint in ["search", "art", "decision", "scrobble", "scrobble-shutdown"] {
             let server = Server::new(|request, socket| {
                 let (mime, body): (_, &[u8]) = if request.starts_with("GET /rest/getCoverArt") {
                     ("image/png", b"ab")
@@ -1180,8 +1218,10 @@ pub(crate) mod tests {
                 let _ = socket.write_all(&body[1..]);
             });
             let mut library = library(&server);
-            library.api_agent =
-                transport_agent(Some(Duration::from_millis(20)), Duration::from_secs(1));
+            if endpoint != "scrobble-shutdown" {
+                library.api_agent =
+                    transport_agent(Some(Duration::from_millis(20)), Duration::from_secs(1));
+            }
             library
                 .extensions
                 .set(HashSet::from([TRANSCODING.into()]))
@@ -1189,6 +1229,19 @@ pub(crate) mod tests {
             let error = match endpoint {
                 "search" => library.search("song").err().unwrap(),
                 "art" => library.cover_art("cover", 300).err().unwrap(),
+                "scrobble" => library
+                    .scrobble("song", 1_700_000_000_123, true, None)
+                    .err()
+                    .unwrap(),
+                "scrobble-shutdown" => library
+                    .scrobble(
+                        "song",
+                        1_700_000_000_123,
+                        true,
+                        Some(std::time::Instant::now() + Duration::from_millis(20)),
+                    )
+                    .err()
+                    .unwrap(),
                 _ => library.stream(&track()).err().unwrap(),
             };
             assert!(
