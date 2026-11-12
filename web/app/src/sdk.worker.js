@@ -28,13 +28,18 @@ function drainVoice() {
     postMessage({kind:"voice_packet",packet},[packet.opus.buffer]);
   }
 }
+function drainContentWork() {
+  if(!client)return;
+  const operations=JSON.parse(client.content_requests());
+  if(operations.length)postMessage({kind:"content_work",operations});
+}
 function refresh() {
   if (!client) return;
   const updates = JSON.parse(client.poll());
+  // Codec credit must not wait behind a large UI snapshot/layout task.
+  drainContentWork();
   postMessage({ kind: "state", servers: JSON.parse(client.servers()), timeline: JSON.parse(client.timeline()), voice: JSON.parse(client.voice()), updates });
   drainVoice();
-  const contentWork=JSON.parse(client.content_requests());
-  if(contentWork.length)postMessage({kind:"content_work",operations:contentWork});
   for (const operation of JSON.parse(client.storage_requests())) {
     // Pages cannot overtake preceding writes. Rust retains opaque navigation
     // tickets and drops replies for old selections/connections/certificates.
@@ -119,7 +124,11 @@ onmessage = async ({ data }) => {
       if (data.id !== undefined) postMessage({ kind: "result", id: data.id, value });
       // Encoding is frequent; its route has already been admitted in Rust.
       if (data.method === "voice_packet") return;
-      if(data.method === "content_complete" || data.method === "content_request") { publication.content(); return; }
+      if(data.method === "content_complete" || data.method === "content_request") {
+        // The real ACK above releases its exact credit immediately. Refill the
+        // bounded codec lane before coalescing only the model publication.
+        drainContentWork();publication.content();return;
+      }
     }
     wake();
   } catch (reason) {
