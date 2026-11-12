@@ -1,0 +1,14 @@
+Source: nuschl
+Section: net
+Priority: optional
+Maintainer: @MAINTAINER@
+Build-Depends: debhelper-compat (= 13), cargo (>= 1.95), rustc (>= 1.95), pkg-config, clang, libclang-dev, protobuf-compiler, libfontconfig-dev, libfreetype-dev, libasound2-dev, libpipewire-0.3-dev, libxkbcommon-dev, libxkbcommon-x11-dev, libwayland-dev, libxcb1-dev, libx11-dev, libsqlite3-dev
+Rules-Requires-Root: no
+Homepage: https://github.com/ambiso/nuschl
+
+Package: nuschl
+Architecture: amd64
+Depends: ${shlibs:Depends}, ${misc:Depends}, bubblewrap, util-linux, desktop-file-utils, hicolor-icon-theme, libfontconfig1, libfreetype6, libxkbcommon0, libxkbcommon-x11-0, libwayland-client0, libwayland-cursor0, libvulkan1, libgl1, libegl1, libx11-6, libxcursor1, libxi6, libxrandr2, libxcb1, libasound2t64 | libasound2, libpipewire-0.3-0t64 | libpipewire-0.3-0, pipewire-bin, libpipewire-0.3-modules, libspa-0.2-modules, libpulse0
+Description: Voice and text chat for Mumble servers
+ Desktop client with isolated content, cryptography, storage and media helpers.
+ Updated by the system package manager; no in-app updater is enabled on Linux.

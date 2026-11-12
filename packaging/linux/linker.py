@@ -1,0 +1,134 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: EUPL-1.2
+"""Final-leaf linker adapter: cached Rust/static crate inputs, target system ABI.
+
+Never silently fall back to a Nix shared library. No package/runtime behavior or
+sandbox policy is changed here. Used only by the explicit native Nix builder.
+"""
+import os
+import json
+import hashlib
+import re
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import tempfile
+
+
+def native_directory(value, scratch):
+    if not value.startswith('/nix/store/'):
+        return value
+    path = Path(value)
+    # Native objects produced by reviewed Rust crates (ring/sqlite/FFI glue)
+    # may be retained. Expose archive files only, never a fallback shared lib.
+    if '-rust_' not in value or not path.is_dir():
+        return None
+    archives = list(path.glob('*.a'))
+    if not archives:
+        return None
+    destination = scratch / str(len(list(scratch.iterdir())))
+    destination.mkdir()
+    for archive in archives:
+        (destination / archive.name).symlink_to(archive.resolve())
+    return str(destination)
+
+
+def filter_arguments(arguments, scratch):
+    result = []; index = 0
+    while index < len(arguments):
+        argument = arguments[index]
+        if argument == '-L' or argument.startswith('-L'):
+            if argument == '-L':
+                index += 1
+                if index == len(arguments): raise ValueError('missing -L path')
+                value = arguments[index]
+            else: value = argument[2:]
+            directory = native_directory(value, scratch)
+            if directory: result += ['-L', directory]
+        elif argument.startswith('-Wl,'):
+            items = argument[4:].split(','); kept = []; part = 0
+            while part < len(items):
+                item = items[part]
+                if item in ('-rpath', '--rpath', '-rpath-link', '--rpath-link', '--dynamic-linker', '-dynamic-linker'):
+                    part += 2; continue
+                if any(item.startswith(prefix) for prefix in ('-rpath=', '--rpath=', '-rpath-link=', '--rpath-link=', '--dynamic-linker=')):
+                    part += 1; continue
+                kept.append(item); part += 1
+            if kept: result.append('-Wl,' + ','.join(kept))
+        elif argument.startswith('/nix/store/') and ('.so' in Path(argument).name or argument.endswith('.o')):
+            # Explicit CRTs from the raw compiler are supplied via target -B;
+            # Rust's own object/rlib inputs are kept, shared objects are not.
+            raise ValueError('unexpected explicit Nix native object: ' + argument)
+        else:
+            result.append(argument)
+        index += 1
+    return result
+
+
+def validate_trace(inputs, sysroot):
+    shared = set()
+    for line in inputs:
+        path = line.strip()
+        native = re.search(r'\.so(?:\.|$)', path) or path.endswith('.o') and '.rlib(' not in path
+        if path.startswith('/nix/store/') and native:
+            if not path.startswith(sysroot.rstrip('/') + '/'):
+                raise ValueError('unexpected Nix native link fallback: ' + path)
+            if re.search(r'\.so(?:\.|$)', path):
+                shared.add(path[len(sysroot):])
+    return sorted(shared)
+
+
+def target_environment(original):
+    env = dict(original)
+    suffixes = {'', '_x86_64_unknown_linux_gnu'}
+    for name in list(env):
+        for prefix in ('NIX_LDFLAGS', 'NIX_CFLAGS_COMPILE', 'NIX_CFLAGS_LINK'):
+            if name.startswith(prefix):
+                suffixes.add(name[len(prefix):])
+                env.pop(name, None)
+                break
+    for suffix in suffixes:
+        env['NIX_DONT_SET_RPATH' + suffix] = '1'
+    for name in ('LIBRARY_PATH', 'LD_LIBRARY_PATH'):
+        env.pop(name, None)
+    return env
+
+
+def main():
+    sysroot, compiler, *arguments = sys.argv[1:]
+    root = Path(sysroot)
+    triple = 'x86_64-linux-gnu'
+    with tempfile.TemporaryDirectory(prefix='nuschl-static-', dir=os.environ['TMPDIR']) as temporary:
+        scratch = Path(temporary)
+        filtered = filter_arguments(arguments, scratch)
+        command = [compiler, '--sysroot=' + sysroot,
+                   '-B' + str(root / 'usr/lib' / triple) + '/',
+                   '-B' + str(root / 'usr/lib/gcc' / triple / '14') + '/',
+                   '-L' + str(root / 'usr/lib' / triple),
+                   '-L' + str(root / 'usr/lib/gcc' / triple / '14'),
+                   '-Wl,--sysroot=' + sysroot,
+                   '-Wl,-rpath-link,' + str(root / 'usr/lib' / triple),
+                   '-Wl,-rpath-link,' + str(root / 'usr/lib' / triple / 'pulseaudio'),
+                   *filtered, '-Wl,--dynamic-linker=/lib64/ld-linux-x86-64.so.2', '-Wl,-t']
+        env = target_environment(os.environ)
+        with tempfile.TemporaryFile() as trace:
+            result = subprocess.run(command, env=env, stdout=trace)
+            if not result.returncode:
+                if trace.tell() > 2 * 1024 * 1024:
+                    raise ValueError('native link trace exceeds bound')
+                trace.seek(0)
+                inputs = trace.read().decode('utf-8', errors='strict').splitlines()
+                shared = validate_trace(inputs, sysroot)
+                print('verified target native shared inputs: ' + json.dumps(shared))
+                report = env.get('NUSCHL_LINK_REPORT')
+                if report:
+                    output = Path(filtered[filtered.index('-o') + 1])
+                    digest = hashlib.file_digest(output.open('rb'), 'sha256').hexdigest()
+                    Path(report).write_text(json.dumps({'schema': 1, 'shared_link_inputs': shared,
+                        'nix_native_fallbacks': 0, 'sha256': digest}, sort_keys=True, indent=2) + '\n')
+    raise SystemExit(result.returncode)
+
+
+if __name__ == '__main__':
+    main()

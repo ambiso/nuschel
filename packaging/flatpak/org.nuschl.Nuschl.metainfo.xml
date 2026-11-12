@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>org.nuschl.Nuschl</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>EUPL-1.2</project_license>
+  <name>Nuschl</name>
+  <summary>Talk with people on Mumble servers</summary>
+  <description>
+    <p>Mumble-compatible voice chat with a channel tree, local chat history,
+    formatted messages and isolated media and content workers.</p>
+    <p>This is an experimental early preview. Platform and physical audio-device
+    coverage remains incomplete.</p>
+  </description>
+  <launchable type="desktop-id">org.nuschl.Nuschl.desktop</launchable>
+  <developer id="org.nuschl">
+    <name>Nuschl contributors</name>
+  </developer>
+  <url type="homepage">https://nuschl.eu</url>
+  <url type="bugtracker">https://github.com/ambiso/nuschl/issues</url>
+  <url type="vcs-browser">https://github.com/ambiso/nuschl</url>
+  <provides>
+    <mediatype>x-scheme-handler/mumble</mediatype>
+    <mediatype>x-scheme-handler/nuschl</mediatype>
+  </provides>
+  <categories>
+    <category>Network</category>
+    <category>Chat</category>
+    <category>AudioVideo</category>
+  </categories>
+</component>
