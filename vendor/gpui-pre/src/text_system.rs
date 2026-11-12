@@ -627,15 +627,15 @@ impl TextSystem {
                 // Nuschel patch: a fallback keeps what was asked of the font
                 // (weight, style, features and fallbacks); only the family
                 // changes. Bold, italic and code text used to come out as the
-                // fallback family's regular face.
-                let monospace = is_monospace_family(&font.family);
-                let font_id = self
-                    .monospace_fallback_font_stack
-                    .iter()
-                    .filter(|_| monospace)
-                    .chain(&self.fallback_font_stack)
-                    .map(|fallback| fallback_for(font, fallback))
-                    .find_map(|candidate| lookup_font(&candidate));
+                // fallback family's regular face. The family is first looked
+                // up as upstream did, by itself, so that a missing family is
+                // asked of the platform once rather than again for every
+                // weight, style and feature set (on Windows each miss rescans
+                // the system fonts).
+                let font_id = self.fallback_fonts(font).find_map(|fallback| {
+                    lookup_font(fallback)?;
+                    lookup_font(&fallback_for(font, fallback))
+                });
                 if let Some(font_id) = font_id {
                     font_ids.with_upgraded(|font_ids| {
                         font_ids.insert(font.clone(), CachedFont::Fallback(font_id));
@@ -651,13 +651,21 @@ impl TextSystem {
             panic!(
                 "failed to resolve font '{}' or any of the fallbacks: {}",
                 font.family,
-                self.monospace_fallback_font_stack
-                    .iter()
-                    .chain(&self.fallback_font_stack)
+                self.fallback_fonts(font)
                     .map(|fallback| &fallback.family)
                     .join(", ")
             );
         })
+    }
+
+    /// Nuschel patch: the fallback families tried for `font`, monospace ones
+    /// first for a monospace family (see [`is_monospace_family`]).
+    fn fallback_fonts(&self, font: &Font) -> impl Iterator<Item = &Font> {
+        let monospace = is_monospace_family(&font.family);
+        self.monospace_fallback_font_stack
+            .iter()
+            .filter(move |_| monospace)
+            .chain(&self.fallback_font_stack)
     }
 }
 
@@ -1408,6 +1416,27 @@ mod font_resolution_tests {
         }
         assert_eq!(text_system.resolve_font(&requested), FontId(42));
         assert_eq!(text_system.get_font_for_id(FontId(42)), Some(expected));
+    }
+
+    /// Nuschel patch: a fallback family known to be missing is skipped, not
+    /// looked up again with each request's weight and style.
+    #[test]
+    fn missing_fallback_families_are_not_looked_up_per_weight() {
+        let text_system = TextSystem::new(Arc::new(NoopTextSystem::new()));
+        let bold = font("Missing Font").bold();
+        {
+            let mut font_ids = text_system.font_ids_by_font.write();
+            font_ids.insert(bold.clone(), missing());
+            font_ids.insert(font(".ZedSans"), missing());
+        }
+        // NoopTextSystem resolves any family it is asked for, as FontId(1).
+        assert_eq!(text_system.resolve_font(&bold), FontId(1));
+        let font_ids = text_system.font_ids_by_font.read();
+        assert!(!font_ids.contains_key(&fallback_for(&bold, &font(".ZedSans"))));
+        assert!(matches!(
+            font_ids.get(&fallback_for(&bold, &font("Helvetica"))),
+            Some(CachedFont::Direct(FontId(1)))
+        ));
     }
 
     /// Nuschel patch: code falls back to a monospace family first; other
