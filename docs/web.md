@@ -139,6 +139,62 @@ explicit empty list, overlapping LAN/DNS exceptions and an explicit destination
 deny setting. It checks unchanged kernel deny/hardening settings and verifies
 that DNS-only exceptions leave the generated application relay config identical.
 
+The isolated DNS integration fixture is built with:
+
+```sh
+nix build --offline --impure --file tests/web_dns_vm.nix driver \
+  --cores 2 --max-jobs 2 --no-link --print-out-paths
+```
+
+Run that driver's `bin/nixos-test-driver --no-interactive -o "$scratch/out"`
+with a **fresh owned directory on disk**, mode 0700. Create its `tmp`, `run` and
+`out` subdirectories with the same permissions, and set
+`NUSCHL_VM_SCRATCH_ROOT="$scratch"`, `TMPDIR="$scratch/tmp"` and
+`XDG_RUNTIME_DIR="$scratch/run"`. Setting only TMPDIR does not select the
+driver's machine-state paths. The shared pre-boot guard checks the actual paths
+and rejects tmpfs/ramfs before either guest starts. This runs owned test VMs;
+it deploys no host service and contacts no public DNS or Mumble server.
+
+The fixture uses two guests, one with the normal resolved `.53` stub and one
+with an explicit custom `.55` resolver file. Their authoritative `.test` zone
+points only to owned guest addresses; upstream/fallback resolvers and DHCP are
+disabled, and the test asserts no default IPv4 route. Forced `files dns` NSS,
+disabled nscd/nsncd and no hosts-file test name make the lookup traverse the IP
+filter rather than a Unix resolver/cache. These are deliberate test controls,
+not a recommendation to disable normal production resolver caches.
+
+Actual checks run inside the relay unit's cgroup with its real hardening:
+the configured resolver and another port at its address are reachable, other
+listening loopbacks are blocked, and BPF IPAccounting observes ingress/egress.
+The actual relay then logs in to stock Murmur with TLS and receives a UDP ping
+answer. Resolver addresses remain `AddressRefused` at the application layer.
+Removing only the DNS IP exception makes startup DNS fail; restoring the
+original unit recovers. The fixture adds only a bounded diagnostic pre-start
+program and IPAccounting; the application and module policy are real.
+
+The first actual run exposed an existing explicit-deny precedence bug: a broad
+operator allowance returned before an overlapping explicit denial. The corrected
+policy checks explicit `deny_networks` first, then allows operator overrides of
+**built-in** special ranges, then applies built-in refusals. IPv4/IPv6, mapped
+IPv4 and prefix-boundary regressions pass. The final VM fixture points the
+explicitly denied name at a **listening owned LAN alias**. A bounded guest-only
+header counter sees four TCP/UDP packets for its direct-connect control and zero
+for the denied relay request, which returns `AddressRefused`. No packet payload
+is stored. This verifies that the deny is enforced before connection/ping work,
+rather than mistaking an unreachable server for a refusal.
+
+Verified source: `fa281ca3` (explicit-deny correction) and `3b7236c4` (stronger
+fixture). All seven relay integration tests and nine units pass; both real VM
+cases pass in 39 seconds. The exact driver is
+`/nix/store/xr61xwgnkgm9xvyxxvj9sfg5j5lf5ipk-nixos-test-driver-nuschl-web-dns`.
+Source hashes, commands and retained failures are recorded in
+`~/.cache/nuschl-dns-review/handoff.json`; final actual runtime evidence is
+`run-3/dns-proof.json`, with btrfs state-path proof in
+`run-3/scratch-proof.json`. The earlier absent custom resolver-file trial and the
+actual pre-fix explicit-deny failure remain intact. IPv6 policy/custom-address
+evaluation is covered, but these runtime DNS cases use IPv4; no public deployment
+or unsupported-kernel eBPF guarantee is claimed.
+
 `nix build .#checks.x86_64-linux.vm-web` boots the module (plain HTTP, no ACME in a
 VM), checks the site, the landing page, its headers, the app-link files and that
 tokens are not logged, logs in to a stock Murmur through the relay with the probe
