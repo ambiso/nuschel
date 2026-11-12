@@ -120,3 +120,27 @@ URI/icon integration, removal/upgrade behavior and package-manager update proof.
 No external repository/account action is authorized merely by building these
 local artifacts. A successful archive extraction or package metadata check alone
 does not prove any runtime or sandbox behavior.
+
+## Native prototype checkpoint
+
+The Debian 13 amd64 prototype relinks only the nine final executable leaves,
+using the cached pinned Rust dependencies and the signed target sysroot. It
+bundles no glibc or native shared-library closure. Per-program link receipts
+record the actual target native inputs and binary hashes; the stage rejects Nix
+shared-library fallbacks, store interpreters/RPATHs and requirements above glibc
+2.41. These link checks do not inspect every runtime `dlopen` or configuration
+lookup.
+
+`packaging/linux/runtime-smoke.py` runs the staged programs against only the
+target distro's `/usr` in a new offline namespace. It checks the version command,
+synthetic Markdown/PNG, formula coverage, Opus encode/decode, an empty crypto
+identity request, SQLite migration/query, transfer EOF, and rejection of invalid
+public test signatures. It also checks absence of the Nix store, home, host audio
+and GPU devices. Every process has bounded time/output and is reaped. This is a
+loader and worker-RPC check, not a GUI render, audio-device, transfer, signature
+acceptance or installation proof.
+
+Actual distro media startup must additionally verify the target PipeWire/ALSA
+public configuration and plugin paths under the production worker sandbox.
+A library found via `DT_NEEDED` is insufficient evidence for those resources.
+No home directory or blanket `/etc` exposure is an acceptable workaround.
