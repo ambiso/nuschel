@@ -71,6 +71,17 @@ class Payload(unittest.TestCase):
         with self.assertRaises(ValueError):
             harness.payload(self.build, self.public)
 
+    def test_read_only_package_notices_remain_intact_and_staging_accepts_its_marker(self):
+        self.notices.chmod(0o555)
+        destination = self.root / "staged-notices"
+        harness.copy_notices(self.notices, destination)
+        marker = destination / "UPDATE-TEST"
+        marker.write_text("synthetic delivery only\n")
+        self.assertTrue(marker.is_file())
+        self.assertEqual((destination / "THIRD-PARTY.json").read_bytes(),
+                         (self.notices / "THIRD-PARTY.json").read_bytes())
+        self.assertEqual(self.notices.stat().st_mode & 0o777, 0o555)
+
 
 @unittest.skipUnless(GUEST, "use --guest for actual private Windows ownership proof")
 class GuestOwnership(unittest.TestCase):

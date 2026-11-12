@@ -2,9 +2,9 @@
 
 Current focus (user, 2026-11-12): **unmute-to-first-speech latency, stereo receive
 and output fidelity, and hybrid update readiness**. Independent owners now cover
-browser jitter/admission, CELT concealment and the Windows desktop updater plus
-metadata-refresh procedure. Shared desktop document-link interaction is integrated;
-its hash-only fetch/render follow-up and remaining capture/device checks stay open.
+browser jitter/admission and hash-only document fetch/render. CELT concealment,
+Windows profile-preserving updater relaunch and the metadata-refresh procedure
+are integrated with scoped proofs; final browser/device/distribution checks stay open.
 Server reordering and the desktop layout foundation have scoped proofs integrated;
 web image attachments, modern identity/archive flows and full parity remain open.
 The rename/build-cache cleanup is complete. Publication remains behind signing,
@@ -19,16 +19,16 @@ outside the current task's scope.
 
 Current integration checkpoint (2026-11-12):
 
-- **Combined Linux/web distributions passed at `b8772408`.** Actual packages
-  include the welcome document fix, receive phase setting, stereo/headroom and
-  filtered conversion corrections, both update helpers and complete compact
-  notices. Formatting, deny, audit and generated-graph checks passed. The actual
-  packaged helpers passed sandbox/forgery/deadline/install fixtures; scoped notice
-  readers verified the packaged bytes. Later mono-device fold correction
-  `abe83021` passed 68 source tests and actual private mono/stereo/DSP checks;
-  its desktop distribution built at `6d054505`, passed notice validation and
-  contains the byte-identical tested worker. This is local evidence, with no push,
-  release, production trust enrollment or native Windows/macOS execution implied.
+- **Combined Linux/web distributions passed at `fe7cffd5`.** Actual packages
+  include shared jitter extraction, shared document links, DTX/FEC/framing fixes,
+  receive phase setting, stereo/headroom/mono folding, filtered conversion,
+  both update helpers and compact notices. Formatting, deny, audit and generated
+  graph checks passed; actual Linux/web notice readers verified the bundled bytes.
+  The packaged codec WASM decodes the preserved 24-packet DTX failure bit-exactly
+  against independent libopus (46,080 samples). Later component/Worklet, CELT PLC,
+  metadata refresh and profile-relaunch commits still need combined distribution
+  checks. Earlier helper sandbox/forgery/deadline/install evidence remains scoped
+  to its recorded packages. No push, release or production trust enrollment.
 - **Desktop layout foundation is integrated through `12d6695c`.** Shared finite
   text/action lanes, one bounded notice stack, restored connection indicator,
   wrapped headers/footers, keyboard/pointer dismissal and nested focus reveal
@@ -92,9 +92,11 @@ Current integration checkpoint (2026-11-12):
   packaged Linux helpers passed sandbox/corruption/timeout/install checks.
   `c262ef1b` adds native Windows fixed-engine, LPAC, forged-reply, deadline and
   library download/apply/cleanup evidence. Windows network probing specifically
-  observed denied/unavailable Winsock initialization. The full desktop GUI
-  update/restart flow, exact final cross archives and macOS execution remain
-  separate gates; see `docs/windows-hybrid-update.md`. Production trust stays empty.
+  observed denied/unavailable Winsock initialization. The fixture desktop GUI
+  update/restart additionally passes exact profile/state continuity and every
+  signed installed hash; its eight helper/worker EXEs match runtime-tested official
+  products. Current-head cross archives and macOS execution remain separate gates;
+  see `docs/windows-hybrid-update.md`. Production trust stays empty.
 - **Release remains gated.** Independent Linux, Windows, universal macOS and web
   artifacts, hybrid update verification, exact notices and final packaging must
   pass. Production public-key enrollment and CI secret provisioning remain
@@ -997,21 +999,23 @@ listed below. Plugin data remains the explicit gap.
       isolates install/profile/listener/files by run ID, and stops only PIDs at
       the owned executable path. Five host cases and an actual Windows same-name
       foreign-path sentinel test pass (`windows_update_test.py --guest`).
-- [ ] Build a separate source embedding only a temporary fixture public pair and
-      prove actual Windows desktop update/restart. Revalidate the UIA-owned focus
-      and legacy update-button geometry on that build; native library installation
-      and harness preflight do not cover the GUI flow. Validate the exact official
-      cross/archive helpers too: current `crossCommon` enables both Cargo engine
-      features in one workspace build, so individually featured native test
-      products do not establish packaged dependency/byte equivalence.
-- [ ] Preserve an explicitly selected profile across desktop updater relaunch
-      (active Windows/updater owner). Production `relaunch()` currently drops
-      `--profile-dir`, so a successful install/hash/PID check can silently restart
-      into the default profile. Record an absolute explicit profile at startup
-      and forward only that argument. Verify relative paths, spaces/Unicode,
-      unchanged anti-rollback state and actual Windows GUI restart; the earlier
-      mechanical-only GUI run does not establish profile continuity. A narrow
-      source fix and fresh successful guest proof await review/integration.
+- [x] Build a separate temporary-public-trust source and prove the actual Windows
+      GUI update/restart in the private VM. UIA-owned focus and the update-button
+      geometry pass; both exact official-feature helper EXEs pass the full native
+      adversarial fixture. The GUI verifies all 16 installed signed files, disjoint
+      old/new PIDs and retired/staging cleanup. See docs/windows-hybrid-update.md
+      for exact app/harness sources; later audio/source changes still need final
+      integrated distribution/archive checks.
+- [x] Preserve an explicitly selected profile across updater restart. The first
+      run caught dropped `--profile-dir`; the fix remembers only that typed path,
+      normalizes it absolute and uses native Command arguments without replaying
+      URLs, offers or autostart. 82 native units and the actual Windows GUI pass:
+      initial relative space/Unicode profile becomes the exact absolute restarted
+      profile and its persisted update-state SHA remains unchanged.
+- [ ] Investigate the secret-free VM bootstrap Run dialog left behind in one
+      restart screenshot after the agent was ready. Focusing the exact owned app
+      makes final captures reliable, but does not establish that automatic
+      bootstrap dialog cleanup is solved; do not dismiss arbitrary guest windows.
 - [ ] Complete unattended Windows desktop/audio/sandbox regression orchestration
       and add UDP (the existing guest-forward voice check used the TCP tunnel).
 - [x] Windows and macOS sandbox profiles for media, storage and content workers.
@@ -1501,8 +1505,9 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
       pair, expiry and persisted anti-rollback state are bound. No minisign or
       adjacent writable-key fallback. Actual Linux workers, a loopback install,
       strict signer/artifact regressions and workflow syntax are tested. Native
-      Windows hybrid verifier/LPAC/library-install proof now passes; the Windows
-      desktop update/restart flow, macOS native proof and an actual release remain.
+      Windows hybrid verifier/LPAC/library-install and desktop update/restart proof
+      now pass on reviewed fixture sources. macOS native proof, final integrated
+      distribution/archive checks and an actual release remain.
 - [ ] Enroll the production public pair in `crates/update/update-trust.json`, back
       up the independent private seeds and explicitly provision the matching
       `UPDATE_HYBRID_SIGNING_KEY` repository secret with the reviewed operator
@@ -1538,6 +1543,17 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
       Keep notice inventory/vendoring tools distinct from compiled package
       builders. Cache cleanup being complete does not mean this migration is done;
       serialize flake/graph edits with the release-notice and codec owners.
+- [ ] Keep source-dependent notice/runtime postInstall hooks out of Crane's
+      buildDepsOnly cache key. The profile-only fix changed no dependency inputs,
+      yet the unused notice postInstall path invalidated a 954 MiB artifact and
+      would repeat the nine-minute dependency build. Its private proof safely
+      reused identical-input artifacts; the production builder is not fixed.
+- [ ] Build official cross updater verifier outputs with separate algorithm
+      features, matching the native per-crate policy. `crossCommon` currently
+      enables both together: actual fixed-entry-point runtime tests pass, but do
+      not establish independent feature graphs. Resolve the test-only Windows
+      crate2nix executable-suffix/import-library/static-pthread adaptations before
+      relying on that route for official products; recheck actual final helpers.
 - [ ] Windows installer (Start menu entry, uninstall); today the zip is portable and
       updates itself where it was unpacked.
 - Deferred (user, 2026-11-11: **no Windows or macOS code signing for now**). The
@@ -1552,8 +1568,8 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
       scope/roots/features, original notice/source hashes, updater file limits and
       both verifier binaries in every desktop distribution; run the release gates
       in `SECURITY.md`/docs/release-notices.md. Current metadata proofs do not imply
-      an actual GitHub release/CI run, Windows desktop update/restart, macOS hybrid
-      updater execution or hardware/accessibility proof.
+      an actual GitHub release/CI run, current-head Windows archive proof, macOS
+      hybrid updater execution or hardware/accessibility proof.
 - [ ] Mobile, web and terminal clients (user, 2026-11-11): decided, see
       docs/clients.md. Then:
   - [x] The headless client SDK in `crates/client` (commands in, updates out; the

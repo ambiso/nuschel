@@ -152,8 +152,10 @@ there. Windows uses distinct LPAC profiles (`nuschl.update.ed25519` and
 standard pipes only, and kill-on-close parent/job containment. Windows/macOS
 package discovery includes both workers. The hybrid verifier/LPAC and library
 installation path passed in a private Windows 11 VM on 2026-11-12 (below); the
-actual desktop update/restart flow and macOS Seatbelt runtime remain unproved.
-Cross compilation alone is not runtime proof.
+actual desktop update/restart flow also passed with a separately embedded
+temporary public pair and the profile-preservation fix. macOS Seatbelt runtime
+remains unproved. These are exact fixture-source results, not execution of every
+later integrated cross archive. Cross compilation alone is not runtime proof.
 
 Only each engine's own signature is sent to it. The transcript necessarily
 contains the full **public** pair, not the other signature or any private seed.
@@ -208,11 +210,19 @@ production executable cannot authorize an update. The GUI harness now requires
 the complete nine-program payload plus actual packaged notices, unique owned
 install/profile/listener/file namespaces, and executable-path-scoped PID cleanup.
 Five host cases and a real Windows same-name foreign-path sentinel check pass.
-Its actual desktop GUI update/restart, owned UIA focus and button geometry still
-require a separate temporary-public-trust build/run. Official cross packages
+The actual desktop GUI update/restart, owned UIA focus and button geometry now
+pass on the recorded fixed source. The first run exposed lost profile arguments;
+the corrected runtime preserves only the typed explicit profile, normalized
+absolute, without replaying one-shot URLs/offers/autostart. A real relative
+space/Unicode profile and its persisted update-state hash survive restart; all
+16 installed signed file hashes, disjoint PIDs and cleanup pass. Official cross packages
 currently enable both Cargo verifier features in one workspace build; the fixed
 entry points remain algorithm-specific, but the individually featured test
 products do not prove dependency or packaged-byte equivalence for those archives.
+The exact official-feature fixture helpers were therefore also run through the
+full native adversarial suite. All eight helper/worker EXEs in the profile-fixed
+build are byte-identical to that tested official-feature build; only the desktop
+changed. Later integrated artifacts still need their final distribution checks.
 
 Downloadable CI payloads first run `release/check-notices.py`; failed gates still
 upload diagnostic logs, while binary/static-web payloads remain blocked.
