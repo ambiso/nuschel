@@ -1120,7 +1120,16 @@ listed below. Plugin data remains the explicit gap.
       to true. Retain the last authenticated value for absent optional fields;
       explicit zero/default values must retain their protocol meaning. Test
       restricted recording plus unrelated bandwidth/HTML updates and reconnect
-      defaults in both adapters. Welcome-only suppression is a separate fix.
+      defaults in both adapters. Limits replace the shared snapshot, so retain
+      max-users and native bandwidth as well. Welcome-only suppression is a
+      separate fix.
+- [ ] Enforce negotiated browser legacy text-send limits on the actual outgoing
+      UTF-8 HTML/plaintext body. An owned TLS/App diagnostic advertised 128 bytes
+      but received the browser's 129-byte message; Session currently checks only
+      the global 256 KiB ceiling. Include escaping/newline expansion, explicit
+      zero, sparse updates and reconnect defaults; retain rejected drafts.
+      This predates live welcome changes and is assigned to the separate config
+      follow-up. Retaining image limits does not imply attachment sending exists.
 - [x] Integrate the separate central browser text-size correction: Settings
       previously changed body font size while rem-sized text kept the root's
       16px. `html` now uses the same preference variable; actual compiled App
