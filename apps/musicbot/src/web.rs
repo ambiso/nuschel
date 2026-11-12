@@ -168,8 +168,13 @@ async fn index() -> Html<&'static str> {
     )
 }
 
-async fn slash(Path(token): Path<String>) -> Redirect {
-    Redirect::permanent(&format!("{token}/"))
+async fn slash(Path(token): Path<String>) -> Result<Redirect, ApiError> {
+    // Path parameters are URL-decoded. Only a canonical UUID may become a
+    // relative redirect, so encoded slashes cannot produce another origin.
+    let token = Uuid::parse_str(&token)
+        .map_err(|_| ApiError(StatusCode::NOT_FOUND, INVALID_LINK.into()))?;
+    // Keep this relative: deployments may mount the bot below a proxy prefix.
+    Ok(Redirect::permanent(&format!("{token}/")))
 }
 
 fn assets(bot: &Bot) -> Result<&PathBuf, ApiError> {
@@ -965,6 +970,24 @@ async fn search(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn token_redirect_is_canonical_and_cannot_escape_the_origin() {
+        for token in ["//evil.example", "/evil", "https://evil.example", "bad"] {
+            let response = slash(Path(token.into())).await.err().unwrap().into_response();
+            assert_eq!(response.status(), StatusCode::NOT_FOUND);
+            assert!(!response.headers().contains_key(header::LOCATION));
+        }
+        let response = slash(Path("AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA".into()))
+            .await
+            .unwrap()
+            .into_response();
+        assert_eq!(response.status(), StatusCode::PERMANENT_REDIRECT);
+        assert_eq!(
+            response.headers()[header::LOCATION],
+            "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/"
+        );
+    }
     use subsonic::tests::Server;
 
     fn test_bot(url: &str, library_count: usize) -> (tempfile::TempDir, Arc<Bot>, String) {
