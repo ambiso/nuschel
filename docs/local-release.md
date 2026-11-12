@@ -39,9 +39,9 @@ and tag. Failed or cancelled preparation never replaces that record. It checks
 the remembered ledger/manifest/signature/checksum identity and reruns the backend's
 source, Nix-product, artifact and hybrid-signature verification before its one
 publication confirmation. It neither rebuilds nor signs again and needs no
-private key. After Yes, a tag created by the earlier command is pushed without
-force; the backend then uploads a draft and verifies every uploaded digest before
-making it public. Existing tags must already exist remotely and match. A changed,
+private key. After Yes, only that exact tag is pushed without force; an identical
+remote tag is unchanged and a different remote tag is refused. The backend then
+uploads a draft and verifies every uploaded digest before making it public. A changed,
 expired, missing, unrelated or already-published stage is refused; no fallback
 stage is guessed. Publication still needs `gh` authentication with the repository
 permissions described below. Preserve failed drafts for explicit inspection.

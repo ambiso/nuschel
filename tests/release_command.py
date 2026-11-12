@@ -247,6 +247,20 @@ class ReleaseCommand(unittest.TestCase):
             front.execute(True, confirm=change_asset)
         self.assertFalse(self.remote_calls)
 
+    def test_failed_prepare_after_creating_local_tag_can_retry_then_publish_that_tag(self):
+        self.git('tag', '-d', 'v0.1.0')
+        with patch.object(self.local, 'prepare', side_effect=ValueError('fixture first preparation failed')):
+            with self.assertRaisesRegex(ValueError, 'fixture first preparation failed'):
+                self.prepare()
+        self.assertFalse(front.infer(self.repo)['create_tag'])
+        self.assertFalse(self.pointer_path().exists())
+        self.assertFalse(self.remote_calls)
+        self.prepare()
+        self.assertFalse(self.pointer()['created_local_tag'])
+        front.execute(True, confirm=lambda details: True)
+        self.assertEqual(self.remote_calls[0], ['git', '-C', str(self.repo), 'push', 'origin',
+                                             'refs/tags/v0.1.0:refs/tags/v0.1.0'])
+
     def test_cache_refuses_ram_or_symlink_staging_and_command_lock_is_exclusive(self):
         with patch.dict(os.environ, {'XDG_CACHE_HOME': '/tmp'}):
             with self.assertRaisesRegex(ValueError, 'disk-backed'):

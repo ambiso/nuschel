@@ -56,6 +56,8 @@ def github_repository(url):
 
 
 def infer(root, *, publish=False):
+    require(sys.platform == 'linux' and os.uname().machine == 'x86_64',
+            'Local cross-platform release builds currently require x86_64 Linux.')
     require(not git(root, 'status', '--porcelain=v1', '--untracked-files=all'),
             'Checkout has uncommitted changes; commit them before running just release.')
     urls = git(root, 'config', '--get-all', 'remote.origin.url', optional=True).splitlines()
@@ -82,8 +84,9 @@ def infer(root, *, publish=False):
     public_raw = git(root, 'show', commit + ':crates/update/update-trust.json').encode()
     require(len(public_raw) <= 32 * 1024, 'Tagged public key document is oversized.')
     public = json.loads(public_raw, object_pairs_hook=backend.unique)
-    require(public.get('format') == 2 and public.get('algorithm') == 'ed25519+mldsa44' and
+    require(isinstance(public, dict) and public.get('format') == 2 and public.get('algorithm') == 'ed25519+mldsa44' and
             isinstance(public.get('keys'), list) and len(public['keys']) == 1 and
+            isinstance(public['keys'][0], dict) and isinstance(public['keys'][0].get('key_id'), str) and
             re.fullmatch('[0-9a-f]{64}', public['keys'][0].get('key_id', '')),
             'The tagged source must select one hybrid public signing pair.')
     return {'repository': repository, 'version': version, 'tag': tag, 'commit': commit,
@@ -243,7 +246,11 @@ def execute(publish=False, *, confirm=None):
             pointer = root / 'last-signed.json'
             require(pointer.exists(), 'No successfully signed release; run just release first.')
             record = backend.load(pointer)
-            require(record.get('format') == 1 and record.get('published') is False and
+            require(isinstance(record, dict) and set(record) == {'format', 'published', 'repository', 'tag',
+                    'commit', 'key_id', 'stage', 'created_local_tag', 'identity', 'signer'} and
+                    type(record['format']) is int and record['format'] == 1 and
+                    isinstance(record['stage'], str) and len(record['stage']) <= 4096 and
+                    type(record['created_local_tag']) is bool and record['published'] is False and
                     all(record.get(k) == selection[k] for k in ('repository', 'tag', 'commit', 'key_id')),
                     'Last signed release is already published or belongs to another source/tag; run just release.')
             stage = Path(record['stage'])
@@ -260,15 +267,13 @@ def execute(publish=False, *, confirm=None):
                 require(all(ledger[k] == selection[k] for k in ('repository', 'tag', 'commit')),
                         'Remembered release belongs to another source/tag.')
                 details = summary(selection, stage, 'PUBLISH these already-signed bytes; no rebuild or signing.')
-                if record['created_local_tag']:
-                    details.append('Push the exact local tag to origin, without force, then publish.')
+                details.append('Push only this exact tag to origin without force, then publish; existing identical tags stay unchanged.')
                 require(confirm(details), 'Cancelled; signed artifacts kept and nothing published.')
                 require(infer(ROOT, publish=True) == selection, 'Source or origin changed during confirmation.')
                 require(record['identity'] == signed_identity(stage), 'Signed release changed during confirmation.')
                 verify_stage(stage, signer)
-                if record['created_local_tag']:
-                    backend.run(['git', '-C', ROOT, 'push', 'origin',
-                                 'refs/tags/' + selection['tag'] + ':refs/tags/' + selection['tag']], timeout=300)
+                backend.run(['git', '-C', ROOT, 'push', 'origin',
+                             'refs/tags/' + selection['tag'] + ':refs/tags/' + selection['tag']], timeout=300)
                 backend.publish(argparse.Namespace(stage=stage, signer=signer, gh='gh'))
             record['published'] = True
             remember(root, record)
