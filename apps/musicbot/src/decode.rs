@@ -209,6 +209,42 @@ mod tests {
     use super::*;
     use std::io::Cursor;
 
+    #[tokio::test]
+    async fn cancelled_read_keeps_its_actual_thread_until_completion() {
+        let (entered, started) = std::sync::mpsc::channel();
+        let (release, finish) = std::sync::mpsc::channel();
+        struct PendingRead {
+            entered: std::sync::mpsc::Sender<()>,
+            finish: std::sync::mpsc::Receiver<()>,
+        }
+        impl Read for PendingRead {
+            fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
+                self.entered.send(()).unwrap();
+                self.finish.recv().unwrap();
+                bytes[0] = 1;
+                Ok(1)
+            }
+        }
+        let flag = Arc::new(AtomicBool::new(false));
+        let worker_flag = flag.clone();
+        let (sender, receiver) = mpsc::channel(2);
+        let mut worker = tokio::task::spawn_blocking(move || {
+            pump(PendingRead { entered, finish }, sender, &worker_flag)
+        });
+        tokio::task::spawn_blocking(move || started.recv().unwrap())
+            .await
+            .unwrap();
+        flag.store(true, Ordering::Relaxed);
+        drop(receiver);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(20), &mut worker)
+                .await
+                .is_err()
+        );
+        release.send(()).unwrap();
+        worker.await.unwrap().unwrap();
+    }
+
     #[test]
     fn opaque_pump_is_bounded_and_cancellation_stops_before_read() {
         let (sender, mut receiver) = mpsc::channel(2);
