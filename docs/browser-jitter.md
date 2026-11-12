@@ -1,6 +1,9 @@
 # Browser sequence-aware voice playout
 
-Status: shared policy/native adapter checkpoint; browser activation is pending.
+Status: shared policy and clocked browser playback are integrated. Scoped
+component, actual-WASM, confined-controller and combined packaged-App proofs
+are recorded in `browser-audio.md`. Broader device/browser parity and SDK RPC
+backpressure remain open in TODO.
 No microphone consent, session, server, broker or desktop UI changes belong to
 this work. Generic VoiceDecoder stays available for independent codec proofs.
 
@@ -97,7 +100,8 @@ and [Opus decoder PLC/FEC contract](https://opus-codec.org/docs/opus_api-1.5/gro
 
 ## Typed playout component and frozen failures
 
-The new Rust VoicePlayout component is not wired into browser playback yet.
+At the isolated component checkpoint, Rust VoicePlayout was not yet wired into
+browser playback. The final activation and runtime evidence are linked above.
 Its 480-frame pulls perform at most one decode, retaining up to 120 ms of raw
 stereo cache. Typed `{opus,gain}` payloads preserve gain through reordering;
 FEC/PLC retain the preceding known gain because a lost packet's gain is unknown,
@@ -126,8 +130,8 @@ browser plumbing, this exposed two separate existing defects, retained with
 The non-loss variable-duration case covers every 10 ms multiple through 120 ms and
 passes at 140.9 dB with exact block lengths/gain. Diagnostic flags explicitly
 expect the two known failures only for frozen-source evidence; final strict runs
-must pass without those flags. Browser FEC parity cannot be called complete while
-the codec defect remains.
+must pass without those flags. Both native and actual-WASM final action suites
+now pass all six cases; broader receive parity retains its separate open gates.
 
 
 ## Separate lost-span correction
@@ -147,12 +151,13 @@ PLC correction now brings the 20 ms case to 81.59 dB native / 83.68 dB actual WA
 Both engines pass all six strict action fixtures after caller admission validation,
 including exact timing, gains and rejection/error results. The unchanged 35 dB
 gate uses fixed gain and no fitted delay. See `opus-silk.md`; this remains a
-component proof, with production browser worker/Worklet activation still pending.
+component proof, supplemented by the scoped production browser worker/Worklet
+and combined packaged-App activation checks in `browser-audio.md`.
 
 Full-framing admission has its own preserved failure: malformed 0900 arrives
-after a following valid packet was already queued. The current renderer decodes
-or errors on the malformed payload, shortens the clock span and plays the valid
-packet early. It scores 6.34 dB against independently specified sample-clock
+after a following valid packet was already queued. The frozen old renderer decoded
+or errored on the malformed payload, shortened the clock span and played the valid
+packet early. It scored 6.34 dB against independently specified sample-clock
 output. `admission-frozen/proof.json` retains the events, raw/reference PCM and
 rejection/error/timing/gain results. The reviewed stateless framing wrapper now
 runs before native/WASM speaker, gain, arrival-clock and queue mutation. The same

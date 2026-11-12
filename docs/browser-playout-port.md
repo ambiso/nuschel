@@ -139,7 +139,8 @@ under `~/.cache/nuschl-output-quality/`; final artifacts are
 Focused Nix tests pass 70 native worker tests (5 diagnostic tests ignored) and
 7 audio component tests. Actual WASM codec artifact:
 `/nix/store/0ad60z2nas0l24pqw0q51z3lzx2vdppw-nuschl-web-audio-codec`.
-This is component evidence; direct-port browser activation is still pending.
+This is historical component evidence; the later direct-port activation and
+private-browser checks are documented below.
 
 
 The activated production pipeline is documented in `browser-audio.md`. Global

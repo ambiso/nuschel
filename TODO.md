@@ -2,8 +2,8 @@
 
 Current focus (user, 2026-11-12): **unmute-to-first-speech latency, stereo receive
 and output fidelity, and hybrid update readiness**. Independent owners now cover
-browser playout/credit bounds, hash-only document fetch/render and cross-build
-verifier isolation. CELT concealment,
+SDK request backpressure, bounded context menus and full cross-distribution
+validation. Browser playout, hash-only document delivery, CELT concealment,
 Windows profile-preserving updater relaunch and the metadata-refresh procedure
 are integrated with scoped proofs; final browser/device/distribution checks stay open.
 Server reordering and the desktop layout foundation have scoped proofs integrated;
@@ -20,18 +20,20 @@ outside the current task's scope.
 
 Current integration checkpoint (2026-11-12):
 
-- **Combined Linux/web distributions passed at `779c686e`.** Actual packages
-  include shared jitter/component/Worklet, corrected lost-span/CELT concealment,
-  DTX/FEC/framing, shared document links, stereo/headroom/mono folding, filtered
-  conversion, profile-preserving relaunch, both update helpers and compact notices.
+- **Combined Linux/web distributions passed at `39ea7132`.** Actual packages
+  include clocked browser playout with both reviewed cross-port fixes, hash-only
+  document delivery, loss/CELT/DTX/FEC/framing corrections, stereo/headroom/mono
+  folding, filtered conversion, profile relaunch, updater helpers and notices.
   Formatting, deny, audit and generated-graph checks passed; actual Linux/web
-  notice readers verified bundled bytes. Both verifier binaries are byte-identical
-  to the prior runtime-tested package. The packaged signer passed nine refresh and
-  15 release regressions. Five independent actual-WASM playout cases pass, while
-  its malformed-admission failure remains preserved. The subsequent `cafd52fd`
-  caller fix passes all six native/actual-WASM cases but awaits a new distribution;
-  production browser activation and hash-only document work remain in progress.
-  No push, release, production trust enrollment or current-head cross-runtime claim.
+  notice readers verified bundled bytes. The native media worker is byte-identical
+  to the independently tested 70-pass source product. The exact combined web App
+  passes private-Murmur production-CSP voice/text/reorder/privacy checks with its
+  new SDK: 21 audio packets produce zero full-state snapshots, audible RMS 0.06762
+  and deafen zero. Browser component/controller/worker proofs remain scoped below.
+  Full current frozen cross archives are building separately; prior six verifier
+  products pass their recorded Windows runtime/Mach-O proofs. Later whole-source
+  Darwin helper outputs must be built/inspected before claiming current archives.
+  No push, release, production trust enrollment or macOS native-runtime claim.
 - **Desktop layout foundation is integrated through `12d6695c`.** Shared finite
   text/action lanes, one bounded notice stack, restored connection indicator,
   wrapped headers/footers, keyboard/pointer dismissal and nested focus reveal
@@ -725,9 +727,9 @@ The media worker uses per-speaker adaptive jitter buffers and Opus loss concealm
       gains and rejection results now agree in native/actual-WASM components.
       Unit tests also prove rejection cannot create a native speaker or advance
       its arrival clock. This checks packet packing, not entropy authenticity;
-      worker activation and confined-browser proof remain open below.
-- [ ] Integrate the verified clocked browser playout checkpoint (`1d1cf926`,
-      `c5a81933`, `9827d211`; active browser-audio owner). Production source now wires shared native
+      worker activation and scoped confined-browser checks are completed below.
+- [x] Integrate the verified clocked browser playout checkpoint (`1d1cf926`,
+      `c5a81933`, `9827d211`). The combined packaged App proof passes too. Shared native
       jitter/FEC/PLC through actual-WASM playout and a direct bounded Worklet
       port, with separate RX authorization and TX epochs. Mic-only changes keep
       listening; route/deafen/connection revocation clears it. Global 16 RX/two
@@ -748,7 +750,7 @@ The media worker uses per-speaker adaptive jitter buffers and Opus loss concealm
       non-ended 120 ms packet waits for the next packet. Deterministic clocked
       startup is 40/30/130 ms for regular 10/20/120 ms packets, versus 10 ms for
       one ended 120 ms packet. These exclude sender/codec/device delay. Preserve
-      native policy equivalence unless a separately measured change is approved.
+      native policy equivalence until a separately measured correction is reviewed.
 - [ ] Audit acknowledged SDK TX-send backlog across rapid epoch changes.
       Codec TX jobs now retain their global two-credit bound until ACK, but
       the separate `txJobs` RPC map still clears on reset. An indefinitely
