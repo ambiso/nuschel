@@ -215,6 +215,7 @@ def exercise_update(args):
                         "--output", str(published), "--sign-key", str(args.secret_file),
                         "--public-key", str(args.public_file), "--signer", args.signer],
                        check=True, capture_output=True)
+        expected_files = json.loads((published / "update.json").read_bytes())["platforms"]["windows-x86_64"]
         artifact_names = []
         for artifact in sorted(published.iterdir()):
             artifact_names.append(artifact.name)
@@ -266,13 +267,22 @@ $dir = "$env:LOCALAPPDATA\Programs\NuschlUpdateTest\__RUN__"
 "old files left: " + (Test-Path "$dir\.nuschl-old")
 "staging left: " + (Test-Path "$dir\.nuschl-update")
 "process: " + ($owned.ProcessId -join ",")
-'''.replace("__RUN__", args.run))
+foreach ($expected in __EXPECTED_FILES__) {
+  $file = Join-Path $dir $expected.path
+  if (-not (Test-Path -LiteralPath $file)) { throw 'installed manifest file missing' }
+  if ((Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLowerInvariant() -ne $expected.sha256) { throw 'installed manifest hash differs' }
+}
+'complete signed file hashes: verified'
+'''.replace("__RUN__", args.run).replace("__EXPECTED_FILES__", "@(" + ",".join("@{path='" + item["path"] + "';sha256='" + item["sha256"] + "'}" for item in expected_files) + ")"))
     print(report, flush=True)
     assert "marker: True" in report, report
     assert "staging left: False" in report, report
     assert "old files left: False" in report, "the restarted process did not clean up the old files"
-    after = report.split("process:")[1].strip()
-    assert before.strip() and after and before.strip() != after, "Nuschl did not restart into an owned new process"
+    after = report.split("process:")[1].splitlines()[0].strip()
+    previous_pids = set(before.strip().split(",")) - {""}
+    current_pids = set(after.split(",")) - {""}
+    assert previous_pids and current_pids and previous_pids.isdisjoint(current_pids), "Nuschl did not replace every owned process"
+    assert "complete signed file hashes: verified" in report, "installed payload was not checked completely"
     print("Windows in-place update: signed manifest verified, files swapped, restarted, old files removed.")
 
 
