@@ -58,6 +58,16 @@ pub fn cleanup() {
 
 /// Where the newest update manifest seen is remembered (in the state folder).
 static STATE: OnceLock<PathBuf> = OnceLock::new();
+static PROFILE: OnceLock<Option<PathBuf>> = OnceLock::new();
+
+/// Retain only the typed persistent profile selection. Startup URLs, offers
+/// and autostart are one-shot actions and must not replay on an update restart.
+pub fn remember_profile(path: Option<&Path>) -> std::io::Result<()> {
+    let profile = path.map(std::path::absolute).transpose()?;
+    PROFILE
+        .set(profile)
+        .map_err(|_| std::io::Error::other("the startup profile was already recorded"))
+}
 
 /// Set once at start, from `Profile::update_state_path`.
 pub fn remember_state(path: &Path) {
@@ -84,8 +94,57 @@ pub fn install(update: &Update, mut progress: impl FnMut(u64, u64)) -> Result<()
 /// Start the updated program; the caller quits.
 pub fn relaunch() -> Result<(), String> {
     let executable = std::env::current_exe().map_err(|e| e.to_string())?;
-    std::process::Command::new(executable)
+    let profile = PROFILE
+        .get()
+        .ok_or("the startup profile was not recorded")?;
+    relaunch_command(&executable, profile.as_deref())
         .spawn()
         .map(|_| ())
         .map_err(|e| e.to_string())
+}
+
+fn relaunch_command(executable: &Path, profile: Option<&Path>) -> std::process::Command {
+    let mut command = std::process::Command::new(executable);
+    if let Some(profile) = profile {
+        // Command owns the native OsString arguments. No shell or manual
+        // quoting is used, including for spaces and non-UTF8/Unicode paths.
+        command.arg("--profile-dir").arg(profile);
+    }
+    command
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::OsString;
+
+    #[test]
+    fn default_profile_restart_does_not_replay_startup_actions() {
+        let executable = Path::new("nuschl");
+        let command = relaunch_command(executable, None);
+        assert_eq!(command.get_program(), executable.as_os_str());
+        assert_eq!(command.get_args().count(), 0);
+    }
+
+    #[test]
+    fn explicit_relative_space_and_unicode_profile_is_absolute_and_one_native_argument() {
+        let relative = Path::new("relative profile µ");
+        let absolute = std::path::absolute(relative).unwrap();
+        assert!(absolute.is_absolute());
+        let command = relaunch_command(Path::new("nuschl"), Some(&absolute));
+        let arguments: Vec<_> = command.get_args().map(OsString::from).collect();
+        assert_eq!(
+            arguments,
+            vec![OsString::from("--profile-dir"), absolute.into_os_string()]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn native_profile_arguments_do_not_require_utf8_conversion() {
+        use std::os::unix::ffi::OsStringExt;
+        let profile = PathBuf::from(OsString::from_vec(b"/private/profile-\xff".to_vec()));
+        let command = relaunch_command(Path::new("nuschl"), Some(&profile));
+        assert_eq!(command.get_args().nth(1).unwrap(), profile.as_os_str());
+    }
 }

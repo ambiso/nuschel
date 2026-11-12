@@ -157,6 +157,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let default_profile = arguments.profile_dir.is_none();
+    update::remember_profile(arguments.profile_dir.as_deref())?;
     let profile = Profile::open(arguments.profile_dir)?;
     if default_profile && let Err(error) = autostart::migrate_legacy() {
         tracing::warn!(%error, "could not migrate the old login entry");
