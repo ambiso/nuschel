@@ -25,3 +25,15 @@ show instead of `node.name` (the application's name on every node).
 
 Remove the override once a cpal release contains this API (adapt the media
 worker's `connect` and `label` if its final shape differs).
+
+
+PulseAudio capture startup (2026-11-12): `Stream::play()` waits for the
+server's successful uncork acknowledgement, then returns without awaiting
+`RecordStream::started()` (the first PCM bytes). CPAL's contract is to start
+the stream; data delivery is asynchronous. A silent/cold reference source must
+not block setup and processing of a microphone that already delivers PCM.
+Record callback/error delivery and playback behavior are unchanged; streams
+remain initially corked and no microphone is retained while globally muted.
+Private virtual-source timing plus independent libpulse and encoded-PCM tests
+cover this change; it does not promise to eliminate hardware/server cold-start
+latency. See <https://docs.rs/cpal/0.18.1/cpal/traits/trait.StreamTrait.html#tymethod.play>.

@@ -103,8 +103,11 @@ impl StreamTrait for Stream {
                 handle.notify();
             }
             StreamInner::Record(stream, _, handle) => {
+                // Acknowledge starting capture, without waiting for its first
+                // data. A silent/cold source may deliver later; waiting here
+                // also serializes independent mic/reference stream startup.
+                // Errors after uncork still reach the record error callback.
                 block_on(stream.uncork()).map_err(Error::from)?;
-                block_on(stream.started()).map_err(Error::from)?;
                 handle.notify();
             }
         }

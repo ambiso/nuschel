@@ -8,6 +8,7 @@ mod mixer;
 mod probe;
 mod reference;
 mod sounds;
+mod timing;
 
 use std::io;
 

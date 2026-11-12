@@ -11,6 +11,7 @@ use crate::{
     probe::EchoProbe,
     reference::{self, Clock, Played, ReferenceConverter, Stamper, Step, Timeline},
     sounds::Effects,
+    timing::Timing,
 };
 use cpal::{
     FromSample, Sample, SampleFormat, SizedSample,
@@ -119,7 +120,14 @@ impl Transmit {
 /// diagnostic for users: it opens the microphone briefly and sends nothing.
 pub fn probe_route() -> Result<(), Box<dyn std::error::Error>> {
     let (tx, _rx) = mpsc::sync_channel(64);
-    let (_devices, route) = open_devices(tx, true, &AudioSettings::default(), None, &CALL)?;
+    let (_devices, route) = open_devices(
+        tx,
+        true,
+        &AudioSettings::default(),
+        None,
+        &CALL,
+        &Timing::new(),
+    )?;
     let report = serde_json::json!({
         "input": route.input,
         "output": route.output,
@@ -135,6 +143,9 @@ pub fn probe_route() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 pub fn run() -> Result<(), Box<dyn std::error::Error>> {
+    let timing = Timing::new();
+    timing.mark("worker_start");
+    let (mut first_processed, mut first_transmit, mut first_packet) = (true, true, true);
     let (tx, rx) = mpsc::sync_channel(256);
     let input_tx = tx.clone();
     std::thread::spawn(move || {
@@ -197,7 +208,14 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     loop {
         if devices.is_none() && state_known && !deafened && Instant::now() >= retry_at {
             let labels = if preview { &CHECK } else { &CALL };
-            match open_devices(tx.clone(), !muted, &settings, only_host.as_deref(), labels) {
+            match open_devices(
+                tx.clone(),
+                !muted,
+                &settings,
+                only_host.as_deref(),
+                labels,
+                &timing,
+            ) {
                 Ok((opened, route)) => {
                     // Without a microphone the canceller has nothing to do.
                     let echo = opened.capture.is_some() && matches!(route.echo, EchoSource::Nuschl);
@@ -213,6 +231,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     );
                     chain.set_delay_hint(ECHO_DELAY_HINT_MS);
                     pipeline = Some(chain);
+                    timing.mark("pipeline_ready");
+                    timing.report_capture();
                     let message = if muted {
                         "Audio ready · microphone muted".to_string()
                     } else if opened.capture.is_some() {
@@ -299,6 +319,11 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 muted: mute,
                 deafened: deaf,
             })) => {
+                timing.mark(if mute || deaf {
+                    "set_state_muted"
+                } else {
+                    "set_state_unmuted"
+                });
                 let was_transmitting = transmit.active;
                 let capture_changed = state_known && (mute || deaf) != muted;
                 muted = mute || deaf;
@@ -333,6 +358,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 settings: requested,
                 host,
             })) => {
+                timing.mark("configure");
                 only_host = host;
                 transmit.encoder.bitrate_bps = bitrate.clamp(
                     nuschl_core::audio::MIN_VOICE_BITRATE,
@@ -552,6 +578,11 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 break;
             }
             mic_index += FRAME as u64;
+            timing.report_capture();
+            if first_processed {
+                timing.mark("first_processed_pcm");
+                first_processed = false;
+            }
             let raw = capture_frame;
             chain.set_far_end(controller.far_active());
             let result = chain.process(&mut capture_frame, push_to_talk, controller.guard_gate());
@@ -603,10 +634,18 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 continue;
             }
             if result.transmit {
+                if first_transmit {
+                    timing.mark("first_open_gate");
+                    first_transmit = false;
+                }
                 transmit.active = true;
                 transmit.pending.extend_from_slice(&capture_frame);
                 if transmit.pending.len() >= 2 * FRAME {
                     if let Some(opus) = transmit.encode() {
+                        if first_packet {
+                            timing.mark("first_packet");
+                            first_packet = false;
+                        }
                         emit(
                             &mut output,
                             LiveMediaEvent::Packet {
@@ -709,6 +748,7 @@ fn open_devices(
     settings: &AudioSettings,
     only_host: Option<&str>,
     labels: &Labels,
+    timing: &Timing,
 ) -> Result<(Devices, Route), String> {
     let mut hosts = vec![];
     #[cfg(target_os = "linux")]
@@ -732,9 +772,11 @@ fn open_devices(
     }
     let mut errors = Vec::new();
     for id in hosts {
-        match connect(id)
-            .and_then(|mut host| open_host(&mut host, tx.clone(), capture, settings, labels))
-        {
+        timing.mark("host_connect_begin");
+        match connect(id).and_then(|mut host| {
+            timing.mark("host_connected");
+            open_host(&mut host, tx.clone(), capture, settings, labels, timing)
+        }) {
             Ok(opened) => return Ok(opened),
             Err(error) => {
                 // Diagnostics only: stderr never carries protocol frames.
@@ -842,6 +884,7 @@ fn open_host(
     capture: bool,
     settings: &AudioSettings,
     labels: &Labels,
+    timing: &Timing,
 ) -> Result<(Devices, Route), String> {
     let all: Vec<cpal::Device> = host
         .devices()
@@ -890,6 +933,7 @@ fn open_host(
             .take(128)
             .collect()
     };
+    timing.mark("devices_listed");
     let inputs = listed(true);
     let outputs = listed(false);
     let find = |id: &Option<String>, input: bool| {
@@ -933,6 +977,7 @@ fn open_host(
         .then(|| input_device.clone())
         .flatten()
         .and_then(|input| {
+            timing.mark("capture_create_begin");
             let config = input.default_input_config().ok()?;
             let (producer, consumer) = RingBuffer::<f32>::new(RING);
             let stamp = (capture_stamper, clock);
@@ -943,11 +988,14 @@ fn open_host(
                     stream_config(host, config),
                     tx.clone(),
                     producer,
-                    stamp
+                    stamp,
+                    timing.clone()
                 )
             )
             .ok()?;
+            timing.mark("capture_created");
             stream.play().ok()?;
+            timing.mark("capture_play_ready");
             capture_consumer = Some(consumer);
             Some(stream)
         });
@@ -961,6 +1009,7 @@ fn open_host(
         .unwrap_or_default();
     #[cfg(not(target_os = "linux"))]
     let found = crate::graph::Upstream::default();
+    timing.mark("graph_inspected");
     let upstream_echo = found.echo.clone().or_else(|| {
         input_id
             .as_ref()
@@ -1019,6 +1068,7 @@ fn open_host(
         },
         clock,
     );
+    timing.mark("playback_create_begin");
     label(host, labels.playback);
     let stream = by_format!(
         config.sample_format(),
@@ -1030,13 +1080,16 @@ fn open_host(
             played
         )
     )?;
+    timing.mark("playback_created");
     stream.play().map_err(|error| error.to_string())?;
+    timing.mark("playback_play_ready");
     // Nuschl's canceller needs to know everything the speakers play: record
     // the output device (all applications) where the system allows it, and
     // only while the microphone is open.
     let mut recording = None;
     let mut reference_name = None;
     let reference = if input.is_some() && matches!(echo, EchoSource::Nuschl) {
+        timing.mark("reference_create_begin");
         match record_output(
             host,
             &all,
@@ -1046,6 +1099,7 @@ fn open_host(
             clock,
         ) {
             Ok((stream, reference, name)) => {
+                timing.mark("reference_play_ready");
                 recording = Some(stream);
                 reference_name = Some(name);
                 Some(reference)
@@ -1186,6 +1240,7 @@ fn input_stream<T>(
     tx: SyncSender<Event>,
     mut ring: Producer<f32>,
     (mut stamper, clock): (Stamper, Clock),
+    timing: Timing,
 ) -> Result<cpal::Stream, String>
 where
     T: SizedSample,
@@ -1197,6 +1252,9 @@ where
         .build_input_stream(
             config,
             move |data: &[T], info: &cpal::InputCallbackInfo| {
+                if !data.is_empty() {
+                    timing.capture();
+                }
                 let timestamp = info.timestamp();
                 let latency = timestamp
                     .callback
