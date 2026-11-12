@@ -27,23 +27,23 @@ const MAX_PACKETS: usize = 64;
 pub const MAX_SEQUENCE: u64 = u64::MAX / 2;
 
 #[derive(Debug, PartialEq, Eq)]
-pub enum Pull {
+pub enum Pull<P = Vec<u8>> {
     /// Decode this packet; it covers `frames` 10 ms frames.
-    Packet { opus: Vec<u8>, end: bool },
+    Packet { opus: P, end: bool },
     /// The packet for the next slot is missing; recover it from `fec` (the
     /// following packet's in-band copy) when available, else conceal.
-    Lost { fec: Option<Vec<u8>>, frames: u64 },
+    Lost { fec: Option<P>, frames: u64 },
     /// Nothing to play: waiting for the initial target or after an underrun.
     Idle,
 }
 
-struct Packet {
-    opus: Vec<u8>,
+struct Packet<P> {
+    opus: P,
     end: bool,
 }
 
-pub struct JitterBuffer {
-    packets: BTreeMap<u64, Packet>,
+pub struct JitterBuffer<P = Vec<u8>> {
+    packets: BTreeMap<u64, Packet<P>>,
     next: Option<u64>,
     /// Origin of the packet just pulled, until its decoded duration is known.
     pulled: Option<u64>,
@@ -54,7 +54,7 @@ pub struct JitterBuffer {
     last_arrival: Option<(Duration, u64)>,
 }
 
-impl Default for JitterBuffer {
+impl<P> Default for JitterBuffer<P> {
     fn default() -> Self {
         Self {
             packets: BTreeMap::new(),
@@ -69,7 +69,7 @@ impl Default for JitterBuffer {
     }
 }
 
-impl JitterBuffer {
+impl<P: Clone> JitterBuffer<P> {
     pub fn target_ms(&self) -> f32 {
         (self.frames_per_packet as f32 * FRAME_MS + 2.5 * self.jitter_ms + 10.)
             .clamp(MIN_TARGET_MS, MAX_TARGET_MS)
@@ -102,7 +102,7 @@ impl JitterBuffer {
         self.playing
     }
 
-    pub fn push(&mut self, sequence: u64, opus: Vec<u8>, end: bool, now: Duration) {
+    pub fn push(&mut self, sequence: u64, opus: P, end: bool, now: Duration) {
         if sequence > MAX_SEQUENCE
             || self.next.is_some_and(|next| sequence < next)
             || self.packets.contains_key(&sequence)
@@ -150,7 +150,7 @@ impl JitterBuffer {
 
     /// The next action for the playout clock, which asks whenever this
     /// speaker's decoded audio runs low.
-    pub fn pull(&mut self) -> Pull {
+    pub fn pull(&mut self) -> Pull<P> {
         self.pulled = None;
         if !self.playing {
             let end_seen = self.packets.values().any(|packet| packet.end);

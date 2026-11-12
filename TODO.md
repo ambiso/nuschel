@@ -739,6 +739,24 @@ The media worker uses per-speaker adaptive jitter buffers and Opus loss concealm
       76.51 dB and formerly silent gain 4 opposing LR→88.53 dB; quiet 66.10 dB and stereo
       regressions pass. 68 native units include allocation-free converter/reference
       correspondence and unchanged exact clocks. Preserve the failing baseline.
+- [ ] Fix/investigate lossless SILK LBRR decoding before claiming receive FEC
+      parity. Independent 24 kbit mono SILK/FEC-enabled packets match libopus for
+      the first 2 packets, then diverge sharply when redundancy likely starts:
+      ordered lossless direct OpusDecoder agreement 6.30 dB (packet 3 only 0.08 dB).
+      This reproduces without jitter and with fresh PCM buffers, so it is not a
+      browser scheduling artifact. Preserve failing packets/reference and strict
+      codec gate; review the smallest upstream-compatible LBRR fix separately.
+- [ ] Correct shared/native variable-duration loss advancement before browser
+      jitter parity: after a valid 120 ms packet at sequence 0 and the next queued
+      packet at 13, only one 10 ms tick is missing, but current Pull::Lost reports
+      twelve ticks and advances past the queued packet. Bound inferred missing
+      duration by the next known sequence; require independent codec/timeline
+      fixtures and a separate reviewed correction, without latency-policy retuning.
+- [ ] Preserve authorized browser receive continuity across mic-only mute/bitrate
+      changes. Current resetMedia→configure→free also clears all receive decoders.
+      Separate RX authorization/epoch from TX capture generation, retaining strict
+      mute/permission gates and immediate route/deafen/listen revocation. Leave
+      unchecked until epoch/stall/real-private-browser proofs pass.
 - [ ] Quantify native non-48 kHz SRC versus full-scale clipping placement against
       stock Mumble. Nuschl retains its existing 48 kHz mix clip before SRC plus a
       device overshoot guard; stock maps/filters before its final output clip.

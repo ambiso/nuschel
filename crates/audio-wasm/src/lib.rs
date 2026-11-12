@@ -1,11 +1,15 @@
 // SPDX-License-Identifier: EUPL-1.2
-//! Codecs only: no device, clock, network, storage or session-key interface.
+//! Codecs and caller-clocked playout: no device, platform clock, network, storage
+//! or session-key interface.
 //! Load the generated WASM in its own bounded audio worker, never the TLS worker.
 #![forbid(unsafe_code)]
 
 use opus_pure::{Application, MAX_PACKET_SAMPLES, OpusDecoder, OpusEncoder, packet};
 #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
 use wasm_bindgen::prelude::*;
+
+mod playout;
+pub use playout::VoicePlayout;
 
 pub const SAMPLE_RATE: u32 = 48_000;
 pub const FRAME_SAMPLES: usize = 960;

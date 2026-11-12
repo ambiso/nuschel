@@ -94,3 +94,35 @@ No public servers, host devices or hardware/perceptual equivalence claim.
 Primary interfaces: [Web Audio message ports](https://www.w3.org/TR/2021/REC-webaudio-20210617/#dom-audioworkletprocessor-port),
 [transferable MessagePorts](https://html.spec.whatwg.org/multipage/web-messaging.html#message-ports),
 and [Opus decoder PLC/FEC contract](https://opus-codec.org/docs/opus_api-1.5/group__opus__decoder.html).
+
+## Typed playout component and frozen failures
+
+The new Rust VoicePlayout component is not wired into browser playback yet.
+Its 480-frame pulls perform at most one decode, retaining up to 120 ms of raw
+stereo cache. Typed `{opus,gain}` payloads preserve gain through reordering;
+FEC/PLC retain the preceding known gain because a lost packet's gain is unknown,
+rather than borrowing a later packet's control. Default native Vec payloads and
+policy decisions remain unchanged; the generic refactor still matches the exact
+19,881-pull frozen trace. Native codec/component units pass 6.
+
+`tests/opus_playout.py` supplies explicit arrival/pull clocks and independently
+specified libopus decode/FEC/PLC actions. No delay or amplitude is fitted. Before
+browser plumbing, this exposed two separate existing defects, retained with
+`passed:false` evidence in `playout-frozen-native/proof.json`:
+
+- After 120 ms at sequence 0, followed by a queued frame at 13, only 10 ms is missing.
+  Native/shared policy instead concealed 120 ms, skipped past 13 and failed exact
+  timeline/gain checks (8.63 dB agreement). A separate reviewed correction must
+  cap the missing span by the nearer queued sequence; target/catch-up/concealment
+  constants must stay unchanged.
+- Ordered lossless 24 kbit SILK with in-band FEC already matches reference libopus
+  at only 6.30 dB. First two packets are exact; the third falls to 0.08 dB, as LBRR
+  likely activates. The frozen direct OpusDecoder probe reproduces this without
+  jitter or persistent output buffers. This is a codec defect investigation,
+  not evidence of a scheduling problem. No gate has been weakened.
+
+The non-loss variable-duration case covers every 10 ms multiple through 120 ms and
+passes at 140.9 dB with exact block lengths/gain. Diagnostic flags explicitly
+expect the two known failures only for frozen-source evidence; final strict runs
+must pass without those flags. Browser FEC parity cannot be called complete while
+the codec defect remains.

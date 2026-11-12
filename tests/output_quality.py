@@ -107,20 +107,20 @@ class Reference:
     def __init__(self, library):
         self.lib = ReferenceOpus(library).lib
 
-    def encode(self, samples, channels, bitrate=128000, *, application=2049, bandwidth=None):
+    def encode(self, samples, channels, bitrate=128000, *, application=2049, bandwidth=None, frame_samples=FRAME, fec=False, packet_loss=0):
         error = ctypes.c_int()
         encoder = self.lib.opus_encoder_create(RATE, channels, application, ctypes.byref(error))  # audio by default
         if error.value:
             raise RuntimeError(f"libopus create: {error.value}")
         try:
-            for request, value in [(4002, bitrate), (4006, 0), (4022, channels), *([(4008, bandwidth)] if bandwidth is not None else [])]:  # bitrate,VBR,force channels
+            for request, value in [(4002, bitrate), (4006, 0), (4022, channels), (4012, int(fec)), (4014, packet_loss), *([(4008, bandwidth)] if bandwidth is not None else [])]:  # bitrate,VBR,force channels
                 if self.lib.opus_encoder_ctl(encoder, request, value):
                     raise RuntimeError(f"libopus control {request}")
             packets = []
-            for offset in range(0, len(samples) - FRAME * channels + 1, FRAME * channels):
-                pcm = (ctypes.c_float * (FRAME * channels))(*samples[offset:offset + FRAME * channels])
+            for offset in range(0, len(samples) - frame_samples * channels + 1, frame_samples * channels):
+                pcm = (ctypes.c_float * (frame_samples * channels))(*samples[offset:offset + frame_samples * channels])
                 output = ctypes.create_string_buffer(1275)
-                count = self.lib.opus_encode_float(encoder, pcm, FRAME, output, len(output))
+                count = self.lib.opus_encode_float(encoder, pcm, frame_samples, output, len(output))
                 if count <= 0:
                     raise RuntimeError(f"libopus encode: {count}")
                 packets.append(bytes(output.raw[:count]))
