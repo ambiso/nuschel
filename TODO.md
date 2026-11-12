@@ -45,6 +45,15 @@ Current integration checkpoint (2026-11-12):
   not claim new physical-device or native Windows/macOS execution tests.
   Source/proof details: `~/.cache/nuschl-integration-20261112/menus-native-gain/handoff.json`.
   No push, release or production trust enrollment.
+- **Browser initialization recovery is integrated through `269d4f24`.** All 44
+  focused Node checks pass on root. The current web package builds and its ten
+  runtime files exactly match the confined Chromium-tested startup package;
+  its actual scoped notices pass separately. Zero-server recovery, a held real
+  WASM loader with zero ordinary requests/microphone access, retained draft/cache
+  and first-ready-only invite connection pass. Actual calling/text/order/privacy
+  checks remain green. Scheduled deadlines do not prove synchronous thread exit.
+  See `docs/sdk-rpc.md`; content-worker retirement and the attachment broker
+  remain independent open work.
 - **Desktop layout foundation is integrated through `12d6695c`.** Shared finite
   text/action lanes, one bounded notice stack, restored connection indicator,
   wrapped headers/footers, keyboard/pointer dismissal and nested focus reveal
