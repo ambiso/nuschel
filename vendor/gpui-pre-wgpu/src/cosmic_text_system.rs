@@ -489,6 +489,10 @@ impl CosmicTextSystemState {
             return font_id;
         };
         if let Some(&instance) = self.variable_instances.get(&(font_id, weight.0)) {
+            // `load_family` gives a face loaded again (after `add_fonts`) a
+            // new fallback chain; its instances take it too.
+            let chain = Arc::clone(&self.loaded_font(font_id).user_fallback_chain);
+            self.loaded_fonts[instance.0].user_fallback_chain = chain;
             return instance;
         }
         // The same face, shaped at the weight (cosmic-text instances it).
@@ -798,11 +802,20 @@ impl CosmicTextSystemState {
                 continue;
             };
 
+            // Nuschel patch: cosmic-text shapes a fallback family at the run's
+            // weight, so a variable one is drawn as its instance at it.
+            let weight = gpui::FontWeight(properties.weight.0 as f32);
+            let fallback_ids: SmallVec<[FontId; 4]> = properties
+                .fallback_chain
+                .iter()
+                .map(|(font_id, _)| self.variable_instance(*font_id, weight))
+                .collect();
             let primary_attrs = properties.attributes(run.font_id, &properties.primary_family_name);
             let fallback_attrs: SmallVec<[Attrs<'_>; 4]> = properties
                 .fallback_chain
                 .iter()
-                .map(|(font_id, family_name)| properties.attributes(*font_id, family_name))
+                .zip(&fallback_ids)
+                .map(|((_, family_name), font_id)| properties.attributes(*font_id, family_name))
                 .collect();
 
             let spans = if properties.fallback_chain.is_empty() {
@@ -2326,6 +2339,42 @@ mod nuschel_tests {
         let state = fonts.0.read();
         assert_eq!(state.loaded_font(regular).variable_weight, None);
         assert_eq!(state.loaded_font(bold).variable_weight, Some(Weight(700)));
+        Ok(())
+    }
+
+    /// A variable family in a font's own fallback chain is shaped at the
+    /// run's weight, so it is drawn at that weight too.
+    #[test]
+    fn variable_fallback_families_are_drawn_at_the_run_weight() -> Result<()> {
+        let Some(fonts) = with_fonts(ADWAITA) else {
+            return Ok(());
+        };
+        let font = gpui::Font {
+            fallbacks: Some(FontFallbacks::from_fonts(vec!["Adwaita Sans".into()])),
+            ..gpui::font("Adwaita Mono").bold()
+        };
+        let font_id = fonts.font_id(&font)?;
+        // U+27F6 is in Adwaita Sans but not in Adwaita Mono.
+        let text = "m\u{27f6}";
+        let layout = fonts.layout_line(
+            text,
+            gpui::px(16.),
+            &[FontRun {
+                len: text.len(),
+                font_id,
+            }],
+        );
+        let arrow = layout
+            .runs
+            .iter()
+            .find(|run| run.glyphs.iter().any(|glyph| glyph.index == 1))
+            .expect("the arrow's run");
+        assert_eq!(family_of(&fonts, arrow.font_id), "Adwaita Sans");
+        let state = fonts.0.read();
+        assert_eq!(
+            state.loaded_font(arrow.font_id).variable_weight,
+            Some(Weight(700))
+        );
         Ok(())
     }
 

@@ -30,7 +30,9 @@ shaped at that weight (cosmic-text's font for the face and weight, and the
 shaping attributes' weight) and drawn, measured and advanced with the axis
 at that weight (`weight_coords` for swash's scaler and metrics). Faces
 cosmic-text falls back to for missing glyphs are instanced at the weight the
-glyph was shaped with. Static faces and regular text are unchanged.
+glyph was shaped with, and families in a font's own fallback chain
+(`FontFallbacks`) at the run's weight. Static faces and regular text are
+unchanged.
 
 Tests. `nuschel_tests` in `src/cosmic_text_system.rs` covers the patches; its
 tests with real fonts read DejaVu and Adwaita font files from
