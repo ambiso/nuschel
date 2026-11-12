@@ -33,6 +33,9 @@ const LIBRARY_TIMEOUT: Duration = subsonic::API_TIMEOUT;
 /// Count actual blocking calls, not callers still waiting for their replies.
 const MAX_LIBRARY_CALLS: usize = 8;
 static LIBRARY_CALLS: Semaphore = Semaphore::const_new(MAX_LIBRARY_CALLS);
+/// A body owns its slot until the SSE stream ends or is dropped. No waiters.
+const MAX_SSE_WATCHERS: usize = 32;
+static SSE_WATCHERS: Semaphore = Semaphore::const_new(MAX_SSE_WATCHERS);
 /// Albums per page of an album list.
 const PAGE_SIZE: u32 = 48;
 /// Changes that come in a burst are sent as one state.
@@ -580,8 +583,14 @@ async fn events(
     Path(token): Path<String>,
 ) -> Result<Response, ApiError> {
     owner(&bot, &token)?;
+    let permit = SSE_WATCHERS.try_acquire().map_err(|_| {
+        ApiError(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "too many live music viewers".to_owned(),
+        )
+    })?;
     let changes = bot.changes.subscribe();
-    let stream = state_stream(bot, token, changes);
+    let stream = state_stream(bot, token, changes, permit);
     let mut response = Sse::new(stream)
         .keep_alive(KeepAlive::default())
         .into_response();
@@ -597,10 +606,11 @@ fn state_stream(
     bot: Arc<Bot>,
     token: String,
     changes: tokio::sync::watch::Receiver<u64>,
+    permit: tokio::sync::SemaphorePermit<'static>,
 ) -> impl Stream<Item = Result<Event, Infallible>> {
     futures_util::stream::unfold(
-        (bot, token, changes, true),
-        |(bot, token, mut changes, first)| async move {
+        (bot, token, changes, true, permit),
+        |(bot, token, mut changes, first, permit)| async move {
             if !first {
                 tokio::select! {
                     result = changes.changed() => { result.ok()?; }
@@ -614,7 +624,7 @@ fn state_stream(
                 .event("state")
                 .json_data(snapshot(&bot, &owner.name))
                 .ok()?;
-            Some((Ok(event), (bot, token, changes, false)))
+            Some((Ok(event), (bot, token, changes, false, permit)))
         },
     )
 }
@@ -1048,6 +1058,74 @@ mod tests {
             .await
             .unwrap();
         serde_json::from_slice(&bytes).unwrap()
+    }
+
+    #[tokio::test]
+    async fn real_http_sse_cap_is_retained_until_the_stream_closes() {
+        use tokio::{
+            io::{AsyncReadExt, AsyncWriteExt},
+            net::{TcpListener, TcpStream},
+        };
+        async fn open(address: std::net::SocketAddr, token: &str) -> (TcpStream, String) {
+            let mut socket = TcpStream::connect(address).await.unwrap();
+            socket
+                .write_all(
+                    format!("GET /u/{token}/api/events HTTP/1.1\r\nHost: fixture\r\n\r\n")
+                        .as_bytes(),
+                )
+                .await
+                .unwrap();
+            let mut header = Vec::new();
+            tokio::time::timeout(Duration::from_secs(2), async {
+                while !header.ends_with(b"\r\n\r\n") {
+                    assert!(header.len() < 8192);
+                    header.push(socket.read_u8().await.unwrap());
+                }
+            })
+            .await
+            .unwrap();
+            (socket, String::from_utf8(header).unwrap())
+        }
+        let library = Server::reply("application/json", b"{}");
+        let (_directory, bot, token) = test_bot(&library.url, 1);
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let serving = tokio::spawn(async move {
+            axum::serve(listener, router(bot)).await.unwrap();
+        });
+        let mut clients = Vec::new();
+        for _ in 0..MAX_SSE_WATCHERS {
+            let (socket, header) = open(address, &token).await;
+            assert!(header.starts_with("HTTP/1.1 200"), "{header}");
+            clients.push(socket);
+        }
+        assert_eq!(SSE_WATCHERS.available_permits(), 0);
+        let (overload, header) = open(address, &token).await;
+        assert!(header.starts_with("HTTP/1.1 503"), "{header}");
+        drop(overload);
+        // A completed handler did not release a live response body's permit.
+        assert_eq!(SSE_WATCHERS.available_permits(), 0);
+        drop(clients.pop());
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while SSE_WATCHERS.available_permits() == 0 {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let (replacement, header) = open(address, &token).await;
+        assert!(header.starts_with("HTTP/1.1 200"), "{header}");
+        clients.push(replacement);
+        drop(clients);
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while SSE_WATCHERS.available_permits() != MAX_SSE_WATCHERS {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        serving.abort();
+        let _ = serving.await;
     }
 
     #[tokio::test]
