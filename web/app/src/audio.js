@@ -180,7 +180,8 @@ export class BrowserAudio {
   resetMedia({preservePlayback=false}={}) {
     this.epoch=String(++this.revision);this.baseSequence=this.sequence;
     if(!this.worker)this.encodeJobs.clear();
-    this.txJobs.clear();
+    // SDK send promises settle only on a real reply or after the SDK owner
+    // terminates its worker. TX epoch changes do not acknowledge its inbox.
     if(!preservePlayback||!this.playbackEnabled()) {
       this.receiveEpoch="rx"+ ++this.receiveRevision;
       // Credits survive revocation until the worker actually acknowledges old
@@ -285,12 +286,12 @@ export class BrowserAudio {
       voice_generation:this.voice.voice_generation,sequence:String(sequence),opus,end};
     const timeout=setTimeout(()=>{
       if(this.epoch!==epoch||this.txJobs.get(job)!==pending)return;
-      this.txJobs.delete(job);this.transportStalled=true;this.stopCapture(true);this.resetMedia({preservePlayback:true});this.applyPolicy();
+      this.transportStalled=true;this.stopCapture(true);this.resetMedia({preservePlayback:true});this.applyPolicy();
       this.status("transport-error","The voice connection stopped accepting audio. Unmute to retry.");
     },250);
     let result;try{result=this.onPacket(packet);}catch(error){result=Promise.reject(error);}
     if(!result||typeof result.then!=="function") {
-      clearTimeout(timeout);this.txJobs.delete(job);this.transportStalled=true;
+      clearTimeout(timeout);this.transportStalled=true;
       this.stopCapture(true);this.resetMedia({preservePlayback:true});this.applyPolicy();
       this.status("transport-error","The voice bridge must acknowledge queued audio packets.");return;
     }

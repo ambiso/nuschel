@@ -6,11 +6,12 @@
   import { inviteFragment } from "./invite.js";
   import { channelRows, initials, avatarColor, conversationKey, filterMessages, appearance } from "./presentation.js";
   import Message from "./Message.svelte";
+  import { SdkRpc, SdkUnavailableError } from "./sdk-rpc.js";
   import { BrowserAudio } from "./audio.js";
   const link = inviteFragment(location.hash);
   let relay = $state(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/relay`);
   let host = $state(link.host), port = $state(link.port), username = $state(link.username), pin = $state(link.pin), serverName = $state(""), password = $state("");
-  let loaded = $state(false), error = $state(link.error), servers = $state([]), timeline = $state(null);
+  let loaded = $state(false), clientUnavailable = $state(false), error = $state(link.error), servers = $state([]), timeline = $state(null);
   let showAdd = $state(false), editingIndex = $state(null), showSettings = $state(false), drawer = $state(false), mobile = $state(false);
   let body = $state(""), expanded = $state(new Map()), search = $state(""), showSearch = $state(false);
   let messagesElement = $state(), composerElement = $state(), navigationButton = $state(), searchElement = $state();
@@ -25,8 +26,8 @@
     return previewIds.map(id => byId.get(id)).filter(Boolean);
   });
   let lastChannelPointer = "";
-  let initialState = true, follow = true, worker, audio, requestId = 0, activateAudio = () => {}, disposeAudio = () => {};
-  const requests = new Map(), drafts = new Map();
+  let initialState = true, follow = true, worker, rpc, audio, activateAudio = () => {}, disposeAudio = () => {};
+  const drafts = new Map();
   const selected = $derived(servers.find((server) => server.id === timeline?.server) || servers.find(server => server.id === selectedFallback) || servers[0]);
   const selectedIndex = $derived(selected?.runtime_index ?? -1);
   const voiceServer = $derived(servers.find(server => server.id === voice?.server_id));
@@ -44,13 +45,13 @@
   const selectedVoiceChannel = $derived(selected?.channels.find((channel) => channel.id === ownUser?.channel));
   const displayedMessages = $derived(filterMessages(timeline?.messages || [], search));
   const selectedUsers = $derived((selected?.users || []).filter((user) => user.channel === timeline?.channel));
-  const canSend = $derived(!!timeline && selected?.status === "connected" && !timeline.sending);
+  const canSend = $derived(loaded && !!timeline && selected?.status === "connected" && !timeline.sending);
   const usersByChannel = $derived.by(() => {
     const groups = new Map();
     for (const user of selected?.users || []) { const group = groups.get(user.channel) || []; group.push(user); groups.set(user.channel, group); }
     return groups;
   });
-  const labels = { connected:"Connected", connecting:"Connecting…", disconnected:"Disconnected" };
+  const labels = { connected:"Connected", connecting:"Connecting…", disconnected:"Disconnected", unavailable:"Unavailable" };
   const icons = {
     menu:"M4 6h16M4 12h16M4 18h16", close:"m6 6 12 12M6 18 18 6", plus:"M12 5v14M5 12h14", hash:"M10 3 8 21M17 3l-2 18M4 9h17M3 15h17",
     voice:"M11 5 6 9H3v6h3l5 4V5Zm4 3a6 6 0 0 1 0 8m3-11a10 10 0 0 1 0 14", mic:"M12 15a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v7a3 3 0 0 0 3 3Zm-6-4v1a6 6 0 0 0 12 0v-1M12 18v4M8 22h8", muted:"m3 3 18 18M9 9v3a3 3 0 0 0 5 2M9 5a3 3 0 0 1 6 0v5M6 11v1a6 6 0 0 0 10 4M18 11v1M12 18v4M8 22h8",
@@ -58,17 +59,12 @@
     settings:"m9 3-.7 3-2.8 1-2.5-1.5-2 3.5 2.3 2V14L1 16l2 3.5L5.5 18l2.8 1L9 22h4l.7-3 2.8-1 2.5 1.5 2-3.5-2.3-2v-3L21 9l-2-3.5L16.5 7l-2.8-1L13 3H9ZM15 12a4 4 0 1 1-8 0 4 4 0 0 1 8 0", send:"m22 2-7 20-4-9-9-4 20-7ZM11 13 22 2", leave:"M10 17l5-5-5-5M15 12H3M15 3h5v18h-5", lock:"M5 10h14v11H5V10Zm3 0V6a4 4 0 0 1 8 0", unlock:"M5 10h14v11H5V10Zm3 0V6a4 4 0 0 1 7-3", chevron:"m9 5 7 7-7 7",
   };
   function command(method, ...args) {
-    return new Promise((resolve, reject) => {
-      if (!worker) { reject("The client is still starting."); return; }
-      if (requests.size >= 128) { reject("The client is busy. Try again shortly."); return; }
-      if (["connect","connect_with_password","disconnect","remove_server","edit_server"].includes(method) && servers.find(server => server.runtime_index === args[0])?.id === voice?.server_id) {
-        audio?.syncVoice(null); voice = null; audioActionPending = null;
-      }
-      const id = ++requestId;
-      const timer = setTimeout(() => { requests.delete(id); reject("The browser worker did not respond. Retry or reload to reconnect."); },15000);
-      requests.set(id, { resolve:value => {clearTimeout(timer);resolve(value);}, reject:reason => {clearTimeout(timer);reject(reason);} });
-      worker.postMessage({ id, method, args });
-    });
+    if (!worker || !rpc || rpc.closed) return Promise.reject(clientUnavailable
+      ? new SdkUnavailableError() : new Error("The client is still starting."));
+    if (["connect","connect_with_password","disconnect","remove_server","edit_server"].includes(method) && servers.find(server => server.runtime_index === args[0])?.id === voice?.server_id) {
+      audio?.syncVoice(null); voice = null; audioActionPending = null;
+    }
+    return rpc.request(method,args);
   }
   async function act(method, ...args) { try { return await command(method, ...args); } catch (reason) { error = String(reason); } }
   function rememberDraft() {
@@ -112,17 +108,28 @@
       onReady: ready => command("audio_ready",ready),
       onState: state => { audioState = state; },
     });
+    const ownedWorker = worker;
+    rpc = new SdkRpc(ownedWorker,{onClose:reason => {
+      if (worker !== ownedWorker) return;
+      worker = null; clientUnavailable = true; loaded = false; cancelOrder(); arrangeServers = false;
+      // Keep conversation text, unsent drafts, bookmarks and history. Only
+      // transport-derived presence is invalid once its owner has terminated.
+      audio.syncVoice(null); voice = null; audioActionPending = null;
+      servers = servers.map(server => ({...server,status:"unavailable",muted:true,deafened:true,
+        users:server.users.map(user => ({...user,talking:false}))}));
+      if (timeline?.sending) timeline = {...timeline,sending:false};
+      error = reason;
+    }});
     activateAudio = options => audio.activateGesture(options);
     disposeAudio = () => audio.dispose();
-    worker.onmessage = async ({ data }) => {
+    ownedWorker.onmessage = async ({ data }) => {
+      if (worker !== ownedWorker || rpc.closed || !data || typeof data !== "object") return;
       if (data.kind === "voice_packet") {
         // Audio packets never replace reactive chat/server state.
         audio.receive(data.packet); return;
       }
       if (data.kind === "result") {
-        const pending = requests.get(data.id); requests.delete(data.id);
-        if (pending) data.error ? pending.reject(data.error) : pending.resolve(data.value);
-        else if (data.error) error = data.error;
+        rpc.accept(data);
       } else if (data.kind === "error") error = data.message;
       else if (data.kind === "ready") {
         loaded = true; capabilities = data.capabilities || [];
@@ -157,6 +164,7 @@
           if (messagesElement) delete messagesElement.dataset.previousHeight;
         }
         await tick();
+        if (worker !== ownedWorker || rpc.closed) return;
         if (messagesElement?.dataset.previousHeight && prior?.loading && !timeline?.loading) {
           const difference = messagesElement.scrollHeight - Number(messagesElement.dataset.previousHeight);
           messagesElement.scrollTop = Number(messagesElement.dataset.previousTop || 0) + difference;
@@ -165,9 +173,16 @@
         updateUnread();
       }
     };
-    worker.onerror = () => { audio.syncVoice(null); voice = null; error = "The browser worker stopped. Reload to reconnect."; loaded = false; for (const pending of requests.values()) pending.reject(error); requests.clear(); };
-    worker.postMessage({ method:"init", relay });
-    return () => { cancelOrder(); window.removeEventListener("keydown", escapeOrder, true); window.removeEventListener("resize", cancelOrder); motion.removeEventListener("change", updateMotion); media.removeEventListener("change", updateMobile); viewport?.removeEventListener("resize", resizeViewport); disposeAudio(); worker.terminate(); for (const pending of requests.values()) pending.reject("Client closed."); requests.clear(); };
+    ownedWorker.onerror = event => {
+      if (worker !== ownedWorker) return;
+      event.preventDefault(); rpc.close("The browser worker stopped. Reload to reconnect.");
+    };
+    ownedWorker.onmessageerror = () => {
+      if (worker === ownedWorker) rpc.close("The browser worker sent an unreadable response. Reload to reconnect.");
+    };
+    ownedWorker.postMessage({ method:"init", relay });
+    return () => { cancelOrder(); window.removeEventListener("keydown", escapeOrder, true); window.removeEventListener("resize", cancelOrder); motion.removeEventListener("change", updateMotion); media.removeEventListener("change", updateMobile); viewport?.removeEventListener("resize", resizeViewport); rpc.close("Client closed.",{notify:false}); worker = null; disposeAudio(); };
+
   });
   async function connect(event) {
     event?.preventDefault();
@@ -350,7 +365,7 @@
   <aside class="channels" aria-label="Server and channels">
     <header class="server-header"><div><span class="eyebrow">YOUR SERVER</span><h1>{selected?.name || "Nuschl"}</h1></div>{#if mobile}<button class="icon-button" aria-label="Close navigation" onclick={closeDrawer}>{@render icon("close")}</button>{:else}<button class="icon-button" aria-label="Server settings" title="Server settings" disabled={!selected} onclick={editServer}>{@render icon("settings")}</button>{/if}</header>
     {#if selected}
-      <div class="server-connection"><span class:connected={selected.status === "connected"} class="connection-dot"></span><span class="status" role="status">{labels[selected.status]}</span><button class="text-button" onclick={() => act(selected.status === "disconnected" ? "connect" : "disconnect", selectedIndex)}>{selected.status === "disconnected" ? "Connect" : "Disconnect"}</button></div>
+      <div class="server-connection"><span class:connected={selected.status === "connected"} class="connection-dot"></span><span class="status" role="status">{labels[selected.status]}</span>{#if clientUnavailable}<button class="text-button" onclick={() => location.reload()}>Reload client</button>{:else}<button class="text-button" disabled={!loaded} onclick={() => act(selected.status === "disconnected" ? "connect" : "disconnect", selectedIndex)}>{selected.status === "disconnected" ? "Connect" : "Disconnect"}</button>{/if}</div>
       <p class="security" title="TLS protects the connection; this server can read legacy chat.">{@render icon("unlock")}<span>Server can read chat</span><span class="transport">TLS</span></p>
       {#if selected.notice}<div class="notice" role="status"><span>{selected.notice}</span>{#if capabilities.includes("dismiss_notice")}<button class="icon-button" aria-label="Dismiss notice" onclick={() => act("dismiss_notice",selectedIndex)}>{@render icon("close")}</button>{/if}</div>{/if}
       {#if selected.certificate}<div class="certificate" role="alert"><strong>{selected.pin ? "Certificate changed" : "Verify server identity"}</strong><p>Compare this fingerprint with the server owner before trusting it.</p><code>{selected.certificate}</code><button class="primary" onclick={() => act("accept_certificate",selectedIndex,selected.certificate)}>Trust this certificate</button></div>{/if}
@@ -409,7 +424,7 @@
     {/if}
     {#if audioState?.message && voice}<div class="audio-notice" role="status">{audioState.message}</div>{/if}
     <form class="composer" onsubmit={send}>
-      <div class="composer-input"><label class="sr-only" for="message">Message</label><textarea id="message" bind:this={composerElement} bind:value={body} rows="2" maxlength="65536" oninput={rememberDraft} placeholder={timeline ? `Message ${timeline.name}` : "Choose a channel to start chatting"} disabled={!timeline || selected?.status !== "connected"} onkeydown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === "Enter") { event.preventDefault(); send(); } }}></textarea><button class="send-button" type="submit" aria-label="Send" title="Send (Ctrl/⌘ Enter)" disabled={!body.trim() || !canSend}>{@render icon("send")}</button></div>
+      <div class="composer-input"><label class="sr-only" for="message">Message</label><textarea id="message" bind:this={composerElement} bind:value={body} rows="2" maxlength="65536" oninput={rememberDraft} placeholder={timeline ? `Message ${timeline.name}` : "Choose a channel to start chatting"} readonly={clientUnavailable} disabled={!timeline || (selected?.status !== "connected" && !clientUnavailable)} onkeydown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === "Enter") { event.preventDefault(); send(); } }}></textarea><button class="send-button" type="submit" aria-label="Send" title="Send (Ctrl/⌘ Enter)" disabled={!body.trim() || !canSend}>{@render icon("send")}</button></div>
       <div class="composer-footer"><small>Enter adds a newline · Ctrl/⌘ Enter sends</small><span class="local-history">History stays in this browser</span></div>
     </form>
   </section>

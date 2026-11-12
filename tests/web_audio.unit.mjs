@@ -68,17 +68,19 @@ test("old transport promises cannot consume or release the next connection's aud
   audio.syncVoice(voice("1"));audio.sendPacket(0n,new Uint8Array([0xf8,0xff,0xfe]),false);audio.sendPacket(2n,new Uint8Array([0xf8,0xff,0xfe]),false);
   audio.sendPacket(4n,new Uint8Array([0xf8,0xff,0xfe]),false);assert.equal(completions.length,2);
   audio.syncVoice(voice("2"));audio.sendPacket(0n,new Uint8Array([0xf8,0xff,0xfe]),false);
-  assert.equal(audio.txJobs.size,1);assert.equal(completions.length,3);
-  completions[0]();completions[1]();await turn();assert.equal(audio.txJobs.size,1);
+  assert.equal(audio.txJobs.size,2);assert.equal(completions.length,2,"epoch change cannot acknowledge old SDK inbox work");
+  completions[0]();await turn();assert.equal(audio.txJobs.size,1);
+  audio.sendPacket(0n,new Uint8Array([0xf8,0xff,0xfe]),false);assert.equal(completions.length,3);assert.equal(audio.txJobs.size,2);
+  completions[1]();await turn();assert.equal(audio.txJobs.size,1);
   completions[2]();await turn();assert.equal(audio.txJobs.size,0);await audio.dispose();
 });
 
 test("a stalled transport closes capture instead of growing an unlimited RPC backlog",async()=>{
-  const audio=new BrowserAudio({onPacket:()=>new Promise(()=>{})});audio.syncVoice(voice());
+  let reply;const audio=new BrowserAudio({onPacket:()=>new Promise(resolve=>{reply=resolve;})});audio.syncVoice(voice());
   audio.sendPacket(0n,new Uint8Array([0xf8,0xff,0xfe]),false);
   await new Promise(resolve=>setTimeout(resolve,300));
-  assert.equal(audio.transportStalled,true);assert.equal(audio.txJobs.size,0);assert.equal(audio.phase,"transport-error");
-  await audio.dispose();
+  assert.equal(audio.transportStalled,true);assert.equal(audio.txJobs.size,1,"timeout is not an SDK acknowledgment");assert.equal(audio.phase,"transport-error");
+  reply();await turn();assert.equal(audio.txJobs.size,0);await audio.dispose();
 });
 
 test("packet inbox stays bounded across stalls and rapid RX revoke/reopen until exact ACK",async()=>{
