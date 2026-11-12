@@ -72,6 +72,13 @@ Current integration checkpoint (2026-11-12):
   These checks are separate from physical acoustic quality; the iOS routing
   proposal is design only.
   Evidence: `~/.cache/nuschl-web-controls-integration/`.
+- **Browser Markdown selection keeps blank lines (`246158d9`, merged in
+  `a8518f67`).** The exact combined Nix App passes real private-Murmur welcome
+  and composer checks: source-edge newlines, headings, loose lists and fenced
+  code retain exact selected line counts with bounded text nodes and unchanged
+  spacer geometry. The combined package again passes 38 JS tests and all five
+  control-layout cases. This fixes selection/copy, without claiming broader
+  browser image/identity parity.
 - **Local SQLite history uses a smaller page cache (`9157817a`, merged in
   `d68c065d`).** Each history connection sets `cache_size=-512`; server databases,
   imports, schema and SQLite temporary/mmap defaults are unchanged. The preserved
@@ -781,12 +788,24 @@ Later (reported):
       Also cover storage cancellation poisoning/operator-lock restart races,
       inherited-FD auditing, Windows spawn/contain ordering and the desktop math
       helper's bare-name fallback; preserve fail-closed executable discovery.
-- [ ] Preserve browser selection/copy blank lines between Markdown blocks.
+      The crypto correction now retains unknown exits per handle, but pinned
+      Tokio still signals from `kill_on_drop` during final task/runtime teardown
+      after a wait error. Resolve that stale-PID risk through bounded common
+      quarantine ownership before integration; do not silently leak unbounded
+      SDK-created child handles or disable normal kill-on-drop protection.
+- [x] Preserve browser selection/copy blank lines between Markdown blocks.
       Geometry is correct, but empty spacer elements lose those newlines in
       DOM selection. A scoped fix must preserve exact selected newlines and
       source edges, bounded text-node counts and existing layout. Correct the
       welcome fixture using exact selection plus geometry rather than weakening
-      the newline assertion; the Markdown owner is implementing this separately.
+      the newline assertion.
+      The preserved fix and exact combined packaged-App proof are recorded above.
+- [ ] Update the stale `tests/web_math.browser.mjs` inline-code assertion after
+      Markdown integration. It expects visible backticks around `$code$` and
+      fails on the unmodified baseline too. Preserve meaningful checks for a
+      real monospace code element, literal dollar-delimited source, absence of
+      formula rendering there and exact selection text; the owner is proposing
+      that scoped fixture correction before editing.
 - [ ] Diagnose `tests/web_voice_ui.mjs`'s "Enable sound" timeout: the receiver
       toggles deafen twice. It reproduces on both the existing baseline and the
       processing-display candidate; neither fixture failure proves an AEC fix.
@@ -2745,6 +2764,11 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
       Audit any redistributed C runtime's licenses/source obligations separately
       from the Rust bundle. Validate install/launch/worker canaries and uninstall
       in owned non-Nix distro environments without host profiles or global state.
+      All nine target ELF links and stage audits now pass; runtime proof remains
+      open. In particular distro PipeWire/ALSA need system configuration data
+      currently absent from the media sandbox's read-only library grants. Prove
+      exact required paths with private fixtures before adding narrowly scoped
+      media-only data mounts; zero Nix RPATH alone does not prove portability.
 - [ ] Produce a pinned Flatpak repository/one-click reference and bundle through
       Nix. Preserve credential-free content/media roles inside Flatpak; a manifest
       around the current nested bubblewrap launcher is insufficient. The Flatpak
