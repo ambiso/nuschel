@@ -112,7 +112,6 @@ pkgs.testers.runNixOSTest {
       };
   };
   testScript = ''
-    import json, os, stat, subprocess
     from pathlib import Path
 
     # Assert actual driver paths BEFORE boot, not merely client TMPDIR.
