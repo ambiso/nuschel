@@ -37,7 +37,7 @@ if git('rev-parse', '--is-shallow-repository') != 'false':
 source = git('rev-parse', args.revision + '^{commit}')
 assert source == args.revision
 base = tomllib.loads(git('show', source + ':Cargo.toml'))['workspace']['package']['version']
-if not re.fullmatch('[0-9]+\.[0-9]+\.[0-9]+', base):
+if not re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+', base):
     parser.error('only stable three-part workspace release versions are currently supported')
 count = int(git('rev-list', '--count', source))
 epoch = int(git('show', '-s', '--format=%ct', source))
