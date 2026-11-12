@@ -79,7 +79,8 @@ pkgs.testers.runNixOSTest {
         # Deliberately model an existing broad ACME membership. Voice key access
         # must still fail; only the new private group owns that certificate.
         users.users.nginx.extraGroups = [ "acme" ];
-        security.acme.certs."voice.test".validMinDays = 365;
+        # Pebble issues five-year leaves; force actual renewal within this fixture.
+        security.acme.certs."voice.test".validMinDays = 3650;
         systemd.services.nuschl.wantedBy = lib.mkForce [ ];
         systemd.services.nuschl-tls-refresh.serviceConfig = {
           # Test-only public trust injection: Pebble generates its issuer root
