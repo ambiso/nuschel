@@ -4393,6 +4393,271 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    async fn acl_query_reservations_prevent_reopen_timeout_and_channel_reuse_retargeting() {
+        let mut state = State::default();
+        let (tx, mut rx) = mpsc::channel(64);
+        state
+            .handle(
+                frame(
+                    kind::CHANNEL_STATE,
+                    proto::ChannelState {
+                        channel_id: Some(7),
+                        ..Default::default()
+                    },
+                ),
+                &tx,
+            )
+            .await
+            .unwrap();
+        drain(&mut rx).await;
+        let original = state.channels[&7].instance;
+        state.query_acl(7, Some(100), &tx).await.unwrap();
+        assert_eq!(state.outbound.len(), 1);
+        // A closed/expired UI request does not cancel this reservation. Reopen
+        // and retry must not consume its eventual reply under a newer ticket.
+        state.query_acl(7, Some(101), &tx).await.unwrap();
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            SessionEvent::AclReply(AclReply {
+                request: 101,
+                result: Err(_)
+            })
+        ));
+        assert_eq!(state.outbound.len(), 1);
+        state
+            .handle(
+                frame(kind::CHANNEL_REMOVE, proto::ChannelRemove { channel_id: 7 }),
+                &tx,
+            )
+            .await
+            .unwrap();
+        state
+            .handle(
+                frame(
+                    kind::CHANNEL_STATE,
+                    proto::ChannelState {
+                        channel_id: Some(7),
+                        ..Default::default()
+                    },
+                ),
+                &tx,
+            )
+            .await
+            .unwrap();
+        assert_ne!(state.channels[&7].instance, original);
+        drain(&mut rx).await;
+        state.query_acl(7, Some(102), &tx).await.unwrap();
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            SessionEvent::AclReply(AclReply {
+                request: 102,
+                result: Err(_)
+            })
+        ));
+        state
+            .handle(
+                frame(
+                    kind::ACL,
+                    proto::Acl {
+                        channel_id: 7,
+                        ..Default::default()
+                    },
+                ),
+                &tx,
+            )
+            .await
+            .unwrap();
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            SessionEvent::AclReply(AclReply {
+                request: 100,
+                result: Err(_)
+            })
+        ));
+        assert!(state.acl_queries.is_empty());
+        state.query_acl(7, Some(103), &tx).await.unwrap();
+        state
+            .handle(
+                frame(
+                    kind::ACL,
+                    proto::Acl {
+                        channel_id: 7,
+                        ..Default::default()
+                    },
+                ),
+                &tx,
+            )
+            .await
+            .unwrap();
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            SessionEvent::AclReply(AclReply {
+                request: 103,
+                result: Ok(_)
+            })
+        ));
+        // Unsolicited replies have no draft ticket and cannot reset a draft.
+        state
+            .handle(
+                frame(
+                    kind::ACL,
+                    proto::Acl {
+                        channel_id: 7,
+                        ..Default::default()
+                    },
+                ),
+                &tx,
+            )
+            .await
+            .unwrap();
+        assert!(matches!(rx.try_recv().unwrap(), SessionEvent::Acl(_)));
+        assert!(
+            State::default().acl_queries.is_empty(),
+            "reconnect owns a fresh query lane"
+        );
+    }
+
+    #[tokio::test]
+    async fn draft_acl_replies_refuse_lossy_snapshots_and_bound_unresolved_queries() {
+        let mut state = State::default();
+        let (tx, mut rx) = mpsc::channel(8);
+        state
+            .handle(
+                frame(
+                    kind::CHANNEL_STATE,
+                    proto::ChannelState {
+                        channel_id: Some(7),
+                        ..Default::default()
+                    },
+                ),
+                &tx,
+            )
+            .await
+            .unwrap();
+        drain(&mut rx).await;
+        for acl in [
+            proto::Acl {
+                channel_id: 7,
+                acls: vec![proto::acl::ChanAcl::default(); 4097],
+                ..Default::default()
+            },
+            proto::Acl {
+                channel_id: 7,
+                groups: vec![proto::acl::ChanGroup {
+                    name: "g".repeat(257),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            proto::Acl {
+                channel_id: 7,
+                acls: vec![proto::acl::ChanAcl {
+                    group: Some("g".repeat(257)),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            proto::Acl {
+                channel_id: 7,
+                groups: vec![proto::acl::ChanGroup {
+                    name: "huge".into(),
+                    add: vec![1; 8193],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+        ] {
+            state.query_acl(7, Some(9), &tx).await.unwrap();
+            state.handle(frame(kind::ACL, acl), &tx).await.unwrap();
+            assert!(matches!(
+                rx.try_recv().unwrap(),
+                SessionEvent::AclReply(AclReply {
+                    request: 9,
+                    result: Err(_)
+                })
+            ));
+        }
+        state.acl_queries = (100..228)
+            .map(|id| (id, (id as u64, Some(id as u64))))
+            .collect();
+        state.query_acl(7, Some(10), &tx).await.unwrap();
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            SessionEvent::AclReply(AclReply {
+                request: 10,
+                result: Err(_)
+            })
+        ));
+        assert_eq!(state.acl_queries.len(), 128);
+    }
+
+    #[tokio::test]
+    async fn acl_wire_preserves_inherited_group_overrides_and_unknown_permission_bits() {
+        let mut state = State {
+            own_session: Some(7),
+            ..Default::default()
+        };
+        let (tx, _rx) = mpsc::channel(8);
+        let pristine = AclGroup {
+            name: "inherited".into(),
+            inherited: true,
+            inherit: true,
+            inheritable: true,
+            add: vec![],
+            remove: vec![],
+            inherited_members: vec![123],
+        };
+        let mut override_group = pristine.clone();
+        override_group.name = "overridden".into();
+        override_group.remove.push(123);
+        override_group.add.push(9876);
+        let mut private = pristine.clone();
+        private.name = "not-inheritable".into();
+        private.inheritable = false;
+        state
+            .command(
+                Command::UpdateAcl(Acl {
+                    channel: 0,
+                    inherit_acls: false,
+                    groups: vec![pristine, override_group, private],
+                    entries: vec![AclEntry {
+                        apply_here: false,
+                        apply_subs: true,
+                        inherited: false,
+                        user_id: Some(9876),
+                        group: None,
+                        grant: 0x8000_0008,
+                        deny: 0x4000_0000,
+                    }],
+                }),
+                &tx,
+            )
+            .await
+            .unwrap();
+        let (kind, body) = state.outbound.pop().unwrap();
+        assert_eq!(kind, kind::ACL);
+        let acl = proto::Acl::decode(body.as_slice()).unwrap();
+        assert_eq!(
+            acl.groups
+                .iter()
+                .map(|group| group.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["overridden", "not-inheritable"]
+        );
+        assert_eq!(acl.groups[0].add, vec![9876]);
+        assert_eq!(acl.groups[0].remove, vec![123]);
+        assert!(
+            acl.groups
+                .iter()
+                .all(|group| group.inherited_members.is_empty())
+        );
+        assert_eq!(acl.acls[0].grant, Some(0x8000_0008));
+        assert_eq!(acl.acls[0].deny, Some(0x4000_0000));
+        assert_eq!(acl.acls[0].user_id, Some(9876));
+        assert_eq!(acl.acls[0].apply_here, Some(false));
+    }
+
+    #[tokio::test]
     async fn encrypted_session_emits_no_plaintext_chat_frames_from_raw_or_restored_commands() {
         let mut state = State {
             own_session: Some(7),

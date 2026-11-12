@@ -161,6 +161,8 @@ pub struct ServerState {
     /// Only correlated responses can initialize/validate an administrative draft.
     pub acl_reply: Option<nuschl_core::admin::AclReply>,
     pub user_names: BTreeMap<u32, String>,
+    pub(crate) acl_name_requests: BTreeSet<u32>,
+    pub(crate) acl_name_budget: usize,
     pub reconnecting: Option<String>,
     /// Sent and total messages of the text waiting for the server's rate limit.
     pub outbox: Option<(usize, usize)>,
@@ -250,6 +252,8 @@ impl ServerState {
             acl: None,
             acl_reply: None,
             user_names: BTreeMap::new(),
+            acl_name_requests: BTreeSet::new(),
+            acl_name_budget: 1024,
             reconnecting: None,
             outbox: None,
             avatar_requests: BTreeSet::new(),
@@ -260,6 +264,14 @@ impl ServerState {
             expansion: BTreeMap::new(),
             unsorted: false,
         }
+    }
+
+    pub(crate) fn clear_acl_cache(&mut self) {
+        self.acl = None;
+        self.acl_reply = None;
+        self.user_names.clear();
+        self.acl_name_requests.clear();
+        self.acl_name_budget = 1024;
     }
 
     pub fn status_label(&self) -> String {
