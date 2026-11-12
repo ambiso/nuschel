@@ -667,9 +667,7 @@ pub fn second_server_dialog(this: &Desktop, cx: &mut Context<Desktop>) -> Option
     let ask = this.second_server.as_ref()?;
     let here = ask.target_name.clone();
     let elsewhere = ask.other_names.join(" and ");
-    let detail = format!(
-        "Your microphone is enabled for {elsewhere}. Enable it for {here} as well, or only for {here}."
-    );
+    let detail = format!("Enable your microphone for {here} and {elsewhere}, or only for {here}.");
     let content = div()
         .flex()
         .flex_col()
