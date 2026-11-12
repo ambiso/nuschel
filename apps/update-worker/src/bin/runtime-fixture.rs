@@ -14,10 +14,24 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+#[cfg(windows)]
+#[path = "runtime-fixture/windows_fault.rs"]
+mod windows_fault;
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Test-only native fault workers use the same first-action LPAC bootstrap
+    // as each production verifier. No unconfined fallback is permitted.
+    #[cfg(windows)]
+    {
+        nuschl_sandbox_windows::launch_if_requested();
+        if windows_fault::dispatch()? {
+            return Ok(());
+        }
+    }
     let args: Vec<_> = std::env::args_os().skip(1).collect();
-    if args.len() != 3 {
-        return Err("fixture requires ED_WORKER ML_WORKER PYTHON".into());
+    let expected = if cfg!(windows) { 2 } else { 3 };
+    if args.len() != expected {
+        return Err("fixture requires ED_WORKER ML_WORKER (and PYTHON on Unix)".into());
     }
     let workers = VerifierPaths {
         ed25519: PathBuf::from(&args[0]),
@@ -141,9 +155,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     fs::write(&canary, "private fixture")?;
     let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
     let port = listener.local_addr()?.port();
-    let spoof = dir.path().join("spoof.py");
-    let script = format!(
-        r#"#!{}
+    #[cfg(unix)]
+    {
+        let spoof = dir.path().join("spoof.py");
+        let script = format!(
+            r#"#!{}
 import sys,hashlib,socket
 canary={:?}
 try:
@@ -162,43 +178,53 @@ except OSError: pass
 b=sys.stdin.buffer.read({})
 sys.stdout.buffer.write(b'NUSUVP2\0'+b[8:9]+hashlib.sha256(b'nuschl.update.verifier.reply.v2\0'+b).digest())
 "#,
-        PathBuf::from(&args[2]).display(),
-        canary.to_str().ok_or("non UTF8 fixture path")?,
-        port,
-        nuschl_update::verifier_wire::MAX_REQUEST_BYTES + 1
-    );
-    fs::write(&spoof, script)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&spoof, fs::Permissions::from_mode(0o755))?;
+            PathBuf::from(&args[2]).display(),
+            canary.to_str().ok_or("non UTF8 fixture path")?,
+            port,
+            nuschl_update::verifier_wire::MAX_REQUEST_BYTES + 1
+        );
+        fs::write(&spoof, script)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&spoof, fs::Permissions::from_mode(0o755))?;
+        }
+        let mut compromised = workers.clone();
+        compromised.ed25519 = spoof.clone();
+        verify(&raw, &signed, std::slice::from_ref(&key), &compromised)?;
+        assert!(verify(&raw, &bad_ml, std::slice::from_ref(&key), &compromised).is_err());
+        compromised = workers.clone();
+        compromised.mldsa44 = spoof.clone();
+        verify(&raw, &signed, std::slice::from_ref(&key), &compromised)?;
+        assert!(verify(&raw, &bad_ed, std::slice::from_ref(&key), &compromised).is_err());
+        fs::write(
+            &spoof,
+            format!(
+                "#!{}\nimport sys\nsys.stdin.buffer.read()\nsys.stdout.buffer.write(b'x'*10000)\n",
+                PathBuf::from(&args[2]).display()
+            ),
+        )?;
+        assert!(verify(&raw, &signed, std::slice::from_ref(&key), &compromised).is_err());
+        fs::write(
+            &spoof,
+            format!(
+                "#!{}\nimport time\ntime.sleep(30)\n",
+                PathBuf::from(&args[2]).display()
+            ),
+        )?;
+        let start = std::time::Instant::now();
+        assert!(verify(&raw, &signed, std::slice::from_ref(&key), &compromised).is_err());
+        assert!(start.elapsed().as_secs() < 10);
     }
-    let mut compromised = workers.clone();
-    compromised.ed25519 = spoof.clone();
-    verify(&raw, &signed, std::slice::from_ref(&key), &compromised)?;
-    assert!(verify(&raw, &bad_ml, std::slice::from_ref(&key), &compromised).is_err());
-    compromised = workers.clone();
-    compromised.mldsa44 = spoof.clone();
-    verify(&raw, &signed, std::slice::from_ref(&key), &compromised)?;
-    assert!(verify(&raw, &bad_ed, std::slice::from_ref(&key), &compromised).is_err());
-    fs::write(
-        &spoof,
-        format!(
-            "#!{}\nimport sys\nsys.stdin.buffer.read()\nsys.stdout.buffer.write(b'x'*10000)\n",
-            PathBuf::from(&args[2]).display()
-        ),
+    #[cfg(windows)]
+    windows_fault::exercise(
+        dir.path(),
+        port,
+        (&raw, &signed, &bad_ed, &bad_ml),
+        &key,
+        &workers,
+        now,
     )?;
-    assert!(verify(&raw, &signed, std::slice::from_ref(&key), &compromised).is_err());
-    fs::write(
-        &spoof,
-        format!(
-            "#!{}\nimport time\ntime.sleep(30)\n",
-            PathBuf::from(&args[2]).display()
-        ),
-    )?;
-    let start = std::time::Instant::now();
-    assert!(verify(&raw, &signed, std::slice::from_ref(&key), &compromised).is_err());
-    assert!(start.elapsed().as_secs() < 10);
     println!(
         "PASS: actual sandbox file/write/network probes, mandatory AND despite one forged answer, bounded output and timeout/reaping"
     );
