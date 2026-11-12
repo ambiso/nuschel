@@ -2,8 +2,9 @@
 
 Current focus (user, 2026-11-12): **unmute-to-first-speech latency, stereo receive
 and output fidelity, and hybrid update readiness**. Independent owners now cover
-SDK request backpressure, bounded context menus and full cross-distribution
-validation. Browser playout, hash-only document delivery, CELT concealment,
+the browser initialization watchdog, stale menu target/focus guards and native
+macOS CI validation. SDK request retirement, bounded menus, native packet-gain
+ownership and frozen cross archives have scoped proofs integrated. Browser playout, hash-only document delivery, CELT concealment,
 Windows profile-preserving updater relaunch and the metadata-refresh procedure
 are integrated with scoped proofs; final browser/device/distribution checks stay open.
 Server reordering and the desktop layout foundation have scoped proofs integrated;
@@ -30,9 +31,11 @@ Current integration checkpoint (2026-11-12):
   passes private-Murmur production-CSP voice/text/reorder/privacy checks with its
   new SDK: 21 audio packets produce zero full-state snapshots, audible RMS 0.06762
   and deafen zero. Browser component/controller/worker proofs remain scoped below.
-  Full current frozen cross archives are building separately; prior six verifier
-  products pass their recorded Windows runtime/Mach-O proofs. Later whole-source
-  Darwin helper outputs must be built/inspected before claiming current archives.
+  Complete frozen Windows/macOS archives at the same source tree also pass
+  scoped archive checks and actual Windows GUI update/profile continuity. Native
+  Apple signature/runtime acceptance remains open. Later menu, SDK-RPC and native
+  gain changes require their own combined distribution check; this checkpoint
+  does not cover later source revisions.
   No push, release, production trust enrollment or macOS native-runtime claim.
 - **Desktop layout foundation is integrated through `12d6695c`.** Shared finite
   text/action lanes, one bounded notice stack, restored connection indicator,
@@ -96,7 +99,8 @@ Current integration checkpoint (2026-11-12):
   client tests passed 93 (one baseline ignored). Actual private PCM/DSP checks
   passed; earlier failed AEC trials remain documented. The shared jitter-core
   refactor `76ef6af6` additionally passed native/shared tests and 19,881 exact
-  frozen-native trace comparisons; browser activation is still in progress.
+  frozen-native trace comparisons; browser activation and its scoped packaged
+  App proof are now integrated (see the detailed completed rows below).
   Physical-device latency, complete Mumble output parity, browser recovery and
   remaining conversion/clip-order work stay open below. The requested transmit
   default is 128 kbit/s subject to server budgets; UserStats bandwidth now converts
@@ -812,7 +816,7 @@ The media worker uses per-speaker adaptive jitter buffers and Opus loss concealm
       limits, zero native mix allocations, bounded persistent browser scratch;
       measured CPU/memory cost is documented in `docs/output-quality.md`.
       Full reference-Mumble multispeaker/loss/device parity remains open.
-- [ ] Integrate verified native encoded-packet gain ownership (`acf7fc66`,
+- [x] Integrate verified native encoded-packet gain ownership (`acf7fc66`,
       `d2e7631f`; browser/audio owner). Typed native jitter payload retains each
       sampled gain through reorder; FEC/PLC keeps the preceding known gain.
       The shared jitter policy, decoded-frame/f64 mix, limits and callbacks are
@@ -945,7 +949,7 @@ listed below. Plugin data remains the explicit gap.
       suppress icons.
 - [x] Context menus: user (direct message, local volume/mute, info, whisper), channel
       (join, create sub-channel, links, description).
-- [ ] Integrate and verify the shared bounded context-menu surface.
+- [x] Integrate and verify the shared bounded context-menu surface.
       One finite viewport/decorations budget, wrapped labels, retained scroll
       handle, visible overflow scrollbar and focus trap cover every native menu.
       Tab/reverse Tab reveal first/last actions; reading keys scroll the region.
@@ -956,7 +960,8 @@ listed below. Plugin data remains the explicit gap.
       background wheel isolation, reading/dismissal and native prompt editing.
       All 82 native units and exact package/notice checks pass. The eight-second
       menu idle proof has two transport-driven draws and no new focus reveals;
-      root integration remains the final gate. See `docs/context-menus.md`.
+      Root integration preserves the exact tested menu source bytes; native
+      Windows/macOS execution remains open. See `docs/context-menus.md`.
 - [ ] Keep menu focus attached to a semantic action when permissions or server
       context actions change while the menu is open. Current item/focus keys use
       vector indexes; inserting/removing entries can reuse an index for a different
