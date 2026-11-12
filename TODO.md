@@ -517,6 +517,18 @@ Later (reported):
       Markdown grammar, rendered by Typst in the sandboxed math worker (docs/math.md).
       Windows uses a less privileged AppContainer (checked in the Windows VM).
       Remaining: `\text` in other scripts than Latin lacks glyphs (one font).
+- [ ] Add an explicit "Send original file" image option (user, 2026-11-12):
+      transmit/store the selected file bytes without resizing, recompression,
+      metadata removal or format conversion. Generate a separate bounded preview
+      so receivers can display it like an image; right-click Save as must save
+      the exact original attachment, not the preview or a re-encoded decode.
+      Verify original/received/saved hashes and bytes across transfer/reconnect
+      paths, including metadata-bearing images and unsupported-preview formats.
+      Use the file/attachment transport and negotiated limits; do not pretend an
+      arbitrary original fits legacy Mumble's inline-image limit. Retain legacy
+      file-offer fallback and peer/relay privacy policy. For clipboard inputs,
+      preserve the supplied representation without claiming it is an unavailable
+      source file. Queue with the attachment/file implementation; not yet started.
 - [ ] Large file transfers peer to peer, not stored on the server: the server only
       relays (perhaps a small chunk cache, content-defined chunking); resumable
       across restarts and lost connections; clearly shown while still uploading.
@@ -1274,6 +1286,13 @@ listed below. Plugin data remains the explicit gap.
       unambiguous disconnect targets; bounded long-name layout must preserve
       useful status. Preserve explicit multi-server transmit consent and capture
       epochs. Assigned to the web owner after the spacing proof.
+- [ ] Preserve native bad-password rejection/retry diagnostics reliably. The ACL
+      E2EE bootstrap fixture sometimes gets the correct password retry form and
+      sometimes a generic Broken pipe for the same rejected credentials, while
+      the owned server logs the explicit rejection. Investigate reader/writer
+      handshake error ordering without relaxing authentication or replaying a
+      password to an unverified connection. Separate from ACL editing; original
+      private fixture failures remain retained.
 - [ ] Replace per-user/per-server volume +/- controls with real continuous
       sliders (user, 2026-11-12), and remove existing settings sliders' 5% pointer
       quantization. Current menu buttons add/subtract 0.1 amplitude gain; saved
