@@ -190,3 +190,12 @@ Final proofs, exact source/artifact hashes and invocations are recorded in
 contains the deadline/late-reply observations and `positive/proof.json` retains
 the original codec/canary gate. These scoped producer checks do not establish
 full attachment/broker operation or platform-independent browser scheduling.
+
+The private scheduling state machine is shared with formula rendering in
+`worker-owner.js` (checkpoint `87fae40c`). This shares implementation, not worker
+ownership, input validators, budgets or caches. The content facade still has one
+distinct page owner, eight jobs / 16 MiB, original eight-second job and
+fifteen-second startup deadlines, and no automatic fatal-owner replacement.
+After extraction all seventeen content units and the complete actual-WASM
+code/image/canary plus normal/throwing-termination browser proofs pass again;
+see `~/.cache/nuschl-math-retirement/content-browser/proof.json`.

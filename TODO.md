@@ -1898,16 +1898,29 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
           ignored after failed termination. No synchronous physical-exit claim,
           no automatic replacement, no App/broker activation. See
           `docs/browser-content.md` and the source-bound handoff.
-    - [ ] Apply the same retirement/credit discipline to the active browser
-          formula renderer. `MathRenderService.cancel()` currently terminates
-          and replaces an active worker; routine component cancellation or its
-          two-second deadline can therefore multiply still-retiring owners.
-          A throwing `terminate()` interrupts cleanup here too (source findings,
-          not an observed resource-exhaustion proof). Preserve healthy canceled
-          work's exact reservation until its reply, bounded shared caching and
-          source fallback; make genuine retirement/reload recovery explicit.
-          Reuse reviewed scheduling rules where they fit, without conflating
-          formula/content source validation or their separate worker budgets.
+    - [x] Apply verified shared retirement/credit discipline to the active browser
+          formula renderer (`87fae40c`/`585bb33f`, docs/browser-math.md). Math and
+          content use one private scheduler implementation but distinct page
+          owners, validators and budgets. All math facades share eight jobs /
+          32 KiB source and one immutable 64-entry/2 MiB serialized cache. Active
+          cancellation retains the exact original reservation until actual ACK;
+          healthy cancellation/disposal/parser errors reuse the same worker.
+          Two-second jobs may fall back while the original fifteen-second loader
+          continues; later explicit retry uses that same loader. Fatal retirement
+          cannot spawn replacements, and thrown termination still settles all
+          consumers while retaining its consumed lease. Valid rendered/cached
+          formulas survive; uncached permanent failure preserves source and offers
+          Reload client instead of a misleading always-enabled Render formula.
+          Packaged Node32/32, fourteen math lifecycle and seventeen content checks
+          pass. Actual pinned Temml normal/throwing-stall proofs ignore the late
+          old result, twenty new facades cannot bypass retirement, and original
+          content WASM code/image/canary/retirement proofs pass after extraction.
+          Real packaged App/private Murmur under production CSP proves cold
+          2.5-second load → source/visible pointer retry on one owner, fatal source/
+          reload at 320px, retained valid fraction DOM and unsent draft, no new
+          posts for later uncached formulas, plus ordinary320/390/1280 geometry,
+          source copy, code grammar and reflow. No physical thread-exit,
+          Safari/mobile-device, OS-quota or content-broker activation claim.
     - [ ] Wire the real async browser content broker: preserve SDK-owned original
           authenticated source/mode; bind render tickets to server/connection,
           conversation/message/revision/digest; reject stale derivatives. The
