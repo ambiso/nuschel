@@ -1538,11 +1538,9 @@ impl Desktop {
             return;
         };
         self.settings = settings;
-        let effects = self.slider_edits.changed(
-            setting.reaches_worker(),
-            input,
-            std::time::Instant::now(),
-        );
+        let effects =
+            self.slider_edits
+                .changed(setting.reaches_worker(), input, std::time::Instant::now());
         self.apply_slider_effects(effects);
         self.settle_settings_soon(cx);
     }
@@ -1572,14 +1570,12 @@ impl Desktop {
         }
         cx.spawn(async move |this, cx| {
             loop {
-                cx.background_executor()
-                    .timer(crate::slider::TICK)
-                    .await;
+                cx.background_executor().timer(crate::slider::TICK).await;
                 let pending = this.update(cx, |this, _| {
                     let (menu, settings) = this.slider_owners();
-                    let effects = this
-                        .slider_edits
-                        .tick(std::time::Instant::now(), |owner| owner.alive(menu, settings));
+                    let effects = this.slider_edits.tick(std::time::Instant::now(), |owner| {
+                        owner.alive(menu, settings)
+                    });
                     this.apply_slider_effects(effects);
                     this.slider_edits.armed()
                 });

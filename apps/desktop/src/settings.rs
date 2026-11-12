@@ -445,9 +445,7 @@ fn meter(
                     div()
                         .text_xs()
                         .text_color(color(TEXT_FAINT))
-                        .child(
-                            text!("· a local test, nothing is sent").with_id("gate-state-note"),
-                        ),
+                        .child(text!("· a local test, nothing is sent").with_id("gate-state-note")),
                 ),
         )
         .into_any_element()

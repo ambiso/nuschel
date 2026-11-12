@@ -54,7 +54,11 @@ impl Scale {
 
     /// Where `value` sits on the slider, 0..=1.
     pub fn position(self, value: f32) -> f32 {
-        let value = if value.is_finite() { value.clamp(0., self.max()) } else { 0. };
+        let value = if value.is_finite() {
+            value.clamp(0., self.max())
+        } else {
+            0.
+        };
         match self {
             Scale::Gain => (value / MAX_GAIN).cbrt(),
             Scale::Amplitude => value.cbrt(),
@@ -64,7 +68,11 @@ impl Scale {
 
     /// The value at slider `position`; the ends are exact.
     pub fn value(self, position: f32) -> f32 {
-        let position = if position.is_finite() { position.clamp(0., 1.) } else { 0. };
+        let position = if position.is_finite() {
+            position.clamp(0., 1.)
+        } else {
+            0.
+        };
         if position >= 1. {
             return self.max();
         }
@@ -99,11 +107,7 @@ impl Scale {
                 return 1.;
             }
         }
-        if to <= 0. {
-            0.
-        } else {
-            self.value(to)
-        }
+        if to <= 0. { 0. } else { self.value(to) }
     }
 
     /// What a screen reader and the label say for `value`.
@@ -570,13 +574,7 @@ pub fn slider(spec: Spec, cx: &mut Context<Desktop>) -> AnyElement {
                 .h(px(6.))
                 .rounded_full()
                 .bg(color(BORDER_STRONG))
-                .child(
-                    div()
-                        .h_full()
-                        .w(relative(position))
-                        .rounded_full()
-                        .bg(fill),
-                ),
+                .child(div().h_full().w(relative(position)).rounded_full().bg(fill)),
         )
         .child(
             div()
@@ -665,7 +663,9 @@ pub fn slider(spec: Spec, cx: &mut Context<Desktop>) -> AnyElement {
                     cx.notify();
                 }),
             )
-            .on_drag(Dragging(target.clone()), |_, _, _, cx| cx.new(|_| EmptyView))
+            .on_drag(Dragging(target.clone()), |_, _, _, cx| {
+                cx.new(|_| EmptyView)
+            })
             .on_drag_move(
                 cx.listener(move |this, event: &DragMoveEvent<Dragging>, _, cx| {
                     if event.drag(cx).0 != moved {
@@ -727,7 +727,10 @@ mod tests {
             value = Scale::Gain.step(value, -1);
         }
         assert_eq!(value, 1.);
-        assert_eq!(Scale::Gain.pointer_value(Scale::Gain.position(1.) + 0.001), 1.);
+        assert_eq!(
+            Scale::Gain.pointer_value(Scale::Gain.position(1.) + 0.001),
+            1.
+        );
         assert_eq!(Scale::Gain.step(0.2, -1000), 0.);
         assert_eq!(Key::Max.apply(Scale::Gain, 0.2, 1.), MAX_GAIN);
         assert_eq!(Key::Min.apply(Scale::Gain, 3., 1.), 0.);
@@ -781,7 +784,9 @@ mod tests {
         assert_eq!(Scale::Gain.text(0.5), "50 % (-6.0 dB)");
         assert_eq!(Scale::Gain.text(4.), "400 % (+12.0 dB)");
         assert_eq!(Scale::Fraction.text(0.42), "42 %");
-        for key in ["right", "up", "left", "down", "pageup", "pagedown", "home", "end"] {
+        for key in [
+            "right", "up", "left", "down", "pageup", "pagedown", "home", "end",
+        ] {
             assert!(Key::from_key(key).is_some());
         }
         assert_eq!(Key::from_key("a"), None);
@@ -853,7 +858,10 @@ mod tests {
                 world.tick(now, SHOWN);
             }
         }
-        assert_eq!(world.saves, 0, "nothing is saved while the pointer holds the slider");
+        assert_eq!(
+            world.saves, 0,
+            "nothing is saved while the pointer holds the slider"
+        );
         assert!(world.edits.dragging(&target));
         let effects = world.edits.release(&target, start + Duration::from_secs(1));
         world.run(effects);
@@ -888,9 +896,14 @@ mod tests {
         }
         assert!(world.sends <= 11, "{} sends in one second", world.sends);
         assert_ne!(world.heard.audio.vad_sensitivity, last);
-        let effects = world.edits.release(&target, start + Duration::from_millis(1000));
+        let effects = world
+            .edits
+            .release(&target, start + Duration::from_millis(1000));
         world.run(effects);
-        assert_eq!(world.heard.audio.vad_sensitivity, last, "the final value reached the worker");
+        assert_eq!(
+            world.heard.audio.vad_sensitivity, last,
+            "the final value reached the worker"
+        );
         assert_eq!(world.disk.audio.vad_sensitivity, last);
         assert_eq!(world.saves, 1);
     }
@@ -929,10 +942,14 @@ mod tests {
         world.run(effects);
         world.preview(&ada.setting, 0.3, Input::Pointer, start);
         // Another menu's slider (or the same person's in a later menu) is not this drag.
-        for other in [user("grace", 3), user("ada", 4), Target {
-            owner: Owner::Settings(1),
-            setting: Setting::SoundVolume,
-        }] {
+        for other in [
+            user("grace", 3),
+            user("ada", 4),
+            Target {
+                owner: Owner::Settings(1),
+                setting: Setting::SoundVolume,
+            },
+        ] {
             assert!(!world.edits.dragging(&other));
             let effects = world.edits.release(&other, start);
             world.run(effects);
@@ -1127,7 +1144,10 @@ mod tests {
             // Nothing that preferences, shortcuts or the relay rule read.
             let mut audio = base.audio.clone();
             audio.vad_sensitivity = edited.audio.vad_sensitivity;
-            assert_eq!(audio, edited.audio, "{setting:?} touched other audio settings");
+            assert_eq!(
+                audio, edited.audio,
+                "{setting:?} touched other audio settings"
+            );
             assert_eq!(setting.reaches_worker(), setting == Setting::Sensitivity);
             let mut reset = edited.clone();
             setting.set(&mut reset, setting.default_value());
