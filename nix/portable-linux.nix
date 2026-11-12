@@ -94,6 +94,22 @@ let
 in
 {
   inherit metadataCheck sysroot linker;
+  tests =
+    pkgs.runCommand "nuschl-native-packaging-tests"
+      {
+        nativeBuildInputs = [
+          pkgs.python3
+          pkgs.binutils
+          pkgs.patchelf
+          toolchain
+        ];
+      }
+      ''
+        python3 ${../packaging/linux/tests.py} \
+          --scratch "$TMPDIR" --rustc ${toolchain}/bin/rustc \
+          --readelf ${pkgs.binutils}/bin/readelf --patchelf ${pkgs.patchelf}/bin/patchelf
+        touch "$out"
+      '';
   content = leaf "nuschl-content-worker";
   desktop = leaf "nuschl";
 }
