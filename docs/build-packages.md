@@ -87,3 +87,24 @@ See [the structured evidence](reviews/2026-11-12-server-rtc-packages.json). This
 proof freezes the tested package/driver paths and source revision; later unrelated
 source changes are not silently covered. Cross/fallback migration, source-filter
 cleanup and other platform/runtime validation remain in TODO.
+
+`tests/vm_driver_scratch.py` now probes the actual pinned driver without booting a
+VM. With both variables pointing inside a fresh owned 0700 disk directory, it
+confirmed all six resolved state paths on btrfs. It rejects tmpfs/ramfs, unexpected
+ownership/modes/symlinks and escaped state paths before guest startup. This path
+probe does not retroactively change the functional suite's tmpfs location. Future
+full-suite runners still need to apply and assert that environment before boot.
+
+The actual probe used the frozen driver above with `--test-script` pointing to
+this repository's `tests/vm_driver_scratch.py`, and these environment values:
+
+```sh
+NUSCHL_VM_SCRATCH_ROOT=/home/ambiso/.cache/ns-sr-probe
+XDG_RUNTIME_DIR=/home/ambiso/.cache/ns-sr-probe/run
+TMPDIR=/home/ambiso/.cache/ns-sr-probe/tmp
+```
+
+Create a fresh root/run/tmp/output tree first (root and runtime mode 0700), pass
+its existing output directory with `-o`, and keep the normal no-host-device
+environment. Retained probe evidence is `~/.cache/ns-sr-probe/scratch-proof.json`
+and `~/.cache/nuschl-server-rtc-build/vm-scratch-probe.log`.

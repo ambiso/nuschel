@@ -1732,6 +1732,9 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
       tmpfs state directories; they were removed after shutdown. Set both variables
       to a short owned disk path before future runs, isolate generic node state
       names and report actual state paths instead of assuming TMPDIR controls them.
+      tests/vm_driver_scratch.py now verifies all six actual driver state paths
+      pre-boot on owned btrfs; wiring that invariant into future full-suite runners
+      remains open. It does not relabel the functional run as disk-backed.
 - [ ] Finish the remaining per-crate build migration: Windows desktop, Darwin
       desktop/verifier slices and the explicit `default-crane` fallback still use
       Crane. Native desktop/server/probe/web/witness and native/Windows updater

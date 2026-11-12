@@ -92,7 +92,22 @@
     "allocated_state_bytes_before_cleanup": 197558272,
     "all_six_owned_state_directories_removed_after_terminal_run": true,
     "state_reporting_correction": "Inherited XDG_RUNTIME_DIR takes precedence over TMPDIR in pinned test driver. Disk-only machine state was not achieved in this run; future drivers must set both variables to an owned short disk-backed directory.",
-    "state_correction_receipt": "/home/ambiso/.cache/nuschl-server-rtc-build/vm-state-correction.json"
+    "state_correction_receipt": "/home/ambiso/.cache/nuschl-server-rtc-build/vm-state-correction.json",
+    "scratch_pre_boot_probe": {
+      "kind": "actual-driver-pre-boot-path-probe",
+      "guest_booted": false,
+      "filesystem": "btrfs",
+      "root": "/home/ambiso/.cache/ns-sr-probe",
+      "state_paths": {
+        "client": "/home/ambiso/.cache/ns-sr-probe/run/vm-state-client",
+        "encrypted": "/home/ambiso/.cache/ns-sr-probe/run/vm-state-encrypted",
+        "encryptedPostgres": "/home/ambiso/.cache/ns-sr-probe/run/vm-state-encryptedPostgres",
+        "postgres": "/home/ambiso/.cache/ns-sr-probe/run/vm-state-postgres",
+        "server": "/home/ambiso/.cache/ns-sr-probe/run/vm-state-server",
+        "witness": "/home/ambiso/.cache/ns-sr-probe/run/vm-state-witness"
+      },
+      "log": "/home/ambiso/.cache/nuschl-server-rtc-build/vm-scratch-probe.log"
+    }
   },
   "builds": {
     "rtc-inventory": {
