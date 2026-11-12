@@ -155,7 +155,8 @@ pub struct Config {
     /// Networks allowed although they are in a refused range (a LAN server,
     /// tests). Never needed for public servers.
     pub allow_networks: Vec<Network>,
-    /// Networks refused in addition to the private and special ranges.
+    /// Networks refused even inside `allow_networks`. Operator allowances
+    /// override only the built-in private/special ranges, never explicit denies.
     pub deny_networks: Vec<Network>,
     /// Origins (`https://web.example.org`) whose pages may open tunnels; empty
     /// allows any.

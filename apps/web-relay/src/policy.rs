@@ -43,24 +43,30 @@ const REFUSED: &[&str] = &[
 pub struct Policy {
     refused: Vec<Network>,
     allowed: Vec<Network>,
+    denied: Vec<Network>,
 }
 
 impl Policy {
     pub fn new(config: &Config) -> Self {
-        let mut refused = REFUSED
+        let refused = REFUSED
             .iter()
             .map(|network| network.parse().expect("built-in network"))
             .collect::<Vec<Network>>();
-        refused.extend_from_slice(&config.deny_networks);
         Self {
             refused,
             allowed: config.allow_networks.clone(),
+            denied: config.deny_networks.clone(),
         }
     }
 
     /// Whether the relay may connect to `ip`.
     pub fn allows(&self, ip: IpAddr) -> bool {
         let ip = canonical(ip);
+        // Explicit operator denies may carve exclusions from an allowed LAN.
+        // Operator allowances still override the BUILTIN special ranges below.
+        if self.denied.iter().any(|network| network.contains(ip)) {
+            return false;
+        }
         if self.allowed.iter().any(|network| network.contains(ip)) {
             return true;
         }
@@ -152,5 +158,90 @@ mod tests {
         assert!(policy.allows("192.168.1.2".parse().expect("ip")));
         assert!(!policy.allows("192.168.2.2".parse().expect("ip")));
         assert!(!policy.allows("::1".parse().expect("ip")));
+    }
+
+    #[test]
+    fn explicit_denies_override_allowed_v4_subranges_and_mapped_addresses() {
+        let policy = Policy::new(&Config {
+            allow_networks: vec![
+                "192.168.1.0/24".parse().unwrap(),
+                "127.0.0.0/8".parse().unwrap(),
+            ],
+            deny_networks: vec![
+                "192.168.1.128/25".parse().unwrap(),
+                "127.0.0.55/32".parse().unwrap(),
+            ],
+            ..Config::default()
+        });
+        for allowed in [
+            "192.168.1.0",
+            "192.168.1.127",
+            "::ffff:192.168.1.127",
+            "127.0.0.53",
+            "127.0.0.56",
+        ] {
+            assert!(policy.allows(allowed.parse().unwrap()), "{allowed}");
+        }
+        for denied in [
+            "192.168.1.128",
+            "192.168.1.255",
+            "::ffff:192.168.1.128",
+            "::ffff:192.168.1.255",
+            "127.0.0.55",
+            "::ffff:127.0.0.55",
+            "192.168.2.0",
+            "::1",
+        ] {
+            assert!(!policy.allows(denied.parse().unwrap()), "{denied}");
+        }
+    }
+
+    #[test]
+    fn explicit_denies_override_allowed_v6_subranges_without_widening_defaults() {
+        let policy = Policy::new(&Config {
+            allow_networks: vec!["fd12:3456::/32".parse().unwrap()],
+            deny_networks: vec!["fd12:3456:8000::/33".parse().unwrap()],
+            ..Config::default()
+        });
+        for allowed in ["fd12:3456::", "fd12:3456:7fff:ffff:ffff:ffff:ffff:ffff"] {
+            assert!(policy.allows(allowed.parse().unwrap()), "{allowed}");
+        }
+        for denied in [
+            "fd12:3456:8000::",
+            "fd12:3456:ffff:ffff:ffff:ffff:ffff:ffff",
+            "fd12:3457::1",
+            "::1",
+        ] {
+            assert!(!policy.allows(denied.parse().unwrap()), "{denied}");
+        }
+    }
+
+    #[test]
+    fn explicit_deny_also_wins_broad_allowances_at_exact_boundaries() {
+        let policy = Policy::new(&Config {
+            allow_networks: vec!["0.0.0.0/0".parse().unwrap(), "::/0".parse().unwrap()],
+            deny_networks: vec![
+                "198.100.0.0/16".parse().unwrap(),
+                "2001:db8::/32".parse().unwrap(),
+            ],
+            ..Config::default()
+        });
+        for allowed in [
+            "198.99.255.255",
+            "198.101.0.0",
+            "2001:db7:ffff:ffff:ffff:ffff:ffff:ffff",
+            "2001:db9::",
+        ] {
+            assert!(policy.allows(allowed.parse().unwrap()), "{allowed}");
+        }
+        for denied in [
+            "198.100.0.0",
+            "198.100.255.255",
+            "::ffff:198.100.0.0",
+            "2001:db8::",
+            "2001:db8:ffff:ffff:ffff:ffff:ffff:ffff",
+        ] {
+            assert!(!policy.allows(denied.parse().unwrap()), "{denied}");
+        }
     }
 }

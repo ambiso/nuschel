@@ -40,7 +40,9 @@ strict; anything else closes the tunnel.
   Teredo, NAT64 and other special ranges (IPv4-mapped IPv6 is checked as IPv4),
   and connects only to an address it checked, so a name cannot change its answer
   in between (no DNS rebinding). `allow_networks` admits a LAN or test network;
-  `deny_networks` adds ranges. On NixOS a separate kernel filter denies major
+  Explicit `deny_networks` exclusions take precedence over `allow_networks`;
+  an operator's allowance overrides only built-in private/special ranges. On
+  NixOS a separate kernel filter denies major
   private/special ranges for the relay's unit (`IPAddressDeny`), except for
   configured DNS resolvers needed to look up public destinations. The relay's
   more detailed destination checks remain authoritative; the two deny lists
