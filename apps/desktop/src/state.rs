@@ -950,6 +950,10 @@ impl Desktop {
         self.schedule_scroll_frame(window, cx);
     }
 
+    pub fn cancel_chat_scroll(&mut self) {
+        self.chat_motion.cancel();
+    }
+
     pub fn cancel_channel_scroll(&mut self) {
         self.channel_motion.cancel();
     }
