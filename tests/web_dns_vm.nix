@@ -22,6 +22,7 @@ let
     # A Unix nscd/nsncd cache would bypass the service's IP filter even with
     # files+dns selected. Exercise DNS from the actual restricted process.
     services.nscd.enable = false;
+    system.nssModules = lib.mkForce [ ];
     services.resolved = {
       enable = resolved;
       settings.Resolve = {
