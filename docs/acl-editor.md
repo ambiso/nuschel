@@ -1,7 +1,32 @@
 # ACL and group editor
 
-Native editor work is in progress. This document describes the shared draft/API
-boundary; it does not claim desktop, web, or TUI feature parity yet.
+The native client provides a local ACL/group draft editor. Right-click a channel
+and choose **Edit permissions…**. Web and TUI editor parity remain queued; the
+shared draft/API boundary below is intended for those frontends too.
+
+Select a rule to edit its group expression or registered-user target, scope and
+grant/deny bits. Apply or explicitly discard a typed target before saving,
+creating another rule, or changing selection. Rules can be created, removed and
+reordered; inherited rules are inspectable but read-only. Channel inheritance
+and group inherit/inheritable flags are separate controls. Select a group to add
+or remove local members, exclude inherited members, or reset a local override.
+Names resolve freshly to registered account IDs; `#id` explicitly selects a
+numeric account. Missing labels never discard membership.
+
+Each open editor has its own lifetime token, in addition to stable row IDs and
+original server/connection/channel authority. Dirty drafts survive disconnect as
+read-only inspectors; obsolete callbacks cannot edit a replacement panel. Inputs
+are read-only throughout a pending load/save/verification, and only become
+editable again when bound to a current local row. Explicit reload discards local
+changes after a successful response. The editor does not mutate remote cached
+ACL vectors.
+
+Rules, groups and memberships use fixed-height virtual lists with one selected
+item's detail editor. Only visible rows instantiate controls. Compact list labels
+ellipsize with full accessibility names and hover text; detail fields retain the
+full source. Home/End, arrows and Page Up/Down navigate retained list focus, and
+the shared scroll contract reveals that focus once without idle timers or
+per-frame model scans. Text input keeps its native editing keys.
 
 `nuschl_core::admin::AclDraft` owns an immutable server baseline and private local
 rows. Callbacks use row IDs, never vector positions. Removal and explicit reload
@@ -60,11 +85,28 @@ the observed local settings; it does not make that sequence atomic. Protobuf
 unknown fields are already discarded by the current generated decoder; this
 work does not claim opaque unknown-field roundtripping.
 
-The native panel must retain its existing `ActionOrigin` connection-generation,
-own-presence, and channel-instance guards. It should use a virtualized list plus
-one selected rule/group editor, bounded member lists, stable semantic focus, and
-the shared modal/scroll layout. It must not instantiate all 4096 rules multiplied
-by permission controls, or scan every group member during each frame.
+Fresh typed-name lookup uses a separate bounded `LookupAccount` transaction,
+matched to the original editor, row and input. It first sends a Ping barrier,
+then a single name query, holding ordinary name queries until completion. The
+barrier preserves all current transport counters and is handled outside ordinary
+RTT sampling. This relies on the honest server's ordered TLS handling; Mumble
+has no authenticated query intent or immutable name-to-account transaction.
+Timeouts retain the unresolved wire reservation until the actual reply or
+reconnect. A changed input cannot apply an earlier result.
+
+Native ACL reads/writes are paced against shared conservative control credit so
+Murmur's default 1/s, burst-5 limit does not silently drop a load/check/write/verify
+sequence. At most 16 semantic commands and 16 MiB wait; original authority is
+rechecked at actual dispatch. Serialized frames are never held after a one-time
+authorization. Urgent mute/deafen/privacy controls bypass the admin queue and
+still spend shared credit. Queue refusals and timeouts terminate the matching UI
+request while preserving its draft; writes are not blindly retried.
+
+ACL editing follows the server's child-Write **or root-Write** administrative
+rule. Current known denials are checked locally; an unknown alternative remains
+subject to authoritative server rejection. Opening a menu requests missing
+current permission information with bounded lifetime-aware deduplication. This
+exception does not grant unrelated channel-edit/remove actions.
 
 Focused tests cover core row lifetime, inherited-group overrides, immutable
 baseline/conflict behavior, dirty/late replies, wrong-channel/lossy replies,
@@ -72,4 +114,20 @@ explicit reload, frozen saves, actor query reservations after reopening and
 channel ID reuse, incomplete snapshots, unresolved-query bounds, inherited-group
 wire serialization, unknown permission bits, and SDK label budgets under large
 groups, duplicates, and command-queue pressure. Actual native editor/server UI
-proof remains outstanding.
+proof is exercised by [acl_editor.py](../tests/acl_editor.py) against owned stock
+Murmur and nuschld at their default 1/s, burst-5 rate with no reconnect settling
+or raised-limit override. It checks native offline-member editing, inherited
+local overrides, ordered user/group rules, subchannel permission denial with an
+unrelated control, dirty conflict retention, root-admin recovery of a child that
+denies Write, stale callbacks, reconnect and restart persistence.
+
+The same fixture's `--geometry` mode loads 512 rules and 512 groups, checking
+pointer/keyboard endpoints, bounded instantiated rows, focus reveal and text
+editing keys at 1280×800, 900×600 and 900×800 at 200% zoom. `--pending-input`
+attempts a real edit during a naturally paced save and verifies the original
+field value is retained, then editable after confirmation.
+[acl_e2ee_bootstrap.py](../tests/acl_e2ee_bootstrap.py) separately starts nuschld
+in E2EE-only mode and uses the native SuperUser password form and group editor
+to promote an offline account, without changing security policy or using a raw
+legacy operator. These are loopback protocol/admin proofs, not MLS chat/video
+coverage. Both scripts use private GNOME, null audio and temporary profiles.

@@ -436,12 +436,11 @@ nuschld --config nuschld.toml admin import-murmur murmur.sqlite   # see Importin
 
 ### Bootstrap a named administrator
 
-The server supports this today, but Nuschl's current ACL panel cannot add group
-members. For a server already running in `security = "compatible"` (the default),
-use stock Mumble's group editor for this step. Stock Mumble cannot connect to a
-`security = "e2ee"` server; full Nuschl ACL/group editors and offline group
-administration are still queued. Keep that security policy rather than changing
-it to perform this bootstrap.
+Nuschl's native ACL/group editor supports this in both `compatible` and `e2ee`
+mode. Stock Mumble's group editor is an alternative for a server already running
+in `security = "compatible"` (the default). Stock Mumble cannot connect to an
+E2EE-only server; keep that security policy and use the native Nuschl client.
+Web/TUI group editors and offline CLI group administration remain queued.
 
 1. **Set a SuperUser password.** On NixOS, provision a root-owned, mode `0600`
    runtime file, preferably through your secret manager. For a manual initial
@@ -493,19 +492,25 @@ it to perform this bootstrap.
    has a different certificate and does not become the same account just by
    using the same name.
 
-3. **Connect stock Mumble as SuperUser.** Add or edit a server entry for the same
-   host and port, set **Username** to `SuperUser`, and enter the password from
-   step 1. Mumble exposes its password field when that username is selected.
-   Nuschl can also log in as SuperUser: its **Server password** field carries
-   this account password, but its current group editor is incomplete.
+3. **Connect Nuschl as SuperUser.** Open **Server settings**, set **Username** to
+   `SuperUser`, enter the step-1 secret in **Password (optional)** (announced as
+   **Server password**), and choose **Save and connect**. The password is kept
+   only for this connection. Use a separate client profile if you want to retain
+   the ordinary account's saved username unchanged.
 
-4. **Add the registered account to the root `admin` group.** In stock Mumble,
-   right-click the root channel, choose **Edit…**, open **Groups**, and select
-   `admin`. Under **Members**, enter the registered account name in **Select
-   member to add**, click **Add**, then **OK**. Preserve existing members, group
-   flags, and ACL rules. The default root ACL already grants the `admin` group
-   **Write**, which confers administrative permissions; do not grant Write to
-   `all`/`@all`.
+4. **Add the registered account to the root `admin` group.** Right-click the
+   root channel, choose **Edit permissions…**, then select `@admin` in **Groups**
+   (the rules list also has an `@admin` entry). Enter the ordinary account name
+   in **Registered group member**, choose **Resolve member**, check the resolved
+   account, then **Add member** and **Save permissions**. Wait for **Permissions
+   saved and confirmed by the server**. Preserve existing members, group flags,
+   and ACL rules. The default root ACL grants the `admin` group **Write**, which
+   confers administrative permissions; do not grant Write to `all`/`@all`.
+
+   On compatible servers, stock Mumble can perform the same operation: connect
+   as `SuperUser`, enter its password, right-click the root channel, choose
+   **Edit…**, open **Groups**, and select `admin`. Under **Members**, enter the
+   account in **Select member to add**, click **Add**, then **OK**.
 
 5. **Disconnect SuperUser and use the ordinary account.** Reconnect that original
    Nuschl identity if necessary. Its root administration permissions now come
@@ -520,6 +525,14 @@ unpromoted control, and persistence after restart. It also checks password
 rotation and rejection of stock clients in `e2ee` mode. The Mumble UI labels above
 were checked against its source; the automated proof uses protocol messages,
 not an interactive stock Mumble GUI session.
+
+[acl_e2ee_bootstrap.py](../tests/acl_e2ee_bootstrap.py) additionally exercises the
+actual native SuperUser password form and ACL/group editor against an owned
+nuschld that starts and remains in `security = "e2ee"`. It checks fresh offline
+account resolution, exact baseline rule/flag preservation, an unpromoted control,
+a benign channel creation by the promoted account and persistence after restart.
+It does not claim MLS chat/video coverage. See [the editor's draft and legacy
+wire limits](acl-editor.md) for conflict/reload behavior.
 
 ## Design
 

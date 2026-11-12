@@ -1056,10 +1056,15 @@ listed below. Plugin data remains the explicit gap.
       inherit/inheritable flags, and explicit/inherited member additions and
       exclusions. Resolve registered users by stable account/registration ID;
       support bootstrapping a normal account into the root admin group.
-      Current desktop only changes existing permission bits, removes rules,
-      adds @all rules and displays group member counts; group membership is
-      read-only. Preserve unrelated ACLs/groups and reject obsolete drafts or
-      retained controls after response, target or connection replacement.
+      Native desktop now implements the complete local rule/group editors with
+      private stable drafts, fresh offline-account lookup, original-target and
+      per-open callback guards, explicit target Apply/Discard, conflict checking
+      and verified saves. Owned stock-Murmur/nuschld default-rate UI matrices,
+      512-row narrow/200%-zoom geometry and native E2EE-only SuperUser bootstrap
+      are green. Web/TUI editors remain open; preserve the shared draft/transport
+      limits documented in docs/acl-editor.md rather than editing cached vectors.
+      Preserve unrelated ACLs/groups and reject obsolete drafts or retained
+      controls after response, target or connection replacement.
       Cover the supported desktop/web/TUI surfaces and server semantics with
       private stock-Mumble/nuschld interoperability, permission-denial controls,
       inheritance/order cases and persistence across reconnect/server restart.
@@ -1115,13 +1120,15 @@ listed below. Plugin data remains the explicit gap.
       reproduction. Preserve strict target guards and bound any own-epoch retry;
       do not add per-frame retry loops.
 - [ ] Give mutable administrative panel drafts stable response/row identities.
-      Source review finds ACL rules and ban-list controls use vector positions;
-      replacing a response for the same server/channel while a panel remains
-      open can overwrite an unsaved draft or change which row an old control
-      edits. Registered-user controls instead use persistent account IDs, not
-      online sessions; review response replacement separately from user-presence
-      leases. This is a separate source finding, not covered by menu geometry,
-      semantic context-menu focus, or original server/connection target guards.
+      Native ACLs now use separate immutable-baseline drafts, per-open tokens,
+      stable row IDs, serialized correlated replies and retained read-only stale
+      drafts (docs/acl-editor.md). The ban-list controls still use vector positions;
+      replacing a response while a panel remains open can overwrite unsaved edits
+      or change which row an old control edits. Registered-user controls instead
+      use persistent account IDs, not online sessions; their response replacement
+      still needs review separately from user-presence leases. Menu geometry and
+      original server/connection authority alone do not close these remaining
+      collection-row/draft problems.
 - [x] Close the enqueue-to-consume authority gap for delayed native actions.
       The former native queue could survive automatic reconnect with only numeric
       target existence checks. Bounded target-instance envelopes now bind work at
