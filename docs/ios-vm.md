@@ -351,23 +351,23 @@ completed at the declared size but failed its whole-file checksum check, as belo
 
 The proposed [InstallAssistant.pkg](https://swcdn.apple.com/content/downloads/13/30/140-88558-A_TN3FIE7J63/p61cqj3ktmcqilz3q64ls4ekp1os9c8qbp/InstallAssistant.pkg)
 is **13,654,790,295 bytes**, with catalog `Digest` value
-`10632733f9b4ab1397fffc98b53e6790e4c2c1b0`. Its `.pkm` declares
+`10632733f9b4ab1397fffc98b53e6790e4c2c1b0` (SHA-1 of the compressed XAR TOC,
+not of the whole file; see below). Its `.pkm` declares
 `com.apple.pkg.InstallAssistant.macOSSonoma`.
 
 The bounded download retained the exact HTTPS URL, response size and ETag, but
 its whole-file SHA-1 is `a8b796d408b5b3870be14161b43042b8bfca40f9`, not the catalog
 value. Its local SHA-256 is
 `ecc36bf172105f8c3325ceeb4e5ab8cc297260be806eac10b21b784ff40d8173`.
-Excluding the final 1,024 bytes also does not reproduce the catalog value.
-The file remains quarantined as `InstallAssistant-14.8.9.pkg.partial`; it was
-not renamed, extracted, mounted, executed or copied into the guest. The original
-failure remains in `acquisition.json` and `acquisition.stderr`. A confined
-read-only fingerprint pass completed separately; no blind retry was attempted.
-Signed prefix authentication is not complete payload authentication. Establish
-the discrepancy and independently verify the signed entry/chunk integrity before
-using this artifact; the checksum requirement has not been bypassed.
+The original check incorrectly compared the whole-file hash with the TOC digest.
+The package remains quarantined as
+`~/.cache/nuschl-ios-feasibility-next/InstallAssistant-14.8.9.pkg.partial`;
+it was not renamed, extracted, mounted, executed or copied into the guest.
+The original failure remains in `acquisition.json` and `acquisition.stderr`.
+The subsequent networkless signed-entry verification below resolves that
+acquisition-integrity question without redownloading or installing the artifact.
 
-The next stages remain artifact authentication, then a reviewed target-disk/APFS
+The next stage remains a reviewed target-disk/APFS
 and installation plan. The exact checker rejects Recovery 14.6.1 even with
 otherwise matching Xcode/SDK/runtime listings; no version check was relaxed.
 
@@ -379,3 +379,90 @@ All receipts are under `~/.cache/nuschl-ios-feasibility-next/`: `live-status.jso
 `sonoma-catalog-candidates.json`, `sonoma-metadata-retrieval.json`, and
 `sonoma-installer-metadata.json`. Backups are in the 0700 `pre-resume-backup/`
 subdirectory. No owned guest, receiver, guard or build remains running.
+
+## Retained Sonoma installer: acquisition integrity (2026-11-12)
+
+The retained `InstallAssistant-14.8.9.pkg.partial` was quarantined because the
+downloader compared the catalog `Digest` with the whole-file SHA-1
+(`a8b796d408b5b3870be14161b43042b8bfca40f9`). The `Digest` is the SHA-1 of the
+4,307-byte zlib-compressed XAR TOC. XAR computes its TOC checksum over the
+*compressed* TOC ([format spec](https://github.com/mackyle/xar/wiki/xarformat)),
+and Apple's xar `xar_close()` passes that checksum to the signer
+(`signer_callback(..., chkstr, chklen, ...)` in `lib/archive.c`). Each entry's
+`archived-checksum` covers its heap bytes; `extracted-checksum` covers the decoded
+bytes (`lib/hash.c`). Apple does not publish the catalog format, so the binding was
+checked against the data. It holds on this file. In the cached catalog, `Digest`
+appears only on `.pkg` entries (7,829), never on `.dmg`, `.zip`, `.plist`, `.tar`
+or `.chunklist` entries. The catalog is an unsigned HTTPS plist, so it pins the
+revision, and the signature supplies authenticity. Acquisition now never compares
+whole-file hashes with the `Digest`. It never renames the file either: the
+download stays a `.partial` until `verify` passes.
+
+`ios_installer.py verify PKG --apple-root … --root-crl … --software-crl …
+--integrity sonoma.integrity` runs networkless in the same Bubblewrap/`prlimit`
+worker (256 MiB address space, 300 s CPU, 900 s wall). It reads the file once and
+collects every content failure. On the retained file (SHA-256
+`ecc36bf172105f8c3325ceeb4e5ab8cc297260be806eac10b21b784ff40d8173`) every check
+passed in 22.7 s: `ios_xip.authenticate`, which needs the pinned Apple Root CA,
+exactly three certificates, the SoftwareUpdate EKU on leaf and intermediate, current
+signed CRLs and a PKCS#1 v1.5 SHA-1 signature over the recomputed TOC digest. It
+runs before the catalog comparison. Next comes `Digest` = TOC SHA-1. All **five**
+signed entries matched their streamed SHA-1, and the two zlib entries also matched
+their decoded SHA-1. PackageInfo is `com.apple.pkg.InstallAssistant.macOSSonoma`
+23.9.631.
+
+| Bytes `[start, end)` | Region | Covered by the signature chain? |
+| --- | --- | --- |
+| 0–28 | XAR header | Fixed: profile constants plus exact signed-TOC lengths |
+| 28–4,335 | Compressed TOC | Signed (its SHA-1 is the signed checksum and catalog `Digest`) |
+| 4,335–4,355 | Stored TOC checksum | Must equal the recomputed signed digest |
+| 4,355–4,611 | RSA signature | Verified |
+| 4,611–11,710,189 | Bom, Payload, Scripts, PackageInfo (contiguous) | Signed `archived-checksum`s |
+| 11,710,189–11,710,221 | 32-byte unreferenced heap gap | **No** |
+| 11,710,221–13,654,789,271 | SharedSupport.dmg | Signed `archived-checksum` |
+| 13,654,789,271–13,654,790,295 | 1,024-byte trailer after the heap | **No** |
+
+No signature covers the 1,056 unreferenced bytes. Changing them does not
+invalidate a XAR signature (compare the
+[CVE-2022-42841 analysis](https://defion.security/en/research-labs/bad-things-come-in-large-packages-pkg-signature-verification-bypass-on-macos/)).
+XAR consumers read only the ranges the TOC gives, so these bytes do not change what
+`installer` extracts. The gap holds the ASCII bytes `deviddsk` and 24 zero bytes.
+The trailer is two 512-byte blocks starting with the UDIF `koly` magic. In the last
+one, the 64-bit field at offset 24 is 11,710,221, which is SharedSupport.dmg's start
+offset; this is a hex observation, not decoded. So a disk-image tool could open the
+`.pkg` itself through unsigned metadata: **never attach the `.pkg` as a disk image.**
+Both regions are pinned (the trailer hash comes from a separate HTTPS tail range).
+Any change is refused and reported as outside the signature. It is never
+ignored.
+
+`sonoma.integrity` (catalog `IntegrityDataURL`, size 46,976, fetched over HTTPS)
+is an Apple `CNKL` chunklist. Its 1,303 SHA-256 chunks (10 MiB each, the last
+2,330,775 bytes) cover every byte, and all of them matched. It is only a
+cross-check. Its signature method 2 tail is a bare SHA-256 of header and table,
+with no key. OpenCore's `AppleChunklist.h` defines method 1 with a 256-byte RSA
+signature, and this file does not use it.
+
+All tamper tests mutate `cp --reflink=always` copies. A flipped byte in each of the
+five entries fails exactly that entry and its chunk, and nothing else. A TOC edit
+with a recomputed XAR checksum fails Apple's signature. Raw TOC, checksum,
+signature and header flips are refused. So are truncation, removal of the trailer
+and a 1-byte extension, and an altered chunklist. Gap and trailer flips leave all
+signed entries verified but are refused with an `UNSIGNED` failure plus a
+chunklist mismatch. Invocation:
+
+```sh
+NUSCHL_INSTALLER_CACHE=/disk/cache NUSCHL_INSTALLER_PACKAGE=/disk/cache/InstallAssistant-14.8.9.pkg.partial \
+NUSCHL_INSTALLER_SCRATCH=/disk/same-btrfs/scratch python3 tests/ios_installer_test.py -v
+```
+
+Limits:
+
+- A pass means **authenticated for acquisition integrity**, not "safe to install".
+- No native Apple `pkgutil --check-signature` or `installer` acceptance was run.
+- No part of SharedSupport.dmg was opened or checked.
+- The XAR profile depends on SHA-1 throughout. SHA-1 is collision-broken, so this
+  relies on its second-preimage resistance and on Apple not having signed
+  colliding content.
+- CRL currency expires: the SoftwareUpdate CRL's `nextUpdate` is 2026-11-25.
+- The gap and trailer pins and the chunklist come only from HTTPS from Apple's
+  CDN. They are not signatures.
