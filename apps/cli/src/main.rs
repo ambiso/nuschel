@@ -961,6 +961,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 SessionEvent::RegisteredUsers(users) => json!({"kind":"registered_users", "users":users}),
                 SessionEvent::Bans(bans) => json!({"kind":"bans", "bans":bans}),
                 SessionEvent::Acl(acl) => json!({"kind":"acl", "acl":acl}),
+                SessionEvent::AccountReply(reply) => match reply.result {
+                    Ok(account) => json!({"kind":"account_reply","request":reply.request,"account":account}),
+                    Err(error) => json!({"kind":"account_reply","request":reply.request,"error":error}),
+                },
                 SessionEvent::AclReply(reply) => match reply.result {
                     Ok(acl) => json!({"kind":"acl_reply", "request":reply.request, "acl":acl}),
                     Err(error) => json!({"kind":"acl_reply", "request":reply.request, "error":error}),

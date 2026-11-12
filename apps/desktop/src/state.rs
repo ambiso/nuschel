@@ -2260,6 +2260,7 @@ impl Desktop {
                     }
                     self.client.handle(input);
                     self.reconcile_delayed_actions();
+                    crate::acl_editor::sync(self, cx);
                 }
                 Err(Native::OwnIdentity(result)) => self.own_identity.apply(*result),
                 Err(Native::Identity {

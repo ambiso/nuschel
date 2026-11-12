@@ -2410,6 +2410,7 @@ impl Client {
             ServerEvent::ContextActions(actions) => server.context_actions = actions,
             ServerEvent::RegisteredUsers(users) => server.registered_users = Some(users),
             ServerEvent::Bans(bans) => server.bans = Some(bans),
+            ServerEvent::AccountReply(reply) => server.account_reply = Some(reply),
             ServerEvent::AclReply(reply) => {
                 if let Ok(acl) = &reply.result {
                     fetch_acl_names(self.platform.as_ref(), server, acl);
@@ -2423,9 +2424,10 @@ impl Client {
             }
             ServerEvent::UserNames(names) => {
                 for (id, name) in names {
-                    if server.user_names.contains_key(&id) || server.user_names.len() < 4096 {
-                        server.user_names.insert(id, name);
+                    if !server.user_names.contains_key(&id) && server.user_names.len() >= 4096 {
+                        server.user_names.pop_first();
                     }
+                    server.user_names.insert(id, name);
                 }
             }
             ServerEvent::Outbox { sent, total } => {

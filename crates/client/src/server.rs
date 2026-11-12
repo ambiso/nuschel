@@ -160,6 +160,7 @@ pub struct ServerState {
     pub acl: Option<Acl>,
     /// Only correlated responses can initialize/validate an administrative draft.
     pub acl_reply: Option<nuschl_core::admin::AclReply>,
+    pub account_reply: Option<nuschl_core::admin::AccountReply>,
     pub user_names: BTreeMap<u32, String>,
     pub(crate) acl_name_requests: BTreeSet<u32>,
     pub(crate) acl_name_budget: usize,
@@ -251,6 +252,7 @@ impl ServerState {
             bans: None,
             acl: None,
             acl_reply: None,
+            account_reply: None,
             user_names: BTreeMap::new(),
             acl_name_requests: BTreeSet::new(),
             acl_name_budget: 1024,
@@ -269,6 +271,7 @@ impl ServerState {
     pub(crate) fn clear_acl_cache(&mut self) {
         self.acl = None;
         self.acl_reply = None;
+        self.account_reply = None;
         self.user_names.clear();
         self.acl_name_requests.clear();
         self.acl_name_budget = 1024;

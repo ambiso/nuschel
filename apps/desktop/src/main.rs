@@ -3,6 +3,7 @@
 // Start menu or the Run key (autostart) opens an empty console window as well.
 // Command-line use goes through nuschl-cli.
 #![cfg_attr(windows, windows_subsystem = "windows")]
+mod acl_editor;
 mod appearance;
 mod assets;
 mod attachments;

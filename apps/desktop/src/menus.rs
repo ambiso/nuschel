@@ -1352,17 +1352,8 @@ impl Desktop {
                     entries.push(item(
                         "Edit permissions…",
                         "shield",
-                        move |this, index, _, _| {
-                            this.client.servers[index].acl = None;
-                            this.run(index, Command::QueryAcl(channel));
-                            this.panel = Some(Panel::Acl {
-                                origin: ActionOrigin::capture(
-                                    &this.client.servers[index],
-                                    MenuTarget::Channel(channel),
-                                ),
-                                server: index,
-                                channel,
-                            });
+                        move |this, index, window, cx| {
+                            crate::acl_editor::open(this, index, channel, window, cx);
                         },
                     ));
                     if channel != 0 {

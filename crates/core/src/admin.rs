@@ -15,6 +15,18 @@ pub struct AclReply {
     pub result: Result<Acl, String>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct RegisteredAccount {
+    pub id: u32,
+    pub name: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct AccountReply {
+    pub request: u64,
+    pub result: Result<RegisteredAccount, String>,
+}
+
 #[derive(Clone, Debug)]
 pub struct Row<T> {
     pub id: RowId,
@@ -708,5 +720,36 @@ mod tests {
         });
         assert!(state.error);
         assert!(state.draft().unwrap().dirty());
+    }
+    #[test]
+    fn baseline_ignores_group_set_order_but_preserves_members_flags_and_rule_order() {
+        let mut baseline = acl();
+        baseline.groups[0].add = vec![100, 200];
+        baseline.groups[0].remove = vec![500, 600];
+        baseline.groups[0].inherited_members = vec![42, 43];
+        let mut other = baseline.groups[0].clone();
+        other.name = "other".into();
+        baseline.groups.push(other);
+        let draft = AclDraft::new(baseline.clone());
+        let mut shuffled = baseline.clone();
+        shuffled.groups.reverse();
+        for group in &mut shuffled.groups {
+            group.add.reverse();
+            group.remove.reverse();
+            group.inherited_members.reverse();
+        }
+        assert!(draft.baseline_matches(&shuffled));
+        let mut changed = shuffled.clone();
+        changed.groups[0].inherit = false;
+        assert!(!draft.baseline_matches(&changed));
+        let mut changed = shuffled.clone();
+        changed.groups[0].add.push(999);
+        assert!(!draft.baseline_matches(&changed));
+        let mut changed = shuffled.clone();
+        changed.entries.reverse();
+        assert!(!draft.baseline_matches(&changed));
+        let mut changed = shuffled;
+        changed.entries[0].grant |= 0x8000_0000;
+        assert!(!draft.baseline_matches(&changed));
     }
 }

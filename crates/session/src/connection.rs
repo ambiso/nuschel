@@ -10,7 +10,7 @@ use crate::{
 };
 use bytes::Bytes;
 use nuschl_core::MAX_CONTENT_BYTES;
-use nuschl_core::admin::{AclReply, group_has_local_definition};
+use nuschl_core::admin::{AccountReply, AclReply, RegisteredAccount, group_has_local_definition};
 use nuschl_protocol::{
     ControlFrame, MAX_CONTROL_BYTES, control as proto,
     crypt::CryptState,
@@ -204,6 +204,7 @@ pub enum SessionEvent {
     Bans(Vec<Ban>),
     Acl(Acl),
     AclReply(AclReply),
+    AccountReply(AccountReply),
     /// Resolved names for registered user ids (ACL editor).
     UserNames(BTreeMap<u32, String>),
     /// A voice packet from a legacy codec Nuschl does not decode.
@@ -320,6 +321,11 @@ pub enum Command {
     UpdateAcl(Acl),
     QueryUserNames(Vec<u32>),
     QueryUserIds(Vec<String>),
+    LookupAccount {
+        channel: u32,
+        request: u64,
+        name: String,
+    },
     /// Mark a channel read up to `seq` (Nuschl servers; synced to the
     /// account's other devices).
     MarkRead {
@@ -567,7 +573,8 @@ impl Command {
             | Self::RemoveChannel(id)
             | Self::RequestPermissions(id)
             | Self::QueryAcl(id)
-            | Self::QueryAclDraft { channel: id, .. } => {
+            | Self::QueryAclDraft { channel: id, .. }
+            | Self::LookupAccount { channel: id, .. } => {
                 channels.insert(*id);
             }
             Self::CreateChannel { parent, .. } => {
@@ -1473,6 +1480,15 @@ fn kt_reply(
     Ok(Some(frame))
 }
 
+struct AccountLookup {
+    request: u64,
+    name: String,
+    channel: (u32, u64),
+    own: (u32, u64),
+    barrier: u64,
+    waiting_reply: bool,
+}
+
 struct State {
     udp: Option<Udp>,
     tcp_ping: PingStats,
@@ -1498,6 +1514,8 @@ struct State {
     /// Never expire/delete an unresolved query: a late wire reply has no ticket
     /// and must not be attributed to a replacement draft or reused channel ID.
     acl_queries: BTreeMap<u32, (u64, Option<u64>)>,
+    account_lookup: Option<AccountLookup>,
+    deferred_name_queries: Vec<proto::QueryUsers>,
     context_actions: BTreeMap<String, ContextAction>,
     unsupported_codec: BTreeSet<u32>,
     /// Bytes of comments, descriptions and avatars in `users` and `channels`.
@@ -1541,6 +1559,8 @@ impl Default for State {
             voice_authorities: BTreeMap::new(),
             permissions: BTreeMap::new(),
             acl_queries: BTreeMap::new(),
+            account_lookup: None,
+            deferred_name_queries: Vec::new(),
             context_actions: BTreeMap::new(),
             unsupported_codec: BTreeSet::new(),
             blob_bytes: 0,
@@ -1563,7 +1583,11 @@ impl State {
         request: Option<u64>,
         events: &mpsc::Sender<SessionEvent>,
     ) -> Result<(), Error> {
-        let error = if self.acl_queries.contains_key(&channel) {
+        let error = if self.account_lookup.is_some() {
+            Some(
+                "A registered-account lookup is unresolved. Wait for its reply or reconnect before querying ACLs.",
+            )
+        } else if self.acl_queries.contains_key(&channel) {
             Some(
                 "An earlier ACL query for this channel is still unresolved. Wait for its reply or reconnect before reloading.",
             )
@@ -1599,6 +1623,87 @@ impl State {
                 ..Default::default()
             },
         );
+        Ok(())
+    }
+
+    fn ping_message(&self, timestamp: u64) -> proto::Ping {
+        let stats = self.transport();
+        proto::Ping {
+            timestamp: Some(timestamp),
+            good: Some(stats.good),
+            late: Some(stats.late),
+            lost: Some(stats.lost),
+            resync: Some(stats.resync),
+            udp_packets: Some(stats.udp.packets),
+            tcp_packets: Some(stats.tcp.packets),
+            udp_ping_avg: Some(stats.udp.average_ms),
+            udp_ping_var: Some(stats.udp.variance_ms),
+            tcp_ping_avg: Some(stats.tcp.average_ms),
+            tcp_ping_var: Some(stats.tcp.variance_ms),
+        }
+    }
+    fn lookup_valid(&self, lookup: &AccountLookup) -> bool {
+        self.own_session == Some(lookup.own.0)
+            && self
+                .users
+                .get(&lookup.own.0)
+                .is_some_and(|own| own.instance == lookup.own.1)
+            && self
+                .channels
+                .get(&lookup.channel.0)
+                .is_some_and(|channel| channel.instance == lookup.channel.1)
+            && self
+                .permissions
+                .get(&lookup.channel.0)
+                .is_none_or(|bits| bits & crate::model::permission::WRITE != 0)
+    }
+    fn queue_names(&mut self, query: proto::QueryUsers) {
+        if self.account_lookup.is_some() {
+            if self.deferred_name_queries.len() < 16 {
+                self.deferred_name_queries.push(query);
+            }
+        } else {
+            self.queue(kind::QUERY_USERS, &query);
+        }
+    }
+    fn release_name_queries(&mut self) {
+        let queries = std::mem::take(&mut self.deferred_name_queries);
+        for query in queries {
+            self.queue(kind::QUERY_USERS, &query);
+        }
+    }
+    async fn lookup_account(
+        &mut self,
+        channel: u32,
+        request: u64,
+        name: String,
+        events: &mpsc::Sender<SessionEvent>,
+    ) -> Result<(), Error> {
+        let own = self
+            .own_session
+            .and_then(|id| self.users.get(&id).map(|user| (id, user.instance)));
+        let instance = self.channels.get(&channel).map(|channel| channel.instance);
+        if self.account_lookup.is_some()
+            || !self.acl_queries.is_empty()
+            || own.is_none()
+            || instance.is_none()
+            || name.trim().is_empty()
+            || name.len() > 512
+        {
+            return emit(events,SessionEvent::AccountReply(AccountReply {request,result:Err("The original channel is unavailable or an earlier administration lookup is unresolved. Wait for its response or reconnect.".into())})).await;
+        }
+        let barrier = (1_u64 << 63) | next_user_instance();
+        self.account_lookup = Some(AccountLookup {
+            request,
+            name: name.trim().into(),
+            channel: (channel, instance.unwrap()),
+            own: own.unwrap(),
+            barrier,
+            waiting_reply: false,
+        });
+        // The high timestamp namespace is never used for RTT. Preserve ALL
+        // transport counters: Mumble servers overwrite missing fields with zero.
+        self.queue(kind::PING, &self.ping_message(barrier));
         Ok(())
     }
 
@@ -1789,7 +1894,8 @@ impl State {
             Command::EditChannel { channel, .. }
             | Command::RemoveChannel(channel)
             | Command::QueryAcl(channel)
-            | Command::QueryAclDraft { channel, .. } => may(*channel, p::WRITE),
+            | Command::QueryAclDraft { channel, .. }
+            | Command::LookupAccount { channel, .. } => may(*channel, p::WRITE),
             Command::UpdateAcl(acl) => may(acl.channel, p::WRITE),
             Command::LinkChannels {
                 channel,
@@ -2628,28 +2734,23 @@ impl State {
                 }
                 self.outbound.push(request.frame());
             }
-            Command::QueryUserNames(ids) => {
-                self.queue(
-                    kind::QUERY_USERS,
-                    &proto::QueryUsers {
-                        ids: ids.into_iter().take(1024).collect(),
-                        names: Vec::new(),
-                    },
-                );
-            }
-            Command::QueryUserIds(names) => {
-                self.queue(
-                    kind::QUERY_USERS,
-                    &proto::QueryUsers {
-                        ids: Vec::new(),
-                        names: names
-                            .into_iter()
-                            .take(128)
-                            .filter(|name| !name.is_empty() && name.len() <= 512)
-                            .collect(),
-                    },
-                );
-            }
+            Command::QueryUserNames(ids) => self.queue_names(proto::QueryUsers {
+                ids: ids.into_iter().take(1024).collect(),
+                names: Vec::new(),
+            }),
+            Command::QueryUserIds(names) => self.queue_names(proto::QueryUsers {
+                ids: Vec::new(),
+                names: names
+                    .into_iter()
+                    .take(128)
+                    .filter(|name| !name.is_empty() && name.len() <= 512)
+                    .collect(),
+            }),
+            Command::LookupAccount {
+                channel,
+                request,
+                name,
+            } => self.lookup_account(channel, request, name, events).await?,
             Command::SendText {
                 target,
                 body,
@@ -3194,6 +3295,31 @@ impl State {
             },
             kind::PING => {
                 let ping: proto::Ping = decode(&frame)?;
+                if self.account_lookup.as_ref().is_some_and(|lookup| {
+                    !lookup.waiting_reply && ping.timestamp == Some(lookup.barrier)
+                }) {
+                    let valid = self
+                        .account_lookup
+                        .as_ref()
+                        .is_some_and(|lookup| self.lookup_valid(lookup));
+                    if valid {
+                        let lookup = self.account_lookup.as_mut().unwrap();
+                        lookup.waiting_reply = true;
+                        let name = lookup.name.clone();
+                        self.queue(
+                            kind::QUERY_USERS,
+                            &proto::QueryUsers {
+                                ids: Vec::new(),
+                                names: vec![name],
+                            },
+                        );
+                    } else {
+                        let lookup = self.account_lookup.take().unwrap();
+                        emit(events,SessionEvent::AccountReply(AccountReply {request:lookup.request,result:Err("The original connection or channel changed during account lookup.".into())})).await?;
+                        self.release_name_queries();
+                    }
+                    return Ok(());
+                }
                 let now = now_ms() as u64;
                 if let Some(timestamp) = ping.timestamp.filter(|sent| *sent <= now) {
                     self.tcp_ping.record((now - timestamp) as f32);
@@ -3879,6 +4005,43 @@ impl State {
             }
             kind::QUERY_USERS => {
                 let query: proto::QueryUsers = decode(&frame)?;
+                if self
+                    .account_lookup
+                    .as_ref()
+                    .is_some_and(|lookup| lookup.waiting_reply)
+                {
+                    let lookup = self.account_lookup.take().unwrap();
+                    let result = if !self.lookup_valid(&lookup) {
+                        Err(
+                            "The original connection or channel changed during account lookup."
+                                .into(),
+                        )
+                    } else {
+                        query
+                            .ids
+                            .iter()
+                            .zip(&query.names)
+                            .find_map(|(id, name)| {
+                                (*id != u32::MAX
+                                    && name.len() <= 512
+                                    && name.to_lowercase() == lookup.name.to_lowercase())
+                                .then(|| RegisteredAccount {
+                                    id: *id,
+                                    name: name.clone(),
+                                })
+                            })
+                            .ok_or_else(|| "No registered account with that name was found.".into())
+                    };
+                    emit(
+                        events,
+                        SessionEvent::AccountReply(AccountReply {
+                            request: lookup.request,
+                            result,
+                        }),
+                    )
+                    .await?;
+                    self.release_name_queries();
+                }
                 emit(
                     events,
                     SessionEvent::UserNames(
@@ -4391,6 +4554,245 @@ pub mod fuzzing {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn registered_lookup_drains_old_names_preserves_ping_stats_and_serializes_queries() {
+        let mut state = State {
+            own_session: Some(7),
+            ..Default::default()
+        };
+        let (tx, mut rx) = mpsc::channel(64);
+        state
+            .handle(
+                frame(
+                    kind::CHANNEL_STATE,
+                    proto::ChannelState {
+                        channel_id: Some(0),
+                        ..Default::default()
+                    },
+                ),
+                &tx,
+            )
+            .await
+            .unwrap();
+        state
+            .handle(
+                frame(
+                    kind::USER_STATE,
+                    proto::UserState {
+                        session: Some(7),
+                        name: Some("Operator".into()),
+                        ..Default::default()
+                    },
+                ),
+                &tx,
+            )
+            .await
+            .unwrap();
+        drain(&mut rx).await;
+        state.tcp_ping.record(12.5);
+        state
+            .lookup_account(0, 10, "Alice".into(), &tx)
+            .await
+            .unwrap();
+        let lookup = state.account_lookup.as_ref().unwrap();
+        let barrier = lookup.barrier;
+        assert_ne!(barrier & (1 << 63), 0);
+        let (_, body) = state.outbound.last().unwrap();
+        let ping = proto::Ping::decode(body.as_slice()).unwrap();
+        assert_eq!(
+            ping,
+            state.ping_message(barrier),
+            "barrier must carry every transport counter"
+        );
+        assert_eq!(ping.tcp_packets, Some(1));
+        for id in 0..32 {
+            state
+                .command(Command::QueryUserNames(vec![id]), &tx)
+                .await
+                .unwrap();
+        }
+        assert_eq!(state.deferred_name_queries.len(), 16);
+        assert_eq!(
+            state.outbound.len(),
+            1,
+            "automatic name queries cannot overtake the barrier"
+        );
+        state.query_acl(0, Some(20), &tx).await.unwrap();
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            SessionEvent::AclReply(AclReply {
+                request: 20,
+                result: Err(_)
+            })
+        ));
+        state
+            .handle(
+                frame(
+                    kind::QUERY_USERS,
+                    proto::QueryUsers {
+                        ids: vec![1],
+                        names: vec!["Alice".into()],
+                    },
+                ),
+                &tx,
+            )
+            .await
+            .unwrap();
+        assert!(
+            matches!(rx.try_recv().unwrap(), SessionEvent::UserNames(_)),
+            "old cached names are labels only"
+        );
+        let packets = state.tcp_ping.packets;
+        state
+            .handle(
+                frame(
+                    kind::PING,
+                    proto::Ping {
+                        timestamp: Some(barrier),
+                        ..Default::default()
+                    },
+                ),
+                &tx,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            state.tcp_ping.packets, packets,
+            "barrier must not pollute RTT"
+        );
+        let (kind, body) = state.outbound.last().unwrap();
+        assert_eq!(*kind, kind::QUERY_USERS);
+        assert_eq!(
+            proto::QueryUsers::decode(body.as_slice()).unwrap().names,
+            vec!["Alice"]
+        );
+        state
+            .lookup_account(0, 11, "Alice".into(), &tx)
+            .await
+            .unwrap();
+        assert!(
+            matches!(
+                rx.try_recv().unwrap(),
+                SessionEvent::AccountReply(AccountReply {
+                    request: 11,
+                    result: Err(_)
+                })
+            ),
+            "unresolved lane is never reassigned"
+        );
+        state
+            .handle(
+                frame(
+                    kind::QUERY_USERS,
+                    proto::QueryUsers {
+                        ids: vec![99],
+                        names: vec!["ALICE".into()],
+                    },
+                ),
+                &tx,
+            )
+            .await
+            .unwrap();
+        match rx.try_recv().unwrap() {
+            SessionEvent::AccountReply(AccountReply {
+                request: 10,
+                result: Ok(account),
+            }) => assert_eq!(account.id, 99),
+            other => panic!("unexpected {other:?}"),
+        }
+        assert!(state.account_lookup.is_none());
+        assert!(state.deferred_name_queries.is_empty());
+        assert_eq!(
+            state
+                .outbound
+                .iter()
+                .filter(|(kind, _)| *kind == kind::QUERY_USERS)
+                .count(),
+            17
+        );
+    }
+
+    #[tokio::test]
+    async fn registered_lookup_retains_expired_reservation_and_rejects_channel_reuse() {
+        let mut state = State {
+            own_session: Some(7),
+            ..Default::default()
+        };
+        let (tx, mut rx) = mpsc::channel(32);
+        state
+            .handle(
+                frame(
+                    kind::CHANNEL_STATE,
+                    proto::ChannelState {
+                        channel_id: Some(0),
+                        ..Default::default()
+                    },
+                ),
+                &tx,
+            )
+            .await
+            .unwrap();
+        state
+            .handle(
+                frame(
+                    kind::USER_STATE,
+                    proto::UserState {
+                        session: Some(7),
+                        ..Default::default()
+                    },
+                ),
+                &tx,
+            )
+            .await
+            .unwrap();
+        drain(&mut rx).await;
+        state
+            .lookup_account(0, 1, "Offline Alice".into(), &tx)
+            .await
+            .unwrap();
+        let barrier = state.account_lookup.as_ref().unwrap().barrier;
+        // UI timeout/close cannot cancel this untagged legacy transaction.
+        state
+            .lookup_account(0, 2, "Offline Bob".into(), &tx)
+            .await
+            .unwrap();
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            SessionEvent::AccountReply(AccountReply {
+                request: 2,
+                result: Err(_)
+            })
+        ));
+        state.channels.get_mut(&0).unwrap().instance += 1;
+        state
+            .handle(
+                frame(
+                    kind::PING,
+                    proto::Ping {
+                        timestamp: Some(barrier),
+                        ..Default::default()
+                    },
+                ),
+                &tx,
+            )
+            .await
+            .unwrap();
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            SessionEvent::AccountReply(AccountReply {
+                request: 1,
+                result: Err(_)
+            })
+        ));
+        assert!(state.account_lookup.is_none());
+        assert!(
+            state
+                .outbound
+                .iter()
+                .all(|(kind, _)| *kind != kind::QUERY_USERS)
+        );
+    }
 
     #[tokio::test]
     async fn acl_query_reservations_prevent_reopen_timeout_and_channel_reuse_retargeting() {
