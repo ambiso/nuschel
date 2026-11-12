@@ -153,6 +153,10 @@ pub struct Channel {
     /// Access tokens (ACL group membership).
     #[serde(default)]
     pub tokens: Vec<String>,
+    /// JSON array of access tokens, read only when connecting. Use a systemd
+    /// credential instead of putting ACL secrets in the generated Nix store.
+    #[serde(default)]
+    pub tokens_file: Option<PathBuf>,
     /// Keep voice in the TLS connection instead of UDP.
     #[serde(default)]
     pub force_tcp: bool,
@@ -180,6 +184,7 @@ impl Config {
         }
         for channel in &mut config.channels {
             resolve(&mut channel.password_file);
+            resolve(&mut channel.tokens_file);
         }
         Ok(config)
     }
@@ -224,6 +229,10 @@ impl Config {
         }
         let mut names = HashSet::new();
         for channel in &self.channels {
+            if channel.tokens_file.is_some() && !channel.tokens.is_empty() {
+                return Err(format!("channel {}: set tokens or tokens_file, not both", channel.name));
+            }
+            validate_tokens(&channel.tokens)?;
             let valid = !channel.name.is_empty()
                 && channel.name.len() <= 64
                 && channel
@@ -257,6 +266,33 @@ impl Config {
         }
         Ok(())
     }
+}
+
+impl Channel {
+    pub fn access_tokens(&self) -> Result<Vec<String>, String> {
+        use std::io::Read;
+        const MAX_FILE: u64 = 128 * 1024;
+        let Some(path) = &self.tokens_file else { return Ok(self.tokens.clone()) };
+        let file = std::fs::File::open(path)
+            .map_err(|_| format!("channel {}: could not read tokens_file", self.name))?;
+        let mut bytes = Vec::new();
+        file.take(MAX_FILE + 1).read_to_end(&mut bytes)
+            .map_err(|_| format!("channel {}: could not read tokens_file", self.name))?;
+        if bytes.len() as u64 > MAX_FILE {
+            return Err("tokens_file exceeds 128 KiB".into());
+        }
+        let tokens: Vec<String> = serde_json::from_slice(&bytes)
+            .map_err(|_| "tokens_file must contain a JSON array of strings".to_owned())?;
+        validate_tokens(&tokens)?;
+        Ok(tokens)
+    }
+}
+
+fn validate_tokens(tokens: &[String]) -> Result<(), String> {
+    if tokens.len() > 64 || tokens.iter().any(|token| token.len() > 256) {
+        return Err("Mumble access tokens are limited to 64 entries of 256 bytes each".into());
+    }
+    Ok(())
 }
 
 /// Base addresses used to construct endpoint and authenticated-page URLs.
@@ -294,6 +330,27 @@ impl Channel {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn file_backed_acl_tokens_resolve_without_reading_during_validation() {
+        let text = format!("{MINIMAL}\ntokens_file = \"acl\"\n");
+        let mut config = parse(&text).unwrap();
+        assert_eq!(config.channels[0].tokens_file.as_deref(), Some(Path::new("/run/credentials/musicbot/acl")));
+        assert!(config.channels[0].access_tokens().is_err());
+        let directory = tempfile::tempdir().unwrap();
+        let file = directory.path().join("acl");
+        std::fs::write(&file, br#"["first", "second"]"#).unwrap();
+        config.channels[0].tokens_file = Some(file.clone());
+        assert_eq!(config.channels[0].access_tokens().unwrap(), ["first", "second"]);
+        std::fs::write(&file, br#"{"private":"must not enter an error"}"#).unwrap();
+        let error = config.channels[0].access_tokens().unwrap_err();
+        assert!(!error.contains("private"));
+        std::fs::write(&file, serde_json::to_vec(&vec!["x"; 65]).unwrap()).unwrap();
+        assert!(config.channels[0].access_tokens().is_err());
+        let file = std::fs::OpenOptions::new().write(true).open(&file).unwrap();
+        file.set_len(128 * 1024 + 1).unwrap();
+        assert!(config.channels[0].access_tokens().is_err());
+    }
 
     const MINIMAL: &str = r#"
         [web]

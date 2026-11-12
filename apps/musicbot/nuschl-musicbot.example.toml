@@ -59,7 +59,7 @@ channel = "Lounge"
 # For servers with a self-signed certificate: its SHA-256 fingerprint.
 # certificate_sha256 = "0123...ef"
 # password_file = "voice-password"
-# tokens = ["music"]
+# tokens_file = "music-tokens" # credential containing a JSON array of ACL tokens
 # force_tcp = false
 
 [[channel]]

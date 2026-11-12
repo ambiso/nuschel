@@ -202,7 +202,7 @@ async fn session(bot: &Arc<Bot>, index: usize) -> Result<(), String> {
     let mut server =
         ServerBookmark::new(&config.name, &config.host, config.port, &config.username)?;
     server.certificate_sha256 = config.certificate_sha256.clone();
-    server.tokens = config.tokens.clone();
+    server.tokens = config.access_tokens()?;
     let password = config
         .password_file
         .as_ref()

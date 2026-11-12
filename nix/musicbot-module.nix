@@ -28,7 +28,12 @@ let
   cfg = config.services.nuschl-musicbot;
   stateDirectory = "/var/lib/nuschl-musicbot";
   format = pkgs.formats.toml { };
-  rawConfigFile = format.generate "nuschl-musicbot-unchecked.toml" cfg.settings;
+  inlineTokens = lib.any (channel: (channel.tokens or [ ]) != [ ]) (cfg.settings.channel or [ ]);
+  rawConfigFile =
+    if inlineTokens then
+      throw "services.nuschl-musicbot: use channel.tokens_file and credentials for ACL secrets; inline tokens enter the Nix store"
+    else
+      format.generate "nuschl-musicbot-unchecked.toml" cfg.settings;
   # Deploy only the file accepted by this package's runtime parser. The check
   # reads no credentials, creates no state and makes no network connections.
   configFile = pkgs.runCommand "nuschl-musicbot.toml" { } ''
@@ -113,6 +118,10 @@ in
   };
   config = lib.mkIf cfg.enable {
     assertions = [
+      {
+        assertion = !inlineTokens;
+        message = "services.nuschl-musicbot: use channel.tokens_file with credentials, not inline ACL tokens.";
+      }
       {
         assertion = lib.all notInStore (lib.attrValues cfg.credentials);
         message = "services.nuschl-musicbot.credentials must not be in the world-readable Nix store.";
