@@ -384,14 +384,148 @@ pub enum TextTarget {
     DirectConversation([u8; 16]),
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct ServerLimits {
     pub allow_html: bool,
+    /// Server limits count UTF-16 code units. Zero means unlimited by the
+    /// server; application byte ceilings are separate and always remain finite.
     pub message_length: usize,
     pub image_message_length: usize,
     pub max_users: Option<u32>,
     pub recording_allowed: bool,
     pub max_bandwidth: Option<u32>,
+}
+
+impl Default for ServerLimits {
+    fn default() -> Self {
+        Self {
+            allow_html: true,
+            message_length: 5000,
+            image_message_length: 131_072,
+            max_users: None,
+            recording_allowed: true,
+            max_bandwidth: Some(crate::audio::DEFAULT_SERVER_BANDWIDTH),
+        }
+    }
+}
+
+/// Protocol-independent optional fields from one sparse server update.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct LimitsUpdate {
+    pub allow_html: Option<bool>,
+    pub message_length: Option<u32>,
+    pub image_message_length: Option<u32>,
+    pub max_users: Option<u32>,
+    pub recording_allowed: Option<bool>,
+    pub max_bandwidth: Option<u32>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MessageLimitExceeded {
+    ClientBytes,
+    TextCharacters(usize),
+    HtmlCharacters(usize),
+}
+
+impl std::fmt::Display for MessageLimitExceeded {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ClientBytes => write!(
+                f,
+                "Message exceeds the {} KiB client limit.",
+                crate::MAX_CONTENT_BYTES / 1024
+            ),
+            Self::TextCharacters(limit) => write!(
+                f,
+                "Message exceeds this server's {limit}-character text limit."
+            ),
+            Self::HtmlCharacters(limit) => write!(
+                f,
+                "Message exceeds this server's {limit}-character total HTML limit."
+            ),
+        }
+    }
+}
+
+impl ServerLimits {
+    /// Whether this update supplied any limit fields. An explicit zero/false
+    /// is preserved, including when it repeats the previous value.
+    pub fn apply(&mut self, update: LimitsUpdate) -> bool {
+        let supplied = update.allow_html.is_some()
+            || update.message_length.is_some()
+            || update.image_message_length.is_some()
+            || update.max_users.is_some()
+            || update.recording_allowed.is_some()
+            || update.max_bandwidth.is_some();
+        if let Some(value) = update.allow_html {
+            self.allow_html = value;
+        }
+        if let Some(value) = update.message_length {
+            self.message_length = value as usize;
+        }
+        if let Some(value) = update.image_message_length {
+            self.image_message_length = value as usize;
+        }
+        if let Some(value) = update.max_users {
+            self.max_users = Some(value);
+        }
+        if let Some(value) = update.recording_allowed {
+            self.recording_allowed = value;
+        }
+        if let Some(value) = update.max_bandwidth {
+            self.max_bandwidth = Some(value);
+        }
+        supplied
+    }
+
+    pub fn bandwidth(&self) -> u32 {
+        self.max_bandwidth
+            .unwrap_or(crate::audio::DEFAULT_SERVER_BANDWIDTH)
+    }
+
+    /// ASCII inline-image markup is prepared against this byte budget. This is
+    /// intentionally independent of a server's unlimited (zero) declaration.
+    pub fn inline_image_byte_budget(&self) -> usize {
+        if self.image_message_length == 0 {
+            crate::MAX_CONTENT_BYTES
+        } else {
+            self.image_message_length.min(crate::MAX_CONTENT_BYTES)
+        }
+    }
+
+    /// Plain user text after legacy formatting (it contains no inline images).
+    /// In HTML mode Murmur always enforces the whole-message image cap too.
+    pub fn check_text_wire(&self, wire: &str) -> Result<(), MessageLimitExceeded> {
+        let units = Self::wire_units(wire)?;
+        self.check_html_units(units)?;
+        if self.message_length != 0 && units > self.message_length {
+            return Err(MessageLimitExceeded::TextCharacters(self.message_length));
+        }
+        Ok(())
+    }
+
+    /// Only the total envelope budget for rich HTML. Its separate text budget
+    /// excludes image src values and needs XML-aware checking; this helper must
+    /// not apply min(text,image) to a complete inline-image body.
+    pub fn check_html_total(&self, wire: &str) -> Result<(), MessageLimitExceeded> {
+        self.check_html_units(Self::wire_units(wire)?)
+    }
+
+    fn wire_units(wire: &str) -> Result<usize, MessageLimitExceeded> {
+        if wire.len() > crate::MAX_CONTENT_BYTES {
+            return Err(MessageLimitExceeded::ClientBytes);
+        }
+        Ok(wire.encode_utf16().count())
+    }
+
+    fn check_html_units(&self, units: usize) -> Result<(), MessageLimitExceeded> {
+        if self.allow_html && self.image_message_length != 0 && units > self.image_message_length {
+            return Err(MessageLimitExceeded::HtmlCharacters(
+                self.image_message_length,
+            ));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize)]
@@ -434,6 +568,100 @@ pub struct TransportStats {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn sparse_limits_keep_server_zero_false_and_large_values_separate_from_local_bytes() {
+        let mut limits = ServerLimits::default();
+        assert!(!limits.apply(LimitsUpdate::default()));
+        assert!(limits.apply(LimitsUpdate {
+            allow_html: Some(false),
+            message_length: Some(0),
+            image_message_length: Some(u32::MAX),
+            max_users: Some(0),
+            recording_allowed: Some(false),
+            max_bandwidth: Some(0)
+        }));
+        assert_eq!(limits.message_length, 0);
+        assert_eq!(limits.image_message_length, u32::MAX as usize);
+        assert_eq!(limits.max_users, Some(0));
+        assert_eq!(limits.bandwidth(), 0);
+        assert!(!limits.allow_html && !limits.recording_allowed);
+        assert_eq!(limits.inline_image_byte_budget(), crate::MAX_CONTENT_BYTES);
+        let before = limits.clone();
+        assert!(!limits.apply(LimitsUpdate::default()));
+        assert_eq!(limits, before);
+        limits.apply(LimitsUpdate {
+            max_bandwidth: Some(48_000),
+            ..Default::default()
+        });
+        assert_eq!(limits.message_length, 0);
+        assert!(!limits.allow_html && !limits.recording_allowed);
+        assert_eq!(limits.bandwidth(), 48_000);
+    }
+
+    #[test]
+    fn text_limits_count_utf16_and_always_enforce_html_total_even_with_unlimited_text() {
+        for html in [false, true] {
+            let mut limits = ServerLimits {
+                allow_html: html,
+                message_length: 1,
+                image_message_length: 0,
+                ..Default::default()
+            };
+            assert_eq!(limits.check_text_wire("漢"), Ok(()));
+            assert_eq!(limits.check_text_wire("é"), Ok(()));
+            assert_eq!(
+                limits.check_text_wire("🙂"),
+                Err(MessageLimitExceeded::TextCharacters(1))
+            );
+            limits.message_length = 2;
+            assert_eq!(limits.check_text_wire("🙂"), Ok(()));
+            assert_eq!(limits.check_text_wire("漢字"), Ok(()));
+            limits.message_length = 0;
+            limits.image_message_length = 2;
+            assert_eq!(limits.check_text_wire("abc").is_err(), html);
+            assert_eq!(limits.check_text_wire("漢字"), Ok(()));
+            limits.image_message_length = 0;
+            assert_eq!(
+                limits.check_text_wire(&"x".repeat(crate::MAX_CONTENT_BYTES)),
+                Ok(())
+            );
+            assert_eq!(
+                limits.check_text_wire(&"x".repeat(crate::MAX_CONTENT_BYTES + 1)),
+                Err(MessageLimitExceeded::ClientBytes)
+            );
+            assert_eq!(
+                limits.check_text_wire(&"漢".repeat(crate::MAX_CONTENT_BYTES / 3 + 1)),
+                Err(MessageLimitExceeded::ClientBytes)
+            );
+        }
+    }
+
+    #[test]
+    fn rich_html_total_never_uses_the_larger_text_limit_or_strips_inline_image_bytes() {
+        let limits = ServerLimits {
+            message_length: 5000,
+            image_message_length: 128,
+            ..Default::default()
+        };
+        assert_eq!(
+            limits.check_html_total(&"x".repeat(129)),
+            Err(MessageLimitExceeded::HtmlCharacters(128))
+        );
+        assert_eq!(limits.check_html_total(&"x".repeat(128)), Ok(()));
+        let limits = ServerLimits {
+            message_length: 50,
+            image_message_length: 256,
+            ..Default::default()
+        };
+        let image = format!("<img src="data:image/png;base64,{}"/>","A".repeat(100));
+        assert!(image.len() > limits.message_length);
+        assert_eq!(
+            limits.check_html_total(&image),
+            Ok(()),
+            "total-only check must not apply the text cap to image data"
+        );
+    }
+
     #[test]
     fn formats_mapped_ipv4_and_ipv6_bans() {
         let mut address = vec![0; 10];
