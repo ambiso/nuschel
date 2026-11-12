@@ -161,8 +161,35 @@
             done
           '';
         };
-        buildDeps =
-          args: craneLib.buildDepsOnly ((builtins.removeAttrs args [ "src" ]) // { inherit dummySrc; });
+        # Artifact-only installation never executes these final-product hooks.
+        # Keeping their source/notice paths in the dependency derivation would
+        # rebuild dependencies after an otherwise harmless application edit.
+        dependencyArgs =
+          args:
+          builtins.removeAttrs args [
+            "src"
+            "preInstall"
+            "postInstall"
+            "installPhase"
+            "installPhaseCommand"
+          ];
+        buildDeps = args: craneLib.buildDepsOnly (dependencyArgs args // { inherit dummySrc; });
+        buildCrossPackage =
+          builder: args:
+          builder.buildPackage (
+            args
+            // {
+              cargoArtifacts = builder.buildDepsOnly (
+                dependencyArgs args
+                // {
+                  inherit dummySrc;
+                  # Match Crane's implicit dependency pass; final installation still
+                  # uses every hook from args. Compile/check/preBuild inputs survive.
+                  installPhase = "prepareAndInstallCargoArtifactsDir";
+                }
+              );
+            }
+          );
         cargoArtifacts = buildDeps common;
         webClient = import ./nix/web-client.nix {
           inherit pkgs lib toolchain;
@@ -367,7 +394,7 @@
           ];
         };
         mingw = pkgs.pkgsCross.mingwW64;
-        windowsPackage = ((crane.mkLib mingw).overrideToolchain crossToolchain).buildPackage (
+        windowsPackage = buildCrossPackage ((crane.mkLib mingw).overrideToolchain crossToolchain) (
           crossCommon
           // {
             pname = "nuschl-windows";
@@ -401,7 +428,7 @@
         });
         macSlice =
           arch:
-          ((crane.mkLib pkgs).overrideToolchain crossToolchain).buildPackage (
+          buildCrossPackage ((crane.mkLib pkgs).overrideToolchain crossToolchain) (
             crossCommon
             // {
               pname = "nuschl-macos-${arch}";
