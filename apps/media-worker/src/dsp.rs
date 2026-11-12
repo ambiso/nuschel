@@ -18,8 +18,6 @@ pub const FRAME: usize = 480;
 const SCALE: f32 = 32768.;
 /// Voice-activity hangover keeps word endings and short pauses.
 const VOICE_HOLD_FRAMES: u32 = 30;
-/// Below this level the gate never opens, whatever the speech probability.
-const SILENCE_DB: f32 = -60.;
 /// Extra speech probability required while the echo guard is up.
 const ECHO_GUARD_MARGIN: f32 = 0.3;
 
@@ -376,7 +374,7 @@ impl Gate {
                 if echo_guard {
                     threshold = (threshold + ECHO_GUARD_MARGIN).min(0.95);
                 }
-                if voice >= threshold && level_db > SILENCE_DB {
+                if voice >= threshold && level_db > nuschl_core::audio::GATE_FLOOR_DB {
                     self.hangover = VOICE_HOLD_FRAMES;
                     true
                 } else if self.hangover > 0 {
@@ -473,6 +471,14 @@ mod tests {
             allocation.count_total, 0,
             "detector/capture processing must remain allocation-free after startup"
         );
+    }
+
+    #[test]
+    fn the_gate_floor_is_the_one_settings_marks() {
+        let floor = nuschl_core::audio::GATE_FLOOR_DB;
+        let settings = AudioSettings::default();
+        assert!(!Gate::new(&settings).update(1., floor, false, false));
+        assert!(Gate::new(&settings).update(1., floor + 0.01, false, false));
     }
 
     /// Diagnostic replay on two instances of this build's DSP; not a general

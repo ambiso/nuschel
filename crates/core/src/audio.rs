@@ -77,6 +77,11 @@ pub fn gate_thresholds(sensitivity: f32) -> GateThresholds {
     }
 }
 
+/// Below this level (dBFS, the RMS of the processed microphone frame) the
+/// voice gate never opens, however speech-like the input. The media worker's
+/// gate and the Settings meter's mark both use this one value.
+pub const GATE_FLOOR_DB: f32 = -60.;
+
 pub const MAX_DEVICE_OVERRIDES: usize = 64;
 
 /// 20 ms of digital silence as one Opus packet (CELT, fullband, mono). It
