@@ -76,7 +76,8 @@ The existing document-link lease/activation tests remain separate evidence.
 
 November 12, 2026 evidence is under
 `~/.cache/nuschl-next/hash-documents/`: `baseline3/`, `fixed2/`, source/unit build
-logs and `handoff.json`. The fixed distribution at production source `b22221b4`
+logs and `handoff.json`. Final SDK tests pass 99 with one existing ignored;
+all 79 native desktop unit tests pass. The fixed distribution at production source `b22221b4`
 is `/nix/store/dcdx6plh0fa45g4blqv9ka028zc6jglx-nuschl-0.1.0`; its scoped notice
 reader passes. Later changes only extend tests/documentation. This is a Linux
 private-GNOME proof, not native Windows/macOS, physical-device or new browser

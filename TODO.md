@@ -843,8 +843,8 @@ listed below. Plugin data remains the explicit gap.
       pending sources are reused. The private old-package baseline reproduces
       both gaps; the fixed Linux package passes first-selection/first-open,
       replacement and hidden/reopen checks against stock Murmur, with raw pinned
-      loopback hash/body frames retained. SDK and native unit checks accompany
-      the scoped proof; root integration remains the final gate. See
+      loopback hash/body frames retained. SDK tests pass 99 (one existing ignored)
+      and all 79 native unit tests pass; root integration remains the final gate. See
       `docs/hash-documents.md`. No Windows/macOS or new browser profile-UI claim.
 - [ ] Audit native legacy blob hash/body normalization separately (source-level
       finding, not a reproduced exploit). A new small inline description/comment
