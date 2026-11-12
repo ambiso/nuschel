@@ -13,8 +13,6 @@ const OUTPUT: usize = 256;
 struct Filtered {
     state: State,
     input: [[f32; INPUT]; 2],
-    at: usize,
-    ready: usize,
     output: [[f32; OUTPUT]; 2],
 }
 
@@ -43,8 +41,6 @@ impl PlaybackConverter {
             filtered: Some(Box::new(Filtered {
                 state,
                 input: [[0.; INPUT]; 2],
-                at: 0,
-                ready: 0,
                 output: [[0.; OUTPUT]; 2],
             })),
         }
@@ -79,29 +75,36 @@ impl PlaybackConverter {
         let mut cursor = 0;
         let frames = data.len() / self.channels;
         while cursor < frames {
-            if filter.at == filter.ready {
-                // A small fixed lookahead, independent of callback size. Silence
-                // preserves the device clock during an underrun; never wait for IO.
-                for i in 0..INPUT {
-                    let frame = ring.pop().unwrap_or_else(|_| {
-                        dry = true;
-                        [0.; 2]
-                    });
+            // Peek without reserving future source frames. Only the portion
+            // Speex consumes is committed; unconsumed real frames remain queued.
+            let available = ring.slots().min(INPUT);
+            let chunk = if available > 0 {
+                ring.read_chunk(available).ok()
+            } else {
+                None
+            };
+            let offered = if let Some(chunk) = &chunk {
+                let (first, second) = chunk.as_slices();
+                for (i, frame) in first.iter().chain(second).enumerate() {
                     filter.input[0][i] = frame[0];
                     filter.input[1][i] = frame[1];
                 }
-                filter.at = 0;
-                filter.ready = INPUT;
-            }
+                available
+            } else {
+                dry = true;
+                filter.input[0].fill(0.);
+                filter.input[1].fill(0.);
+                INPUT
+            };
             let count = (frames - cursor).min(OUTPUT);
             let left = filter.state.process_float(
                 0,
-                &filter.input[0][filter.at..filter.ready],
+                &filter.input[0][..offered],
                 &mut filter.output[0][..count],
             );
             let right = filter.state.process_float(
                 1,
-                &filter.input[1][filter.at..filter.ready],
+                &filter.input[1][..offered],
                 &mut filter.output[1][..count],
             );
             let (Ok((read, written)), Ok(other)) = (left, right) else {
@@ -112,14 +115,18 @@ impl PlaybackConverter {
                 data[cursor * self.channels..].fill(T::from_sample(0.));
                 return (true, handed);
             }
-            for index in filter.at..filter.at + read {
+            for index in 0..read {
                 handed += reference(
                     played,
                     self.channels,
                     [filter.input[0][index], filter.input[1][index]],
                 );
             }
-            filter.at += read;
+            if let Some(chunk) = chunk {
+                chunk.commit(read);
+            }
+            // An empty ring offered silence for THIS call only. Its unconsumed
+            // tail is discarded, so a later callback can immediately see audio.
             for index in 0..written {
                 write_device(
                     &mut data
@@ -193,6 +200,40 @@ mod tests {
                 "timestamps count source frames"
             );
         }
+    }
+
+    #[test]
+    fn short_underrun_callbacks_never_reserve_silence_ahead_of_new_audio() {
+        let (mut queued, mut input) = RingBuffer::<[f32; 2]>::new(1024);
+        let (mut played, _reference) = RingBuffer::<f32>::new(4096);
+        let mut converter = PlaybackConverter::new(2, 384_000);
+        let mut one = [0_f32; 2];
+        assert!(converter.pull(&mut one, &mut input, &mut played).0);
+        queued.push([0.25, -0.125]).unwrap();
+        queued.push_entire_slice(&[[0.; 2]; 511]).unwrap();
+        let initial = input.slots();
+        let measured = allocation_counter::measure(|| {
+            for _ in 0..16 {
+                converter.pull(&mut one, &mut input, &mut played);
+            }
+        });
+        assert_eq!(measured.count_total, 0);
+        assert!(
+            input.slots() < initial,
+            "real source must be consumed, not hidden behind speculative silence"
+        );
+        let mut output = [0_f32; 1024];
+        converter.pull(&mut output, &mut input, &mut played);
+        let peak = output
+            .chunks_exact(2)
+            .enumerate()
+            .max_by(|(_, a), (_, b)| a[0].abs().total_cmp(&b[0].abs()))
+            .unwrap();
+        assert!(peak.1[0].abs() > 0.1, "the real marker must reach output");
+        assert!(
+            peak.0 as f64 <= converter.delay().as_secs_f64() * 384_000. + 16.,
+            "no extra silence before marker"
+        );
     }
 
     #[test]

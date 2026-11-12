@@ -277,22 +277,33 @@ fractional clocks. The gate requires at least 100 dB agreement and maximum error
 `tests/output_device_rates.py` additionally runs the actual live worker on private
 Pulse sinks. It verifies client **and monitor** negotiate exactly 22,050, 44,100
 and 96,000 Hz so server resampling cannot masquerade as the new converter.
-Encoded stereo carrier errors are below 0.001 dB and LR separation exceeds 71 dB
+Encoded stereo carrier errors are below 0.004 dB and LR separation exceeds 71 dB
 in that fixture. Endpoint fractional delay is kept separate from amplitude.
 
-The source suite passes 56 tests, with two pre-existing ignored tests plus the
+The source suite passes 57 tests, with two pre-existing ignored tests plus the
 explicit ignored PCM-extraction fixture. Existing private 48 kHz DSP regressions pass
 with the filtered source, including echo routing/probe, double talk, clipping and
 sound isolation. The jitter run had one silent 20 ms window over 3020 ms with
 five dropped packets, within its existing limits. A new integrated distribution
 and full reference-Mumble/device/listening proof remain pending.
 
-Final leaf: `1gxvvpx47f1s4vw1srnrc2ky03hwcm92-rust_nuschl-media-worker-0.1.0-linked`
-(the private runtime proofs used behavior-identical `fjsqrmjz...` before the final
-reference-clock unit was added).
+Final playback leaf: `xq4r52yz85acnipv6w1i7xmbzqv1r5bj-rust_nuschl-media-worker-0.1.0-linked`.
+The follow-up read-chunk implementation and its private runtime proofs use this
+same artifact.
 Evidence: `resample-adapter-gated/proof.json`, `private-device-rates/proof.json`
 and `filtered-dsp-regressions.log`. The source graph is based on integrated updater
 checkpoint `d1480f2c`; lock/generated edits add only the reviewed SRC package.
+
+Review found that the first adapter filled an input stage with speculative zeros
+and retained its unconsumed tail after an empty callback. A tiny high-rate
+callback could then hide newly arrived real audio behind those future zeros.
+The correction peeks a bounded rtrb read chunk and commits only the source frames
+Speex reports consumed. An empty call offers fixed silence only for that call;
+its unconsumed tail is discarded. A 384 kHz single-frame underrun/marker regression
+proves immediate real queue consumption and an audible marker within the declared
+filter delay, with zero allocations. The full reference/chunk/clock matrix and
+private negotiated-rate proofs passed again: `resample-peek-gated/` and
+`private-peek-device-rates/`.
 
 A stricter newly added 44.1 kHz-render/48 kHz-capture echo check exposed an
 active reliability follow-up alongside this bounded SRC quality checkpoint. Separate new-source attempts
@@ -317,6 +328,14 @@ frame-count/chunk test passes at 11,025/22,050/44,100/96,000 Hz; that rules out 
 specific counter/boundary hypotheses but does not certify reconstruction quality. Do not substitute passing output
 spectra or 48 kHz echo tests for stable non-48 AEC. Evidence is retained in
 `private-device-rates-echo/`, `old-src-echo-baseline/` and `paired-src-echo/`.
+
+The repeated ABBA test after the peek fix is also retained unchanged:
+old/new/new/old reduction was 45.33/0.55/43.72/47.81 dB. The failed new trial
+transmitted 34.8%; it is not discarded because the next trial passed. Combined
+with the earlier baseline failure, these observations leave reliability and a
+possible timing/reconstruction interaction open. They do not justify claiming
+stable AEC. `paired-peek-src-echo/proof.json` records every trial and the 15 dB
+assertion remains unchanged.
 
 ## Remaining reference decoder setting
 
