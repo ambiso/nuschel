@@ -53,7 +53,7 @@ test("deafen/epoch changes clear all buffered sound, and malformed or extra spea
 function voice(generation="1") {
   return {server_id:"web:"+"u".repeat(128)+"@"+"a".repeat(253)+":64738",
     connection_generation:generation,voice_generation:"9007199254740993",channel_id:0,
-    joined:true,muted:false,deafened:false,can_transmit:true};
+    joined:true,muted:false,deafened:false,can_transmit:true,bitrate:128000};
 }
 const turn=()=>new Promise(resolve=>setImmediate(resolve));
 
@@ -121,4 +121,34 @@ test("explicit undeafen restores acknowledged playback while microphone capture 
     await audio.dispose();
     for(const [key,descriptor] of originals)if(descriptor)Object.defineProperty(globalThis,key,descriptor);else delete globalThis[key];
   }
+});
+
+
+test("authenticated route targets reach only the codec and budget updates invalidate queued media",async()=>{
+  const messages=[];const audio=new BrowserAudio();audio.syncVoice(voice());
+  audio.ctx={state:"running",currentTime:0};audio.workerReady=true;audio.nodesReady=true;
+  audio.worker={postMessage:message=>messages.push(message),terminate:()=>{}};
+  audio.captureNode={port:{postMessage:()=>{}},disconnect:()=>{}};
+  audio.consent=context(audio.voice);
+  audio.stream={getAudioTracks:()=>[{muted:false,readyState:"live"}],getTracks:()=>[]};
+  audio.source={disconnect:()=>{}};
+  audio.applyPolicy();
+  assert.equal(messages.at(-1).bitrate,128000);
+  audio.encodeJobs.set(1,{epoch:audio.epoch});const oldEpoch=audio.epoch;
+  audio.syncVoice({...voice(),voice_generation:"9007199254740994",bitrate:24000});
+  assert.notEqual(audio.epoch,oldEpoch);assert.equal(audio.encodeJobs.size,0);
+  assert.equal(messages.at(-1).bitrate,24000);
+  assert.ok(audio.captureEnabled());
+  audio.syncVoice({...voice(),voice_generation:"9007199254740995",bitrate:0,can_transmit:false});
+  assert.equal(audio.captureEnabled(),false);assert.equal(audio.stream,null);assert.equal(audio.consent,null);
+  assert.equal(audio.playbackEnabled(),true,"a tiny upload budget does not disable listening");
+  audio.ctx=null;await audio.dispose();
+});
+
+test("missing and malformed encoder targets cannot open capture",async()=>{
+  const audio=new BrowserAudio();
+  for(const bitrate of [undefined,-1,5999,128001,Infinity,"128000"]) {
+    audio.syncVoice({...voice(),bitrate});assert.equal(audio.voice.bitrate,0);assert.equal(audio.captureEnabled(),false);
+  }
+  await audio.dispose();
 });

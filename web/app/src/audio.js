@@ -20,7 +20,7 @@ export class BrowserAudio {
       playback:Boolean(this.playbackEnabled()),contextState:this.ctx?.state||"closed"});
   }
   captureEnabled() {
-    return Boolean(this.voice?.joined&&!this.voice.muted&&!this.voice.deafened&&!this.localBlocked&&!this.localDeaf&&
+    return Boolean(this.voice?.joined&&this.voice.bitrate>=6000&&!this.voice.muted&&!this.voice.deafened&&!this.localBlocked&&!this.localDeaf&&
       this.consent&&sameDestination(this.consent,this.voice)&&!this.awaitingUnmute&&
       !this.transportStalled&&this.workerReady&&this.nodesReady&&this.ctx?.state==="running");
   }
@@ -100,18 +100,19 @@ export class BrowserAudio {
     const next=context(value);
     const old=this.voice;
     const incoming=next?{...next,joined:value.joined===true,muted:value.muted!==false,
-      deafened:value.deafened!==false,can_transmit:value.can_transmit===true}:null;
+      deafened:value.deafened!==false,can_transmit:value.can_transmit===true,
+      bitrate:Number.isInteger(value.bitrate)&&value.bitrate>=6000&&value.bitrate<=128000?value.bitrate:0}:null;
     if(!sameDestination(old,incoming)) {
       this.stopCapture(true);this.localBlocked=false;this.localDeaf=false;this.sequence=0n;this.transportStalled=false;
     }
     if(this.awaitingUnmute&&incoming&&!incoming.muted&&!incoming.deafened&&incoming.voice_generation!==this.unmuteGeneration)this.awaitingUnmute=false;
     this.voice=incoming;
-    if(!incoming?.joined||incoming.muted||incoming.deafened) {
+    if(!incoming?.joined||incoming.muted||incoming.deafened||!incoming.bitrate) {
       // A permission request initiated by this explicit unmute may finish while
       // waiting for its acknowledgment. It remains disabled and time bounded.
-      if(!this.awaitingUnmute)this.stopCapture(true);
+      if(!this.awaitingUnmute||!incoming?.bitrate)this.stopCapture(true);
     }
-    const changed=!sameContext(old,incoming)||old?.channel_id!==incoming?.channel_id||old?.joined!==incoming?.joined||old?.muted!==incoming?.muted||old?.deafened!==incoming?.deafened;
+    const changed=old?.bitrate!==incoming?.bitrate||!sameContext(old,incoming)||old?.channel_id!==incoming?.channel_id||old?.joined!==incoming?.joined||old?.muted!==incoming?.muted||old?.deafened!==incoming?.deafened;
     if(changed)this.resetMedia();
     this.applyPolicy();
     if(!incoming)this.status("idle");
@@ -181,7 +182,7 @@ export class BrowserAudio {
       this.captureRunning=capture;
       for(const track of this.stream?.getAudioTracks()||[])track.enabled=capture;
       if(capture&&!this.source){this.source=this.ctx.createMediaStreamSource(this.stream);this.source.connect(this.captureNode);}
-      this.worker?.postMessage({kind:"configure",epoch:this.epoch,capture});
+      this.worker?.postMessage({kind:"configure",epoch:this.epoch,capture,bitrate:this.voice?.bitrate||0});
       this.captureNode?.port.postMessage({kind:"configure",epoch:this.epoch,enabled:capture});
     }
     const playback=this.playbackEnabled();

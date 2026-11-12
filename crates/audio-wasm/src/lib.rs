@@ -9,6 +9,8 @@ use wasm_bindgen::prelude::*;
 
 pub const SAMPLE_RATE: u32 = 48_000;
 pub const FRAME_SAMPLES: usize = 960;
+pub const DEFAULT_BITRATE: u32 = 128_000;
+pub const MIN_BITRATE: u32 = 6_000;
 /// Leaves space for Mumble's header inside its 1024-byte tunneled voice bound.
 pub const MAX_ENCODED_BYTES: usize = 960;
 pub const MAX_DECODED_SAMPLES: usize = MAX_PACKET_SAMPLES;
@@ -27,9 +29,19 @@ impl VoiceEncoder {
     pub fn new() -> Result<Self, String> {
         let mut encoder = OpusEncoder::new(SAMPLE_RATE as i32, 1, Application::Voip)
             .map_err(|error| error.to_string())?;
-        encoder.bitrate_bps = 64_000;
+        encoder.bitrate_bps = DEFAULT_BITRATE as i32;
         encoder.complexity = 5;
         Ok(Self { encoder })
+    }
+
+    /// A target selected by the authenticated session's current server budget.
+    /// Invalid controls fail before mutating the running codec.
+    pub fn set_bitrate(&mut self, bitrate: u32) -> Result<(), String> {
+        if !(MIN_BITRATE..=DEFAULT_BITRATE).contains(&bitrate) {
+            return Err("invalid voice bitrate".into());
+        }
+        self.encoder.bitrate_bps = bitrate as i32;
+        Ok(())
     }
 
     pub fn encode(&mut self, samples: &[f32]) -> Result<Vec<u8>, String> {
@@ -40,7 +52,8 @@ impl VoiceEncoder {
         {
             return Err("expected 20 ms of finite mono PCM in [-1, 1]".into());
         }
-        let mut output = vec![0; MAX_ENCODED_BYTES];
+        // Bound VBR packets to this 20 ms destination payload allowance.
+        let mut output = vec![0; (self.encoder.bitrate_bps as usize / 400).min(MAX_ENCODED_BYTES)];
         let size = self
             .encoder
             .encode(samples, FRAME_SAMPLES, &mut output)
@@ -148,6 +161,33 @@ mod tests {
                 carrier > amplitude(other) * 10.,
                 "carrier was lost relative to {other} Hz"
             );
+        }
+    }
+
+    #[test]
+    fn live_targets_bound_real_encoded_packets_and_preserve_decodable_duration() {
+        let mut encoder = VoiceEncoder::new().unwrap();
+        assert_eq!(encoder.encoder.bitrate_bps, 128_000);
+        let mut decoder = VoiceDecoder::new().unwrap();
+        for bitrate in [128_000, 24_000, 6_000, 48_000, 128_000] {
+            encoder.set_bitrate(bitrate).unwrap();
+            for frame in 0..8 {
+                let pcm: Vec<_> = (0..FRAME_SAMPLES)
+                    .map(|i| {
+                        (std::f32::consts::TAU * 997. * (frame * FRAME_SAMPLES + i) as f32
+                            / SAMPLE_RATE as f32)
+                            .sin()
+                            * 0.3
+                    })
+                    .collect();
+                let encoded = encoder.encode(&pcm).unwrap();
+                assert!(encoded.len() <= (bitrate / 400) as usize);
+                assert_eq!(decoder.decode(&encoded).unwrap().len(), FRAME_SAMPLES);
+            }
+        }
+        for invalid in [0, 5999, 128_001, u32::MAX] {
+            assert!(encoder.set_bitrate(invalid).is_err());
+            assert_eq!(encoder.encoder.bitrate_bps, 128_000);
         }
     }
 

@@ -98,9 +98,16 @@ impl Transmit {
         if self.pending.len() < SAMPLES {
             self.pending.resize(SAMPLES, 0.);
         }
+        // Constrain each 20 ms packet too: VBR must not exceed the selected
+        // destination's payload allowance while meeting its average target.
+        let max_bytes = (self.encoder.bitrate_bps as usize / 400).min(self.packet.len());
         let count = self
             .encoder
-            .encode(&self.pending[..SAMPLES], SAMPLES, &mut self.packet)
+            .encode(
+                &self.pending[..SAMPLES],
+                SAMPLES,
+                &mut self.packet[..max_bytes],
+            )
             .ok();
         self.pending.drain(..SAMPLES);
         Some(self.packet[..count?].to_vec())
@@ -142,7 +149,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut output = io::stdout().lock();
     let mut settings = AudioSettings::default();
     let mut encoder = OpusEncoder::new(48_000, 1, Application::Voip)?;
-    encoder.bitrate_bps = 48_000;
+    encoder.bitrate_bps = nuschl_core::audio::DEFAULT_VOICE_BITRATE as i32;
     encoder.use_inband_fec = true;
     encoder.packet_loss_perc = 5;
     let mut transmit = Transmit {
@@ -326,7 +333,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 host,
             })) => {
                 only_host = host;
-                transmit.encoder.bitrate_bps = bitrate.clamp(6000, 64_000) as i32;
+                transmit.encoder.bitrate_bps = bitrate.clamp(
+                    nuschl_core::audio::MIN_VOICE_BITRATE,
+                    nuschl_core::audio::DEFAULT_VOICE_BITRATE,
+                ) as i32;
                 transmit.encoder.packet_loss_perc = i32::from(packet_loss_percent.clamp(1, 30));
                 let requested = requested.sanitized();
                 if !requested.same_route(&settings) && devices.is_some() {
@@ -1501,6 +1511,39 @@ fn device_buffer(supported: &cpal::SupportedBufferSize) -> cpal::BufferSize {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn real_mono_packets_fit_default_and_reduced_live_targets_without_devices() {
+        let mut encoder =
+            opus_pure::OpusEncoder::new(48_000, 1, opus_pure::Application::Voip).unwrap();
+        encoder.use_inband_fec = true;
+        encoder.packet_loss_perc = 5;
+        let mut tx = super::Transmit {
+            encoder,
+            pending: Vec::new(),
+            packet: [0; opus_pure::MAX_PACKET_BYTES],
+            sequence: 0,
+            active: false,
+        };
+        let mut decoder = opus_pure::OpusDecoder::new(48_000, 1).unwrap();
+        for target in [
+            nuschl_core::audio::DEFAULT_VOICE_BITRATE,
+            24_000,
+            6_000,
+            128_000,
+        ] {
+            tx.encoder.bitrate_bps = target as i32;
+            for frame in 0..8 {
+                tx.pending.extend((0..960).map(|i| {
+                    (std::f32::consts::TAU * 997. * (frame * 960 + i) as f32 / 48_000.).sin() * 0.3
+                }));
+                let packet = tx.encode().unwrap();
+                assert!(packet.len() <= (target / 400) as usize);
+                let mut output = vec![0.; 5760];
+                assert_eq!(decoder.decode(&packet, 5760, &mut output).unwrap(), 960);
+            }
+        }
+    }
+
     use super::*;
     use opus_pure::{MAX_PACKET_SAMPLES, OpusDecoder};
 

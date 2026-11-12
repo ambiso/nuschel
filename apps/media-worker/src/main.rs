@@ -26,7 +26,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     // Native device I/O and DSP will live here too. This process receives no server credentials.
     let mut encoder = OpusEncoder::new(48_000, 1, Application::Voip)?;
-    encoder.bitrate_bps = 64_000;
+    encoder.bitrate_bps = nuschl_core::audio::DEFAULT_VOICE_BITRATE as i32;
     let mut decoder = OpusDecoder::new(48_000, 1)?;
     let mut input = io::stdin().lock();
     let mut output = io::stdout().lock();

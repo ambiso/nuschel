@@ -938,6 +938,14 @@ impl WebClient {
             .get(&server.id)
             .map(|c| c.session.borrow().voice_policy())
             .unwrap_or((true, true));
+        let bitrate = self
+            .shared
+            .connections
+            .borrow()
+            .get(&server.id)
+            .map(|connection| connection.session.borrow().voice_bitrate())
+            .unwrap_or(0);
+        self.shared.voice.borrow_mut().set_bitrate(bitrate);
         self.shared.voice.borrow_mut().policy(
             server.voice_channel() == Some(view.channel_id),
             muted || server.muted,

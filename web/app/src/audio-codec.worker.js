@@ -15,8 +15,9 @@ function free() {
   speakers.clear();
 }
 function configure(data) {
+  if(data.capture&&(!Number.isInteger(data.bitrate)||data.bitrate<6000||data.bitrate>128000))throw new Error("Invalid voice bitrate");
   free();epoch=data.epoch;enabled=Boolean(data.capture);
-  if(enabled)encoder=new VoiceEncoder();
+  if(enabled){encoder=new VoiceEncoder();encoder.set_bitrate(data.bitrate);}
 }
 await init();
 postMessage({kind:"ready"});

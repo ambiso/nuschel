@@ -15,7 +15,10 @@ use crate::{
     server::{AudioHealth, direct_conversation_key},
     timeline::{Deletion, IncomingMessage, Page},
 };
-use nuschl_core::audio::{AudioDevice, EchoSource, Sound, TransmitMode};
+use nuschl_core::audio::{
+    AudioDevice, DEFAULT_SERVER_BANDWIDTH, DEFAULT_VOICE_BITRATE, EchoSource, Sound, TransmitMode,
+    voice_bitrate,
+};
 use nuschl_core::{ChatMessage, ContentBlock, HistoryPage, MessageDocument};
 use nuschl_ipc::{LiveMediaEvent, LiveMediaRequest};
 use nuschl_protocol::nuschl::v1;
@@ -1008,7 +1011,7 @@ async fn connect_once(
     let mut voice_allowed = true;
     let mut sequence = 0;
     let mut content_gap = false;
-    let mut bitrate = 48_000;
+    let mut bitrate = voice_bitrate(DEFAULT_SERVER_BANDWIDTH);
     // Our share of the app's microphone, once connected; detached however
     // this ends.
     let mut voice: Option<(mpsc::Receiver<media::Outgoing>, media::Attached)> = None;
@@ -1102,7 +1105,7 @@ async fn connect_once(
                 let Some(media::Outgoing { revision, opus, end }) = outgoing else { voice = None; continue };
                 // Only unmuted, as the worker's supervisor routes it; nothing
                 // captured before a mute leaves.
-                if !voice_allowed || revision != voice_revision || muted || deafened || voice_keys.borrow().mute { continue; }
+                if !voice_allowed || revision != voice_revision || muted || deafened || voice_keys.borrow().mute || bitrate == 0 || opus.len() > (bitrate / 400) as usize { continue; }
                 let packet = nuschl_protocol::voice::VoicePacket { sender: 0, sequence, opus, end, volume: 1. };
                 sequence += 2;
                 transmitting = !end;
@@ -1222,13 +1225,25 @@ async fn connect_once(
                     }
                     own_session = Some(connected_session);
                     let own_session = connected_session;
-                    bitrate = max_bandwidth.saturating_sub(24_000).clamp(6000, 48_000);
+                    bitrate = voice_bitrate(max_bandwidth);
                     let (sender, receiver) = mpsc::channel(64);
                     let link = media::Link { revision: voice_revision, voice_allowed, muted, deafened, bitrate, loss_percent };
                     hub.send(media::Control::Attach { server: id.clone(), generation, link, voice: sender });
                     voice = Some((receiver, media::Attached { hub: hub.clone(), server: id.clone(), generation }));
                     if !deafened { hub.send(media::Control::Sound(Sound::Connected)); }
                     let _ = events.send(Event::Protocol { server: id.clone(), generation, event: SessionEvent::Connected { session: own_session, max_bandwidth } }).await;
+                },
+                SessionEvent::Limits(limits) => {
+                    if let Some(max_bandwidth) = limits.max_bandwidth {
+                        let next = voice_bitrate(max_bandwidth);
+                        if (next == 0) != (bitrate == 0) { voice_revision = voice_revision.wrapping_add(1); }
+                        bitrate = next;
+                        if voice.is_some() {
+                            hub.send(media::Control::Update { server: id.clone(), generation,
+                                link: media::Link { revision: voice_revision, voice_allowed, muted, deafened, bitrate, loss_percent }, cue: None });
+                        }
+                    }
+                    let _ = events.send(Event::Protocol { server: id.clone(), generation, event: SessionEvent::Limits(limits) }).await;
                 },
                 SessionEvent::Audio(packet) => {
                     if !voice_allowed { continue; }
@@ -1984,7 +1999,7 @@ async fn chime(
     let Ok(mut worker) = Media::start() else {
         return;
     };
-    configure(&worker, &audio, (48_000, 5), host);
+    configure(&worker, &audio, (DEFAULT_VOICE_BITRATE, 5), host);
     let _ = worker.commands.try_send(LiveMediaRequest::SetState {
         epoch: 0,
         muted: true,

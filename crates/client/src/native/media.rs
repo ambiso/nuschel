@@ -137,7 +137,7 @@ fn plan<'a>(links: impl Iterator<Item = &'a Link>) -> Plan {
     let mut plan = Plan {
         listen: false,
         capture: false,
-        bitrate: 48_000,
+        bitrate: nuschl_core::audio::DEFAULT_VOICE_BITRATE,
         loss_percent: 1,
     };
     let mut speaking = Vec::new();
@@ -153,7 +153,7 @@ fn plan<'a>(links: impl Iterator<Item = &'a Link>) -> Plan {
             .iter()
             .map(|link| link.bitrate)
             .min()
-            .unwrap_or(48_000);
+            .unwrap_or(nuschl_core::audio::DEFAULT_VOICE_BITRATE);
         plan.loss_percent = speaking
             .iter()
             .map(|link| link.loss_percent)
@@ -165,7 +165,10 @@ fn plan<'a>(links: impl Iterator<Item = &'a Link>) -> Plan {
 
 /// The microphone goes to this server.
 fn speaking_to(link: &Link) -> bool {
-    link.voice_allowed && !link.muted && !link.deafened
+    link.voice_allowed
+        && link.bitrate >= nuschl_core::audio::MIN_VOICE_BITRATE
+        && !link.muted
+        && !link.deafened
 }
 
 /// A destination started/stopped receiving the microphone, or changed its
@@ -464,6 +467,21 @@ mod tests {
             bitrate,
             loss_percent,
         }
+    }
+
+    #[test]
+    fn requested_default_and_each_destination_budget_control_capture() {
+        let empty = plan(std::iter::empty());
+        assert_eq!(empty.bitrate, nuschl_core::audio::DEFAULT_VOICE_BITRATE);
+        let blocked = link(false, false, nuschl_core::audio::voice_bitrate(20_000), 1);
+        assert!(!speaking_to(&blocked));
+        let listening = plan([&blocked].into_iter());
+        assert!(listening.listen && !listening.capture);
+        let high = link(false, false, nuschl_core::audio::voice_bitrate(200_000), 1);
+        let low = link(false, false, nuschl_core::audio::voice_bitrate(48_000), 1);
+        assert_eq!(plan([&high, &low].into_iter()).bitrate, 24_000);
+        assert_eq!(plan([&high, &blocked].into_iter()).bitrate, 128_000);
+        assert!(capture_route_changed(&high, &blocked));
     }
 
     #[test]

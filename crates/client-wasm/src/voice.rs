@@ -13,6 +13,7 @@ pub struct VoiceView {
     pub muted: bool,
     pub deafened: bool,
     pub can_transmit: bool,
+    pub bitrate: u32,
 }
 
 #[derive(Deserialize)]
@@ -64,7 +65,8 @@ pub struct Route {
 impl Route {
     pub fn view(&self) -> Option<VoiceView> {
         let mut view = self.view.clone()?;
-        view.can_transmit = view.joined && !view.muted && !view.deafened && self.capture_ready;
+        view.can_transmit =
+            view.joined && !view.muted && !view.deafened && view.bitrate != 0 && self.capture_ready;
         Some(view)
     }
 
@@ -79,6 +81,9 @@ impl Route {
             muted: true,
             deafened: true,
             can_transmit: false,
+            bitrate: nuschl_core::audio::voice_bitrate(
+                nuschl_core::audio::DEFAULT_SERVER_BANDWIDTH,
+            ),
         });
     }
 
@@ -118,6 +123,18 @@ impl Route {
         }
     }
 
+    /// Revoke queued work/readiness when the destination changes its budget.
+    /// Playback and explicit capture consent are otherwise independent.
+    pub fn set_bitrate(&mut self, bitrate: u32) {
+        if self.view.as_ref().is_some_and(|v| v.bitrate != bitrate) {
+            self.invalidate();
+            if let Some(view) = &mut self.view {
+                view.bitrate = bitrate;
+                view.voice_generation = self.epoch.to_string();
+            }
+        }
+    }
+
     pub fn matches(&self, context: &Context) -> bool {
         self.view.as_ref().is_some_and(|v| {
             v.server_id == context.server_id
@@ -140,7 +157,7 @@ impl Route {
         if !self.matches(&packet.context)
             || !self.view().is_some_and(|v| v.can_transmit)
             || len == 0
-            || len > 960
+            || len > self.view.as_ref().map_or(0, |v| (v.bitrate / 400) as usize)
         {
             return Err("Voice packet is not authorized for the active route.".into());
         }
@@ -221,13 +238,90 @@ mod tests {
             sequence: "9007199254740993".into(),
             end: false,
         };
-        assert_eq!(route.admit(&packet, 960).unwrap(), 9007199254740993);
-        assert!(route.admit(&packet, 960).is_err());
+        assert_eq!(route.admit(&packet, 120).unwrap(), 9007199254740993);
+        assert!(route.admit(&packet, 120).is_err());
         route.policy(true, false, true);
         assert!(route.view().unwrap().muted);
         assert!(route.admit(&packet, 20).is_err());
         assert!(route.receive("one", 5).is_none());
     }
+    #[test]
+    fn live_budget_changes_revoke_queued_frames_without_affecting_playback_policy() {
+        let mut route = Route::default();
+        route.select("one".into(), 1, 2);
+        route.policy(true, false, false);
+        route.set_bitrate(128_000);
+        route
+            .ready(Ready {
+                context: context(&route),
+                capture: true,
+                playback: true,
+            })
+            .unwrap();
+        let old = Outgoing {
+            context: context(&route),
+            sequence: "0".into(),
+            end: false,
+        };
+        assert!(route.admit(&old, 320).is_ok());
+        assert!(
+            route
+                .admit(
+                    &Outgoing {
+                        context: context(&route),
+                        sequence: "2".into(),
+                        end: false
+                    },
+                    321
+                )
+                .is_err()
+        );
+        route.set_bitrate(24_000);
+        assert!(route.admit(&old, 40).is_err());
+        assert!(!route.view().unwrap().can_transmit);
+        route
+            .ready(Ready {
+                context: context(&route),
+                capture: true,
+                playback: true,
+            })
+            .unwrap();
+        assert!(
+            route
+                .admit(
+                    &Outgoing {
+                        context: context(&route),
+                        sequence: "2".into(),
+                        end: false
+                    },
+                    61
+                )
+                .is_err()
+        );
+        assert!(
+            route
+                .admit(
+                    &Outgoing {
+                        context: context(&route),
+                        sequence: "2".into(),
+                        end: false
+                    },
+                    60
+                )
+                .is_ok()
+        );
+        route.set_bitrate(0);
+        route
+            .ready(Ready {
+                context: context(&route),
+                capture: true,
+                playback: true,
+            })
+            .unwrap();
+        assert!(!route.view().unwrap().can_transmit);
+        assert!(route.receive("one", 1).is_some());
+    }
+
     #[test]
     fn replacement_and_policy_changes_revoke_both_directions() {
         let mut route = Route::default();

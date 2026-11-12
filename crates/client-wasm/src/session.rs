@@ -201,6 +201,7 @@ pub struct Session {
     allow_html: bool,
     voice_version: u64,
     opus_allowed: bool,
+    max_bandwidth: u32,
     desired_muted: bool,
     desired_deafened: bool,
     self_change_pending: bool,
@@ -260,6 +261,7 @@ impl Session {
             allow_html: true,
             voice_version: 0,
             opus_allowed: true,
+            max_bandwidth: nuschl_core::audio::DEFAULT_SERVER_BANDWIDTH,
             desired_muted: true,
             desired_deafened: true,
             self_change_pending: false,
@@ -398,9 +400,21 @@ impl Session {
         )
     }
 
+    /// Effective mono target for this authenticated connection, including the
+    /// conservative server-accounting overhead reserve.
+    pub fn voice_bitrate(&self) -> u32 {
+        nuschl_core::audio::voice_bitrate(self.max_bandwidth)
+    }
+
     pub fn send_voice(&mut self, sequence: u64, opus: Vec<u8>, end: bool) -> Result<(), String> {
-        if self.voice_policy().0 {
-            return Err("Voice is muted or not acknowledged by the server.".into());
+        if self.voice_policy().0
+            || self.voice_bitrate() == 0
+            || opus.len() > (self.voice_bitrate() / 400) as usize
+        {
+            return Err(
+                "Voice exceeds its bandwidth budget, is muted or not acknowledged by the server."
+                    .into(),
+            );
         }
         let packet = nuschl_protocol::voice::VoicePacket {
             sender: 0,
@@ -701,6 +715,9 @@ impl Session {
                 let Some(session) = sync.session else {
                     return self.close("The server omitted our session number.".into());
                 };
+                self.max_bandwidth = sync
+                    .max_bandwidth
+                    .unwrap_or(nuschl_core::audio::DEFAULT_SERVER_BANDWIDTH);
                 self.phase = Phase::LoggedIn;
                 self.own = Some(session);
                 self.events
@@ -756,6 +773,29 @@ impl Session {
                     if let Some(html) = config.allow_html {
                         self.allow_html = html;
                     }
+                    if let Some(bandwidth) = config.max_bandwidth {
+                        self.max_bandwidth = bandwidth;
+                    }
+                    self.events.push_back(Event::Server(ServerEvent::Limits(
+                        nuschl_core::model::ServerLimits {
+                            allow_html: self.allow_html,
+                            message_length: config
+                                .message_length
+                                .filter(|n| *n != 0)
+                                .map(|n| n as usize)
+                                .unwrap_or(MAX_CONTENT_BYTES)
+                                .min(MAX_CONTENT_BYTES),
+                            image_message_length: config
+                                .image_message_length
+                                .filter(|n| *n != 0)
+                                .map(|n| n as usize)
+                                .unwrap_or(1024 * 1024)
+                                .min(1024 * 1024),
+                            max_users: config.max_users,
+                            recording_allowed: config.recording_allowed.unwrap_or(true),
+                            max_bandwidth: Some(self.max_bandwidth),
+                        },
+                    )));
                 }
             }
             kind::PERMISSION_QUERY => {
@@ -1025,6 +1065,90 @@ mod tests {
             !s.take_events()
                 .iter()
                 .any(|event| matches!(event, Event::Server(ServerEvent::Notice(_))))
+        );
+    }
+
+    #[test]
+    fn authenticated_server_budget_tracks_initial_and_live_limits_before_voice_leaves_tls() {
+        let mut s = voice_session();
+        s.control(
+            kind::SERVER_SYNC,
+            proto::ServerSync {
+                session: Some(3),
+                max_bandwidth: Some(200_000),
+                ..Default::default()
+            }
+            .encode_to_vec()
+            .into(),
+        );
+        assert_eq!(s.voice_bitrate(), 128_000);
+        s.set_self(false, false);
+        s.control(
+            kind::USER_STATE,
+            proto::UserState {
+                session: Some(3),
+                self_mute: Some(false),
+                self_deaf: Some(false),
+                ..Default::default()
+            }
+            .encode_to_vec()
+            .into(),
+        );
+        assert!(s.send_voice(0, vec![0; 320], false).is_ok());
+        s.control(
+            kind::SERVER_CONFIG,
+            proto::ServerConfig {
+                max_bandwidth: Some(48_000),
+                ..Default::default()
+            }
+            .encode_to_vec()
+            .into(),
+        );
+        assert_eq!(s.voice_bitrate(), 24_000);
+        s.take_outgoing();
+        assert!(s.send_voice(2, vec![0; 320], false).is_err());
+        assert!(s.take_outgoing().is_empty());
+        assert!(s.send_voice(2, vec![0; 60], false).is_ok());
+        s.control(
+            kind::SERVER_CONFIG,
+            proto::ServerConfig {
+                allow_html: Some(false),
+                ..Default::default()
+            }
+            .encode_to_vec()
+            .into(),
+        );
+        assert_eq!(
+            s.voice_bitrate(),
+            24_000,
+            "sparse config preserves the budget"
+        );
+        s.control(
+            kind::SERVER_CONFIG,
+            proto::ServerConfig {
+                max_bandwidth: Some(29_999),
+                ..Default::default()
+            }
+            .encode_to_vec()
+            .into(),
+        );
+        assert_eq!(s.voice_bitrate(), 0);
+        assert!(s.send_voice(4, vec![0; 3], false).is_err());
+        s.control(
+            kind::SERVER_CONFIG,
+            proto::ServerConfig {
+                max_bandwidth: Some(200_000),
+                ..Default::default()
+            }
+            .encode_to_vec()
+            .into(),
+        );
+        assert_eq!(s.voice_bitrate(), 128_000);
+        let replacement = voice_session();
+        assert_eq!(
+            replacement.voice_bitrate(),
+            48_000,
+            "reconnect does not inherit another server budget"
         );
     }
 

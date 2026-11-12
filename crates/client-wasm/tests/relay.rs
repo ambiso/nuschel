@@ -19,6 +19,10 @@ use tokio_tungstenite::tungstenite::{Message, client::IntoClientRequest, http::H
 /// A TLS Mumble server that sends the root channel, our user and
 /// `ServerSync` after `Authenticate`; its port and certificate fingerprint.
 async fn mumble_server() -> (u16, String) {
+    mumble_server_with_budget(None, None).await
+}
+
+async fn mumble_server_with_budget(initial: Option<u32>, update: Option<u32>) -> (u16, String) {
     let certified = rcgen::generate_simple_self_signed(vec!["localhost".into()]).expect("cert");
     let certificate = certified.cert.der().clone();
     let fingerprint = nuschl_client_wasm::session::hex(&sha2_digest(certificate.as_ref()));
@@ -81,6 +85,7 @@ async fn mumble_server() -> (u16, String) {
                         kind::SERVER_SYNC,
                         &proto::ServerSync {
                             session: Some(3),
+                            max_bandwidth: initial,
                             ..Default::default()
                         },
                     ),
@@ -88,6 +93,7 @@ async fn mumble_server() -> (u16, String) {
                 for frame in frames {
                     let _ = tls.write_all(&frame.expect("frame")).await;
                 }
+                let mut update = update;
                 loop {
                     while let Ok(Some(frame)) = decode_control(&mut buffer) {
                         if frame.kind == kind::USER_STATE {
@@ -112,6 +118,17 @@ async fn mumble_server() -> (u16, String) {
                             let _ = tls
                                 .write_all(&nuschl_protocol::encode_tunnel(&packet))
                                 .await;
+                            if let Some(max_bandwidth) = update.take() {
+                                let config = proto::ServerConfig {
+                                    max_bandwidth: Some(max_bandwidth),
+                                    ..Default::default()
+                                };
+                                let _ = tls
+                                    .write_all(
+                                        &encode_control(kind::SERVER_CONFIG, &config).unwrap(),
+                                    )
+                                    .await;
+                            }
                         } else if frame.kind == kind::TEXT_MESSAGE {
                             let text = proto::TextMessage::decode(frame.payload).expect("text");
                             let reply = proto::TextMessage {
@@ -480,6 +497,75 @@ async fn opus_voice_round_trips_only_after_explicit_unmute_over_private_tls_rela
             Ok(Some(Ok(Message::Binary(bytes)))) => session.receive(&bytes),
             Ok(Some(Ok(_))) => {}
             other => panic!("voice relay ended: {other:?}"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn authenticated_live_bandwidth_reduction_caps_outgoing_audio_through_the_private_tls_relay()
+{
+    let (port, pin) = mumble_server_with_budget(Some(200_000), Some(48_000)).await;
+    let relay = relay().await;
+    let mut request = relay.into_client_request().unwrap();
+    request.headers_mut().insert(
+        "Sec-WebSocket-Protocol",
+        HeaderValue::from_static(tunnel::SUBPROTOCOL),
+    );
+    let (mut ws, _) = tokio_tungstenite::connect_async(request).await.unwrap();
+    let mut session = Session::new(Login {
+        host: "127.0.0.1".into(),
+        port,
+        username: "budget-fixture".into(),
+        password: None,
+        tokens: vec![],
+        pin: Some(pin),
+    })
+    .unwrap();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    let (mut requested, mut high_sent, mut high_received, mut low_sent) =
+        (false, false, false, false);
+    loop {
+        for event in session.take_events() {
+            match event {
+                Event::Server(ServerEvent::Connected { .. }) => {
+                    assert_eq!(session.voice_bitrate(), 128_000);
+                    session.set_self(false, false);
+                    requested = true;
+                }
+                Event::Server(ServerEvent::User(_))
+                    if requested && !high_sent && !session.voice_policy().0 =>
+                {
+                    session.send_voice(0, vec![1; 320], false).unwrap();
+                    high_sent = true;
+                }
+                Event::Voice(packet) if !high_received => {
+                    assert_eq!(packet.opus.len(), 320);
+                    high_received = true;
+                }
+                Event::Server(ServerEvent::Limits(limits))
+                    if limits.max_bandwidth == Some(48_000) =>
+                {
+                    assert!(high_received);
+                    assert_eq!(session.voice_bitrate(), 24_000);
+                    assert!(session.send_voice(2, vec![1; 320], false).is_err());
+                    session.send_voice(2, vec![1; 60], false).unwrap();
+                    low_sent = true;
+                }
+                Event::Voice(packet) if low_sent => {
+                    assert_eq!(packet.opus.len(), 60);
+                    return;
+                }
+                Event::Closed { reason } => panic!("closed: {reason}"),
+                _ => {}
+            }
+        }
+        for message in session.take_outgoing() {
+            ws.send(Message::binary(message)).await.unwrap();
+        }
+        match tokio::time::timeout_at(deadline, ws.next()).await {
+            Ok(Some(Ok(Message::Binary(bytes)))) => session.receive(&bytes),
+            Ok(Some(Ok(_))) => {}
+            other => panic!("budget relay ended: {other:?}"),
         }
     }
 }

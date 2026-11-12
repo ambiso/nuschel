@@ -35,6 +35,27 @@ pub enum EchoSource {
     Upstream(String),
 }
 
+/// Requested mono VoIP target; the destination's network budget takes priority.
+pub const DEFAULT_VOICE_BITRATE: u32 = 128_000;
+pub const MIN_VOICE_BITRATE: u32 = 6_000;
+/// Conservative fallback until the server advertises its Mumble network budget.
+pub const DEFAULT_SERVER_BANDWIDTH: u32 = 72_000;
+/// At 50 packets/s, reserve 60 bytes/packet for Mumble framing/transport.
+/// This is conservative for the server's Mumble bandwidth accounting, not an
+/// estimate of all traffic on the additional browser WebSocket relay hop.
+pub const VOICE_OVERHEAD_BITRATE: u32 = 24_000;
+
+/// Zero means the budget cannot support even the minimum codec rate: listen
+/// without transmitting, rather than clamping upwards past the server limit.
+pub fn voice_bitrate(max_bandwidth: u32) -> u32 {
+    let available = max_bandwidth.saturating_sub(VOICE_OVERHEAD_BITRATE);
+    if available < MIN_VOICE_BITRATE {
+        0
+    } else {
+        available.min(DEFAULT_VOICE_BITRATE)
+    }
+}
+
 pub const MAX_DEVICE_OVERRIDES: usize = 64;
 
 /// 20 ms of digital silence as one Opus packet (CELT, fullband, mono). It
@@ -168,6 +189,26 @@ impl Sound {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn default_voice_target_reserves_overhead_and_never_exceeds_a_server_budget() {
+        assert_eq!(DEFAULT_VOICE_BITRATE, 128_000);
+        for (budget, target) in [
+            (0, 0),
+            (24_000, 0),
+            (29_999, 0),
+            (30_000, 6_000),
+            (72_000, 48_000),
+            (128_000, 104_000),
+            (152_000, 128_000),
+            (u32::MAX, 128_000),
+        ] {
+            assert_eq!(voice_bitrate(budget), target);
+            if target != 0 {
+                assert!(target + VOICE_OVERHEAD_BITRATE <= budget);
+            }
+        }
+    }
+
     #[test]
     fn defaults_follow_the_product_requirements() {
         let settings = AudioSettings::default();
