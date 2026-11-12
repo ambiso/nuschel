@@ -119,6 +119,59 @@ Without a browser client, omit the web module and configure server TLS explicitl
 using the [server module's ACME/manual alternatives](server.md#reusing-an-acme-certificate).
 A self-signed server is supported, but clients must explicitly trust/pin it.
 
+## Separate voice hostname with HTTP-01 only
+
+For a fresh setup with web on `nuschl.eu`, voice on `voice.nuschl.eu`, and the
+optional witness unchanged on `witness.nuschl.eu`, use:
+
+```nix
+services.nuschl = {
+  enable = true;
+  hostName = "voice.nuschl.eu";
+  security = "compatible";
+  tls = {
+    enableACME = true;
+    nginxHTTP01 = true;
+  };
+  superUserPasswordFile = config.age.secrets.nuschl-superuser-password.path;
+  kt.origins = [ "voice.nuschl.eu:64738" ];
+  settings.share_links.web_host = "nuschl.eu";
+};
+```
+
+Keep the existing web/witness service definitions, global ACME account settings
+and interface firewall rules described above. Publish the voice hostname's DNS
+records and make TCP 80 reachable for HTTP-01. Native clients connect to
+`voice.nuschl.eu:64738`. The explicit KT origin avoids the default, which derives
+from the machine's FQDN rather than `services.nuschl.hostName`.
+
+`tls.nginxHTTP01` defaults to **false**. It requires `tls.enableACME` and a concrete
+`hostName`; use it instead of `tls.useACMEHost`. It enables nginx and supplies
+exactly an HTTP port-80 virtual host for that voice name. The challenge prefix
+`/.well-known/acme-challenge/` serves token GETs from a dedicated public webroot;
+other HTTP paths return 404. It creates **no HTTPS voice virtual host**, redirect,
+web app or nginx certificate/key selection. Web and witness HTTPS hosts remain
+separate. On a shared IP, port 443 still serves those other hosts; this is not a
+claim that a TCP connection to that IP's port 443 becomes impossible.
+
+The voice certificate is its own `security.acme.certs."voice.nuschl.eu"` entry.
+Its private `nuschl-acme` group is not granted to nginx or the voice server; PID 1
+continues delivering only the selected pair to the restricted `nuschl-tls`
+publisher. nginx has filesystem exclusions for the voice certificate source and
+published runtime directory, and the server uses the runtime pair rather than
+source-key access. Do not add these services to the certificate's private group.
+
+The option selects a webroot and clears inherited DNS/standalone/S3 challenge
+choices **for this certificate only**. Other certificates keep their settings.
+An explicitly conflicting per-certificate definition must be resolved rather
+than silently overridden. With the option off, ordinary `tls.enableACME` supports
+other configured challenges without requiring nginx. No firewall is opened
+implicitly, and IPv6 listening is added only when the host enables IPv6.
+
+Do not merge HTTPS/ACME-reuse settings into the voice name's HTTP-only nginx
+virtual host. The module rejects that combination. The selected-pair validator,
+atomic publication and SIGHUP renewal behavior remain the same as below.
+
 ## Relay and DNS boundaries
 
 The enabled relay listens on a group-protected Unix socket behind nginx, not an
@@ -281,3 +334,52 @@ Package stubs and an explicitly invalid fixture-only verifier string avoid build
 and key generation: this is module-wiring evidence, not runtime key validation.
 The existing private [PKI fixtures](server.md#reusing-an-acme-certificate),
 NixOS VM tests and [witness tests](witness.md) provide separate runtime evidence.
+
+The HTTP-01 option's seven module-evaluation cases can be reproduced with:
+
+```sh
+python3 tests/server_http01.py --output /disk/cache/http01-module-review
+```
+
+They cover cohosted HTTPS services, IPv4-only hosts, unrelated DNS challenge
+defaults, disabled nginx integration and rejected conflicting choices. The
+separate `tests/server_http01_vm.nix` fixture uses two private NixOS guests and
+real Pebble/lego HTTP-01 issuance, with validation enabled. Build its driver with
+a previously built native server package (including its adjacent storage helper):
+
+```sh
+nix build --no-link --print-out-paths --cores 2 --max-jobs 2 --impure \
+  --file tests/server_http01_vm.nix \
+  --argstr packagePath /nix/store/REPLACE-with-built-nuschld-package driver
+```
+
+Run the returned driver's `bin/nixos-test-driver -o "$scratch/out"` with a fresh,
+owned mode-0700 **disk-backed** `$scratch`, `TMPDIR="$scratch/tmp"`,
+`XDG_RUNTIME_DIR="$scratch/run"`, and `NUSCHL_VM_SCRATCH_ROOT="$scratch"`.
+Create `tmp`, `run` and `out` as mode 0700 too. The test asserts the actual driver's
+state paths and filesystem **before booting**. Do not reuse an earlier run's
+state: Pebble generates a new ephemeral issuer each time. Limit the driver to ten
+minutes and monitor free scratch space; the completed run took about a minute.
+Client `TMPDIR` does not relocate Nix daemon build scratch.
+
+The completed 2026-11-12 run passed real issuance and renewal with three distinct
+public keys/SANs, live challenge GET/catch-all/POST checks, active nginx
+configuration/SNI checks, and actual service UID/group and mount-namespace key
+access probes. nginx could read its web/witness keys but could not read the voice
+source/runtime keys; the voice server could read its runtime key but not the
+source key. Renewal performed fresh HTTP validation, changed the served leaf,
+kept the server PID and preserved a logged-in client's ping.
+
+The issuer is private Pebble, **not a public CA**. The fixture binds its ephemeral
+public root over the CA bundle only inside the publisher's service namespace;
+the production validation script and outside CA bundle bytes stay unchanged.
+The cohosted web/witness fixtures are nginx HTTPS endpoints, not an execution test
+of the full web/witness applications. This does not test public DNS, firewall
+reachability, a public issuer, deployment or migration.
+
+Earlier failures are retained separately: an initial chain-check failure lacked
+stderr; the diagnostic rerun passed that unchanged check, then exposed a test
+helper's HTTP-module shadowing. Another run correctly failed renewal because
+Pebble's five-year leaf exceeded the fixture's one-year renewal threshold. The
+final fixture uses a ten-year **test-only** threshold to force actual renewal;
+production renewal policy is unchanged.
