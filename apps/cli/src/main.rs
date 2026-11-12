@@ -152,6 +152,15 @@ enum Input {
     Acl {
         channel: u32,
     },
+    AclDraft {
+        channel: u32,
+        request: u64,
+    },
+    LookupAccount {
+        channel: u32,
+        request: u64,
+        name: String,
+    },
     Join {
         channel: u32,
     },
@@ -785,6 +794,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 Ok(Input::RegisteredUsers) => Command::QueryRegisteredUsers,
                 Ok(Input::Bans) => Command::QueryBans,
                 Ok(Input::Acl { channel }) => Command::QueryAcl(channel),
+                Ok(Input::AclDraft { channel, request }) => {
+                    Command::QueryAclDraft { channel, request }
+                }
+                Ok(Input::LookupAccount {
+                    channel,
+                    request,
+                    name,
+                }) => Command::LookupAccount {
+                    channel,
+                    request,
+                    name,
+                },
                 Ok(Input::Join { channel }) => Command::Join(channel),
                 Ok(Input::Text { channel, body }) => Command::SendText {
                     target: TextTarget::Channel(channel),
