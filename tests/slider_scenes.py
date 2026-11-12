@@ -282,6 +282,7 @@ class Scenes:
             # microphone test starts.
             self.launch(profile)
             self.settings(writes, settings_path)
+            self.zoom_geometry(settings_path)
             self.quit()
             peer = Client(self.args.binaries, "127.0.0.1", port, pin, "Ada Lovelace", self.root / "peer")
             peer.send(kind="join", channel=2)
@@ -336,6 +337,7 @@ class Scenes:
 
         # The real accessibility SetValue route must never turn NaN/infinity
         # into a default gain or save an otherwise unchanged setting.
+        time.sleep(0.1)  # Let the preceding Delete write reach the observer.
         start = time.monotonic()
         for invalid in ["nan", "inf", "-inf"]:
             slider.bus("set-property", slider.destination, slider.path,
@@ -446,6 +448,41 @@ class Scenes:
         time.sleep(1.0)
         assert self.recording() == [], "a microphone is open after Settings closed"
         print("Stop test closed the microphone and the meter; closing Settings left none open.", flush=True)
+
+    def zoom_geometry(self, settings_path):
+        """Actual controls/direction labels remain legible and contained after zoom."""
+        records = []
+        for width, zoom in [(1280, 100), (900, 100), (900, 200)]:
+            self.shell.chord("Control_L", "0")
+            self.shell.place("Nuschl", 40, 40, width, HEIGHT)
+            for _ in range(5 if zoom == 200 else 0):
+                self.shell.chord("Control_L", "equal")
+                time.sleep(0.1)
+            eventually(lambda: abs(saved(settings_path, "appearance", "zoom") - zoom / 100) < 0.001,
+                       "zoom shortcut did not update the actual setting")
+            self.wait_for("push button", "Settings", "no Settings button").press()
+            dialog = self.wait_for("dialog", "Settings", "Settings did not open")
+            slider = self.wait_for("slider", "Voice activity sensitivity", "no sensitivity slider")
+            slider.call("Component", "GrabFocus")
+            time.sleep(0.5)
+            labels = [self.wait_for(None, label, "missing sensitivity direction")
+                      for label in ["0 %: stricter", "100 %: more sensitive"]]
+            bounds = [list(node.extents()) for node in [slider, *labels]]
+            self.shot(f"zoom-{width}-{zoom}")
+            window = self.shell.window("Nuschl")
+            parent = list(dialog.extents())
+            for x, y, w, h in bounds:
+                assert w > 0 and h > 0 and x >= 0 and y >= 0, bounds
+                assert x + w <= window["width"] + 1 and y + h <= window["height"] + 1, (width, zoom, window, bounds)
+                assert x >= parent[0] - 1 and x + w <= parent[0] + parent[2] + 1, (parent, bounds)
+            left, right = bounds[1:]
+            assert left[0] + left[2] <= right[0] + 1, ("direction labels overlap", bounds)
+            records.append({"width": width, "zoom": zoom, "dialog": parent, "controls": bounds})
+            self.close_settings()
+        self.shell.chord("Control_L", "0")
+        self.shell.place("Nuschl", 40, 40, WIDTH, HEIGHT)
+        (self.out / "zoom-geometry.json").write_text(json.dumps(records, indent=2) + "\n")
+        print("Actual sensitivity direction/slider geometry:1280/100,900/100,900/200 contained.", flush=True)
 
     def menu(self, writes, settings_path):
         # Ada's row; right-click until her menu (with a volume slider) opens.
