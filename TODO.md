@@ -2,9 +2,10 @@
 
 Current focus (user, 2026-11-12): **unmute-to-first-speech latency, stereo receive
 and output fidelity, and hybrid update readiness**. Independent owners now cover
-the browser initialization watchdog, stale menu target/focus guards and the
-standalone server/RTC per-crate build migration. Native macOS static CI
-verification is prepared; its actual execution remains open. SDK request retirement, bounded menus, native packet-gain
+stale menu target/focus guards, content-worker retry bounds and the standalone
+server/RTC per-crate build migration. Browser initialization recovery is
+integrated. Native macOS static CI verification is prepared; its actual execution
+remains open. SDK request retirement, bounded menus, native packet-gain
 ownership and frozen cross archives have scoped proofs integrated. Browser playout, hash-only document delivery, CELT concealment,
 Windows profile-preserving updater relaunch and the metadata-refresh procedure
 are integrated with scoped proofs; final browser/device/distribution checks stay open.
@@ -781,7 +782,7 @@ The media worker uses per-speaker adaptive jitter buffers and Opus loss concealm
       `Worker.terminate()` has no physical-exit acknowledgment; a future retry
       must not multiply still-retiring workers/inboxes or restore old consent.
       No guarantee is made about previously submitted network traffic delivery.
-- [ ] Integrate the verified browser SDK startup watchdog (`8a235afe`,
+- [x] Integrate the verified browser SDK startup watchdog (`8a235afe`,
       `40bd8a5c`; browser owner). An explicit starting/ready/closed owner has a
       separate 30 s initialization deadline even with zero RPCs. Only its first
       ready after one init clears that deadline/autoconnects; duplicate/late
