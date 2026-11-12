@@ -141,6 +141,32 @@ def run(args, root, shell, registry, bots, profile, port, pin, shot):
         done.call("Component","GrabFocus")
         eventually(lambda:inside(done.extents(),dialog.extents()),"Done escaped Settings")
         assert done.extents()[2] < 130*percent/100,"short button expanded into a full-width action"
+        # Shared radio/switch/slider families reveal without activating audio.
+        for label in ["Voice activity", "Voice activity sensitivity", "Show when you are typing"]:
+            control=eventually(lambda:named(None,label),f"Settings control {label} absent")
+            dialog.call("Component","GrabFocus");shell.key("Home")
+            control.call("Component","GrabFocus")
+            eventually(lambda:inside(control.extents(),dialog.extents()),f"Settings control {label} was not revealed")
+            records.append({"settings_control":label,"width":width,"zoom":percent,"bounds":control.extents(),"dialog":dialog.extents()})
+        # The font list has its own handle; its focused descendant must reveal
+        # through BOTH the inner list and the enclosing modal, even after Home.
+        opener=eventually(lambda:named("push button","Interface font:",True),"font picker opener absent")
+        opener.call("Component","GrabFocus")
+        eventually(lambda:inside(opener.extents(),dialog.extents()),"font picker opener was not revealed")
+        fonts=named(None,"Installed fonts")
+        if not fonts:
+            opener.press()
+            fonts=eventually(lambda:named(None,"Installed fonts"),"font choices absent")
+        options=[node for _,node,role,_ in snapshot(fonts) if role=="radio button"]
+        assert len(options)>1,"fixture must expose a real nested font list"
+        choice=options[-1]
+        for attempt in range(2):
+            dialog.call("Component","GrabFocus");shell.key("Home")
+            eventually(lambda:not inside(choice.extents(),dialog.extents()),"nested font probe did not begin clipped")
+            choice.call("Component","GrabFocus")
+            eventually(lambda:inside(choice.extents(),fonts.extents()) and inside(choice.extents(),dialog.extents()),"nested font choice was not revealed through both regions")
+            records.append({"nested_font_focus":choice.name,"attempt":attempt,"width":width,"zoom":percent,"bounds":choice.extents(),"list":fonts.extents(),"dialog":dialog.extents()})
+        report.write_text(json.dumps(records,indent=2))
         controls=[node for _,node,role,_ in snapshot(dialog) if role=="push button"]
         last=controls[-1]
         last.call("Component","GrabFocus")

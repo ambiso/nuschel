@@ -94,13 +94,15 @@ pub fn segmented(
                 .enumerate()
                 .map(|(index, (text, selected, action))| {
                     let key_action = action.clone();
-                    div()
+                    let control = div()
                         .id((id, index))
                         .role(Role::RadioButton)
                         .aria_label(text)
                         .aria_selected(selected)
                         .tab_index(0)
                         .flex_1()
+                        .min_w_0()
+                        .whitespace_normal()
                         .py(px(6.))
                         .rounded(px(6.))
                         .flex()
@@ -118,9 +120,11 @@ pub fn segmented(
                             if activation(event) {
                                 key_action(this, window, cx);
                                 cx.notify();
+                                cx.stop_propagation();
                             }
                         }))
-                        .child(text!(text).with_id((id, index + 100)))
+                        .child(text!(text).with_id((id, index + 100)));
+                    crate::layout::focusable((id, index), control)
                 }),
         )
         .into_any_element()
@@ -135,7 +139,7 @@ pub fn toggle(
     cx: &mut Context<Desktop>,
 ) -> AnyElement {
     let key_action = action.clone();
-    div()
+    let control = div()
         .id(id)
         .role(Role::Switch)
         .aria_label(title)
@@ -153,6 +157,7 @@ pub fn toggle(
             if activation(event) {
                 key_action(this, window, cx);
                 cx.notify();
+                cx.stop_propagation();
             }
         }))
         .child(
@@ -185,8 +190,8 @@ pub fn toggle(
                 .flex()
                 .when(on, |track| track.justify_end())
                 .child(div().size(px(16.)).rounded_full().bg(color(WHITE))),
-        )
-        .into_any_element()
+        );
+    crate::layout::focusable(id, control)
 }
 
 fn meter(preview: &PreviewView) -> AnyElement {
@@ -256,7 +261,7 @@ fn slider(
     // The track's bounds as last painted, for a click that is not a drag.
     let track = Rc::new(std::cell::Cell::new(Bounds::default()));
     let painted = track.clone();
-    div()
+    let control = div()
         .id(id)
         .role(Role::Slider)
         .aria_label(label)
@@ -276,6 +281,7 @@ fn slider(
             };
             step(this, value);
             cx.notify();
+            cx.stop_propagation();
         }))
         .on_mouse_down(
             MouseButton::Left,
@@ -323,8 +329,8 @@ fn slider(
                 .border_2()
                 .border_color(color(ACCENT))
                 .shadow_sm(),
-        )
-        .into_any_element()
+        );
+    crate::layout::focusable(id, control)
 }
 
 /// A slider under a label that shows its value; `name` is for screen readers.

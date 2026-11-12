@@ -28,12 +28,19 @@ impl RenderOnce for Focusable {
         let trace = key.clone();
         let state = window.use_keyed_state(key, cx, |window, cx| {
             let handle = cx.focus_handle();
-            let subscription =
-                cx.on_focus(&handle, window, move |state: &mut FocusState, _, cx| {
+            let subscription = cx.on_focus(
+                &handle,
+                window,
+                move |state: &mut FocusState, window, cx| {
                     tracing::debug!(control = %trace, "layout control received focus");
                     state.reveal.set(true);
                     cx.notify();
-                });
+                    // Focus listeners run during DrawPhase::Focus: refresh is
+                    // suppressed there, and request_animation_frame requires
+                    // a prepaint/paint view. Schedule one ordinary next frame.
+                    window.on_next_frame(|window, _| window.refresh());
+                },
+            );
             FocusState {
                 handle,
                 reveal: Rc::default(),
@@ -186,6 +193,7 @@ pub fn scrollable(id: &'static str, label: &'static str, handle: ScrollHandle) -
     let begin = outer_request.clone();
     div()
         .on_children_prepainted(move |_, window, _| {
+            let prior_request = outer_request.take();
             if let Some(target) = window.take_autoscroll() {
                 let clip = reveal.bounds();
                 let dy = if target.top() < clip.top() {
@@ -201,10 +209,18 @@ pub fn scrollable(id: &'static str, label: &'static str, handle: ScrollHandle) -
                 tracing::debug!(region = id, ?target, ?clip, before = ?prior, after = ?offset, max = ?reveal.max_offset(), "layout region received reveal");
                 if offset != prior {
                     reveal.set_offset(offset);
-                    window.refresh();
+                    // refresh is suppressed during prepaint. One extra frame
+                    // paints the changed offset, without an idle redraw loop.
+                    window.request_animation_frame();
                 }
-            }
-            if let Some(prior) = outer_request.take() {
+                // A nested region may itself be outside its parent's clip.
+                // Reveal the visible part of the focused child through every
+                // ancestor, after accounting for our actual clamped movement.
+                let mut visible = target;
+                visible.origin.y += offset.y - prior.y;
+                let visible = visible.intersect(&clip);
+                window.request_autoscroll(visible);
+            } else if let Some(prior) = prior_request {
                 window.request_autoscroll(prior);
             }
         })

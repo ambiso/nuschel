@@ -361,7 +361,8 @@ fn font_row(
                 .font_weight(FontWeight::MEDIUM)
                 .child(text!(label).with_id((id, 1_usize))),
         )
-        .child(
+        .child(crate::layout::focusable(
+            id,
             div()
                 .id(id)
                 .role(Role::Button)
@@ -369,6 +370,7 @@ fn font_row(
                 .aria_expanded(open)
                 .tab_index(0)
                 .max_w(px(260.))
+                .min_w_0()
                 .px_3()
                 .py(px(6.))
                 .rounded(px(6.))
@@ -387,6 +389,7 @@ fn font_row(
                     if matches!(event.keystroke.key.as_str(), "enter" | "space") {
                         this.open_font_picker(role, window, cx);
                         cx.notify();
+                        cx.stop_propagation();
                     }
                 }))
                 .child(
@@ -400,7 +403,7 @@ fn font_row(
                         ),
                 )
                 .child(crate::assets::icon("chevron-down", 14., color(TEXT_MUTED))),
-        )
+        ))
         .into_any_element()
 }
 

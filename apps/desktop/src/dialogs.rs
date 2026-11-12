@@ -145,13 +145,14 @@ pub fn toggle_button(
     action: impl Fn(&mut Desktop, &mut Window, &mut Context<Desktop>) + 'static,
     cx: &mut Context<Desktop>,
 ) -> AnyElement {
+    let id = id.into();
     let action = Rc::new(action);
     let click = action.clone();
     let label = label.into();
     let tooltip = label.clone();
     let foreground = mix(TEXT_MUTED, DANGER, on);
-    div()
-        .id(id)
+    let control = div()
+        .id(id.clone())
         .role(Role::Button)
         .aria_label(label)
         .tab_index(0)
@@ -207,8 +208,8 @@ pub fn toggle_button(
                     .absolute()
                     .inset_0(),
                 ),
-        )
-        .into_any_element()
+        );
+    crate::layout::focusable(id, control)
 }
 
 /// The colour `t` of the way from `a` to `b`.
@@ -473,7 +474,10 @@ pub fn server_form(this: &Desktop, cx: &mut Context<Desktop>) -> AnyElement {
                 .py_4()
                 .bg(color(SIDEBAR))
                 .rounded_b(px(12.))
+                .w_full()
+                .min_w_0()
                 .flex()
+                .flex_wrap()
                 .gap_3()
                 .justify_end()
                 .when(editing && !form.managed, |view| {
