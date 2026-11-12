@@ -16,6 +16,7 @@ import document_link_regression as fixture
 from local_murmur import eventually
 from mumble_client import Client
 import welcome_html
+from hash_document_wire import capture
 
 DESCRIPTION = (
     "<a href='https://hash.test/description'>Hash description</a><br>"
@@ -68,10 +69,14 @@ def actions(args, root, shell, application, bot, murmur):
         assert launches()[len(before):] == [url]
         records.append(url)
 
+    pin = bot.process.args[bot.process.args.index("--certificate-sha256") + 1]
+    wire = capture(murmur.port, pin, bot.session, DESCRIPTION, wire_comment(COMMENT))
+    (args.output / "stock-wire.json").write_text(json.dumps(wire, indent=2) + "\n")
+
     # A newly connected independent observer establishes that this exact stock
     # server supplies hashes rather than the long bodies before any blob request.
     observer = Client(args.binaries, "127.0.0.1", murmur.port,
-                      bot.process.args[bot.process.args.index("--certificate-sha256") + 1],
+                      pin,
                       "Hash observer", root / "observer")
     try:
         initial_channel = observer.channels[0].copy()
@@ -117,13 +122,13 @@ def actions(args, root, shell, application, bot, murmur):
     shell.screenshot(args.output / "hash-comment-first-open.png")
     bot.send(kind="comment", text=REPLACEMENT)
     replacement = eventually(lambda: link("https://hash.test/replacement"), "open profile replacement required reopening")
-    before = launches()
-    try:
-        comment.press()
-    except RuntimeError:
-        pass  # Revoked AT-SPI node is an equally safe outcome.
-    time.sleep(.2)
-    assert launches() == before, "stale comment callback activated"
+    # AT-SPI paths identify the current accessible node, not a frozen callback.
+    # AccessKit may reuse the path after replacing its label/target. The SDK
+    # tests separately exercise late old-source renderer inputs and hidden work.
+    assert link("https://hash.test/comment") is None
+    path_reused = comment.path == replacement.path
+    if path_reused:
+        assert comment.name == replacement.name == "https://hash.test/replacement"
     activate(replacement, "https://hash.test/replacement")
     shell.screenshot(args.output / "hash-comment-replacement.png")
     eventually(lambda: find("Close"), "profile close missing").press()
@@ -137,7 +142,8 @@ def actions(args, root, shell, application, bot, murmur):
              "https://hash.test/hidden")
     return {"passed": True, "stock_hash_only_confirmed": True,
             "description_first_selection": True, "comment_first_open": True,
-            "open_profile_hash_replacement": True, "stale_comment_rejected": True,
+            "open_profile_hash_replacement": True, "old_target_removed": True,
+            "accessible_path_reused_for_current_node": path_reused,
             "hidden_then_explicit_reopen_latest": True, "activations": records}
 
 
