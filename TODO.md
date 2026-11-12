@@ -635,11 +635,15 @@ listed below. Plugin data remains the explicit gap.
       nuschl servers. Persist the requested target; show the effective encoder
       target and why it is limited. Respect each destination's advertised bandwidth,
       including packet/transport overhead, and recompute on server updates/reconnect.
-      Current gap: native caps the target at 48 kb/s (`client/src/native.rs`), while
-      browser Opus is fixed at 64 kb/s (`audio-wasm`); this is not configurable parity.
-      Test low/high budgets and runtime changes against private Murmur and nuschld.
+      The requested mono VoIP default is now 128 kb/s on native and web; lower
+      ServerSync/ServerConfig budgets take precedence, with a 24 kb/s conservative
+      Mumble framing/transport reserve. Tiny budgets disable capture, not playback.
+      Live changes reject over-budget frames and update isolated encoders;
+      browser route epochs also revoke prior queued media.
+      Persistent controls/effective-rate UI and the full private-server matrix
+      remain open; synthetic codec/budget regressions cover the default slice.
 - [ ] Design an optional music preset alongside the voice default: proposed voice
-      48 kb/s mono at 48 kHz; music 128 kb/s stereo at 48 kHz, with 96/160/192 kb/s
+      128 kb/s mono at 48 kHz; music 128 kb/s stereo at 48 kHz, with 96/160/192 kb/s
       choices subject to the same server budget. Music uses `Application::Audio`,
       an explicitly selected continuous source and speech-processing/VAD bypass
       only for that music track. Selecting it must not unmute, acquire microphone

@@ -121,3 +121,21 @@ cleared the composer after the SDK send acknowledgment. A 400 ms audio-only
 window delivered 20 packets without replacing the full Svelte state snapshot.
 These Chromium results do not establish mobile Safari audio or background-tab
 behavior.
+
+
+The requested default is 128,000 bit/s, mono VoIP with 20 ms packets. The
+session selects the lower of that target and its authenticated server bandwidth
+minus a conservative 24,000 bit/s Mumble framing/transport reserve; an absent
+limit initially uses the conservative 72,000 bit/s server budget. This reserve
+covers Mumble server bandwidth accounting, not the extra WebSocket relay hop's
+entire network cost. ServerSync and later ServerConfig limits update the active
+route, revoke queued frames/readiness, and pass only a bounded effective bitrate
+to the independent codec worker. Encoded packet buffers are also limited to that
+20 ms payload allowance, so VBR cannot emit a packet above it. A budget below the
+6,000 bit/s codec minimum plus the reserve disables capture while preserving
+playback. No unmute or microphone consent is created by a budget change.
+
+This changes the default; persistent bitrate controls and a separate stereo music
+preset remain future work. Existing echo/noise processing and mono VoIP behavior
+are unchanged. Mumble's upstream accounting distinguishes audio bitrate from
+framing/transport overhead; see its [AudioInput implementation](https://github.com/mumble-voip/mumble/blob/v1.5.939/src/mumble/AudioInput.cpp).
