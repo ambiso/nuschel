@@ -44,11 +44,14 @@ works alongside Codex through `~/.cache/nuschl-coordination/to-claude.md` and
 `to-codex.md`, with an active reply-file watcher. Claude owns the received-audio
 attenuation audit, an independent read-only simplification/correctness review,
 the separate volume-slider/VAD-meter implementation, installer authentication
-and poll-design lanes. Claude has frozen isolated Markdown, font, legacy poll,
-Talking UI and image-quality checkpoints with branch-specific proofs awaiting
-integration. A separate read-only RAM audit is running. Codex owns the urgent VAD change,
-independent speech/onset validation, native PipeWire default-source correction
-and queue/integration. Implement
+and poll-design lanes. Font/desktop Markdown are integrated; legacy polls, Talking
+UI, image quality and memory reductions retain separate frozen proofs awaiting
+integration. Claude also owns bitrate controls, web button/image UX, iOS web AEC
+diagnosis and the Windows timing investigation. Codex owns the browser content
+broker and SDK image leases, Flatpak confinement/builds, native Debian/Ubuntu/AUR
+packaging, the VAD correction/validation and final queue integration. The measured
+RAM audit is integrated as documentation, with product reductions still staged.
+Implement
 in isolated jj workspaces with explicit file/function ownership; exchange frozen
 revisions and evidence before integration. This is collaboration, not a handover.
 The watcher maintains `codex-pending.json`, revisioned message acknowledgements
@@ -650,7 +653,8 @@ Later (reported):
       navigation and microphone-consent behavior. Coordinate composer/button
       hunks with the separate bitrate settings row, without whole-file reformat.
 - [ ] Investigate weaker web echo cancellation (user, 2026-11-12). Obtain browser/
-      OS and same-device desktop comparison; current capture requests browser
+      version and same-device desktop comparison; the user reports **iOS web**.
+      Current capture requests browser
       AEC/NS/AGC and records applied track settings. Check actual applied effects,
       playback reference/device routing and reconnect/mute recovery before adding
       DSP. Do not double-cancel blindly or keep capture open while muted. Browser
@@ -661,6 +665,11 @@ Later (reported):
       intermittently stutter/drop out. Reported ping is 82 ms versus other
       participants' 7–20 ms, with zero reported late/lost packets toward the
       server; these observations do not establish incoming loss or its absence.
+      Another game also lags on that machine, so a system-wide scheduling/driver
+      issue is plausible; this is not a confirmed Nuschl regression. Read-only
+      source/simulation suggests timer granularity, callback priority and queue
+      recovery hypotheses; an owned Windows VM timing check is underway, with no
+      speculative DSP/buffer change allocated.
       Bind the report to an exact build/device/output route.
       Compare Nuschl and stock Mumble using owned private servers and synthetic
       audio. Inspect WASAPI callback/buffer sizes, sample-rate conversion, bounded
@@ -692,6 +701,15 @@ Later (reported):
       typed failures or follow a safe recovery path, with scoped lint/CI checks
       to prevent regressions. Do not mask invalid state with blanket catch-and-
       continue handling or claim raw match counts prove runtime panic frequency.
+      The exact-source audit classifies 38 explicit runtime sites separately
+      from tests/guarded invariants (`~/.cache/nuschl-panic-audit/report.json`).
+      One concrete extreme-configuration autoban deadline overflow is fixed in
+      `ce6ae327` and staged in `fe54e117`: configuration rejects it, runtime
+      admission checks before bookkeeping, and 137 server tests plus actual CLI/
+      loopback controls pass. Final packaged-server integration is pending.
+      Remaining ranked work includes fallible server RNG/authoritative-state
+      poison policy, unchecked public SDK positions and ID exhaustion; no blanket
+      panic-free claim follows from this one correction.
 - [ ] Make worker supervision recover safely without crash loops (user,
       2026-11-12). Erlang/Elixir-style worker crashes are acceptable when a safe
       in-process recovery path is unavailable; the main application must survive.
@@ -2637,6 +2655,46 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
 
 ### Release and other targets
 
+- [ ] Build Linux distribution artifacts from Nix (user, 2026-11-12): Flatpak,
+      Debian/Ubuntu `.deb` packages and AUR packaging. Prefer existing suitable
+      bundlers, but verify real runtime portability and role confinement rather
+      than repacking `/nix/store`-linked binaries. Produce all nine desktop/helper
+      programs, actual source/feature-bound notices, icons, URI registration and
+      package-manager-owned updates. Expose reproducible flake outputs after
+      isolated builders are checked; pin external inputs and keep builds offline.
+      Codex's distro owner has a strict `.deb` validator/source-recipe lane and a
+      bounded cached-Rust final-link prototype against a signed/hash-pinned
+      Debian 13 sysroot; Debian 13/Ubuntu 26.04 are initial targets, not all Linux.
+      Current cached ELF requires GLIBC 2.44, so portability is an actual gate.
+      Audit any redistributed C runtime's licenses/source obligations separately
+      from the Rust bundle. Validate install/launch/worker canaries and uninstall
+      in owned non-Nix distro environments without host profiles or global state.
+- [ ] Produce a pinned Flatpak repository/one-click reference and bundle through
+      Nix. Preserve credential-free content/media roles inside Flatpak; a manifest
+      around the current nested bubblewrap launcher is insufficient. The Flatpak
+      owner is inspecting exact signed Freedesktop 26.08 runtime compatibility.
+      A parent-owned portal worker manager must retain actual-exit evidence and
+      role credit across cancellation, with fixed FD/env/path/network/device
+      grants and limits inside the child. Portal/proxy loss is not child-exit
+      proof; quarantine rather than release credit or fall back to `--host`.
+      Common supervisor migration must coordinate crypto idle/media retirement.
+- [ ] Prepare Ubuntu PPA publication and a separately signed Debian APT
+      repository (user, 2026-11-12). Nix should build `.deb`, source-package and
+      repository tooling/artifacts; Launchpad itself builds source uploads,
+      rather than accepting the local binary `.deb`. Name and test compatible
+      per-series Rust build dependencies/offline Cargo sources before claiming
+      PPA readiness. Debian 13 backports offers a newer compiler than its base;
+      Ubuntu compiler availability remains a separate source-build gate. Use
+      `Signed-By` scoped repository keyrings, a dedicated local publication key,
+      and no `apt-key`, CI signing secret or reuse of Nuschl's hybrid private pair.
+      Account/repository publication is not performed by the preparation task.
+- [ ] Build and validate AUR `PKGBUILD`/`.SRCINFO` and an appropriate immutable
+      source or `-bin` artifact from Nix. Pin release/source hashes, retain all
+      helpers/licenses and use genuine offline/frozen Cargo preparation for
+      source builds. A `-bin` recipe depends on the audited portable archive;
+      nonexistent future release URLs do not prove a package builds. Test actual
+      install/runtime confinement in an owned clean Arch environment before
+      publishing to AUR; no external AUR write has occurred.
 - [x] Reusable independent Linux/native+web, Windows x86_64 and macOS universal
       build jobs, with separate gated publication. Update v2 requires Ed25519 AND
       ML-DSA-44 in two confined fixed-algorithm processes; raw bytes, full public
