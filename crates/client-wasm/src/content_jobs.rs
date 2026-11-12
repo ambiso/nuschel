@@ -423,6 +423,7 @@ impl Jobs {
     /// A refused queue admission stores only bounded metadata and the original
     /// source digest. Explicit retry can rehydrate from the SDK's retained row;
     /// no additional source copy, background retry or worker credit is created.
+    #[cfg(test)]
     pub fn failed(
         &mut self,
         origin: Origin,
