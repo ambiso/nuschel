@@ -16,7 +16,7 @@
 //! at once and saved after half a second without another (see [`Edits`]).
 use crate::{state::Desktop, theme::*};
 use gpui_kit::{prelude::*, *};
-use nuschl_session::config::ClientSettings;
+use nuschl_session::config::{ClientSettings, ManagedSettings};
 use std::{
     cell::Cell,
     rc::Rc,
@@ -183,7 +183,11 @@ impl Setting {
         }
     }
 
+    /// Not a number (NaN, infinity) sets nothing.
     pub fn set(&self, settings: &mut ClientSettings, value: f32) {
+        if !value.is_finite() {
+            return;
+        }
         let value = value.clamp(0., self.scale().max());
         match self {
             Setting::UserVolume(hash) => {
@@ -233,6 +237,25 @@ impl Setting {
             _ => self.scale().text(value),
         }
     }
+}
+
+/// `settings` with `setting` at `value`, as a preview makes them: sanitised,
+/// with the managed values back in place. None when that changes nothing, and
+/// for a value that is not a number, before anything is touched: sanitising
+/// would drop a NaN volume, putting the person or server back to 100 %.
+pub fn previewed(
+    settings: &ClientSettings,
+    managed: &ManagedSettings,
+    setting: &Setting,
+    value: f32,
+) -> Option<ClientSettings> {
+    if !value.is_finite() {
+        return None;
+    }
+    let mut next = settings.clone();
+    setting.set(&mut next, value);
+    let next = managed.apply(next.sanitized());
+    (next != *settings).then_some(next)
 }
 
 /// Where a slider is shown, by the invocation of the menu or of Settings that
@@ -621,8 +644,9 @@ pub fn slider(spec: Spec, cx: &mut Context<Desktop>) -> AnyElement {
             .on_a11y_action(
                 AccessibleAction::SetValue,
                 action(Rc::new(move |_, data| match data {
+                    // Not a number is no value (see `previewed`).
                     Some(accesskit::ActionData::NumericValue(percent)) => {
-                        Some(*percent as f32 / 100.)
+                        Some(*percent as f32 / 100.).filter(|value| value.is_finite())
                     }
                     _ => None,
                 })),
@@ -673,7 +697,8 @@ pub fn slider(spec: Spec, cx: &mut Context<Desktop>) -> AnyElement {
 mod tests {
     // Not `super::*`: gpui's `test` attribute would replace the standard one.
     use super::{
-        ClientSettings, Edits, Effects, Input, Key, MAX_GAIN, Owner, Scale, Setting, TICK, Target,
+        ClientSettings, Edits, Effects, Input, Key, MAX_GAIN, ManagedSettings, Owner, Scale,
+        Setting, TICK, Target, previewed,
     };
     use std::time::{Duration, Instant};
 
@@ -787,8 +812,13 @@ mod tests {
                 self.saves += 1;
             }
         }
+        /// As `Desktop::preview_setting`.
         fn preview(&mut self, setting: &Setting, value: f32, input: Input, now: Instant) {
-            setting.set(&mut self.memory, value);
+            let Some(next) = previewed(&self.memory, &ManagedSettings::default(), setting, value)
+            else {
+                return;
+            };
+            self.memory = next;
             let effects = self.edits.changed(setting.reaches_worker(), input, now);
             self.run(effects);
         }
@@ -863,7 +893,8 @@ mod tests {
         let mut world = World::default();
         let setting = Setting::Sensitivity;
         let start = Instant::now();
-        let value = |press: u64| 0.5 + press as f32 / 100.;
+        // From 51 %: a key to the value memory already holds is no change.
+        let value = |press: u64| 0.51 + press as f32 / 100.;
         for press in 0..5_u64 {
             let now = start + Duration::from_millis(press * 20);
             world.preview(&setting, value(press), Input::Keyboard, now);
@@ -980,6 +1011,47 @@ mod tests {
         let effects = world.edits.press(second.clone(), start + TICK * 4);
         world.run(effects);
         assert!(world.edits.dragging(&second) && !world.edits.dragging(&first));
+    }
+
+    #[test]
+    fn a_value_that_is_not_a_number_changes_and_saves_nothing() {
+        let mut world = World::default();
+        world.memory.user_volumes.insert("ada".into(), 2.5);
+        world.memory.server_volumes.insert("home".into(), 0.4);
+        world.memory.audio.vad_sensitivity = 0.8;
+        world.memory.sound_volume = 0.3;
+        let before = world.memory.clone();
+        let start = Instant::now();
+        let settings = [
+            Setting::UserVolume("ada".into()),
+            Setting::ServerVolume("home".into()),
+            Setting::Sensitivity,
+            Setting::SoundVolume,
+        ];
+        for setting in &settings {
+            for value in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+                let mut set = before.clone();
+                setting.set(&mut set, value);
+                assert_eq!(set, before, "{setting:?} set to {value}");
+                assert_eq!(
+                    previewed(&before, &ManagedSettings::default(), setting, value),
+                    None
+                );
+                world.preview(setting, value, Input::Keyboard, start);
+            }
+        }
+        world.tick(start + Duration::from_secs(1), |_| true);
+        assert_eq!(world.memory, before);
+        assert_eq!(
+            (world.sends, world.saves),
+            (0, 0),
+            "nothing heard, nothing written"
+        );
+        assert!(!world.edits.armed());
+        // A number still previews.
+        for setting in &settings {
+            assert!(previewed(&before, &ManagedSettings::default(), setting, 0.2).is_some());
+        }
     }
 
     #[test]

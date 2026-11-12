@@ -1526,12 +1526,11 @@ impl Desktop {
         input: crate::slider::Input,
         cx: &mut Context<Self>,
     ) {
-        let mut settings = self.settings.clone();
-        setting.set(&mut settings, value);
-        let settings = self.managed.apply(settings.sanitized());
-        if settings == self.settings {
+        let Some(settings) =
+            crate::slider::previewed(&self.settings, &self.managed, setting, value)
+        else {
             return;
-        }
+        };
         self.settings = settings;
         let effects = self.slider_edits.changed(
             setting.reaches_worker(),
