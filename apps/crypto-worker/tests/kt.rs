@@ -169,6 +169,7 @@ impl User {
         bookmark.name = "Test server".into();
         bookmark.certificate_sha256 = Some(server.running.fingerprint.clone());
         ConnectOptions {
+            voice_route: Default::default(),
             server: bookmark,
             identity: mumble_identity(self.index),
             password: None,

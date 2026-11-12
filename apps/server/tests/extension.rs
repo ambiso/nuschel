@@ -153,6 +153,7 @@ fn options(address: SocketAddr, pin: &str, name: &str, identity: usize) -> Conne
         ServerBookmark::new("", &address.ip().to_string(), address.port(), name).unwrap();
     server.certificate_sha256 = Some(pin.to_owned());
     ConnectOptions {
+        voice_route: Default::default(),
         server,
         identity: session_identity(identity),
         password: None,

@@ -70,6 +70,8 @@ mod kind {
 }
 
 const MAX_BLOB_REQUEST: usize = 64;
+/// Delayed UI actions are small; bulk targets need explicit fresh actions.
+pub const MAX_ACTION_TARGETS: usize = 128;
 
 // Known protocol types are not necessarily implemented by this client. In
 // particular knock/1 needs a native consumer before we negotiate typed notices;
@@ -220,6 +222,11 @@ const RELAY_PRIVACY_UNAVAILABLE: &str = "Relay-only is enabled locally, but this
 
 #[derive(Debug)]
 pub enum Command {
+    /// Native delayed action, checked again by the single session actor.
+    Scoped {
+        authority: CommandAuthority,
+        command: Box<Command>,
+    },
     Join(u32),
     CreateChannel {
         parent: u32,
@@ -280,6 +287,11 @@ pub enum Command {
         id: u32,
         targets: Vec<VoiceTargetSpec>,
     },
+    /// Install and select one explicit route atomically (native UI whisper).
+    Whisper {
+        id: u32,
+        targets: Vec<VoiceTargetSpec>,
+    },
     /// Send subsequent voice to this registered target (0 = normal talking).
     SelectVoiceTarget(u32),
     ContextAction {
@@ -317,9 +329,258 @@ pub enum Command {
     Disconnect,
 }
 
+/// A bounded observed-model lease. IDs alone are reusable on Mumble servers.
+/// This is local metadata; no presence tokens are sent on the wire.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ActionSubject {
+    User(u32, u64),
+    Channel(u32, u64),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CommandAuthority {
+    pub subject: Option<ActionSubject>,
+    pub own: (u32, u64),
+    pub users: Vec<(u32, u64)>,
+    pub channels: Vec<(u32, u64)>,
+    /// Explicit immutable Nuschl conversation IDs, scoped to this connection.
+    pub conversations: Vec<[u8; 16]>,
+}
+
+impl CommandAuthority {
+    /// Keep only concrete command refs plus the original primary subject. The
+    /// UI snapshot can include candidate link/move destinations, but unrelated
+    /// candidates do not become dependencies of an action.
+    pub fn for_command(&self, command: &Command) -> Option<Self> {
+        if self.users.len() > MAX_ACTION_TARGETS
+            || self.channels.len() > MAX_ACTION_TARGETS
+            || self.conversations.len() > MAX_ACTION_TARGETS
+        {
+            return None;
+        }
+        let (users, channels) = command.targets()?;
+        if !users
+            .iter()
+            .all(|id| self.users.iter().any(|(held, _)| id == held))
+            || !channels
+                .iter()
+                .all(|id| self.channels.iter().any(|(held, _)| id == held))
+        {
+            return None;
+        }
+        let conversations = command.conversation_targets()?;
+        if !conversations
+            .iter()
+            .all(|id| self.conversations.contains(id))
+        {
+            return None;
+        }
+        let selecting = matches!(command, Command::SelectVoiceTarget(id) if *id != 0);
+        let selected_user = selecting
+            .then_some(self.subject)
+            .flatten()
+            .and_then(|subject| match subject {
+                ActionSubject::User(id, instance) => Some((id, instance)),
+                _ => None,
+            });
+        let selected_channel = selecting
+            .then_some(self.subject)
+            .flatten()
+            .and_then(|subject| match subject {
+                ActionSubject::Channel(id, instance) => Some((id, instance)),
+                _ => None,
+            });
+        Some(Self {
+            subject: self.subject,
+            own: self.own,
+            users: self
+                .users
+                .iter()
+                .filter(|(id, _)| {
+                    users.contains(id) || selected_user.is_some_and(|(selected, _)| selected == *id)
+                })
+                .copied()
+                .collect(),
+            channels: self
+                .channels
+                .iter()
+                .filter(|(id, _)| {
+                    channels.contains(id)
+                        || selected_channel.is_some_and(|(selected, _)| selected == *id)
+                })
+                .copied()
+                .collect(),
+            conversations,
+        })
+    }
+}
+
+impl Command {
+    fn conversation_targets(&self) -> Option<Vec<[u8; 16]>> {
+        let bytes: Option<&[u8]> = match self {
+            Self::Nuschl(NuschlRequest::History(request)) => Some(&request.conversation),
+            Self::Nuschl(NuschlRequest::ReadMarker(request)) => Some(&request.conversation),
+            Self::Nuschl(NuschlRequest::Edit(request)) => Some(&request.conversation),
+            Self::Nuschl(NuschlRequest::Delete(request)) => Some(&request.conversation),
+            Self::Mls(
+                crate::mls::MlsCommand::OpenChannel { conversation }
+                | crate::mls::MlsCommand::Status { conversation }
+                | crate::mls::MlsCommand::Sync { conversation }
+                | crate::mls::MlsCommand::History { conversation, .. },
+            ) => Some(conversation),
+            _ => None,
+        };
+        match bytes {
+            Some(bytes) => Some(vec![nuschl::id(bytes)?]),
+            None => Some(Vec::new()),
+        }
+    }
+
+    /// Every explicit wire target must be covered by the envelope. A caller
+    /// cannot authorize a different target by supplying an unrelated valid lease.
+    /// The bound also limits allocation/work before reaching the actor.
+    pub fn targets(&self) -> Option<(BTreeSet<u32>, BTreeSet<u32>)> {
+        let within = match self {
+            Self::LinkChannels { add, remove, .. } => {
+                add.len().saturating_add(remove.len()).saturating_add(1) <= MAX_ACTION_TARGETS
+            }
+            Self::RequestBlobs {
+                textures,
+                comments,
+                descriptions,
+            } => {
+                textures
+                    .len()
+                    .saturating_add(comments.len())
+                    .saturating_add(descriptions.len())
+                    <= MAX_ACTION_TARGETS
+            }
+            Self::SetVoiceTarget { targets, .. } | Self::Whisper { targets, .. } => {
+                targets.len() <= 32
+                    && targets
+                        .iter()
+                        .try_fold(0usize, |count, target| {
+                            let count = count.saturating_add(match target {
+                                VoiceTargetSpec::Users(ids) => ids.len(),
+                                _ => 1,
+                            });
+                            (count <= MAX_ACTION_TARGETS).then_some(count)
+                        })
+                        .is_some()
+            }
+            _ => true,
+        };
+        if !within {
+            return None;
+        }
+        let mut users = BTreeSet::new();
+        let mut channels = BTreeSet::new();
+        match self {
+            Self::Join(id)
+            | Self::RemoveChannel(id)
+            | Self::RequestPermissions(id)
+            | Self::QueryAcl(id) => {
+                channels.insert(*id);
+            }
+            Self::CreateChannel { parent, .. } => {
+                channels.insert(*parent);
+            }
+            Self::EditChannel { channel, edit } => {
+                channels.insert(*channel);
+                channels.extend(edit.parent);
+            }
+            Self::LinkChannels {
+                channel,
+                add,
+                remove,
+            } => {
+                channels.insert(*channel);
+                channels.extend(add.iter().chain(remove).copied());
+            }
+            Self::Listen { channel, .. } | Self::MarkRead { channel, .. } => {
+                channels.insert(*channel);
+            }
+            Self::User {
+                session, action, ..
+            } => {
+                users.insert(*session);
+                if let UserAction::Move(channel) = action {
+                    channels.insert(*channel);
+                }
+            }
+            Self::RequestStats(session) => {
+                users.insert(*session);
+            }
+            Self::RequestBlobs {
+                textures,
+                comments,
+                descriptions,
+            } => {
+                users.extend(textures.iter().chain(comments).copied());
+                channels.extend(descriptions.iter().copied());
+            }
+            Self::SetVoiceTarget { targets, .. } | Self::Whisper { targets, .. } => {
+                for target in targets {
+                    match target {
+                        VoiceTargetSpec::Users(ids) => users.extend(ids.iter().copied()),
+                        VoiceTargetSpec::Channel { channel, .. } => {
+                            channels.insert(*channel);
+                        }
+                    }
+                }
+            }
+            Self::ContextAction {
+                session, channel, ..
+            } => {
+                users.extend(session);
+                channels.extend(channel);
+            }
+            Self::UpdateAcl(acl) => {
+                channels.insert(acl.channel);
+            }
+            Self::SetComment(_)
+            | Self::SetAvatar(_)
+            | Self::RegisterSelf
+            | Self::QueryRegisteredUsers
+            | Self::UpdateRegisteredUsers(_)
+            | Self::QueryBans
+            | Self::UpdateBans(_)
+            | Self::QueryUserNames(_)
+            | Self::SelectVoiceTarget(_)
+            | Self::SetSelf { .. }
+            | Self::Identity(_)
+            | Self::Mls(
+                crate::mls::MlsCommand::OpenDirect { .. }
+                | crate::mls::MlsCommand::OpenChannel { .. }
+                | crate::mls::MlsCommand::Status { .. }
+                | crate::mls::MlsCommand::Sync { .. }
+                | crate::mls::MlsCommand::History { .. },
+            ) => {}
+            Self::Nuschl(NuschlRequest::ShareLinkCreate(request)) => {
+                channels.insert(request.channel);
+            }
+            Self::Nuschl(
+                NuschlRequest::History(_)
+                | NuschlRequest::ReadMarker(_)
+                | NuschlRequest::OpenDirect(_)
+                | NuschlRequest::Edit(_)
+                | NuschlRequest::Delete(_),
+            ) => {}
+            // Persistent configuration, chat/crypto and connection management
+            // have their own lifecycles; this envelope is not a generic bypass.
+            _ => return None,
+        }
+        (users.len() <= MAX_ACTION_TARGETS && channels.len() <= MAX_ACTION_TARGETS)
+            .then_some((users, channels))
+    }
+}
+
 /// Passwords exist only in memory and are never part of a saved bookmark or Debug output.
 pub struct ConnectOptions {
     pub server: ServerBookmark,
+    /// Accepted voice route, retained by native reconnect supervision. Nonzero
+    /// reconnects suspended until an explicit new target/normal selection.
+    pub voice_route: std::sync::Arc<std::sync::atomic::AtomicU32>,
     pub identity: ClientIdentity,
     pub password: Option<String>,
     /// Never use UDP; voice stays in the TLS tunnel (Mumble's "Force TCP mode").
@@ -770,6 +1031,7 @@ pub async fn run(
             resend: options.resend,
             ..State::default()
         };
+        state.restore_voice_route(options.voice_route.clone());
         // With the extension (or a sticky record) the server's hello decides
         // before any credential is sent.
         let mut kt_descriptor = None;
@@ -903,6 +1165,10 @@ pub async fn run(
                 },
                 command = commands.recv() => {
                     let Some(command) = command else { break; };
+                    let Some(command) = state.authorize(command) else {
+                        emit(&events, SessionEvent::Notice("This action expired; open it again for the current connection and target.".into())).await?;
+                        continue;
+                    };
                     match command {
                         Command::Disconnect => break,
                         Command::Identity(command) => {
@@ -917,8 +1183,11 @@ pub async fn run(
                                     "This server is not end-to-end encrypted (it is a compatible server).".into()))).await?,
                             }
                         }
-                        Command::SelectVoiceTarget(id) => state.voice_target = id.min(30),
-                        Command::Voice { target, packet } => if let Some(packet) = state.outgoing_voice(packet)
+                        Command::SelectVoiceTarget(id) => {
+                            if id == 0 || state.voice_target_valid(id) { state.select_voice_target(id.min(30)); }
+                        },
+                        Command::Voice { target, packet } => if state.voice_target_valid(if target == 0 { state.voice_target } else { target })
+                            && let Some(packet) = state.outgoing_voice(packet)
                             && let Ok(payload) = voice::encode_voice(state.version, if target == 0 { state.voice_target } else { target }, &packet) {
                             let sent = match state.udp.as_mut() { Some(udp) => udp.send_voice(&payload).await, None => false };
                             if !sent { write_control(&mut writer, kind::UDP_TUNNEL, &payload).await?; }
@@ -1115,6 +1384,9 @@ struct State {
     local_deafened: bool,
     rejoin: Option<u32>,
     voice_target: u32,
+    voice_route: std::sync::Arc<std::sync::atomic::AtomicU32>,
+    /// Installed explicit targets retain authority through later voice packets.
+    voice_authorities: BTreeMap<u32, CommandAuthority>,
     permissions: BTreeMap<u32, u32>,
     context_actions: BTreeMap<String, ContextAction>,
     unsupported_codec: BTreeSet<u32>,
@@ -1154,6 +1426,8 @@ impl Default for State {
             local_deafened: false,
             rejoin: None,
             voice_target: 0,
+            voice_route: Default::default(),
+            voice_authorities: BTreeMap::new(),
             permissions: BTreeMap::new(),
             context_actions: BTreeMap::new(),
             unsupported_codec: BTreeSet::new(),
@@ -1277,6 +1551,327 @@ impl State {
         self.own_session.is_some()
     }
 
+    fn authority_valid(&self, authority: &CommandAuthority) -> bool {
+        if authority.users.len() > MAX_ACTION_TARGETS
+            || authority.channels.len() > MAX_ACTION_TARGETS
+            || authority.conversations.len() > MAX_ACTION_TARGETS
+            || self.own_session != Some(authority.own.0)
+            || self
+                .users
+                .get(&authority.own.0)
+                .is_none_or(|u| u.instance == 0 || u.instance != authority.own.1)
+        {
+            return false;
+        }
+        let subject_valid = match authority.subject {
+            Some(ActionSubject::User(id, instance)) => {
+                instance != 0
+                    && self
+                        .users
+                        .get(&id)
+                        .is_some_and(|user| user.instance == instance)
+            }
+            Some(ActionSubject::Channel(id, instance)) => {
+                instance != 0
+                    && self
+                        .channels
+                        .get(&id)
+                        .is_some_and(|channel| channel.instance == instance)
+            }
+            None => true,
+        };
+        subject_valid
+            && authority.users.iter().all(|(id, instance)| {
+                *instance != 0 && self.users.get(id).is_some_and(|u| u.instance == *instance)
+            })
+            && authority.channels.iter().all(|(id, instance)| {
+                *instance != 0
+                    && self
+                        .channels
+                        .get(id)
+                        .is_some_and(|c| c.instance == *instance)
+            })
+    }
+
+    /// Unknown permissions are left to the server; a known revocation must
+    /// take effect even while a UI prompt or native command is queued.
+    fn known_permission(&self, channel: u32, permission: u32) -> bool {
+        use crate::model::permission::WRITE;
+        self.permissions
+            .get(&channel)
+            .is_none_or(|bits| bits & (permission | WRITE) != 0)
+    }
+
+    fn command_permitted(&self, command: &Command) -> bool {
+        use crate::model::permission as p;
+        let may = |channel, permission| self.known_permission(channel, permission);
+        match command {
+            Command::Join(id) => may(*id, p::ENTER),
+            Command::CreateChannel {
+                parent, temporary, ..
+            } => may(
+                *parent,
+                if *temporary {
+                    p::MAKE_TEMP_CHANNEL
+                } else {
+                    p::MAKE_CHANNEL
+                },
+            ),
+            Command::EditChannel { channel, .. }
+            | Command::RemoveChannel(channel)
+            | Command::QueryAcl(channel) => may(*channel, p::WRITE),
+            Command::UpdateAcl(acl) => may(acl.channel, p::WRITE),
+            Command::LinkChannels {
+                channel,
+                add,
+                remove,
+            } => {
+                may(*channel, p::LINK_CHANNEL)
+                    && add.iter().chain(remove).all(|id| may(*id, p::LINK_CHANNEL))
+            }
+            Command::Listen { channel, .. } => may(*channel, p::LISTEN),
+            Command::User {
+                session, action, ..
+            } => match action {
+                UserAction::Kick => may(0, p::KICK),
+                UserAction::Ban => may(0, p::BAN),
+                UserAction::Register => may(0, p::REGISTER),
+                UserAction::ResetComment | UserAction::ResetAvatar => may(0, p::RESET_USER_CONTENT),
+                UserAction::Move(channel) => may(*channel, p::MOVE),
+                _ => self
+                    .users
+                    .get(session)
+                    .is_some_and(|user| may(user.channel, p::MUTE_DEAFEN)),
+            },
+            Command::RegisterSelf => may(0, p::SELF_REGISTER),
+            Command::QueryRegisteredUsers | Command::UpdateRegisteredUsers(_) => {
+                may(0, p::REGISTER)
+            }
+            Command::QueryBans | Command::UpdateBans(_) => may(0, p::BAN),
+            Command::SetVoiceTarget { targets, .. } | Command::Whisper { targets, .. } => {
+                targets.iter().all(|target| match target {
+                    VoiceTargetSpec::Users(ids) => ids.iter().all(|id| {
+                        self.users
+                            .get(id)
+                            .is_some_and(|user| may(user.channel, p::WHISPER))
+                    }),
+                    VoiceTargetSpec::Channel { channel, .. } => may(*channel, p::WHISPER),
+                })
+            }
+            Command::ContextAction {
+                action,
+                session,
+                channel,
+            } => self.context_actions.get(action).is_some_and(|action| {
+                if session.is_some() {
+                    action.user
+                } else if channel.is_some() {
+                    action.channel
+                } else {
+                    action.server
+                }
+            }),
+            _ => true,
+        }
+    }
+
+    fn semantic_targets_covered(&self, command: &Command, authority: &CommandAuthority) -> bool {
+        let user_id = |wanted: u32| {
+            wanted != 0
+                && authority
+                    .users
+                    .iter()
+                    .copied()
+                    .chain(match authority.subject {
+                        Some(ActionSubject::User(id, instance)) => Some((id, instance)),
+                        _ => None,
+                    })
+                    .any(|(session, instance)| {
+                        self.users.get(&session).is_some_and(|user| {
+                            user.instance == instance && user.user_id == Some(wanted)
+                        })
+                    })
+        };
+        let conversation = |bytes: &[u8]| {
+            let Some(id) = nuschl::id(bytes) else {
+                return false;
+            };
+            if !authority.conversations.contains(&id) {
+                return false;
+            }
+            if let Some((channel, _)) = self.conversations.iter().find(|(_, held)| **held == id) {
+                return authority
+                    .channels
+                    .iter()
+                    .copied()
+                    .chain(match authority.subject {
+                        Some(ActionSubject::Channel(id, instance)) => Some((id, instance)),
+                        _ => None,
+                    })
+                    .any(|(held, instance)| {
+                        held == *channel
+                            && self
+                                .channels
+                                .get(&held)
+                                .is_some_and(|current| current.instance == instance)
+                    });
+            }
+            // Direct IDs are immutable server-side conversation identities;
+            // the explicit lease remains usable if the peer goes offline.
+            self.directs.contains_key(&id)
+        };
+        match command {
+            Command::Nuschl(request) => match request {
+                NuschlRequest::OpenDirect(request) => user_id(request.user_id),
+                NuschlRequest::History(request) => conversation(&request.conversation),
+                NuschlRequest::ReadMarker(request) => conversation(&request.conversation),
+                NuschlRequest::Edit(request) => conversation(&request.conversation),
+                NuschlRequest::Delete(request) => conversation(&request.conversation),
+                NuschlRequest::ShareLinkCreate(_) => true, // numeric coverage checked centrally
+                _ => false,
+            },
+            Command::Mls(command) => match command {
+                crate::mls::MlsCommand::OpenDirect { user_id: id } => user_id(*id),
+                crate::mls::MlsCommand::OpenChannel { conversation: id }
+                | crate::mls::MlsCommand::Status { conversation: id }
+                | crate::mls::MlsCommand::Sync { conversation: id }
+                | crate::mls::MlsCommand::History {
+                    conversation: id, ..
+                } => conversation(id),
+                _ => false,
+            },
+            Command::Identity(crate::identity::IdentityCommand::Check {
+                user_id: Some(id),
+                account: None,
+                ..
+            }) => user_id(*id),
+            Command::Identity(_) => false,
+            _ => true,
+        }
+    }
+
+    fn voice_target_valid(&self, id: u32) -> bool {
+        use crate::model::permission::WHISPER;
+        id == 0
+            || self.voice_authorities.get(&id).is_some_and(|authority| {
+                self.authority_valid(authority)
+                    && authority.users.iter().all(|(id, _)| {
+                        self.users
+                            .get(id)
+                            .is_some_and(|user| self.known_permission(user.channel, WHISPER))
+                    })
+                    && authority
+                        .channels
+                        .iter()
+                        .all(|(id, _)| self.known_permission(*id, WHISPER))
+            })
+    }
+
+    fn restore_voice_route(&mut self, route: std::sync::Arc<std::sync::atomic::AtomicU32>) {
+        self.voice_target = if route.load(Ordering::Relaxed) == 0 {
+            0
+        } else {
+            31
+        };
+        self.voice_route = route;
+    }
+
+    fn select_voice_target(&mut self, id: u32) {
+        self.voice_target = id;
+        self.voice_route.store(id, Ordering::Relaxed);
+    }
+
+    fn authorize(&mut self, command: Command) -> Option<Command> {
+        // Replacing the selected installation or requesting a new non-normal
+        // selection suspends it BEFORE validation. Failure cannot retain a prior
+        // recipient under the newly requested route's UI label.
+        let requested = match &command {
+            Command::Scoped { command, .. } => command.as_ref(),
+            command => command,
+        };
+        match requested {
+            Command::SetVoiceTarget { id, .. } | Command::Whisper { id, .. } => {
+                self.voice_authorities.remove(id);
+                if self.voice_target == *id || matches!(requested, Command::Whisper { .. }) {
+                    self.select_voice_target(31);
+                }
+            }
+            Command::SelectVoiceTarget(id) if *id != 0 => self.select_voice_target(31),
+            _ => {}
+        }
+        let Command::Scoped { authority, command } = command else {
+            // CLI callers also get observed-lifetime protection for subsequent
+            // voice. Explicit native UI actions additionally bind at enqueue.
+            if matches!(
+                &command,
+                Command::SetVoiceTarget { .. } | Command::Whisper { .. }
+            ) {
+                let (users, channels) = command.targets()?;
+                let own = self.own_session.and_then(|id| self.users.get(&id))?;
+                let authority = CommandAuthority {
+                    subject: None,
+                    own: (own.session, own.instance),
+                    users: users
+                        .iter()
+                        .map(|id| self.users.get(id).map(|u| (*id, u.instance)))
+                        .collect::<Option<_>>()?,
+                    conversations: Vec::new(),
+                    channels: channels
+                        .iter()
+                        .map(|id| self.channels.get(id).map(|c| (*id, c.instance)))
+                        .collect::<Option<_>>()?,
+                };
+                return self.authorize(Command::Scoped {
+                    authority,
+                    command: Box::new(command),
+                });
+            }
+            return Some(command);
+        };
+        let (users, channels) = command.targets()?;
+        if !self.authority_valid(&authority)
+            || !users
+                .iter()
+                .all(|id| authority.users.iter().any(|(held, _)| id == held))
+            || !channels
+                .iter()
+                .all(|id| authority.channels.iter().any(|(held, _)| id == held))
+            || !self.semantic_targets_covered(&command, &authority)
+            || !self.command_permitted(&command)
+        {
+            return None;
+        }
+        if let Command::SelectVoiceTarget(id) = command.as_ref() {
+            if *id != 0
+                && self.voice_authorities.get(id).is_none_or(|installed| {
+                    installed.own != authority.own
+                        || !installed
+                            .users
+                            .iter()
+                            .all(|target| authority.users.contains(target))
+                        || !installed
+                            .channels
+                            .iter()
+                            .all(|target| authority.channels.contains(target))
+                })
+            {
+                return None;
+            }
+        }
+        if let Command::SetVoiceTarget { id, .. } | Command::Whisper { id, .. } = command.as_ref() {
+            if !(1..=30).contains(id) {
+                return None;
+            }
+            let mut authority = authority;
+            authority.users.retain(|(id, _)| users.contains(id));
+            authority.channels.retain(|(id, _)| channels.contains(id));
+            authority.conversations.clear();
+            authority.subject = None;
+            self.voice_authorities.insert(*id, authority);
+        }
+        Some(*command)
+    }
+
     async fn command(
         &mut self,
         command: Command,
@@ -1295,6 +1890,7 @@ impl State {
             return emit(events, SessionEvent::Notice("Plaintext chat and attachments are disabled on an encrypted server; send text through MLS.".into())).await;
         }
         let own = self.own_session.unwrap_or_default();
+        let select_whisper = matches!(&command, Command::Whisper { .. });
         match command {
             Command::RelayOnly(relay_only) => {
                 if self.privacy_supported() {
@@ -1307,7 +1903,8 @@ impl State {
                     .await?;
                 }
             }
-            Command::Disconnect
+            Command::Scoped { .. }
+            | Command::Disconnect
             | Command::Voice { .. }
             | Command::SelectVoiceTarget(_)
             | Command::Identity(_)
@@ -1627,7 +2224,7 @@ impl State {
                     );
                 }
             }
-            Command::SetVoiceTarget { id, targets } => {
+            Command::SetVoiceTarget { id, targets } | Command::Whisper { id, targets } => {
                 if (1..=30).contains(&id) {
                     let targets = targets
                         .into_iter()
@@ -1658,6 +2255,9 @@ impl State {
                             targets,
                         },
                     );
+                    if select_whisper {
+                        self.select_voice_target(id);
+                    }
                 }
             }
             Command::ContextAction {
@@ -2488,6 +3088,7 @@ impl State {
                     return self.notice_once(events, CHANNELS_NOTICE).await;
                 }
                 let channel = self.channels.entry(id).or_insert_with(|| Channel {
+                    instance: next_user_instance(),
                     id,
                     parent: (id != 0).then_some(0),
                     name: format!("Channel {id}"),
@@ -4593,5 +5194,259 @@ mod tests {
             read_control(&mut input).await,
             Err(Error::Protocol(_))
         ));
+    }
+}
+
+#[cfg(test)]
+mod delayed_action_authority_tests {
+    use super::*;
+
+    fn observed() -> State {
+        let mut state = State {
+            own_session: Some(1),
+            ..State::default()
+        };
+        for (session, instance, user_id) in [(1, 11, 101), (2, 22, 202), (3, 33, 303)] {
+            state.users.insert(
+                session,
+                User {
+                    session,
+                    instance,
+                    user_id: Some(user_id),
+                    channel: 5,
+                    ..User::default()
+                },
+            );
+        }
+        for (id, instance) in [(0, 40), (5, 45), (6, 46)] {
+            state.channels.insert(
+                id,
+                Channel {
+                    id,
+                    instance,
+                    ..Channel::default()
+                },
+            );
+        }
+        state.conversations.insert(5, [5; 16]);
+        state.conversations.insert(6, [6; 16]);
+        state
+    }
+    fn snapshot() -> CommandAuthority {
+        CommandAuthority {
+            own: (1, 11),
+            subject: Some(ActionSubject::User(2, 22)),
+            users: vec![(1, 11), (2, 22)],
+            channels: vec![(0, 40), (5, 45), (6, 46)],
+            conversations: vec![[5; 16]],
+        }
+    }
+    fn scoped(authority: CommandAuthority, command: Command) -> Command {
+        Command::Scoped {
+            authority,
+            command: Box::new(command),
+        }
+    }
+    #[tokio::test]
+    async fn readonly_stats_never_retargets_reused_session_or_reconnected_own_presence() {
+        let mut state = observed();
+        let (events, _) = mpsc::channel(16);
+        let lease = snapshot().for_command(&Command::RequestStats(2)).unwrap();
+        // Harmless updates and unrelated removals do not revoke a precise action.
+        state.users.get_mut(&2).unwrap().name = "renamed".into();
+        state.users.get_mut(&2).unwrap().channel = 6;
+        state.channels.remove(&0);
+        let command = state
+            .authorize(scoped(lease.clone(), Command::RequestStats(2)))
+            .unwrap();
+        state.command(command, &events).await.unwrap();
+        assert_eq!(state.outbound.len(), 1);
+        assert_eq!(state.outbound[0].0, kind::USER_STATS);
+        let stats = proto::UserStats::decode(state.outbound[0].1.as_slice()).unwrap();
+        assert_eq!(stats.session, Some(2));
+        state.outbound.clear();
+        state.users.get_mut(&2).unwrap().instance = 222;
+        assert!(
+            state
+                .authorize(scoped(lease.clone(), Command::RequestStats(2)))
+                .is_none()
+        );
+        state.users.get_mut(&2).unwrap().instance = 22;
+        state.users.get_mut(&1).unwrap().instance = 111;
+        assert!(
+            state
+                .authorize(scoped(lease, Command::RequestStats(2)))
+                .is_none()
+        );
+        assert!(state.outbound.is_empty());
+    }
+    #[test]
+    fn channel_lifetime_and_known_permission_revocations_are_rechecked() {
+        let mut state = observed();
+        let mut origin = snapshot();
+        origin.subject = Some(ActionSubject::Channel(5, 45));
+        let lease = origin.for_command(&Command::Join(5)).unwrap();
+        state.permissions.insert(5, crate::model::permission::ENTER);
+        assert!(
+            state
+                .authorize(scoped(lease.clone(), Command::Join(5)))
+                .is_some()
+        );
+        state.permissions.insert(5, 0);
+        assert!(
+            state
+                .authorize(scoped(lease.clone(), Command::Join(5)))
+                .is_none()
+        );
+        state.permissions.remove(&5); // Unknown is left to authoritative server ACLs.
+        assert!(
+            state
+                .authorize(scoped(lease.clone(), Command::Join(5)))
+                .is_some()
+        );
+        state.channels.get_mut(&5).unwrap().instance = 450;
+        assert!(state.authorize(scoped(lease, Command::Join(5))).is_none());
+    }
+    #[test]
+    fn incomplete_nested_oversized_and_wrong_semantic_envelopes_fail_closed() {
+        let mut state = observed();
+        let mut lease = snapshot();
+        lease.subject = None;
+        lease.users.clear();
+        assert!(
+            state
+                .authorize(scoped(lease.clone(), Command::RequestStats(2)))
+                .is_none()
+        );
+        assert!(
+            state
+                .authorize(scoped(
+                    lease.clone(),
+                    scoped(snapshot(), Command::RequestStats(2))
+                ))
+                .is_none()
+        );
+        assert!(
+            state
+                .authorize(scoped(
+                    lease.clone(),
+                    Command::Nuschl(NuschlRequest::OpenDirect(v1::OpenDirect {
+                        request_id: 1,
+                        user_id: 202
+                    }))
+                ))
+                .is_none()
+        );
+        lease.subject = Some(ActionSubject::User(2, 22));
+        assert!(
+            state
+                .authorize(scoped(
+                    lease.clone(),
+                    Command::Nuschl(NuschlRequest::OpenDirect(v1::OpenDirect {
+                        request_id: 1,
+                        user_id: 303
+                    }))
+                ))
+                .is_none()
+        );
+        assert!(
+            state
+                .authorize(scoped(
+                    lease.clone(),
+                    Command::Nuschl(NuschlRequest::OpenDirect(v1::OpenDirect {
+                        request_id: 1,
+                        user_id: 202
+                    }))
+                ))
+                .is_some()
+        );
+        for id in [[5; 16], [6; 16]] {
+            let command = Command::Nuschl(NuschlRequest::Delete(v1::ChatDelete {
+                request_id: 1,
+                conversation: id.to_vec(),
+                target: 4,
+            }));
+            // Channel conversations require their original channel lifetime,
+            // even when an explicit conversation ID was supplied.
+            let mut minimal = lease.clone();
+            minimal.channels.clear();
+            assert!(state.authorize(scoped(minimal, command)).is_none());
+        }
+        lease.subject = Some(ActionSubject::Channel(5, 45));
+        lease.channels.clear();
+        assert!(
+            state
+                .authorize(scoped(
+                    lease.clone(),
+                    Command::Nuschl(NuschlRequest::History(v1::HistoryRequest {
+                        conversation: vec![5; 16],
+                        ..Default::default()
+                    }))
+                ))
+                .is_some()
+        );
+        assert!(
+            state
+                .authorize(scoped(
+                    lease.clone(),
+                    Command::Nuschl(NuschlRequest::History(v1::HistoryRequest {
+                        conversation: vec![6; 16],
+                        ..Default::default()
+                    }))
+                ))
+                .is_none()
+        );
+        assert!(
+            state
+                .authorize(scoped(
+                    lease.clone(),
+                    Command::Mls(crate::mls::MlsCommand::OpenDirect { user_id: 303 })
+                ))
+                .is_none()
+        );
+        lease.users = vec![(2, 22); MAX_ACTION_TARGETS + 1];
+        assert!(
+            state
+                .authorize(scoped(lease, Command::RequestStats(2)))
+                .is_none()
+        );
+        assert!(
+            Command::RequestBlobs {
+                textures: vec![2; MAX_ACTION_TARGETS + 1],
+                comments: vec![],
+                descriptions: vec![]
+            }
+            .targets()
+            .is_none()
+        );
+    }
+    #[test]
+    fn whisper_reuse_and_failed_replacement_suspend_without_fallback() {
+        let mut state = observed();
+        let install = || Command::SetVoiceTarget {
+            id: 1,
+            targets: vec![VoiceTargetSpec::Users(vec![2])],
+        };
+        let lease = snapshot().for_command(&install()).unwrap();
+        assert!(state.authorize(scoped(lease.clone(), install())).is_some());
+        assert!(state.voice_target_valid(1));
+        state.select_voice_target(1);
+        state.users.get_mut(&2).unwrap().instance = 222;
+        assert!(!state.voice_target_valid(state.voice_target));
+        assert!(state.authorize(scoped(lease.clone(), install())).is_none());
+        assert_eq!(state.voice_target, 31);
+        assert!(!state.voice_target_valid(state.voice_target));
+        assert!(!state.voice_authorities.contains_key(&1));
+        assert!(
+            state
+                .authorize(scoped(lease, Command::SelectVoiceTarget(1)))
+                .is_none()
+        );
+        assert_eq!(state.voice_route.load(Ordering::Relaxed), 31);
+        assert!(!state.voice_target_valid(state.voice_target));
+        // Only an explicit accepted normal selection clears the suspended route.
+        state.select_voice_target(0);
+        assert!(state.voice_target_valid(0));
+        assert_eq!(state.voice_route.load(Ordering::Relaxed), 0);
     }
 }

@@ -1358,6 +1358,7 @@ impl Desktop {
             return;
         }
         self.client.remove_server(&id);
+        self.reconcile_delayed_actions();
         self.ui.remove(&id);
         self.form = None;
         if !self.client.servers.is_empty() {
@@ -2231,7 +2232,9 @@ impl Desktop {
         // A closed/replaced profile cannot keep requesting or rendering comment
         // updates. Only the explicit profile-open action creates SDK interest.
         self.client.retain_comment_interest(match self.panel {
-            Some(Panel::UserInfo { server, session }) => Some((server, session)),
+            Some(Panel::UserInfo {
+                server, session, ..
+            }) => Some((server, session)),
             _ => None,
         });
         self.client.set_time(monotonic_ms());
@@ -2256,6 +2259,7 @@ impl Desktop {
                         }
                     }
                     self.client.handle(input);
+                    self.reconcile_delayed_actions();
                 }
                 Err(Native::OwnIdentity(result)) => self.own_identity.apply(*result),
                 Err(Native::Identity {

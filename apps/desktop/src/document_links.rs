@@ -59,7 +59,7 @@ impl Scope {
         let surface = match self.key {
             RenderKey::Comment(session) => matches!(
                 this.panel,
-                Some(crate::panels::Panel::UserInfo { server, session: shown })
+                Some(crate::panels::Panel::UserInfo { server, session: shown, .. })
                     if server == server_index && shown == session
             ),
             RenderKey::Welcome | RenderKey::Description(_) => {

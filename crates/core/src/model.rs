@@ -55,6 +55,8 @@ fn hex(bytes: &[u8]) -> String {
 
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct Channel {
+    /// Process-local lifetime; changes after removal/recreation or reconnect.
+    pub instance: u64,
     pub id: u32,
     pub parent: Option<u32>,
     pub name: String,

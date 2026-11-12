@@ -2188,6 +2188,7 @@ impl Client {
                     .iter_mut()
                     .find(|channel| channel.target == TextTarget::Channel(update.id))
                 {
+                    channel.instance = update.instance;
                     channel.name = update.name;
                     channel.parent = update.parent;
                     channel.position = update.position;
@@ -2202,6 +2203,7 @@ impl Client {
                 } else {
                     rendering = render(&update.description);
                     server.channels.push(ConversationState {
+                        instance: update.instance,
                         topic: "Channel chat · select Join voice to move here".into(),
                         links: update.links,
                         temporary: update.temporary,

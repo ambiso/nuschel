@@ -539,6 +539,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .transpose()?
         .map(|p| p.trim_end_matches(['\r', '\n']).to_owned());
     let options = ConnectOptions {
+        voice_route: Default::default(),
         server,
         identity: profile.identity()?,
         password,

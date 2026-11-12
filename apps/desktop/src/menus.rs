@@ -17,7 +17,7 @@ use gpui_kit::{
     *,
 };
 use nuschl_session::{
-    connection::{Command, TextTarget, User},
+    connection::{ActionSubject, Command, CommandAuthority, TextTarget, User},
     model::{ChannelEdit, UserAction, VoiceTargetSpec, permission as perm},
 };
 use std::rc::Rc;
@@ -36,8 +36,178 @@ pub enum MenuTarget {
     Message,
 }
 
+/// Original saved endpoint plus observed connection/target lifetimes. Local
+/// preferences use `local_index`; live actions require `live_index` and carry
+/// this snapshot through the native queue into the session actor.
+#[derive(Clone, Debug)]
+pub struct ActionOrigin {
+    server: String,
+    endpoint: (String, u16, String, Option<String>),
+    generation: u64,
+    authority: CommandAuthority,
+    primary: MenuTarget,
+    conversation: Option<nuschl_client::Conversation>,
+}
+impl ActionOrigin {
+    pub fn capture(view: &crate::state::ServerView, primary: MenuTarget) -> Self {
+        let own = view
+            .own_session
+            .and_then(|id| view.users.get(&id))
+            .map(|user| (user.session, user.instance))
+            .unwrap_or((0, 0));
+        let mut users = std::collections::BTreeSet::from([own.0]);
+        let mut channels = std::collections::BTreeSet::from([0]);
+        channels.extend(view.voice_channel());
+        match primary {
+            MenuTarget::User(id) => {
+                users.insert(id);
+                channels.extend(view.users.get(&id).map(|user| user.channel));
+            }
+            MenuTarget::Channel(id) => {
+                channels.insert(id);
+                if let Some(channel) = view.channels.iter().find(|channel| channel.id == id) {
+                    channels.extend(
+                        channel
+                            .links
+                            .iter()
+                            .copied()
+                            .take(nuschl_session::connection::MAX_ACTION_TARGETS.saturating_sub(3)),
+                    );
+                }
+            }
+            _ => {}
+        }
+        Self {
+            server: view.id.clone(),
+            endpoint: (
+                view.bookmark.host.clone(),
+                view.bookmark.port,
+                view.bookmark.username.clone(),
+                view.bookmark.certificate_sha256.clone(),
+            ),
+            generation: view.generation,
+            authority: CommandAuthority {
+                subject: match primary {
+                    MenuTarget::User(id) => view
+                        .users
+                        .get(&id)
+                        .map(|user| ActionSubject::User(id, user.instance)),
+                    MenuTarget::Channel(id) => view
+                        .channels
+                        .iter()
+                        .find(|channel| channel.id == id)
+                        .map(|channel| ActionSubject::Channel(id, channel.instance)),
+                    _ => None,
+                },
+                conversations: view
+                    .channels
+                    .iter()
+                    .filter(|channel| match primary {
+                        MenuTarget::Channel(id) => channel.target == TextTarget::Channel(id),
+                        MenuTarget::User(id) => channel
+                            .direct_peer
+                            .as_ref()
+                            .is_some_and(|peer| peer.session == id),
+                        _ => false,
+                    })
+                    .filter_map(|channel| channel.conversation)
+                    .take(nuschl_session::connection::MAX_ACTION_TARGETS)
+                    .collect(),
+                own,
+                users: users
+                    .into_iter()
+                    .filter_map(|id| view.users.get(&id).map(|user| (id, user.instance)))
+                    .collect(),
+                channels: channels
+                    .into_iter()
+                    .filter_map(|id| {
+                        view.channels
+                            .iter()
+                            .find(|channel| channel.target == TextTarget::Channel(id))
+                            .map(|channel| (id, channel.instance))
+                    })
+                    .collect(),
+            },
+            primary,
+            conversation: None,
+        }
+    }
+    pub fn local_index(&self, this: &Desktop) -> Option<usize> {
+        this.client.servers.iter().position(|view| {
+            view.id == self.server
+                && view.bookmark.host == self.endpoint.0
+                && view.bookmark.port == self.endpoint.1
+                && view.bookmark.username == self.endpoint.2
+                && view.bookmark.certificate_sha256 == self.endpoint.3
+        })
+    }
+    pub fn live_index(&self, this: &Desktop) -> Option<usize> {
+        let index = self.local_index(this)?;
+        let view = &this.client.servers[index];
+        if view.status != Status::Connected
+            || view.generation != self.generation
+            || view.own_session != Some(self.authority.own.0)
+            || self.authority.own.1 == 0
+            || view
+                .users
+                .get(&self.authority.own.0)
+                .is_none_or(|user| user.instance != self.authority.own.1)
+        {
+            return None;
+        }
+        let valid = match self.primary {
+            MenuTarget::User(id) => self
+                .authority
+                .users
+                .iter()
+                .find(|(held, _)| *held == id)
+                .is_some_and(|(_, instance)| {
+                    view.users
+                        .get(&id)
+                        .is_some_and(|user| user.instance == *instance)
+                }),
+            MenuTarget::Channel(id) => self
+                .authority
+                .channels
+                .iter()
+                .find(|(held, _)| *held == id)
+                .is_some_and(|(_, instance)| {
+                    view.channels
+                        .iter()
+                        .any(|channel| channel.id == id && channel.instance == *instance)
+                }),
+            _ => true,
+        };
+        (valid
+            && self.conversation.as_ref().is_none_or(|conversation| {
+                this.client.navigation.selection() == Some(conversation)
+            }))
+        .then_some(index)
+    }
+    pub fn with_scope<R>(&self, this: &mut Desktop, callback: impl FnOnce(&mut Desktop) -> R) -> R {
+        let driver = this.driver.clone();
+        driver.with_action_scope(
+            self.server.clone(),
+            self.generation,
+            self.authority.clone(),
+            || callback(this),
+        )
+    }
+    pub fn run(&self, this: &mut Desktop, command: Command) {
+        let Some(index) = self.live_index(this) else {
+            return;
+        };
+        self.with_scope(this, |this| this.run(index, command));
+    }
+}
+
+#[derive(Clone)]
 pub struct Menu {
-    pub server: usize,
+    pub origin: ActionOrigin,
+    pub invocation: u64,
+    pub user: Option<User>,
+    pub image: Option<crate::viewer::ViewerImage>,
+    pub message: Option<crate::selection::MessageMenu>,
     pub target: MenuTarget,
     pub position: Point<Pixels>,
 }
@@ -69,7 +239,7 @@ pub enum PromptAction {
 }
 
 pub struct Prompt {
-    pub server: usize,
+    pub origin: Option<ActionOrigin>,
     pub title: String,
     pub detail: String,
     pub confirm: &'static str,
@@ -78,10 +248,19 @@ pub struct Prompt {
     pub action: PromptAction,
 }
 
-type Action = Rc<dyn Fn(&mut Desktop, &mut Window, &mut Context<Desktop>)>;
+type Action = Rc<dyn Fn(&mut Desktop, usize, &mut Window, &mut Context<Desktop>)>;
+
+#[derive(Clone, Copy)]
+enum Access {
+    Local,
+    Bookmark,
+    Live,
+}
 
 enum Entry {
     Item {
+        key: String,
+        access: Access,
         label: String,
         icon: &'static str,
         danger: bool,
@@ -98,7 +277,7 @@ enum Entry {
 
 /// Whose volume a menu sets: a person's (by certificate hash) or a
 /// server's playback (by id).
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 enum Volume {
     User(String),
     Server(String),
@@ -122,30 +301,74 @@ impl Volume {
     }
 }
 
+#[track_caller]
 fn item(
     label: impl Into<String>,
     icon: &'static str,
-    action: impl Fn(&mut Desktop, &mut Window, &mut Context<Desktop>) + 'static,
+    action: impl Fn(&mut Desktop, usize, &mut Window, &mut Context<Desktop>) + 'static,
 ) -> Entry {
+    let label = label.into();
+    let caller = std::panic::Location::caller();
     Entry::Item {
-        label: label.into(),
+        key: format!("builtin:{}:{}", caller.file(), caller.line()),
+        access: Access::Live,
+        label,
         icon,
         danger: false,
         action: Rc::new(action),
     }
 }
 
+#[track_caller]
 fn danger(
     label: impl Into<String>,
     icon: &'static str,
-    action: impl Fn(&mut Desktop, &mut Window, &mut Context<Desktop>) + 'static,
+    action: impl Fn(&mut Desktop, usize, &mut Window, &mut Context<Desktop>) + 'static,
 ) -> Entry {
+    let label = label.into();
+    let caller = std::panic::Location::caller();
     Entry::Item {
-        label: label.into(),
+        key: format!("builtin:{}:{}", caller.file(), caller.line()),
+        access: Access::Live,
+        label,
         icon,
         danger: true,
         action: Rc::new(action),
     }
+}
+
+impl Entry {
+    fn access(mut self, access: Access) -> Self {
+        if let Self::Item {
+            access: current, ..
+        } = &mut self
+        {
+            *current = access;
+        }
+        self
+    }
+    fn key(mut self, key: String) -> Self {
+        if let Self::Item { key: current, .. } = &mut self {
+            *current = key;
+        }
+        self
+    }
+}
+#[track_caller]
+fn local_item(
+    label: impl Into<String>,
+    icon: &'static str,
+    action: impl Fn(&mut Desktop, usize, &mut Window, &mut Context<Desktop>) + 'static,
+) -> Entry {
+    item(label, icon, action).access(Access::Local)
+}
+#[track_caller]
+fn bookmark_item(
+    label: impl Into<String>,
+    icon: &'static str,
+    action: impl Fn(&mut Desktop, usize, &mut Window, &mut Context<Desktop>) + 'static,
+) -> Entry {
+    item(label, icon, action).access(Access::Bookmark)
 }
 
 impl Desktop {
@@ -168,8 +391,39 @@ impl Desktop {
                 }
             }
         }
+        self.make_menu(server, target, position);
+    }
+
+    pub fn make_menu(&mut self, server: usize, target: MenuTarget, position: Point<Pixels>) {
+        let Some(view) = self.client.servers.get(server) else {
+            return;
+        };
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        let mut origin = ActionOrigin::capture(view, target);
+        if target == MenuTarget::Message {
+            if let Some((_, channel)) = self.selected_indices() {
+                let selected = &view.channels[channel];
+                origin = ActionOrigin::capture(
+                    view,
+                    match selected.target {
+                        TextTarget::Channel(id) => MenuTarget::Channel(id),
+                        TextTarget::Direct(id) => MenuTarget::User(id),
+                        _ => MenuTarget::Message,
+                    },
+                );
+                origin.authority.conversations.extend(selected.conversation);
+            }
+            origin.conversation = self.client.navigation.selection().cloned();
+        }
         self.menu = Some(Menu {
-            server,
+            origin,
+            invocation: NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            user: match target {
+                MenuTarget::User(id) => view.users.get(&id).cloned(),
+                _ => None,
+            },
+            image: self.menu_image.clone(),
+            message: self.text.menu.clone(),
             target,
             position,
         });
@@ -222,8 +476,38 @@ impl Desktop {
             )
         });
         input.update(cx, |input, cx| input.focus(window, cx));
+        let target = match action {
+            PromptAction::Kick { session } | PromptAction::Ban { session } => {
+                MenuTarget::User(session)
+            }
+            PromptAction::CreateChannel { parent } => MenuTarget::Channel(parent),
+            _ => MenuTarget::Server,
+        };
+        let mut origin = self
+            .client
+            .servers
+            .get(server)
+            .map(|view| ActionOrigin::capture(view, target));
+        if matches!(action, PromptAction::DeleteMessage { .. }) {
+            if let Some(origin) = &mut origin {
+                if let Some((_, channel)) = self.selected_indices() {
+                    let view = &self.client.servers[server];
+                    let selected = &view.channels[channel];
+                    *origin = ActionOrigin::capture(
+                        view,
+                        match selected.target {
+                            TextTarget::Channel(id) => MenuTarget::Channel(id),
+                            TextTarget::Direct(id) => MenuTarget::User(id),
+                            _ => MenuTarget::Message,
+                        },
+                    );
+                    origin.authority.conversations.extend(selected.conversation);
+                }
+                origin.conversation = self.client.navigation.selection().cloned();
+            }
+        }
         self.prompt = Some(Prompt {
-            server,
+            origin,
             title,
             detail: detail.into(),
             confirm,
@@ -237,6 +521,38 @@ impl Desktop {
         let Some(prompt) = self.prompt.take() else {
             return;
         };
+        let local = matches!(
+            prompt.action,
+            PromptAction::Nickname { .. }
+                | PromptAction::ImportCertificate { .. }
+                | PromptAction::ExportCertificate
+        );
+        let persistent = matches!(prompt.action, PromptAction::Tokens);
+        let index = if local {
+            Some(usize::MAX)
+        } else if persistent {
+            prompt
+                .origin
+                .as_ref()
+                .and_then(|origin| origin.local_index(self))
+        } else {
+            prompt
+                .origin
+                .as_ref()
+                .and_then(|origin| origin.live_index(self))
+        };
+        let Some(index) = index else {
+            return;
+        };
+        if !local && !persistent {
+            let origin = prompt.origin.clone().expect("live prompt origin");
+            origin.with_scope(self, |this| this.apply_prompt(prompt, index, cx));
+        } else {
+            self.apply_prompt(prompt, index, cx);
+        }
+    }
+
+    fn apply_prompt(&mut self, prompt: Prompt, index: usize, cx: &mut Context<Self>) {
         let text = prompt.input.read(cx).value().to_string();
         let reason = (!text.trim().is_empty()).then(|| text.trim().to_string());
         let command = match prompt.action {
@@ -305,7 +621,7 @@ impl Desktop {
                 let temporary = self
                     .client
                     .servers
-                    .get(prompt.server)
+                    .get(index)
                     .is_some_and(|server| !server.may(parent, perm::MAKE_CHANNEL));
                 Command::CreateChannel {
                     parent,
@@ -331,7 +647,7 @@ impl Desktop {
                     .filter(|token| !token.is_empty())
                     .take(64)
                     .collect();
-                if let Some(server) = self.client.servers.get_mut(prompt.server) {
+                if let Some(server) = self.client.servers.get_mut(index) {
                     server.bookmark.tokens = tokens.clone();
                 }
                 let bookmarks: Vec<_> = self
@@ -346,7 +662,7 @@ impl Desktop {
                 Command::SetTokens(tokens)
             }
         };
-        self.run(prompt.server, command);
+        self.run(index, command);
     }
 
     pub fn import_certificate(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -392,16 +708,21 @@ impl Desktop {
     }
 
     pub fn whisper(&mut self, server: usize, target: VoiceTargetSpec, label: String) {
-        self.run(
-            server,
-            Command::SetVoiceTarget {
+        let Some(view) = self.client.servers.get_mut(server) else {
+            return;
+        };
+        // A failed enqueue leaves the old route and label intact. Once accepted
+        // by the actor, installation and selection are one transaction; a
+        // rejected replacement suspends outgoing voice instead of retaining it.
+        match self.driver.command(
+            &view.id,
+            Command::Whisper {
                 id: WHISPER_TARGET,
                 targets: vec![target],
             },
-        );
-        self.run(server, Command::SelectVoiceTarget(WHISPER_TARGET));
-        if let Some(view) = self.client.servers.get_mut(server) {
-            view.whisper = Some(label);
+        ) {
+            Ok(()) => view.whisper = Some(label),
+            Err(error) => view.notice = Some(error),
         }
     }
 
@@ -413,108 +734,158 @@ impl Desktop {
     }
 
     fn menu_entries(&self, menu: &Menu) -> Vec<Entry> {
-        let index = menu.server;
-        let Some(server) = self.client.servers.get(index) else {
-            return Vec::new();
+        let mut entries = Vec::new();
+        if matches!(menu.target, MenuTarget::Image | MenuTarget::Message) {
+            match menu.target {
+                MenuTarget::Image => {
+                    if let Some(image) = menu.image.clone() {
+                        let viewed = image.clone();
+                        if self.viewer.is_none() {
+                            entries.push(local_item(
+                                "Open image",
+                                "search",
+                                move |this, _index, _, _| this.open_viewer(viewed.clone()),
+                            ));
+                        }
+                        let copied = image.clone();
+                        entries.push(local_item(
+                            "Copy image",
+                            "copy",
+                            move |this, _index, _, cx| this.copy_image(copied.image.clone(), cx),
+                        ));
+                        if image.source.is_some() {
+                            entries.push(local_item(
+                                "Save image as…",
+                                "record",
+                                move |this, _index, _, cx| this.save_image(&image, cx),
+                            ));
+                        }
+                    }
+                }
+                MenuTarget::Message => {
+                    if let Some(message) = &menu.message {
+                        if let Some(link) = message.link.clone() {
+                            entries.push(local_item(
+                                "Copy link",
+                                "link",
+                                move |_, _index, _, cx| {
+                                    cx.write_to_clipboard(ClipboardItem::new_string(
+                                        link.to_string(),
+                                    ))
+                                },
+                            ));
+                        }
+                        if let Some(selection) = message.selection.clone() {
+                            entries.push(local_item("Copy", "copy", move |_, _index, _, cx| {
+                                cx.write_to_clipboard(ClipboardItem::new_string(
+                                    selection.to_string(),
+                                ))
+                            }));
+                        }
+                        if !message.text.is_empty() {
+                            let text = message.text.clone();
+                            entries.push(local_item(
+                                "Copy message",
+                                "copy",
+                                move |_, _index, _, cx| {
+                                    cx.write_to_clipboard(ClipboardItem::new_string(
+                                        text.to_string(),
+                                    ))
+                                },
+                            ));
+                        }
+                        // Nuschl servers: edit or delete (see editing.rs).
+                        let serial = message.serial;
+                        let (edit, delete) = self
+                            .selected_indices()
+                            .filter(|_| menu.origin.live_index(self).is_some())
+                            .and_then(|(server, channel)| {
+                                let view = &self.client.servers[server];
+                                let channel = &view.channels[channel];
+                                let message = channel
+                                    .timeline
+                                    .messages
+                                    .iter()
+                                    .find(|message| message.serial == serial)?;
+                                Some((
+                                    view.may_edit(channel, message),
+                                    view.may_delete(channel, message),
+                                ))
+                            })
+                            .unwrap_or_default();
+                        if edit || delete {
+                            entries.push(Entry::Separator);
+                        }
+                        if edit {
+                            entries.push(item(
+                                "Edit message",
+                                "pencil",
+                                move |this, _index, window, cx| this.start_edit(serial, window, cx),
+                            ));
+                        }
+                        if delete {
+                            entries.push(danger(
+                                "Delete message",
+                                "trash",
+                                move |this, _index, window, cx| {
+                                    this.confirm_delete(serial, window, cx)
+                                },
+                            ));
+                        }
+                    }
+                }
+                _ => unreachable!(),
+            }
+            return entries;
+        }
+        let Some(index) = menu.origin.local_index(self) else {
+            return entries;
         };
-        let connected = server.status == Status::Connected;
+        let server = &self.client.servers[index];
+        let connected = menu.origin.live_index(self).is_some();
         let own = server.own_session;
         let my_channel = server.voice_channel();
-        let mut entries = Vec::new();
         match menu.target {
-            MenuTarget::Image => {
-                if let Some(image) = self.menu_image.clone() {
-                    let viewed = image.clone();
-                    if self.viewer.is_none() {
-                        entries.push(item("Open image", "search", move |this, _, _| {
-                            this.open_viewer(viewed.clone())
-                        }));
-                    }
-                    let copied = image.clone();
-                    entries.push(item("Copy image", "copy", move |this, _, cx| {
-                        this.copy_image(copied.image.clone(), cx)
-                    }));
-                    if image.source.is_some() {
-                        entries.push(item("Save image as…", "record", move |this, _, cx| {
-                            this.save_image(&image, cx)
-                        }));
-                    }
-                }
-            }
-            MenuTarget::Message => {
-                if let Some(menu) = &self.text.menu {
-                    if let Some(link) = menu.link.clone() {
-                        entries.push(item("Copy link", "link", move |_, _, cx| {
-                            cx.write_to_clipboard(ClipboardItem::new_string(link.to_string()))
-                        }));
-                    }
-                    if let Some(selection) = menu.selection.clone() {
-                        entries.push(item("Copy", "copy", move |_, _, cx| {
-                            cx.write_to_clipboard(ClipboardItem::new_string(selection.to_string()))
-                        }));
-                    }
-                    if !menu.text.is_empty() {
-                        let text = menu.text.clone();
-                        entries.push(item("Copy message", "copy", move |_, _, cx| {
-                            cx.write_to_clipboard(ClipboardItem::new_string(text.to_string()))
-                        }));
-                    }
-                    // Nuschl servers: edit or delete (see editing.rs).
-                    let serial = menu.serial;
-                    let (edit, delete) = self
-                        .selected_indices()
-                        .and_then(|(server, channel)| {
-                            let view = &self.client.servers[server];
-                            let channel = &view.channels[channel];
-                            let message = channel
-                                .timeline
-                                .messages
-                                .iter()
-                                .find(|message| message.serial == serial)?;
-                            Some((
-                                view.may_edit(channel, message),
-                                view.may_delete(channel, message),
-                            ))
-                        })
-                        .unwrap_or_default();
-                    if edit || delete {
-                        entries.push(Entry::Separator);
-                    }
-                    if edit {
-                        entries.push(item("Edit message", "pencil", move |this, window, cx| {
-                            this.start_edit(serial, window, cx)
-                        }));
-                    }
-                    if delete {
-                        entries.push(danger(
-                            "Delete message",
-                            "trash",
-                            move |this, window, cx| this.confirm_delete(serial, window, cx),
-                        ));
-                    }
-                }
-            }
             MenuTarget::User(session) => {
-                let Some(user) = server.users.get(&session).cloned() else {
+                let Some(user) = menu
+                    .user
+                    .as_ref()
+                    .map(|original| {
+                        server
+                            .users
+                            .get(&session)
+                            .filter(|current| current.instance == original.instance)
+                            .unwrap_or(original)
+                    })
+                    .cloned()
+                else {
                     return entries;
                 };
                 let name = display_name(&user, &self.settings).to_string();
                 let mine = own == Some(session);
                 let channel = user.channel;
                 let registered = user.user_id.filter(|_| !mine);
-                entries.push(item("Profile and connection", "info", move |this, _, _| {
-                    this.run(index, Command::RequestStats(session));
-                    this.render_comment(index, session);
-                    if let Some(user_id) = registered {
-                        crate::identity::check(this, index, user_id, false);
-                    }
-                    this.panel = Some(Panel::UserInfo {
-                        server: index,
-                        session,
-                    });
-                }));
+                entries.push(item(
+                    "Profile and connection",
+                    "info",
+                    move |this, index, _, _| {
+                        this.run(index, Command::RequestStats(session));
+                        this.render_comment(index, session);
+                        if let Some(user_id) = registered {
+                            crate::identity::check(this, index, user_id, false);
+                        }
+                        this.panel = Some(Panel::UserInfo {
+                            origin: ActionOrigin::capture(
+                                &this.client.servers[index],
+                                MenuTarget::User(session),
+                            ),
+                            server: index,
+                            session,
+                        });
+                    },
+                ));
                 if mine {
-                    entries.push(item("Edit comment…", "pencil", move |this, window, cx| {
+                    entries.push(item("Edit comment…", "pencil", move |this, index, window, cx| {
                         let current = this.client.servers[index].users.get(&session).and_then(|user| user.comment.clone()).unwrap_or_default();
                         this.open_prompt(index, PromptAction::Comment, "Your comment", "Shown to others in your profile. Plain text; line breaks are kept.", strip_tags(&current), window, cx);
                     }));
@@ -522,14 +893,14 @@ impl Desktop {
                         entries.push(item(
                             "Register this name",
                             "certificate",
-                            move |this, _, _| this.run(index, Command::RegisterSelf),
+                            move |this, index, _, _| this.run(index, Command::RegisterSelf),
                         ));
                     }
                 } else {
                     entries.push(item(
                         "Send direct message",
                         "message",
-                        move |this, window, cx| this.open_direct(index, session, window, cx),
+                        move |this, index, window, cx| this.open_direct(index, session, window, cx),
                     ));
                     if let Some(hash) = user.certificate_hash.clone() {
                         entries.push(Entry::Volume {
@@ -537,22 +908,25 @@ impl Desktop {
                             volume: self.settings.volume_for(Some(&hash)),
                         });
                         let muted = self.settings.locally_muted(Some(&hash));
-                        entries.push(item(
-                            if muted {
-                                "Unmute for me"
-                            } else {
-                                "Mute for me"
-                            },
-                            if muted { "volume" } else { "mic-off" },
-                            move |this, _, _| {
-                                let hash = hash.clone();
-                                this.update_settings(|settings| {
-                                    if !settings.local_mutes.remove(&hash) {
-                                        settings.local_mutes.insert(hash);
-                                    }
-                                });
-                            },
-                        ));
+                        entries.push(
+                            local_item(
+                                if muted {
+                                    "Unmute for me"
+                                } else {
+                                    "Mute for me"
+                                },
+                                if muted { "volume" } else { "mic-off" },
+                                move |this, _index, _, _| {
+                                    let hash = hash.clone();
+                                    this.update_settings(|settings| {
+                                        if !settings.local_mutes.remove(&hash) {
+                                            settings.local_mutes.insert(hash);
+                                        }
+                                    });
+                                },
+                            )
+                            .key(format!("local-mute:{session}:{muted}")),
+                        );
                     }
                     match user.certificate_hash.clone() {
                         Some(hash) => people_entries(&mut entries, &self.settings, &user, hash),
@@ -565,7 +939,7 @@ impl Desktop {
                         entries.push(item(
                             format!("Whisper to {name}"),
                             "whisper",
-                            move |this, _, _| {
+                            move |this, index, _, _| {
                                 this.whisper(
                                     index,
                                     VoiceTargetSpec::Users(vec![session]),
@@ -577,16 +951,19 @@ impl Desktop {
                     if let Some(mine) = my_channel.filter(|mine| *mine != channel)
                         && server.may(mine, perm::MOVE)
                     {
-                        entries.push(item("Move to my channel", "volume", move |this, _, _| {
-                            this.run(
-                                index,
-                                Command::User {
-                                    session,
-                                    action: UserAction::Move(mine),
-                                    reason: None,
-                                },
-                            );
-                        }));
+                        entries.push(
+                            item("Move to my channel", "volume", move |this, index, _, _| {
+                                this.run(
+                                    index,
+                                    Command::User {
+                                        session,
+                                        action: UserAction::Move(mine),
+                                        reason: None,
+                                    },
+                                );
+                            })
+                            .key(format!("move-user:{session}:{mine}")),
+                        );
                     }
                 }
                 let moderate = server.may(channel, perm::MUTE_DEAFEN);
@@ -602,66 +979,75 @@ impl Desktop {
                 if moderate {
                     let (muted, deafened, priority) =
                         (user.muted, user.deafened, user.priority_speaker);
-                    entries.push(item(
-                        if muted {
-                            "Server unmute"
-                        } else {
-                            "Server mute"
-                        },
-                        "mic-off",
-                        move |this, _, _| {
-                            this.run(
-                                index,
-                                Command::User {
-                                    session,
-                                    action: UserAction::Mute(!muted),
-                                    reason: None,
-                                },
-                            );
-                        },
-                    ));
-                    entries.push(item(
-                        if deafened {
-                            "Server undeafen"
-                        } else {
-                            "Server deafen"
-                        },
-                        "headphones-off",
-                        move |this, _, _| {
-                            this.run(
-                                index,
-                                Command::User {
-                                    session,
-                                    action: UserAction::Deafen(!deafened),
-                                    reason: None,
-                                },
-                            );
-                        },
-                    ));
-                    entries.push(item(
-                        if priority {
-                            "Remove priority speaker"
-                        } else {
-                            "Make priority speaker"
-                        },
-                        "star",
-                        move |this, _, _| {
-                            this.run(
-                                index,
-                                Command::User {
-                                    session,
-                                    action: UserAction::PrioritySpeaker(!priority),
-                                    reason: None,
-                                },
-                            );
-                        },
-                    ));
+                    entries.push(
+                        item(
+                            if muted {
+                                "Server unmute"
+                            } else {
+                                "Server mute"
+                            },
+                            "mic-off",
+                            move |this, index, _, _| {
+                                this.run(
+                                    index,
+                                    Command::User {
+                                        session,
+                                        action: UserAction::Mute(!muted),
+                                        reason: None,
+                                    },
+                                );
+                            },
+                        )
+                        .key(format!("server-mute:{session}:{muted}")),
+                    );
+                    entries.push(
+                        item(
+                            if deafened {
+                                "Server undeafen"
+                            } else {
+                                "Server deafen"
+                            },
+                            "headphones-off",
+                            move |this, index, _, _| {
+                                this.run(
+                                    index,
+                                    Command::User {
+                                        session,
+                                        action: UserAction::Deafen(!deafened),
+                                        reason: None,
+                                    },
+                                );
+                            },
+                        )
+                        .key(format!("server-deafen:{session}:{deafened}")),
+                    );
+                    entries.push(
+                        item(
+                            if priority {
+                                "Remove priority speaker"
+                            } else {
+                                "Make priority speaker"
+                            },
+                            "star",
+                            move |this, index, _, _| {
+                                this.run(
+                                    index,
+                                    Command::User {
+                                        session,
+                                        action: UserAction::PrioritySpeaker(!priority),
+                                        reason: None,
+                                    },
+                                );
+                            },
+                        )
+                        .key(format!("priority:{session}:{priority}")),
+                    );
                 }
                 if !mine && user.user_id.is_none() && root(perm::REGISTER) {
                     entries.push(item(
                         format!("Register {name}"),
                         "certificate",
-                        move |this, _, _| {
+                        move |this, index, _, _| {
                             this.run(
                                 index,
                                 Command::User {
@@ -674,7 +1060,7 @@ impl Desktop {
                     ));
                 }
                 if root(perm::RESET_USER_CONTENT) {
-                    entries.push(item("Reset comment", "pencil", move |this, _, _| {
+                    entries.push(item("Reset comment", "pencil", move |this, index, _, _| {
                         this.run(
                             index,
                             Command::User {
@@ -684,7 +1070,7 @@ impl Desktop {
                             },
                         );
                     }));
-                    entries.push(item("Reset avatar", "user", move |this, _, _| {
+                    entries.push(item("Reset avatar", "user", move |this, index, _, _| {
                         this.run(
                             index,
                             Command::User {
@@ -697,31 +1083,39 @@ impl Desktop {
                 }
                 if !mine && root(perm::KICK) {
                     let title = format!("Kick {name}");
-                    entries.push(danger("Kick…", "hang-up", move |this, window, cx| {
-                        this.open_prompt(
-                            index,
-                            PromptAction::Kick { session },
-                            title.clone(),
-                            "Optional reason, shown to the user.",
-                            String::new(),
-                            window,
-                            cx,
-                        );
-                    }));
+                    entries.push(danger(
+                        "Kick…",
+                        "hang-up",
+                        move |this, index, window, cx| {
+                            this.open_prompt(
+                                index,
+                                PromptAction::Kick { session },
+                                title.clone(),
+                                "Optional reason, shown to the user.",
+                                String::new(),
+                                window,
+                                cx,
+                            );
+                        },
+                    ));
                 }
                 if !mine && root(perm::BAN) {
                     let title = format!("Ban {name}");
-                    entries.push(danger("Ban…", "shield", move |this, window, cx| {
-                        this.open_prompt(
-                            index,
-                            PromptAction::Ban { session },
-                            title.clone(),
-                            "Bans this certificate and address. Optional reason.",
-                            String::new(),
-                            window,
-                            cx,
-                        );
-                    }));
+                    entries.push(danger(
+                        "Ban…",
+                        "shield",
+                        move |this, index, window, cx| {
+                            this.open_prompt(
+                                index,
+                                PromptAction::Ban { session },
+                                title.clone(),
+                                "Bans this certificate and address. Optional reason.",
+                                String::new(),
+                                window,
+                                cx,
+                            );
+                        },
+                    ));
                 }
                 push_context_actions(
                     &mut entries,
@@ -746,49 +1140,56 @@ impl Desktop {
                     .is_some_and(|user| user.listening.contains(&channel));
                 if connected && my_channel != Some(channel) && server.may_try(channel, perm::ENTER)
                 {
-                    entries.push(item("Join channel", "volume", move |this, _, _| {
+                    entries.push(item("Join channel", "volume", move |this, index, _, _| {
                         this.run(index, Command::Join(channel))
                     }));
                 }
                 if connected && my_channel != Some(channel) && server.may_try(channel, perm::LISTEN)
                 {
-                    entries.push(item(
-                        if listening {
-                            "Stop listening"
-                        } else {
-                            "Listen to channel"
-                        },
-                        "ear",
-                        move |this, _, _| {
-                            this.run(
-                                index,
-                                Command::Listen {
-                                    channel,
-                                    listen: !listening,
-                                },
-                            );
-                        },
-                    ));
+                    entries.push(
+                        item(
+                            if listening {
+                                "Stop listening"
+                            } else {
+                                "Listen to channel"
+                            },
+                            "ear",
+                            move |this, index, _, _| {
+                                this.run(
+                                    index,
+                                    Command::Listen {
+                                        channel,
+                                        listen: !listening,
+                                    },
+                                );
+                            },
+                        )
+                        .key(format!("listen:{channel}:{listening}")),
+                    );
                 }
                 if connected && server.may_try(channel, perm::WHISPER) {
                     let label = format!("Shouting to #{}", view.name);
-                    entries.push(item("Shout to channel", "whisper", move |this, _, _| {
-                        this.whisper(
-                            index,
-                            VoiceTargetSpec::Channel {
-                                channel,
-                                links: false,
-                                children: false,
-                                group: None,
-                            },
-                            label.clone(),
-                        );
-                    }));
+                    entries.push(item(
+                        "Shout to channel",
+                        "whisper",
+                        move |this, index, _, _| {
+                            this.whisper(
+                                index,
+                                VoiceTargetSpec::Channel {
+                                    channel,
+                                    links: false,
+                                    children: false,
+                                    group: None,
+                                },
+                                label.clone(),
+                            );
+                        },
+                    ));
                     let label = format!("Shouting to #{} and sub-channels", view.name);
                     entries.push(item(
                         "Shout to channel and sub-channels",
                         "whisper",
-                        move |this, _, _| {
+                        move |this, index, _, _| {
                             this.whisper(
                                 index,
                                 VoiceTargetSpec::Channel {
@@ -806,52 +1207,63 @@ impl Desktop {
                     && server.may(channel, perm::LINK_CHANNEL)
                 {
                     let linked = links.contains(&mine);
-                    entries.push(item(
-                        if linked {
-                            "Unlink from my channel"
-                        } else {
-                            "Link with my channel"
-                        },
-                        "link",
-                        move |this, _, _| {
-                            let (add, remove) = if linked {
-                                (vec![], vec![mine])
+                    entries.push(
+                        item(
+                            if linked {
+                                "Unlink from my channel"
                             } else {
-                                (vec![mine], vec![])
-                            };
+                                "Link with my channel"
+                            },
+                            "link",
+                            move |this, index, _, _| {
+                                let (add, remove) = if linked {
+                                    (vec![], vec![mine])
+                                } else {
+                                    (vec![mine], vec![])
+                                };
+                                this.run(
+                                    index,
+                                    Command::LinkChannels {
+                                        channel,
+                                        add,
+                                        remove,
+                                    },
+                                );
+                            },
+                        )
+                        .key(format!("link:{channel}:{mine}:{linked}")),
+                    );
+                }
+                if !links.is_empty() && server.may(channel, perm::LINK_CHANNEL) {
+                    let links_key = format!("{links:?}");
+                    entries.push(
+                        item("Unlink all", "link", move |this, index, _, _| {
                             this.run(
                                 index,
                                 Command::LinkChannels {
                                     channel,
-                                    add,
-                                    remove,
+                                    add: vec![],
+                                    remove: links.iter().copied().collect(),
                                 },
                             );
-                        },
-                    ));
+                        })
+                        .key(format!("unlink-all:{channel}:{links_key}")),
+                    );
                 }
-                if !links.is_empty() && server.may(channel, perm::LINK_CHANNEL) {
-                    entries.push(item("Unlink all", "link", move |this, _, _| {
-                        this.run(
-                            index,
-                            Command::LinkChannels {
-                                channel,
-                                add: vec![],
-                                remove: links.iter().copied().collect(),
-                            },
-                        );
-                    }));
-                }
-                entries.push(item("Copy link", "link", move |this, _, cx| {
+                entries.push(item("Copy link", "link", move |this, index, _, cx| {
                     if let Some(url) = this.channel_url(index, channel) {
                         cx.write_to_clipboard(ClipboardItem::new_string(url));
                     }
                 }));
                 // A link that opens Nuschl, or the channel in a browser
                 // (docs/web.md, "Share links").
-                entries.push(item("Copy share link", "link", move |this, _, cx| {
-                    this.copy_share_link(index, channel, cx);
-                }));
+                entries.push(item(
+                    "Copy share link",
+                    "link",
+                    move |this, index, _, cx| {
+                        this.copy_share_link(index, channel, cx);
+                    },
+                ));
                 let write = server.may(channel, perm::WRITE);
                 let create = server.may(channel, perm::MAKE_CHANNEL)
                     || server.may(channel, perm::MAKE_TEMP_CHANNEL);
@@ -859,7 +1271,7 @@ impl Desktop {
                     entries.push(Entry::Separator);
                 }
                 if connected && create {
-                    entries.push(item("Create sub-channel…", "plus", move |this, window, cx| {
+                    entries.push(item("Create sub-channel…", "plus", move |this, index, window, cx| {
                         let temporary = !this.client.servers[index].may(channel, perm::MAKE_CHANNEL);
                         this.open_prompt(
                             index,
@@ -876,23 +1288,33 @@ impl Desktop {
                     entries.push(item(
                         "Edit channel…",
                         "pencil",
-                        move |this, window, cx| {
+                        move |this, index, window, cx| {
                             this.open_channel_editor(index, channel, window, cx)
                         },
                     ));
-                    entries.push(item("Edit permissions…", "shield", move |this, _, _| {
-                        this.client.servers[index].acl = None;
-                        this.run(index, Command::QueryAcl(channel));
-                        this.panel = Some(Panel::Acl {
-                            server: index,
-                            channel,
-                        });
-                    }));
+                    entries.push(item(
+                        "Edit permissions…",
+                        "shield",
+                        move |this, index, _, _| {
+                            this.client.servers[index].acl = None;
+                            this.run(index, Command::QueryAcl(channel));
+                            this.panel = Some(Panel::Acl {
+                                origin: ActionOrigin::capture(
+                                    &this.client.servers[index],
+                                    MenuTarget::Channel(channel),
+                                ),
+                                server: index,
+                                channel,
+                            });
+                        },
+                    ));
                     if channel != 0 {
                         entries.push(danger(
                             "Remove channel",
                             "window-close",
-                            move |this, _, _| this.run(index, Command::RemoveChannel(channel)),
+                            move |this, index, _, _| {
+                                this.run(index, Command::RemoveChannel(channel))
+                            },
                         ));
                     }
                 }
@@ -914,9 +1336,11 @@ impl Desktop {
                         nuschl_client::voice::Role::Listening
                             | nuschl_client::voice::Role::Deafened
                     ) {
-                        entries.push(item("Use voice here", "mic", move |this, _, _| {
-                            this.use_voice_here(index)
-                        }));
+                        entries.push(bookmark_item(
+                            "Use voice here",
+                            "mic",
+                            move |this, index, _, _| this.use_voice_here(index),
+                        ));
                     }
                     entries.push(Entry::Volume {
                         of: Volume::Server(server.id.clone()),
@@ -924,9 +1348,19 @@ impl Desktop {
                     });
                     entries.push(Entry::Separator);
                 }
-                entries.push(item("Connection info", "signal", move |this, _, _| {
-                    this.panel = Some(Panel::Connection { server: index })
-                }));
+                entries.push(bookmark_item(
+                    "Connection info",
+                    "signal",
+                    move |this, index, _, _| {
+                        this.panel = Some(Panel::Connection {
+                            server: index,
+                            origin: ActionOrigin::capture(
+                                &this.client.servers[index],
+                                MenuTarget::Server,
+                            ),
+                        })
+                    },
+                ));
                 if connected {
                     let registered = own
                         .and_then(|own| server.users.get(&own))
@@ -935,34 +1369,52 @@ impl Desktop {
                         entries.push(item(
                             "Register your name",
                             "certificate",
-                            move |this, _, _| this.run(index, Command::RegisterSelf),
+                            move |this, index, _, _| this.run(index, Command::RegisterSelf),
                         ));
                     }
                     // managed.json declares a managed server's tokens.
                     if !server.bookmark.managed {
                         let tokens = server.bookmark.tokens.join(", ");
-                        entries.push(item("Access tokens…", "keyboard", move |this, window, cx| {
+                        entries.push(bookmark_item("Access tokens…", "keyboard", move |this, index, window, cx| {
                             this.open_prompt(index, PromptAction::Tokens, "Access tokens", "Comma-separated. Tokens grant membership in password-protected groups and are saved with this server.", tokens.clone(), window, cx);
                         }));
                     }
                     if server.may(0, perm::REGISTER) {
-                        entries.push(item("Registered users…", "user", move |this, _, _| {
-                            this.client.servers[index].registered_users = None;
-                            this.run(index, Command::QueryRegisteredUsers);
-                            this.panel = Some(Panel::RegisteredUsers { server: index });
-                        }));
+                        entries.push(item(
+                            "Registered users…",
+                            "user",
+                            move |this, index, _, _| {
+                                this.client.servers[index].registered_users = None;
+                                this.run(index, Command::QueryRegisteredUsers);
+                                this.panel = Some(Panel::RegisteredUsers {
+                                    server: index,
+                                    origin: ActionOrigin::capture(
+                                        &this.client.servers[index],
+                                        MenuTarget::Server,
+                                    ),
+                                });
+                            },
+                        ));
                     }
                     if server.may(0, perm::BAN) {
-                        entries.push(item("Ban list…", "shield", move |this, _, _| {
+                        entries.push(item("Ban list…", "shield", move |this, index, _, _| {
                             this.client.servers[index].bans = None;
                             this.run(index, Command::QueryBans);
-                            this.panel = Some(Panel::Bans { server: index });
+                            this.panel = Some(Panel::Bans {
+                                server: index,
+                                origin: ActionOrigin::capture(
+                                    &this.client.servers[index],
+                                    MenuTarget::Server,
+                                ),
+                            });
                         }));
                     }
                 }
-                entries.push(item("Edit server…", "pencil", move |this, window, cx| {
-                    this.open_form(Some(index), window, cx)
-                }));
+                entries.push(bookmark_item(
+                    "Edit server…",
+                    "pencil",
+                    move |this, index, window, cx| this.open_form(Some(index), window, cx),
+                ));
                 if let Some(position) = self
                     .client
                     .server_order()
@@ -971,23 +1423,27 @@ impl Desktop {
                 {
                     if position > 0 {
                         let id = server.id.clone();
-                        entries.push(item(
+                        entries.push(bookmark_item(
                             "Move server earlier",
                             "chevron-up",
-                            move |this, window, cx| this.move_saved_server(&id, -1, window, cx),
+                            move |this, _index, window, cx| {
+                                this.move_saved_server(&id, -1, window, cx)
+                            },
                         ));
                     }
                     if position + 1 < self.client.server_order().len() {
                         let id = server.id.clone();
-                        entries.push(item(
+                        entries.push(bookmark_item(
                             "Move server later",
                             "chevron-down",
-                            move |this, window, cx| this.move_saved_server(&id, 1, window, cx),
+                            move |this, _index, window, cx| {
+                                this.move_saved_server(&id, 1, window, cx)
+                            },
                         ));
                     }
                 }
                 if connected {
-                    entries.push(danger("Disconnect", "hang-up", move |this, _, _| {
+                    entries.push(danger("Disconnect", "hang-up", move |this, index, _, _| {
                         this.disconnect(index)
                     }));
                 }
@@ -1000,8 +1456,81 @@ impl Desktop {
                     None,
                 );
             }
+            MenuTarget::Image | MenuTarget::Message => unreachable!(),
         }
+        entries.retain(|entry| {
+            !matches!(
+                entry,
+                Entry::Item {
+                    access: Access::Live,
+                    ..
+                }
+            ) || connected
+        });
         entries
+    }
+
+    pub(crate) fn reconcile_delayed_actions(&mut self) {
+        if let Some(panel) = self.panel.as_ref() {
+            let index = panel.origin().and_then(|origin| match panel {
+                Panel::Connection { .. } => origin.local_index(self),
+                _ => origin.live_index(self),
+            });
+            if panel.origin().is_some() {
+                match index {
+                    Some(index) => {
+                        if let Some(panel) = self.panel.as_mut() {
+                            panel.set_server(index);
+                        }
+                    }
+                    None => self.panel = None,
+                }
+            }
+        }
+    }
+
+    fn activate_menu(
+        &mut self,
+        menu: &Menu,
+        key: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self
+            .menu
+            .as_ref()
+            .is_none_or(|current| current.invocation != menu.invocation)
+        {
+            return;
+        }
+        let Some(Entry::Item { action, access, .. }) = self
+            .menu_entries(menu)
+            .into_iter()
+            .find(|entry| matches!(entry, Entry::Item { key: current, .. } if current == key))
+        else {
+            return;
+        };
+        let index = match access {
+            Access::Local => menu.origin.local_index(self).unwrap_or(usize::MAX),
+            Access::Bookmark => match menu.origin.local_index(self) {
+                Some(index) => index,
+                None => return,
+            },
+            Access::Live => match menu.origin.live_index(self) {
+                Some(index) => index,
+                None => return,
+            },
+        };
+        let activate = |this: &mut Self| {
+            this.menu = None;
+            window.focus(&this.window_focus, cx);
+            action(this, index, window, cx);
+        };
+        if matches!(access, Access::Live) {
+            menu.origin.with_scope(self, activate);
+        } else {
+            activate(self);
+        }
     }
 
     pub fn channel_url(&self, server: usize, channel: u32) -> Option<String> {
@@ -1084,17 +1613,25 @@ impl Desktop {
                 .ui_of(server)
                 .is_some_and(|ui| ui.descriptions.contains_key(&channel))
         {
-            let id = self.client.servers[server].id.clone();
-            let _ = self.driver.command(
-                &id,
-                Command::RequestBlobs {
-                    textures: vec![],
-                    comments: vec![],
-                    descriptions: vec![channel],
-                },
-            );
+            let origin =
+                ActionOrigin::capture(&self.client.servers[server], MenuTarget::Channel(channel));
+            origin.with_scope(self, |this| {
+                let id = this.client.servers[server].id.clone();
+                let _ = this.driver.command(
+                    &id,
+                    Command::RequestBlobs {
+                        textures: vec![],
+                        comments: vec![],
+                        descriptions: vec![channel],
+                    },
+                );
+            });
         }
         self.panel = Some(Panel::ChannelEdit {
+            origin: ActionOrigin::capture(
+                &self.client.servers[server],
+                MenuTarget::Channel(channel),
+            ),
             server,
             channel,
             name,
@@ -1106,7 +1643,8 @@ impl Desktop {
 
     pub fn save_channel_editor(&mut self, cx: &mut Context<Self>) {
         let Some(Panel::ChannelEdit {
-            server,
+            origin,
+            server: _,
             channel,
             name,
             description,
@@ -1116,15 +1654,20 @@ impl Desktop {
         else {
             return;
         };
-        let read = |input: &Entity<InputState>| input.read(cx).value().to_string();
-        let edit = ChannelEdit {
-            name: Some(read(&name).trim().to_string()).filter(|name| !name.is_empty()),
-            description: Some(read(&description)),
-            position: read(&position).trim().parse().ok(),
-            max_users: read(&max_users).trim().parse().ok(),
-            parent: None,
+        let Some(server) = origin.live_index(self) else {
+            return;
         };
-        self.run(server, Command::EditChannel { channel, edit });
+        origin.with_scope(self, |this| {
+            let read = |input: &Entity<InputState>| input.read(cx).value().to_string();
+            let edit = ChannelEdit {
+                name: Some(read(&name).trim().to_string()).filter(|name| !name.is_empty()),
+                description: Some(read(&description)),
+                position: read(&position).trim().parse().ok(),
+                max_users: read(&max_users).trim().parse().ok(),
+                parent: None,
+            };
+            this.run(server, Command::EditChannel { channel, edit });
+        });
     }
 
     pub fn render_comment(&mut self, server: usize, session: u32) {
@@ -1159,16 +1702,20 @@ fn push_context_actions(
     entries.push(Entry::Separator);
     for action in actions {
         let name = action.action.clone();
-        entries.push(item(action.text.clone(), "more", move |this, _, _| {
-            this.run(
-                index,
-                Command::ContextAction {
-                    action: name.clone(),
-                    session,
-                    channel,
-                },
-            );
-        }));
+        let key = format!("context:{name}:{session:?}:{channel:?}");
+        entries.push(
+            item(action.text.clone(), "more", move |this, index, _, _| {
+                this.run(
+                    index,
+                    Command::ContextAction {
+                        action: name.clone(),
+                        session,
+                        channel,
+                    },
+                );
+            })
+            .key(key),
+        );
     }
 }
 
@@ -1186,29 +1733,37 @@ fn people_entries(
         .to_string();
     if settings.friend(Some(&hash)).is_some() {
         let hash = hash.clone();
-        entries.push(item("Remove friend", "heart", move |this, _, _| {
-            this.update_settings(|settings| {
-                settings.friends.remove(&hash);
-            })
-        }));
+        entries.push(local_item(
+            "Remove friend",
+            "heart",
+            move |this, _index, _, _| {
+                this.update_settings(|settings| {
+                    settings.friends.remove(&hash);
+                })
+            },
+        ));
     } else {
         let (hash, name) = (hash.clone(), user.name.clone());
-        entries.push(item("Add friend", "heart", move |this, _, _| {
-            let mut full = false;
-            this.update_settings(|settings| full = !settings.add_friend(&hash, &name));
-            if full {
-                this.error = Some(format!(
-                    "You have {} friends, the most Nuschl keeps.",
-                    nuschl_session::config::MAX_PEOPLE
-                ));
-            }
-        }));
+        entries.push(local_item(
+            "Add friend",
+            "heart",
+            move |this, _index, _, _| {
+                let mut full = false;
+                this.update_settings(|settings| full = !settings.add_friend(&hash, &name));
+                if full {
+                    this.error = Some(format!(
+                        "You have {} friends, the most Nuschl keeps.",
+                        nuschl_session::config::MAX_PEOPLE
+                    ));
+                }
+            },
+        ));
     }
     let name = user.name.clone();
-    entries.push(item(
+    entries.push(local_item(
         "Set nickname…",
         "pencil",
-        move |this, window, cx| {
+        move |this, _index, window, cx| {
             this.open_prompt(
                 usize::MAX,
                 PromptAction::Nickname { hash: hash.clone() },
@@ -1403,16 +1958,22 @@ pub fn menu(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement> {
                 .child(text!(note).with_id(("menu-note-text", index)))
                 .into_any_element(),
             Entry::Item {
+                key,
+                access: _,
                 label,
                 icon: name,
                 danger,
                 action,
             } => {
-                let key_action = action.clone();
+                let _ = action;
+                let pointer_key = key.clone();
+                let keyboard_key = key.clone();
+                let origin_menu = menu.clone();
+                let key_menu = menu.clone();
                 let foreground = if danger { DANGER_HOVER } else { TEXT };
                 let control = div()
-                    .id(("menu-item", index))
-                    .group(SharedString::from(format!("menu-item-{index}")))
+                    .id(SharedString::from(format!("menu-item:{key}")))
+                    .group(SharedString::from(format!("menu-item:{key}")))
                     .role(Role::MenuItem)
                     .aria_label(label.clone())
                     .tab_index(0)
@@ -1439,18 +2000,14 @@ pub fn menu(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement> {
                     })
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .on_click(cx.listener(move |this, _, window, cx| {
-                        this.menu = None;
-                        window.focus(&this.window_focus, cx);
-                        action(this, window, cx);
+                        this.activate_menu(&origin_menu, &pointer_key, window, cx);
                         cx.notify();
                     }))
                     .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
                         if !event.keystroke.modifiers.modified()
                             && (event.keystroke.key == "enter" || event.keystroke.key == "space")
                         {
-                            this.menu = None;
-                            window.focus(&this.window_focus, cx);
-                            key_action(this, window, cx);
+                            this.activate_menu(&key_menu, &keyboard_key, window, cx);
                             cx.notify();
                             cx.stop_propagation();
                         }
@@ -1461,7 +2018,7 @@ pub fn menu(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement> {
                             15.,
                             color(if danger { DANGER_HOVER } else { TEXT_MUTED }),
                         )
-                        .group_hover(SharedString::from(format!("menu-item-{index}")), |style| {
+                        .group_hover(SharedString::from(format!("menu-item:{key}")), |style| {
                             style.text_color(color(WHITE))
                         }),
                     )
@@ -1470,16 +2027,19 @@ pub fn menu(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement> {
                             .whitespace_normal()
                             .child(text!(label).with_id(("menu-label", index))),
                     );
-                crate::layout::focusable(("menu-focus", index), control)
+                crate::layout::focusable(SharedString::from(format!("menu-focus:{key}")), control)
             }
             Entry::Volume { of, volume } => {
                 let what = match &of {
                     Volume::User(_) => "Volume",
                     Volume::Server(_) => "Server volume",
                 };
+                let volume_key = format!("volume:{of:?}");
+                let down_key: SharedString = format!("volume-down:{of:?}").into();
+                let up_key: SharedString = format!("volume-up:{of:?}").into();
                 let (down, up) = (of.clone(), of);
                 div()
-                    .id(("menu-volume", index))
+                    .id(SharedString::from(volume_key))
                     .role(Role::Slider)
                     .aria_label(format!("{what} {:.0}%", volume * 100.))
                     .min_w_0()
@@ -1499,7 +2059,7 @@ pub fn menu(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement> {
                         ),
                     )
                     .child(named_button(
-                        ("volume-down", index),
+                        down_key,
                         "−",
                         format!("{what} quieter"),
                         Tone::Secondary,
@@ -1510,7 +2070,7 @@ pub fn menu(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement> {
                         cx,
                     ))
                     .child(named_button(
-                        ("volume-up", index),
+                        up_key,
                         "+",
                         format!("{what} louder"),
                         Tone::Secondary,
@@ -1554,11 +2114,7 @@ pub fn menu(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement> {
                 }
             }))
             .child(MenuSurface {
-                identity: format!(
-                    "context-menu:{}:{:?}:{:?}",
-                    menu.server, menu.target, menu.position
-                )
-                .into(),
+                identity: format!("context-menu:{}", menu.invocation).into(),
                 position: menu.position,
                 rows,
             })

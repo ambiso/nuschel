@@ -1038,6 +1038,14 @@ listed below. Plugin data remains the explicit gap.
       stale-action cases with private servers, then reject obsolete actions
       before dispatch. Channel actions need equivalent lifecycle review. This
       is a source-level finding; the menu geometry proof does not establish it.
+- [ ] Give mutable administrative panel drafts stable response/row identities.
+      Source review finds ACL rules and ban-list controls use vector positions;
+      replacing a response for the same server/channel while a panel remains
+      open can overwrite an unsaved draft or change which row an old control
+      edits. Registered-user controls instead use persistent account IDs, not
+      online sessions; review response replacement separately from user-presence
+      leases. This is a separate source finding, not covered by menu geometry,
+      semantic context-menu focus, or original server/connection target guards.
 - [ ] Close the enqueue-to-consume authority gap for delayed native actions.
       Source review finds that the native command queue survives automatic
       reconnects, while numeric user/channel targets are checked only for current

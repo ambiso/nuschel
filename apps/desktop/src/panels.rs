@@ -3,6 +3,7 @@
 use crate::{
     assets::icon,
     dialogs::{Tone, modal, styled_button},
+    menus::ActionOrigin,
     state::{Desktop, ServerView, Status},
     theme::{self, *},
     view::document_blocks,
@@ -19,6 +20,7 @@ use nuschl_session::{
 
 pub enum Panel {
     UserInfo {
+        origin: ActionOrigin,
         server: usize,
         session: u32,
     },
@@ -28,19 +30,24 @@ pub enum Panel {
         server: usize,
     },
     Connection {
+        origin: ActionOrigin,
         server: usize,
     },
     RegisteredUsers {
+        origin: ActionOrigin,
         server: usize,
     },
     Bans {
+        origin: ActionOrigin,
         server: usize,
     },
     Acl {
+        origin: ActionOrigin,
         server: usize,
         channel: u32,
     },
     ChannelEdit {
+        origin: ActionOrigin,
         server: usize,
         channel: u32,
         name: Entity<InputState>,
@@ -48,6 +55,31 @@ pub enum Panel {
         position: Entity<InputState>,
         max_users: Entity<InputState>,
     },
+}
+
+impl Panel {
+    pub(crate) fn origin(&self) -> Option<&ActionOrigin> {
+        match self {
+            Self::UserInfo { origin, .. }
+            | Self::Connection { origin, .. }
+            | Self::RegisteredUsers { origin, .. }
+            | Self::Bans { origin, .. }
+            | Self::Acl { origin, .. }
+            | Self::ChannelEdit { origin, .. } => Some(origin),
+            Self::IdentityAlarm { .. } => None,
+        }
+    }
+    pub(crate) fn set_server(&mut self, index: usize) {
+        match self {
+            Self::UserInfo { server, .. }
+            | Self::Connection { server, .. }
+            | Self::RegisteredUsers { server, .. }
+            | Self::Bans { server, .. }
+            | Self::Acl { server, .. }
+            | Self::ChannelEdit { server, .. } => *server = index,
+            Self::IdentityAlarm { .. } => {}
+        }
+    }
 }
 
 fn heading(title: String, cx: &mut Context<Desktop>) -> AnyElement {
@@ -114,7 +146,12 @@ fn duration(seconds: u32) -> String {
 pub fn panel(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement> {
     let panel = this.panel.as_ref()?;
     let (title, width, body): (String, f32, AnyElement) = match panel {
-        Panel::UserInfo { server, session } => {
+        Panel::UserInfo {
+            server: _,
+            session,
+            origin,
+        } => {
+            let server = &origin.live_index(this)?;
             let server_view = this.client.servers.get(*server)?;
             let user = server_view.users.get(session)?;
             let stats = server_view.stats.get(session);
@@ -325,9 +362,10 @@ pub fn panel(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement> {
                     "Refresh",
                     Tone::Secondary,
                     {
-                        let (server, session) = (*server, *session);
+                        let session = *session;
+                        let origin = origin.clone();
                         move |this, _, cx| {
-                            this.run(server, Command::RequestStats(session));
+                            origin.run(this, Command::RequestStats(session));
                             cx.notify();
                         }
                     },
@@ -336,7 +374,8 @@ pub fn panel(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement> {
                 .into_any_element();
             ("Profile".into(), 520., body)
         }
-        Panel::Connection { server } => {
+        Panel::Connection { server: _, origin } => {
+            let server = &origin.local_index(this)?;
             let view = this.client.servers.get(*server)?;
             let mut rows = vec![
                 row(
@@ -447,7 +486,8 @@ pub fn panel(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement> {
                     .into_any_element(),
             )
         }
-        Panel::RegisteredUsers { server } => {
+        Panel::RegisteredUsers { server: _, origin } => {
+            let server = &origin.live_index(this)?;
             let view = this.client.servers.get(*server)?;
             let index = *server;
             let body = match &view.registered_users {
@@ -496,25 +536,34 @@ pub fn panel(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement> {
                                     ("unregister", position),
                                     "Unregister",
                                     Tone::Ghost,
-                                    move |this, _, cx| {
-                                        if let Some(users) =
-                                            this.client.servers[index].registered_users.as_mut()
-                                        {
-                                            users.retain(|user| user.user_id != id);
+                                    {
+                                        let origin = origin.clone();
+                                        move |this, _, cx| {
+                                            let Some(index) = origin.live_index(this) else {
+                                                return;
+                                            };
+                                            origin.with_scope(this, |this| {
+                                                if let Some(users) = this.client.servers[index]
+                                                    .registered_users
+                                                    .as_mut()
+                                                {
+                                                    users.retain(|user| user.user_id != id);
+                                                }
+                                                // A user without a name is unregistered by the server.
+                                                this.run(
+                                                    index,
+                                                    Command::UpdateRegisteredUsers(vec![
+                                                        nuschl_session::model::RegisteredUser {
+                                                            user_id: id,
+                                                            name: None,
+                                                            last_seen: None,
+                                                            last_channel: None,
+                                                        },
+                                                    ]),
+                                                );
+                                                cx.notify();
+                                            });
                                         }
-                                        // A user without a name is unregistered by the server.
-                                        this.run(
-                                            index,
-                                            Command::UpdateRegisteredUsers(vec![
-                                                nuschl_session::model::RegisteredUser {
-                                                    user_id: id,
-                                                    name: None,
-                                                    last_seen: None,
-                                                    last_channel: None,
-                                                },
-                                            ]),
-                                        );
-                                        cx.notify();
                                     },
                                     cx,
                                 ))
@@ -530,7 +579,8 @@ pub fn panel(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement> {
             let body = crate::identity::alarm(this, *server, alarm, cx);
             (format!("Your identity on {}", view.name), 520., body)
         }
-        Panel::Bans { server } => {
+        Panel::Bans { server: _, origin } => {
+            let server = &origin.live_index(this)?;
             let view = this.client.servers.get(*server)?;
             let index = *server;
             let body = match &view.bans {
@@ -595,15 +645,25 @@ pub fn panel(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement> {
                                 ("unban", position),
                                 "Remove",
                                 Tone::Ghost,
-                                move |this, _, cx| {
-                                    if let Some(bans) = this.client.servers[index].bans.as_mut() {
-                                        if position < bans.len() {
-                                            bans.remove(position);
-                                        }
-                                        let bans = bans.clone();
-                                        this.run(index, Command::UpdateBans(bans));
+                                {
+                                    let origin = origin.clone();
+                                    move |this, _, cx| {
+                                        let Some(index) = origin.live_index(this) else {
+                                            return;
+                                        };
+                                        origin.with_scope(this, |this| {
+                                            if let Some(bans) =
+                                                this.client.servers[index].bans.as_mut()
+                                            {
+                                                if position < bans.len() {
+                                                    bans.remove(position);
+                                                }
+                                                let bans = bans.clone();
+                                                this.run(index, Command::UpdateBans(bans));
+                                            }
+                                            cx.notify();
+                                        });
                                     }
-                                    cx.notify();
                                 },
                                 cx,
                             ))
@@ -612,15 +672,21 @@ pub fn panel(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement> {
             };
             ("Ban list".into(), 560., body)
         }
-        Panel::Acl { server, channel } => {
+        Panel::Acl {
+            server: _,
+            channel,
+            origin,
+        } => {
+            let server = &origin.live_index(this)?;
             let view = this.client.servers.get(*server)?;
             (
                 format!("Permissions · {}", channel_name(view, *channel)),
                 760.,
-                acl_editor(view, *server, *channel, cx),
+                acl_editor(view, *server, *channel, origin, cx),
             )
         }
         Panel::ChannelEdit {
+            origin,
             name,
             description,
             position,
@@ -628,6 +694,7 @@ pub fn panel(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement> {
             channel,
             server,
         } => {
+            let server = &origin.live_index(this)?;
             let view = this.client.servers.get(*server)?;
             let field = |id: &'static str, label: &'static str, input: &Entity<InputState>| {
                 div()
@@ -735,6 +802,7 @@ fn acl_editor(
     view: &ServerView,
     server: usize,
     channel: u32,
+    origin: &ActionOrigin,
     cx: &mut Context<Desktop>,
 ) -> AnyElement {
     let Some(acl) = view.acl.as_ref().filter(|acl| acl.channel == channel) else {
@@ -771,11 +839,23 @@ fn acl_editor(
                 .items_center()
                 .gap_2()
                 .text_sm()
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    if let Some(acl) = this.client.servers[server].acl.as_mut() {
-                        acl.inherit_acls = !acl.inherit_acls;
+                .on_click(cx.listener({
+                    let origin = origin.clone();
+                    move |this, _, _, cx| {
+                        let Some(server) = origin.live_index(this) else {
+                            return;
+                        };
+                        origin.with_scope(this, |this| {
+                            if let Some(acl) = this.client.servers[server]
+                                .acl
+                                .as_mut()
+                                .filter(|acl| acl.channel == channel)
+                            {
+                                acl.inherit_acls = !acl.inherit_acls;
+                            }
+                            cx.notify();
+                        });
                     }
-                    cx.notify();
                 }))
                 .child(
                     div()
@@ -794,19 +874,31 @@ fn acl_editor(
             "acl-add-all",
             "Add rule for @all",
             Tone::Secondary,
-            move |this, _, cx| {
-                if let Some(acl) = this.client.servers[server].acl.as_mut() {
-                    acl.entries.push(AclEntry {
-                        apply_here: true,
-                        apply_subs: true,
-                        inherited: false,
-                        user_id: None,
-                        group: Some("all".into()),
-                        grant: 0,
-                        deny: 0,
+            {
+                let origin = origin.clone();
+                move |this, _, cx| {
+                    let Some(server) = origin.live_index(this) else {
+                        return;
+                    };
+                    origin.with_scope(this, |this| {
+                        if let Some(acl) = this.client.servers[server]
+                            .acl
+                            .as_mut()
+                            .filter(|acl| acl.channel == channel)
+                        {
+                            acl.entries.push(AclEntry {
+                                apply_here: true,
+                                apply_subs: true,
+                                inherited: false,
+                                user_id: None,
+                                group: Some("all".into()),
+                                grant: 0,
+                                deny: 0,
+                            });
+                        }
+                        cx.notify();
                     });
                 }
-                cx.notify();
             },
             cx,
         ))
@@ -814,12 +906,24 @@ fn acl_editor(
             "acl-save",
             "Save",
             Tone::Primary,
-            move |this, _, cx| {
-                if let Some(acl) = this.client.servers[server].acl.clone() {
-                    this.run(server, Command::UpdateAcl(acl));
-                    this.run(server, Command::QueryAcl(channel));
+            {
+                let origin = origin.clone();
+                move |this, _, cx| {
+                    let Some(server) = origin.live_index(this) else {
+                        return;
+                    };
+                    origin.with_scope(this, |this| {
+                        if let Some(acl) = this.client.servers[server]
+                            .acl
+                            .clone()
+                            .filter(|acl| acl.channel == channel)
+                        {
+                            this.run(server, Command::UpdateAcl(acl));
+                            this.run(server, Command::QueryAcl(channel));
+                        }
+                        cx.notify();
+                    });
                 }
-                cx.notify();
             },
             cx,
         ));
@@ -828,114 +932,136 @@ fn acl_editor(
         .filter(|(bit, _)| channel == 0 || *bit < permission::KICK)
         .copied()
         .collect::<Vec<_>>();
-    let rows = acl.entries.iter().enumerate().map(|(position, entry)| {
-        let inherited = entry.inherited;
-        div()
-            .flex()
-            .flex_col()
-            .gap_1()
-            .py_2()
-            .border_b_1()
-            .border_color(color(BORDER))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .text_sm()
-                    .child(
-                        div()
-                            .flex_1()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child(text!(who(entry)).with_id(("acl-who", position))),
-                    )
-                    .child(
-                        div().text_xs().text_color(color(TEXT_FAINT)).child(
-                            text!(format!(
-                                "{}{}{}",
-                                if entry.apply_here { "this channel" } else { "" },
-                                if entry.apply_here && entry.apply_subs {
-                                    " + "
-                                } else {
-                                    ""
-                                },
-                                if entry.apply_subs { "sub-channels" } else { "" }
-                            ))
-                            .with_id(("acl-scope", position)),
-                        ),
-                    )
-                    .when(inherited, |row| {
-                        row.child(
+    let rows =
+        acl.entries.iter().enumerate().map(|(position, entry)| {
+            let inherited = entry.inherited;
+            div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .py_2()
+                .border_b_1()
+                .border_color(color(BORDER))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .text_sm()
+                        .child(
                             div()
-                                .text_xs()
-                                .text_color(color(WARNING))
-                                .child(text!("inherited").with_id(("acl-inherited", position))),
+                                .flex_1()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child(text!(who(entry)).with_id(("acl-who", position))),
                         )
-                    })
-                    .when(!inherited, |row| {
-                        row.child(styled_button(
-                            ("acl-remove", position),
-                            "Remove",
-                            Tone::Ghost,
-                            move |this, _, cx| {
-                                if let Some(acl) = this.client.servers[server].acl.as_mut()
-                                    && position < acl.entries.len()
-                                {
-                                    acl.entries.remove(position);
-                                }
-                                cx.notify();
-                            },
-                            cx,
-                        ))
-                    }),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_wrap()
-                    .gap_1()
-                    .children(columns.iter().map(|(bit, label)| {
-                        let bit = *bit;
-                        let (text, tone) = if entry.grant & bit != 0 {
-                            ("allow", SUCCESS)
-                        } else if entry.deny & bit != 0 {
-                            ("deny", DANGER)
-                        } else {
-                            ("—", TEXT_FAINT)
-                        };
-                        div()
-                            .id(SharedString::from(format!("acl-{position}-{bit}")))
-                            .role(Role::Button)
-                            .aria_label(format!("{label}: {text}"))
-                            .tab_index(0)
-                            .px_2()
-                            .py(px(2.))
-                            .rounded(px(4.))
-                            .bg(color(if inherited { SIDEBAR } else { ELEVATED }))
-                            .text_xs()
-                            .when(!inherited, |chip| {
-                                chip.cursor_pointer()
-                                    .hover(|style| style.bg(color(SELECTED)))
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        if let Some(acl) = this.client.servers[server].acl.as_mut()
-                                            && let Some(entry) = acl.entries.get_mut(position)
-                                        {
-                                            cycle(entry, bit);
-                                        }
-                                        cx.notify();
-                                    }))
-                            })
-                            .child(
-                                text!(format!("{label}: ")).with_id(SharedString::from(format!(
-                                    "acl-label-{position}-{bit}"
-                                ))),
+                        .child(
+                            div().text_xs().text_color(color(TEXT_FAINT)).child(
+                                text!(format!(
+                                    "{}{}{}",
+                                    if entry.apply_here { "this channel" } else { "" },
+                                    if entry.apply_here && entry.apply_subs {
+                                        " + "
+                                    } else {
+                                        ""
+                                    },
+                                    if entry.apply_subs { "sub-channels" } else { "" }
+                                ))
+                                .with_id(("acl-scope", position)),
+                            ),
+                        )
+                        .when(inherited, |row| {
+                            row.child(
+                                div()
+                                    .text_xs()
+                                    .text_color(color(WARNING))
+                                    .child(text!("inherited").with_id(("acl-inherited", position))),
                             )
-                            .child(div().text_color(color(tone)).child(text!(text).with_id(
-                                SharedString::from(format!("acl-value-{position}-{bit}")),
-                            )))
-                    })),
-            )
-    });
+                        })
+                        .when(!inherited, |row| {
+                            row.child(styled_button(
+                                ("acl-remove", position),
+                                "Remove",
+                                Tone::Ghost,
+                                {
+                                    let origin = origin.clone();
+                                    move |this, _, cx| {
+                                        let Some(server) = origin.live_index(this) else {
+                                            return;
+                                        };
+                                        origin.with_scope(this, |this| {
+                                            if let Some(acl) = this.client.servers[server]
+                                                .acl
+                                                .as_mut()
+                                                .filter(|acl| acl.channel == channel)
+                                                && position < acl.entries.len()
+                                            {
+                                                acl.entries.remove(position);
+                                            }
+                                            cx.notify();
+                                        });
+                                    }
+                                },
+                                cx,
+                            ))
+                        }),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_wrap()
+                        .gap_1()
+                        .children(columns.iter().map(|(bit, label)| {
+                            let bit = *bit;
+                            let (text, tone) = if entry.grant & bit != 0 {
+                                ("allow", SUCCESS)
+                            } else if entry.deny & bit != 0 {
+                                ("deny", DANGER)
+                            } else {
+                                ("—", TEXT_FAINT)
+                            };
+                            div()
+                                .id(SharedString::from(format!("acl-{position}-{bit}")))
+                                .role(Role::Button)
+                                .aria_label(format!("{label}: {text}"))
+                                .tab_index(0)
+                                .px_2()
+                                .py(px(2.))
+                                .rounded(px(4.))
+                                .bg(color(if inherited { SIDEBAR } else { ELEVATED }))
+                                .text_xs()
+                                .when(!inherited, |chip| {
+                                    chip.cursor_pointer()
+                                        .hover(|style| style.bg(color(SELECTED)))
+                                        .on_click(cx.listener({
+                                            let origin = origin.clone();
+                                            move |this, _, _, cx| {
+                                                let Some(server) = origin.live_index(this) else {
+                                                    return;
+                                                };
+                                                origin.with_scope(this, |this| {
+                                                    if let Some(acl) = this.client.servers[server]
+                                                        .acl
+                                                        .as_mut()
+                                                        .filter(|acl| acl.channel == channel)
+                                                        && let Some(entry) =
+                                                            acl.entries.get_mut(position)
+                                                    {
+                                                        cycle(entry, bit);
+                                                    }
+                                                    cx.notify();
+                                                });
+                                            }
+                                        }))
+                                })
+                                .child(text!(format!("{label}: ")).with_id(SharedString::from(
+                                    format!("acl-label-{position}-{bit}"),
+                                )))
+                                .child(div().text_color(color(tone)).child(text!(text).with_id(
+                                    SharedString::from(format!("acl-value-{position}-{bit}")),
+                                )))
+                        })),
+                )
+        });
     let groups = acl.groups.iter().enumerate().map(|(position, group)| {
         let members = group.add.len() + group.inherited_members.len();
         div()

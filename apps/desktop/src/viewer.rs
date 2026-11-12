@@ -84,11 +84,7 @@ impl Desktop {
             return;
         }
         self.menu_image = Some(image);
-        self.menu = Some(crate::menus::Menu {
-            server,
-            target: crate::menus::MenuTarget::Image,
-            position,
-        });
+        self.make_menu(server, crate::menus::MenuTarget::Image, position);
     }
 
     /// Save the original file the image was sent as.

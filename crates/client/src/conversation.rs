@@ -18,6 +18,8 @@ pub const TYPING_SHOWN_MS: u64 = 6_000;
 
 #[derive(Clone, Debug)]
 pub struct ConversationState {
+    /// Observed channel lifetime; zero for cached/offline and direct entries.
+    pub instance: u64,
     /// A channel's id; direct conversations count down from `u32::MAX`.
     pub id: u32,
     pub parent: Option<u32>,
@@ -86,6 +88,7 @@ impl ConversationState {
     /// The root channel before the server has said anything.
     pub fn root() -> Self {
         Self {
+            instance: 0,
             id: 0,
             parent: None,
             name: "Root".into(),

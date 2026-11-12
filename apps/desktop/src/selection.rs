@@ -11,7 +11,7 @@
 //! [`Desktop`], so Ctrl+C and the message menu can copy it.
 use crate::{
     document::{Document, InlineMath, Links},
-    menus::{Menu, MenuTarget},
+    menus::MenuTarget,
     state::{Desktop, Status},
     theme::{ACCENT, tint},
 };
@@ -127,6 +127,7 @@ pub struct Candidate {
 }
 
 /// What a message's context menu copies, taken when it opens.
+#[derive(Clone)]
 pub struct MessageMenu {
     /// The message, by its serial.
     pub serial: u64,
@@ -426,11 +427,7 @@ impl Desktop {
             selection,
             link,
         });
-        self.menu = Some(Menu {
-            server,
-            target: MenuTarget::Message,
-            position,
-        });
+        self.make_menu(server, MenuTarget::Message, position);
     }
 }
 

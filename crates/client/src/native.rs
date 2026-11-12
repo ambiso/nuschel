@@ -324,6 +324,114 @@ struct Connection {
     sounds: mpsc::Sender<Sound>,
     task: tokio::task::JoinHandle<()>,
 }
+/// Synchronous UI callback scope only. No async task inherits this thread-local
+/// value. The guard restores the prior scope even when a callback unwinds.
+#[derive(Clone)]
+struct ActionScope {
+    id: u64,
+    driver: usize,
+    server: String,
+    generation: u64,
+    authority: nuschl_session::connection::CommandAuthority,
+}
+#[derive(Default)]
+struct ActionScopes {
+    entries: Vec<ActionScope>,
+    blocked: usize,
+    next_id: u64,
+}
+thread_local! {
+    static ACTION_SCOPES: std::cell::RefCell<ActionScopes> = const { std::cell::RefCell::new(ActionScopes {
+        entries: Vec::new(), blocked: 0, next_id: 0,
+    }) };
+}
+#[must_use]
+struct ActionScopeGuard {
+    id: Option<u64>,
+    not_send: std::marker::PhantomData<std::rc::Rc<()>>,
+}
+impl Drop for ActionScopeGuard {
+    fn drop(&mut self) {
+        ACTION_SCOPES.with(|scopes| {
+            let mut scopes = scopes.borrow_mut();
+            match self.id {
+                Some(id) => scopes.entries.retain(|scope| scope.id != id),
+                None => scopes.blocked = scopes.blocked.saturating_sub(1),
+            }
+        });
+    }
+}
+fn action_scope(
+    driver: usize,
+    server: String,
+    generation: u64,
+    authority: nuschl_session::connection::CommandAuthority,
+) -> ActionScopeGuard {
+    let id = ACTION_SCOPES.with(|scopes| {
+        let mut scopes = scopes.borrow_mut();
+        if scopes.entries.len() >= 32 {
+            scopes.blocked = scopes.blocked.saturating_add(1);
+            return None;
+        }
+        scopes.next_id = scopes
+            .next_id
+            .checked_add(1)
+            .expect("action scope IDs exhausted");
+        let id = scopes.next_id;
+        scopes.entries.push(ActionScope {
+            id,
+            driver,
+            server,
+            generation,
+            authority,
+        });
+        Some(id)
+    });
+    ActionScopeGuard {
+        id,
+        not_send: std::marker::PhantomData,
+    }
+}
+fn scoped_command(
+    driver: usize,
+    server: &str,
+    command: &mut Option<Command>,
+) -> Result<Option<(u64, Command)>, String> {
+    ACTION_SCOPES.with(|scopes| {
+        let scopes = scopes.borrow();
+        if scopes.blocked != 0 {
+            return Err("Too many nested actions.".into());
+        }
+        let mut matching = scopes.entries.iter().filter(|scope| scope.driver == driver);
+        let Some(scope) = matching.next() else {
+            return Ok(None);
+        };
+        // Reentrant SDK/UI callbacks may only retain the exact same origin.
+        // Differing nested scopes fail closed rather than widening either one.
+        if scope.server != server
+            || matching.any(|other| {
+                other.server != scope.server
+                    || other.generation != scope.generation
+                    || other.authority != scope.authority
+            })
+            || command.as_ref().and_then(Command::targets).is_none()
+        {
+            return Err("This action does not authorize that request.".into());
+        }
+        let authority = scope
+            .authority
+            .for_command(command.as_ref().expect("command present"))
+            .ok_or("This action does not cover the requested targets.")?;
+        Ok(Some((
+            scope.generation,
+            Command::Scoped {
+                authority,
+                command: Box::new(command.take().expect("command present")),
+            },
+        )))
+    })
+}
+
 pub struct Driver {
     handle: Handle,
     profile: Profile,
@@ -605,9 +713,49 @@ impl Driver {
     }
     /// Send a command to a server's session.
     pub fn command(&self, server: &str, command: Command) -> Result<(), String> {
+        let mut command = Some(command);
+        if let Some((generation, command)) =
+            scoped_command(self as *const Self as usize, server, &mut command)?
+        {
+            return self.command_scoped(server, generation, command);
+        }
+        let command = command.expect("unscoped command retained");
         self.connections()
             .get(server)
             .ok_or("Server is not connected.")?
+            .commands
+            .try_send(command)
+            .map_err(|_| "Connection is busy or has ended; reconnect to try again.".into())
+    }
+    /// Restrict synchronous SDK/platform requests made by one UI callback.
+    /// The envelope is copied before enqueue, never retained as ambient worker authority.
+    pub fn with_action_scope<R>(
+        &self,
+        server: String,
+        generation: u64,
+        authority: nuschl_session::connection::CommandAuthority,
+        callback: impl FnOnce() -> R,
+    ) -> R {
+        let _scope = action_scope(self as *const Self as usize, server, generation, authority);
+        callback()
+    }
+    /// Enqueue only on the original explicit driver connection. The actor also
+    /// checks observed presence lifetimes across automatic reconnects.
+    pub fn command_scoped(
+        &self,
+        server: &str,
+        generation: u64,
+        command: Command,
+    ) -> Result<(), String> {
+        let connections = self.connections();
+        let connection = connections
+            .get(server)
+            .filter(|connection| connection.generation == generation)
+            .ok_or("This action belongs to an older connection.")?;
+        if !matches!(command, Command::Scoped { .. }) {
+            return Err("Missing action authority.".into());
+        }
+        connection
             .commands
             .try_send(command)
             .map_err(|_| "Connection is busy or has ended; reconnect to try again.".into())
@@ -758,6 +906,7 @@ impl Drop for Driver {
 /// What to restore when a dropped connection is re-established.
 #[derive(Default)]
 struct Restore {
+    voice_route: std::sync::Arc<std::sync::atomic::AtomicU32>,
     channel: Option<u32>,
     muted: bool,
     deafened: bool,
@@ -969,6 +1118,7 @@ async fn connect_once(
         .and_then(|identity| Ok((identity, required?)))
     {
         Ok((identity, required)) => ConnectOptions {
+            voice_route: restore.voice_route.clone(),
             server: server.clone(),
             identity,
             password,
@@ -1078,8 +1228,9 @@ async fn connect_once(
                 hub.send(media::Control::Sound(sound));
             },
             Some(command) = commands.recv() => {
-                if let Command::Mls(command @ (nuschl_session::mls::MlsCommand::OpenChannel { .. } | nuschl_session::mls::MlsCommand::OpenDirect { .. })) = &command {
-                    pending_encrypted_open = Some(command.clone());
+                if let Command::Mls(open @ (nuschl_session::mls::MlsCommand::OpenChannel { .. } | nuschl_session::mls::MlsCommand::OpenDirect { .. })) = match &command { Command::Scoped { command, .. } => command.as_ref(), command => command } {
+                    let authority = match &command { Command::Scoped { authority, .. } => Some(authority.clone()), _ => None };
+                    pending_encrypted_open = Some((open.clone(), authority));
                     if !mls_keys_ready { continue; }
                 }
                 if let Command::SetSelf { muted: mute, deafened: deaf } = &command {
@@ -1291,10 +1442,14 @@ async fn connect_once(
                     match &event {
                         MlsEvent::KeyPackages { .. } => {
                             mls_keys_ready = true;
-                            if let Some(open) = pending_encrypted_open.clone() { let _ = session_commands.send(Command::Mls(open)).await; }
+                            if let Some((open, authority)) = pending_encrypted_open.clone() {
+                                let command = Command::Mls(open);
+                                let command = match authority { Some(authority) => Command::Scoped { authority, command: Box::new(command) }, None => command };
+                                let _ = session_commands.send(command).await;
+                            }
                         }
                         MlsEvent::Conversation { view, peer } => {
-                            if view.pinned && view.active && pending_encrypted_open.as_ref().is_some_and(|pending| match pending {
+                            if view.pinned && view.active && pending_encrypted_open.as_ref().is_some_and(|(pending, _)| match pending {
                                 nuschl_session::mls::MlsCommand::OpenChannel { conversation } => view.conversation.as_slice() == conversation,
                                 nuschl_session::mls::MlsCommand::OpenDirect { user_id } => *peer == Some(*user_id),
                                 _ => false,
