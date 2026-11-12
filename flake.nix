@@ -231,6 +231,7 @@
             }
             ''
               install -Dm755 ${crates.project.workspaceMembers.nuschl-musicbot.build}/bin/nuschl-musicbot "$out/bin/nuschl-musicbot"
+              install -Dm755 ${crates.project.workspaceMembers.nuschl-content-worker.build}/bin/nuschl-content-worker "$out/libexec/nuschl-musicbot/nuschl-content-worker"
               install -Dm644 ${./LICENSE} "$out/share/licenses/nuschl/EUPL-1.2"
               install -Dm644 ${./crates/protocol/proto/LICENSE.mumble} "$out/share/licenses/nuschl/Mumble-BSD"
               mkdir -p "$out/share/licenses/nuschl"

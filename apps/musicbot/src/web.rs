@@ -36,6 +36,9 @@ static LIBRARY_CALLS: Semaphore = Semaphore::const_new(MAX_LIBRARY_CALLS);
 /// A body owns its slot until the SSE stream ends or is dropped. No waiters.
 const MAX_SSE_WATCHERS: usize = 32;
 static SSE_WATCHERS: Semaphore = Semaphore::const_new(MAX_SSE_WATCHERS);
+/// Includes fetching and the actual isolated worker exit, not HTTP lifetime.
+const MAX_COVER_JOBS: usize = 2;
+static COVER_JOBS: Semaphore = Semaphore::const_new(MAX_COVER_JOBS);
 /// Albums per page of an album list.
 const PAGE_SIZE: u32 = 48;
 /// Changes that come in a burst are sent as one state.
@@ -295,29 +298,106 @@ fn default_art_size() -> u32 {
     300
 }
 
-/// Cover art from a library, fetched with the bot's credentials. The browser
-/// may keep it: the address holds the secret link, so the copy is private.
+#[derive(Serialize)]
+struct CoverPixels {
+    width: u32,
+    height: u32,
+    rgba: String,
+}
+
+fn content_worker_path(executable: &std::path::Path) -> Result<PathBuf, ApiError> {
+    executable
+        .parent()
+        .and_then(|bin| bin.parent())
+        .map(|root| root.join("libexec/nuschl-musicbot/nuschl-content-worker"))
+        .ok_or_else(|| {
+            ApiError(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "the artwork worker is unavailable".to_owned(),
+            )
+        })
+}
+
+/// Only validated RGBA leaves this route. Never expose encoded library art to
+/// the browser's native image decoder. The owned task retains concurrency
+/// through worker completion/reaping even after its HTTP consumer disappears.
 async fn art(
     State(bot): State<Arc<Bot>>,
     Path((token, library, id)): Path<(String, usize, String)>,
     Query(query): Query<ArtQuery>,
 ) -> Result<Response, ApiError> {
     owner(&bot, &token)?;
-    let size = query.size.clamp(32, 1200);
-    let image = ask(&bot, library, move |library| library.cover_art(&id, size))
-        .await
-        .map_err(|error| match error.0 {
-            StatusCode::SERVICE_UNAVAILABLE => error,
-            _ => ApiError(StatusCode::NOT_FOUND, error.1),
-        })?;
-    Ok((
-        [
-            (header::CONTENT_TYPE, image.mime),
-            (header::CACHE_CONTROL, "private, max-age=86400"),
-        ],
-        image.bytes,
-    )
-        .into_response())
+    if library >= bot.libraries.len() {
+        return Err(ApiError(
+            StatusCode::NOT_FOUND,
+            "no such library".to_owned(),
+        ));
+    }
+    let permit = COVER_JOBS.try_acquire().map_err(|_| {
+        ApiError(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "the artwork worker is busy".to_owned(),
+        )
+    })?;
+    let size = query.size.clamp(32, nuschl_ipc::MAX_THUMBNAIL_EDGE);
+    let worker = content_worker_path(&std::env::current_exe().map_err(|_| {
+        ApiError(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "the artwork worker is unavailable".to_owned(),
+        )
+    })?)?;
+    if !worker.is_file() {
+        return Err(ApiError(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "the artwork worker is unavailable".to_owned(),
+        ));
+    }
+    let owned = bot.clone();
+    let task = tokio::spawn(async move {
+        let _permit = permit;
+        let image = ask(&owned, library, move |library| library.cover_art(&id, size))
+            .await
+            .map_err(|error| match error.0 {
+                StatusCode::SERVICE_UNAVAILABLE => error,
+                _ => ApiError(StatusCode::NOT_FOUND, error.1),
+            })?;
+        let block = nuschl_ipc::host::thumbnail(&worker, &image.bytes, size, size)
+            .await
+            .map_err(|_| {
+                ApiError(
+                    StatusCode::NOT_FOUND,
+                    "the cover image is invalid or unavailable".to_owned(),
+                )
+            })?;
+        let nuschl_core::ContentBlock::Image {
+            width,
+            height,
+            rgba,
+            source: _,
+        } = block
+        else {
+            return Err(ApiError(
+                StatusCode::NOT_FOUND,
+                "the artwork worker returned invalid pixels".to_owned(),
+            ));
+        };
+        Ok::<_, ApiError>(CoverPixels {
+            width,
+            height,
+            rgba,
+        })
+    });
+    let pixels = match tokio::time::timeout(LIBRARY_TIMEOUT + Duration::from_secs(10), task).await {
+        Ok(Ok(result)) => result?,
+        _ => {
+            return Err(ApiError(
+                StatusCode::GATEWAY_TIMEOUT,
+                "the artwork worker did not finish in time".to_owned(),
+            ));
+        }
+    };
+    owner(&bot, &token)?;
+    Ok(([(header::CACHE_CONTROL, "private, no-store")], Json(pixels)).into_response())
 }
 
 #[derive(Serialize)]
