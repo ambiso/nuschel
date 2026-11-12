@@ -716,6 +716,9 @@ impl ManagedSettings {
             for key in &self.keys {
                 put(map, key, lookup(&self.own, key).cloned());
             }
+            // Managed reinsertion must not restore the old handwritten key:
+            // released clients reject the whole settings file when it is present.
+            map.remove(VOICE_BITRATE);
         }
         Ok(value)
     }
@@ -1481,11 +1484,13 @@ impl Profile {
         settings: &ClientSettings,
         managed: &ManagedSettings,
     ) -> io::Result<()> {
+        // Migrate a handwritten user fallback before removing its old key.
+        // A failed sidecar write must leave that original value recoverable.
+        self.save_voice_quality(settings.voice_bitrate, managed)?;
         self.write(
             SETTINGS_FILE,
             &serde_json::to_vec_pretty(&managed.unmanaged(settings)?)?,
-        )?;
-        self.save_voice_quality(settings.voice_bitrate, managed)
+        )
     }
 
     /// The bitrate voice-quality.json holds, if there is one; an error for
@@ -1535,12 +1540,32 @@ impl Profile {
     /// changed from what it holds (the default without one), and never over a
     /// file that could not be read. A managed bitrate is not the user's.
     fn save_voice_quality(&self, bitrate: u32, managed: &ManagedSettings) -> io::Result<()> {
-        let changed = match *self.voice_quality_record() {
+        let record = *self.voice_quality_record();
+        if managed.contains(VOICE_BITRATE) {
+            if record == VoiceQuality::Absent
+                && let Some(own) = managed.own.get(VOICE_BITRATE).and_then(Value::as_u64)
+                && let Ok(own) = u32::try_from(own)
+            {
+                let file = VoiceQualityFile {
+                    version: VOICE_QUALITY_VERSION,
+                    voice_bitrate: nuschl_core::bitrate::requested_voice_bitrate(own),
+                };
+                atomic_private_create(
+                    &self.config_dir.join(VOICE_QUALITY_FILE),
+                    &serde_json::to_vec_pretty(&file)?,
+                )?;
+                // Another profile owner may have won creation with a newer
+                // sidecar. Observe it without replacing or repairing it.
+                *self.voice_quality_record() = VoiceQuality::of(&self.read_voice_quality());
+            }
+            return Ok(());
+        }
+        let changed = match record {
             VoiceQuality::Saved(saved) => bitrate != saved,
             VoiceQuality::Absent => bitrate != nuschl_core::audio::DEFAULT_VOICE_BITRATE,
             VoiceQuality::Unreadable => false,
         };
-        if changed && !managed.contains(VOICE_BITRATE) {
+        if changed {
             self.write_voice_quality(bitrate)
         } else {
             Ok(())
@@ -1860,6 +1885,29 @@ pub(crate) fn atomic_private_write(path: &Path, bytes: &[u8]) -> io::Result<()> 
     if result.is_err() {
         let _ = fs::remove_file(temporary);
     }
+    result
+}
+
+/// Publish a complete private file only if its destination is still absent.
+/// Migration never replaces a sidecar another version or process created.
+fn atomic_private_create(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    let temporary = path.with_extension(format!("{}.tmp", Uuid::new_v4()));
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    let mut file = options.open(&temporary)?;
+    let result = (|| {
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        match fs::hard_link(&temporary, path) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => Ok(()),
+            Err(error) => Err(error),
+        }
+    })();
+    drop(file);
+    let _ = fs::remove_file(temporary);
     result
 }
 
@@ -3460,6 +3508,130 @@ mod tests {
             r#"{"version": 1, "voice_bitrate": 96000}"#
         );
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn managed_bitrate_migrates_the_handwritten_user_fallback_before_an_unrelated_save() {
+        let (root, profile) = temporary_profile("bitrate-managed-migrate");
+        write(
+            &profile,
+            "settings.json",
+            r#"{"voice_bitrate":96000,"relay_only":true}"#,
+        );
+        write(
+            &profile,
+            "managed-voice-quality.json",
+            r#"{"version":1,"voice_bitrate":64000}"#,
+        );
+        let loaded = profile.load();
+        assert_eq!(loaded.settings.voice_bitrate, 64_000);
+        let mut settings = loaded.settings;
+        settings.enter_sends = false;
+        profile.save_settings(&settings, &loaded.managed).unwrap();
+        let written: Value = serde_json::from_str(&read(&profile, "settings.json")).unwrap();
+        assert!(settings_keys(&profile).is_subset(&released_keys()));
+        assert_eq!(written["relay_only"], true);
+        assert_eq!(written["enter_sends"], false);
+        assert_eq!(
+            serde_json::from_str::<Value>(&sidecar(&profile).unwrap()).unwrap(),
+            serde_json::json!({"version":1,"voice_bitrate":96000})
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(profile.config_dir.join(VOICE_QUALITY_FILE))
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o600
+            );
+        }
+        fs::remove_file(profile.config_dir.join(MANAGED_VOICE_QUALITY_FILE)).unwrap();
+        let reloaded = Profile::open(Some(root.clone())).unwrap().load();
+        assert_eq!(reloaded.settings.voice_bitrate, 96_000);
+        assert!(reloaded.settings.relay_only);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn managed_handwritten_migration_preserves_existing_valid_future_and_corrupt_sidecars() {
+        for contents in [
+            r#"{"version":1,"voice_bitrate":192000}"#,
+            r#"{"version":2,"voice_bitrate":320000,"stereo":true}"#,
+            "{broken",
+        ] {
+            let (root, profile) = temporary_profile("bitrate-managed-preserve");
+            write(
+                &profile,
+                "settings.json",
+                r#"{"voice_bitrate":96000,"relay_only":true}"#,
+            );
+            write(
+                &profile,
+                "managed-voice-quality.json",
+                r#"{"version":1,"voice_bitrate":64000}"#,
+            );
+            write(&profile, "voice-quality.json", contents);
+            let loaded = profile.load();
+            let mut settings = loaded.settings;
+            settings.enter_sends = false;
+            profile.save_settings(&settings, &loaded.managed).unwrap();
+            assert_eq!(sidecar(&profile).unwrap(), contents);
+            assert!(settings_keys(&profile).is_subset(&released_keys()));
+            assert!(profile.load().settings.relay_only);
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn managed_handwritten_migration_cannot_replace_a_concurrent_sidecar_winner() {
+        let (root, profile) = temporary_profile("bitrate-managed-concurrent");
+        write(
+            &profile,
+            "settings.json",
+            r#"{"voice_bitrate":96000,"relay_only":true}"#,
+        );
+        write(
+            &profile,
+            "managed-voice-quality.json",
+            r#"{"version":1,"voice_bitrate":64000}"#,
+        );
+        let loaded = profile.load();
+        assert_eq!(*profile.voice_quality_record(), VoiceQuality::Absent);
+        let future = r#"{"version":2,"voice_bitrate":320000,"stereo":true}"#;
+        write(&profile, "voice-quality.json", future);
+        profile
+            .save_settings(&loaded.settings, &loaded.managed)
+            .unwrap();
+        assert_eq!(sidecar(&profile).unwrap(), future);
+        assert_eq!(*profile.voice_quality_record(), VoiceQuality::Unreadable);
+        assert!(settings_keys(&profile).is_subset(&released_keys()));
+        assert!(profile.load().settings.relay_only);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn failed_managed_handwritten_migration_keeps_the_original_settings() {
+        use std::os::unix::fs::PermissionsExt;
+        let (root, profile) = temporary_profile("bitrate-managed-migrate-failed");
+        let original = r#"{"voice_bitrate":96000,"relay_only":true}"#;
+        write(&profile, "settings.json", original);
+        write(
+            &profile,
+            "managed-voice-quality.json",
+            r#"{"version":1,"voice_bitrate":64000}"#,
+        );
+        let loaded = profile.load();
+        fs::set_permissions(&profile.config_dir, fs::Permissions::from_mode(0o500)).unwrap();
+        let result = profile.save_settings(&loaded.settings, &loaded.managed);
+        fs::set_permissions(&profile.config_dir, fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(result.is_err());
+        assert_eq!(read(&profile, "settings.json"), original);
+        assert!(sidecar(&profile).is_none());
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
