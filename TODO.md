@@ -2,7 +2,7 @@
 
 Current focus (user, 2026-11-12): **fluid persistent server reordering, web
 feature parity, and robust desktop layout**. Active independent owners cover
-native ordering, ACME/PKI and browser formulas. The rename/build-cache cleanup is
+server ordering, ACME/PKI and audio follow-ups. The rename/build-cache cleanup is
 complete; publication remains behind signing, notice and packaging gates. Public
 `main` is still the last user-pushed `7f28f8d4`; no new push, tag or release is
 implied by the integrated source checkpoints below.
@@ -20,12 +20,16 @@ Current integration checkpoint (2026-11-12):
   The frozen integrated Linux `.#default` package built successfully; its exact
   package control and eight-case rail GUI repeats passed. Native Windows/macOS runtime proof remains
   separate.
-- **Server reordering is active, not complete.** The SDK catalog keeps canonical
-  stable-ID display order separate from live connection vectors and async
-  indexes. Native drag preview/ghost, cancellation, edge scrolling, keyboard
-  alternatives and atomic persistence are under implementation. Browser callers
-  must use explicit runtime indexes when display order changes. All bookmark
-  writers must preserve canonical order; no per-frame persistence.
+- **Native and browser server reordering passed their scoped checks.** Stable-ID
+  catalog order leaves live connection indexes, conversations, drafts and voice
+  routes unchanged. Drag preview/ghost, cancellation, edge scrolling, keyboard
+  alternatives and atomic persistence have native 100/200% and actual browser
+  desktop/320/390 touch proofs. The live-App synthetic-voice test also preserved
+  generations and microphone state and correctly muted after a permutation.
+  SDK tests passed 87 with one pre-existing ignored; native tests passed 79.
+  Canonical bookmark barriers cover native/TUI/browser writers. Final integrated
+  distribution and physical-device/cross-platform checks remain; see
+  `docs/server-order.md`.
 - **Real web voice/mobile baseline is integrated through `690fe1f9`.** Shared SDK
   legacy voice, explicit touch Join, desktop double-click, chat-first responsive
   drawer and browser audio were verified with synthetic media/private servers.
@@ -38,8 +42,9 @@ Current integration checkpoint (2026-11-12):
 - **Browser content producer is integrated through `e91ff46e`.** Three native,
   eight Node and real confined-worker RGBA/code/canary checks passed with a
   256 MiB maximum. The source-ticket SDK bridge and App image paste/attachment
-  controls remain unimplemented; see `docs/browser-content.md`. A pinned,
-  isolated Temml 0.14 formula renderer with notices is active in a separate lane.
+  controls remain unimplemented; see `docs/browser-content.md`. The pinned,
+  isolated Temml 0.14 formula renderer with notices is integrated through
+  `309ad791`/`9159eae5`; this does not complete image/attachment parity.
 - **Modern browser identity/archive flows remain open.** Do not advertise MLS,
   authenticated modern archive parity or other desktop-only capabilities until
   end-to-end browser interoperability and capability checks prove them.
@@ -824,8 +829,10 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
          again (Murmur does not check), removed with the user or channel.
    - [x] TLS reload on SIGHUP and `minimum_tls_version = "1.3"` (2026-11-11): new
          handshakes get the new certificate, a broken one keeps the old one. The
-         NixOS module copies certificate credentials at start, so there a renewal
-         still needs a restart.
+         NixOS module's manual `certificateFile` credentials are copied at start,
+         so replacing those still needs a restart. The integrated ACME helper
+         publishes renewed material for reload; its real systemd lifecycle remains
+         a separate verification gate.
    - [ ] Prove the integrated ACME certificate lifecycle in an actual NixOS systemd
          service: DynamicUser/UID access, credential replacement, renewal/recovery,
          SIGHUP handoff, restart and intentional manual stop. Module evaluation,
