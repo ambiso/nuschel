@@ -64,6 +64,8 @@ pub enum Control {
     Sound(Sound),
     /// A sound that plays even without a worker (a disconnection).
     Chime(Sound),
+    #[cfg(test)]
+    Inspect(tokio::sync::oneshot::Sender<(bool, bool, std::time::Duration)>),
 }
 
 /// Voice from a server, for the mix.
@@ -179,9 +181,18 @@ fn capture_route_changed(old: &Link, next: &Link) -> bool {
 
 /// Supervise the worker until the driver goes away.
 pub async fn run(
+    inputs: (mpsc::UnboundedReceiver<Control>, mpsc::Receiver<Playback>),
+    events: mpsc::Sender<Event>,
+    watches: (watch::Receiver<ClientSettings>, watch::Receiver<VoiceKeys>),
+) {
+    run_with_start(inputs, events, watches, Media::start).await;
+}
+
+async fn run_with_start(
     (mut control, mut playback): (mpsc::UnboundedReceiver<Control>, mpsc::Receiver<Playback>),
     events: mpsc::Sender<Event>,
     (mut settings, mut voice_keys): (watch::Receiver<ClientSettings>, watch::Receiver<VoiceKeys>),
+    mut start: impl FnMut() -> Result<Media, nuschl_session::Error> + Send,
 ) {
     let mut streams = BTreeMap::<String, Stream>::new();
     let mut numbers = 0_u32;
@@ -200,11 +211,21 @@ pub async fn run(
     // Changes not applied to the worker yet, and their sounds (and whether
     // each plays without a worker, see `Control::Chime`).
     let mut settle: Option<Instant> = None;
+    #[cfg(test)]
+    let mut last_wait = SETTLE;
     let mut cues = Vec::<(Sound, bool)>::new();
     loop {
         tokio::select! {
             message = control.recv() => {
                 let Some(message) = message else { break };
+                #[cfg(test)]
+                let message = match message {
+                    Control::Inspect(reply) => {
+                        let _ = reply.send((planned.capture, plan(streams.values().map(|s| &s.link)).capture, last_wait));
+                        continue;
+                    }
+                    other => other,
+                };
                 let capture_changed = match &message {
                     Control::Attach { server, link, .. } => speaking_to(link)
                         || streams.get(server).is_some_and(|old| speaking_to(&old.link)),
@@ -214,6 +235,8 @@ pub async fn run(
                     Control::Detach { server, generation } => streams.get(server)
                         .is_some_and(|old| old.generation == *generation && speaking_to(&old.link)),
                     Control::Sound(_) | Control::Chime(_) => false,
+                    #[cfg(test)]
+                    Control::Inspect(_) => unreachable!(),
                 };
                 if capture_changed {
                     // Invalidate even a packet already in the worker's IPC
@@ -251,9 +274,15 @@ pub async fn run(
                     }
                     Control::Sound(sound) => cues.push((sound, false)),
                     Control::Chime(sound) => cues.push((sound, true)),
+                    #[cfg(test)]
+                    Control::Inspect(_) => unreachable!(),
                 }
-                // Moving your voice changes two servers at once: settle first.
-                settle.get_or_insert_with(|| Instant::now() + SETTLE);
+                // A first explicitly authorized microphone needs no debounce.
+                // Moving an active voice still settles both server changes.
+                let opening = !planned.capture && plan(streams.values().map(|stream| &stream.link)).capture;
+                #[cfg(test)] { last_wait = if opening { std::time::Duration::ZERO } else { SETTLE }; }
+                if opening { settle = Some(Instant::now()); }
+                else { settle.get_or_insert_with(|| Instant::now() + SETTLE); }
             },
             _ = tokio::time::sleep_until(settle.unwrap_or_else(Instant::now)), if settle.is_some() => {
                 settle = None;
@@ -329,7 +358,7 @@ pub async fn run(
                 epoch += 1;
                 // Until the devices are open, nobody hears you yet.
                 broadcast(&streams, &events, |server, generation| Event::AudioStatus { server, generation, message: "Starting audio…".into() }).await;
-                match Media::start() {
+                match start() {
                     Ok(worker) => {
                         configure(&worker, &applied, (planned.bitrate, planned.loss_percent), pinned_host(&audio_host));
                         let _ = worker.commands.try_send(LiveMediaRequest::SetState { epoch, muted: !planned.capture, deafened: false });
@@ -467,6 +496,118 @@ mod tests {
             bitrate,
             loss_percent,
         }
+    }
+
+    #[tokio::test]
+    async fn real_control_loop_opens_the_first_talk_route_without_debouncing_active_moves() {
+        let (control, input) = mpsc::unbounded_channel();
+        let (_playback, playback) = mpsc::channel(4);
+        let (events, _events) = mpsc::channel(64);
+        let (_settings, settings) = watch::channel(ClientSettings::default());
+        let (_keys, keys) = watch::channel(VoiceKeys::default());
+        let (started, mut starts) = mpsc::unbounded_channel();
+        // Exercise the actual supervisor/control loop, without opening devices
+        // or granting a real worker any audio capability.
+        let task = tokio::spawn(run_with_start(
+            (input, playback),
+            events,
+            (settings, keys),
+            move || {
+                let _ = started.send(());
+                Err(nuschl_session::Error::Worker(
+                    "synthetic worker start".into(),
+                ))
+            },
+        ));
+        async fn inspect(
+            control: &mpsc::UnboundedSender<Control>,
+        ) -> (bool, bool, std::time::Duration) {
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            control.send(Control::Inspect(tx)).unwrap();
+            rx.await.unwrap()
+        }
+        let (out, _out) = mpsc::channel(4);
+        control
+            .send(Control::Attach {
+                server: "one".into(),
+                generation: 1,
+                link: link(true, false, 128_000, 1),
+                voice: out,
+            })
+            .unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(2), starts.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        control
+            .send(Control::Update {
+                server: "one".into(),
+                generation: 1,
+                link: Link {
+                    revision: 1,
+                    ..link(false, false, 128_000, 1)
+                },
+                cue: None,
+            })
+            .unwrap();
+        let (_, current, wait) = inspect(&control).await;
+        assert!(current);
+        assert_eq!(wait, std::time::Duration::ZERO);
+        tokio::time::timeout(std::time::Duration::from_secs(2), starts.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        // Muting the active destination then unmuting another remains a
+        // coalesced move, with the old worker already invalidated.
+        control
+            .send(Control::Update {
+                server: "one".into(),
+                generation: 1,
+                link: Link {
+                    revision: 2,
+                    ..link(true, false, 128_000, 1)
+                },
+                cue: None,
+            })
+            .unwrap();
+        let (out, _other_out) = mpsc::channel(4);
+        control
+            .send(Control::Attach {
+                server: "two".into(),
+                generation: 2,
+                link: link(false, false, 128_000, 1),
+                voice: out,
+            })
+            .unwrap();
+        let (_, current, wait) = inspect(&control).await;
+        assert!(current);
+        assert_eq!(wait, SETTLE);
+        // A rapid mute/unmute retains that same move debounce and new revision.
+        control
+            .send(Control::Update {
+                server: "two".into(),
+                generation: 2,
+                link: Link {
+                    revision: 1,
+                    ..link(true, false, 128_000, 1)
+                },
+                cue: None,
+            })
+            .unwrap();
+        control
+            .send(Control::Update {
+                server: "two".into(),
+                generation: 2,
+                link: Link {
+                    revision: 2,
+                    ..link(false, false, 128_000, 1)
+                },
+                cue: None,
+            })
+            .unwrap();
+        assert_eq!(inspect(&control).await.2, SETTLE);
+        task.abort();
+        let _ = task.await;
     }
 
     #[test]

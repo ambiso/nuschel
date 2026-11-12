@@ -5,7 +5,9 @@ acknowledges uncorking it. It no longer waits for the first PCM bytes before
 starting playback and the echo-reference stream. Those streams start together;
 a delayed reference cannot hold otherwise available microphone processing inside
 `Stream::play()`. AEC reference ordering and its bounded capture hold remain in
-force. Playback/mixing behavior is outside this change.
+force. Playback/mixing behavior is outside this change. The supervisor also skips its
+30 ms coalescing delay for a first explicitly authorized talk destination; moves
+between already active talk destinations retain that delay and revision guards.
 
 In the private virtual PulseAudio fixture, warm first processed samples moved
 from about 103 ms to 16–22 ms after worker launch; actual independently decoded
@@ -43,10 +45,20 @@ Remaining limits are explicit:
   Independent libpulse `parec` took 1.413–1.415 s on fresh copies of the same
   fixture. Early "Audio ready" does not mean samples have arrived; this change
   cannot manufacture missing hardware/server input or promise instant cold start.
+- The strict fresh-source noise regression in `tests/unmute_noise.py` currently
+  FAILS on both baseline and changed workers: deterministic white noise can open
+  the VAD gate. Its zero-packet assertion is preserved, raw first-source PCM and
+  independent decoded Opus are recorded, and no warm-up suppression or threshold
+  change conceals the result. Fixing that existing classifier behavior is separate
+  from this latency/prefix improvement.
 - RNNoise VAD still needs evidence from the input. The measured synthetic onset
   needed roughly one to five 10 ms frames. Prefix retention preserves the onset
   without lowering the confidence threshold; it does not make classification
   instantaneous.
+- The combined native media process is still replaced on microphone mute/unmute
+  or a changed speaking destination. This interrupts incoming playback while it
+  restarts. Separating playback lifetime/capabilities is a distinct follow-up;
+  keeping the microphone open while muted is not an acceptable workaround.
 - Physical Pulse/PipeWire, WASAPI/CoreAudio, actual speech onset and GUI-to-remote
   playback latency need their own measurements. The private worker fixture is
   synthetic and has no host microphone/speaker access.

@@ -723,11 +723,22 @@ listed below. Plugin data remains the explicit gap.
       epoch, with bounded/paced output and strict mute/PTT/echo-guard resets.
       Private synthetic worker timings and independent libopus marker proof are
       documented in `docs/unmute-latency.md`; no always-open muted microphone.
+      A first authorized talk route skips the supervisor's 30 ms move debounce;
+      active-server moves still coalesce with unchanged revision/epoch guards.
 - [ ] Measure remaining unmute latency end-to-end on physical Pulse/PipeWire,
       Windows and macOS. A fresh virtual Pulse source still takes ~1.3 s before
       first PCM (independent libpulse reproduces it); classifier evidence takes
       input frames, and onset retention can queue up to 80 ms. No claim of zero
       cold hardware latency or complete GUI-to-peer timing proof.
+- [ ] Preserve incoming playback across native microphone mute/unmute and speaking
+      destination changes. The combined worker currently restarts, interrupting
+      listening; separate playback lifetime/capabilities without retaining a muted
+      microphone stream or replaying old capture into another destination.
+- [ ] Fix the existing fresh-noise VAD false positive: `tests/unmute_noise.py`
+      transmits deterministic white noise with both baseline and updated workers.
+      Keep its strict zero-packet assertion and raw first-source PCM/reference
+      evidence; do not hide it with startup suppression, weaker noise tests or
+      another unmute delay.
 - [x] Connection status: ping, UDP/TCP indicator, packet loss.
 - [x] Error/reject dialogs from section 4.
 - [x] AT-SPI accessibility coverage through GPUI AccessKit (`tests/accessibility.py`,

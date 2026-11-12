@@ -20,14 +20,17 @@ import threading
 import time
 
 from media_live import Pulse
-from mumble_client import ReferenceOpus
+from mumble_client import Client, ReferenceOpus, certificate_pin
+from local_murmur import Murmur, free_port
 
 
 class Worker:
-    def __init__(self, binary, pulse, log):
+    def __init__(self, binary, pulse, log, peer=None):
         self.start = time.monotonic()
         self.events = []
         self.log = log
+        self.peer = peer
+        self.first_wire_sequence = None
         self.stderr = log.open("wb")
         self.process = subprocess.Popen(
             [str(binary), "--live"],
@@ -54,6 +57,17 @@ class Worker:
             assert length <= 1024 * 1024
             event = json.loads(self.process.stdout.read(length))["payload"]
             self.events.append((time.monotonic() - self.start, event))
+            if self.peer is not None and event["kind"] == "packet":
+                if self.first_wire_sequence is None and not event["end"]:
+                    self.first_wire_sequence = self.peer.wire_sequence
+                self.peer.send(
+                    kind="voice",
+                    target=31,
+                    sequence=self.peer.wire_sequence,
+                    opus=event["opus"],
+                    end=event["end"],
+                )
+                self.peer.wire_sequence += 2
 
     def send(self, payload):
         data = json.dumps({"version": 1, "request_id": 0, "payload": payload}).encode()
@@ -115,11 +129,29 @@ def marker_proof(path, reference):
     }
 
 
-def measure(binary, pulse, root, reference, current):
+class TimedPeer(Client):
+    def __init__(self, *args, **kwargs):
+        self.audio_times = []
+        self.wire_sequence = 0
+        super().__init__(*args, **kwargs)
+
+    def _read(self):
+        try:
+            for line in self.process.stdout:
+                event = json.loads(line)
+                self.events.append(event)
+                if event["kind"] == "audio":
+                    self.audio_times.append((event["sequence"], time.monotonic()))
+                self.queue.put(event)
+        finally:
+            self.queue.put(None)
+
+
+def measure(binary, pulse, root, reference, current, peer=None):
     results = []
     for mode in ("continuous", "push_to_talk", "voice_activity"):
         for trial in range(2):
-            worker = Worker(binary, pulse, root / f"{mode}-{trial}.stderr")
+            worker = Worker(binary, pulse, root / f"{mode}-{trial}.stderr", peer)
             try:
                 worker.send(
                     {
@@ -140,6 +172,22 @@ def measure(binary, pulse, root, reference, current):
                 ]
                 worker.wait(lambda: len(packets()) >= 6)
                 emitted = packets()
+                network_ms = None
+                if peer:
+                    worker.wait(
+                        lambda: any(
+                            sequence == worker.first_wire_sequence
+                            for sequence, _ in peer.audio_times
+                        )
+                    )
+                    network_ms = (
+                        next(
+                            at
+                            for sequence, at in peer.audio_times
+                            if sequence == worker.first_wire_sequence
+                        )
+                        - worker.start
+                    ) * 1000
                 pcm = reference.decode([e["opus"] for _, e in emitted[:6]])
                 rms = math.sqrt(sum(v * v for v in pcm) / len(pcm))
                 assert rms > 0.001 and all(math.isfinite(v) for v in pcm), (
@@ -186,6 +234,7 @@ def measure(binary, pulse, root, reference, current):
                         "mode": mode,
                         "trial": trial,
                         "first_packet_ms": emitted[0][0] * 1000,
+                        "first_private_murmur_echo_ms": network_ms,
                         "rms": rms,
                         "stages_ms": stages,
                     }
@@ -232,68 +281,118 @@ def main():
     parser.add_argument("--opus-library", type=Path, required=True)
     parser.add_argument("--marker-fixture", type=Path)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--murmur", type=Path)
+    parser.add_argument(
+        "--binaries",
+        type=Path,
+        help="Cached CLI/helpers for the optional owned Murmur wire path",
+    )
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True, mode=0o700)
     reference = ReferenceOpus(args.opus_library)
     report = {"synthetic_only": True, "host_audio_devices": False, "GUI_timing": False}
     if args.marker_fixture:
         report["prefix_marker"] = marker_proof(args.marker_fixture, reference)
-    for label, binary in (("baseline", args.baseline_worker), ("current", args.worker)):
-        if binary is None:
-            continue
-        root = args.output / label
-        root.mkdir(exist_ok=True)
-        pulse = Pulse(args.pulse_bin, root)
-        feeder = subprocess.Popen(
-            [
-                str(args.pulse_bin / "pacat"),
-                f"--server=unix:{pulse.socket}",
-                "--playback",
-                "--device=mic",
-                "--raw",
-                "--format=float32le",
-                "--rate=48000",
-                "--channels=1",
-                "--latency-msec=20",
-            ],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-        samples = array.array(
-            "f",
-            (
-                0.12
-                * (0.5 + 0.5 * math.sin(2 * math.pi * 4 * i / 48000))
-                * sum(
-                    math.sin(2 * math.pi * 140 * h * i / 48000) / h
-                    for h in range(1, 13)
+    peer = None
+    murmur = None
+    try:
+        if args.murmur is not None:
+            assert args.binaries is not None, "--murmur requires --binaries"
+            server = args.output / "murmur"
+            server.mkdir(exist_ok=True)
+            murmur = Murmur(args.murmur, server, free_port())
+            # Exercise the requested128k codec target; lower-budget behavior has its
+            # own SDK/worker tests. No server authentication/ACL policy is weakened.
+            murmur.ini.write_text(
+                murmur.ini.read_text().replace("bandwidth=72000", "bandwidth=200000")
+            )
+            murmur.seed()
+            murmur.start()
+            pin = certificate_pin(
+                args.binaries, "127.0.0.1", murmur.port, server / "probe"
+            )
+            peer = TimedPeer(
+                args.binaries,
+                "127.0.0.1",
+                murmur.port,
+                pin,
+                "LatencyFixture",
+                server / "peer",
+            )
+            peer.unmute()
+            report["private_murmur"] = {
+                "binary": str(args.murmur),
+                "bandwidth": 200000,
+                "host": "127.0.0.1",
+            }
+        for label, binary in (
+            ("baseline", args.baseline_worker),
+            ("current", args.worker),
+        ):
+            if binary is None:
+                continue
+            root = args.output / label
+            root.mkdir(exist_ok=True)
+            pulse = Pulse(args.pulse_bin, root)
+            feeder = subprocess.Popen(
+                [
+                    str(args.pulse_bin / "pacat"),
+                    f"--server=unix:{pulse.socket}",
+                    "--playback",
+                    "--device=mic",
+                    "--raw",
+                    "--format=float32le",
+                    "--rate=48000",
+                    "--channels=1",
+                    "--latency-msec=20",
+                ],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            samples = array.array(
+                "f",
+                (
+                    0.12
+                    * (0.5 + 0.5 * math.sin(2 * math.pi * 4 * i / 48000))
+                    * sum(
+                        math.sin(2 * math.pi * 140 * h * i / 48000) / h
+                        for h in range(1, 13)
+                    )
+                    for i in range(48000)
+                ),
+            ).tobytes()
+
+            source = {"samples": samples}
+
+            def feed(feeder=feeder, source=source):
+                try:
+                    while feeder.poll() is None:
+                        feeder.stdin.write(source["samples"])
+                        feeder.stdin.flush()
+                except (BrokenPipeError, ValueError):
+                    pass
+
+            thread = threading.Thread(target=feed, daemon=True)
+            thread.start()
+            try:
+                report[label] = measure(
+                    binary, pulse, root, reference, label == "current", peer
                 )
-                for i in range(48000)
-            ),
-        ).tobytes()
-
-        def feed(feeder=feeder):
-            try:
-                while feeder.poll() is None:
-                    feeder.stdin.write(samples)
-                    feeder.stdin.flush()
-            except (BrokenPipeError, ValueError):
-                pass
-
-        thread = threading.Thread(target=feed, daemon=True)
-        thread.start()
-        try:
-            report[label] = measure(binary, pulse, root, reference, label == "current")
-        finally:
-            feeder.terminate()
-            feeder.wait(timeout=5)
-            thread.join(timeout=2)
-            try:
-                feeder.stdin.close()
-            except BrokenPipeError:
-                pass
-            pulse.stop()
+            finally:
+                feeder.terminate()
+                feeder.wait(timeout=5)
+                thread.join(timeout=2)
+                try:
+                    feeder.stdin.close()
+                except BrokenPipeError:
+                    pass
+                pulse.stop()
+    finally:
+        if peer:
+            peer.close()
+        if murmur:
+            murmur.stop()
     report["passed"] = True
     report["limits"] = (
         "Worker-command timings, not GUI clicks; virtual-source cold latency is also present with independent libpulse."
