@@ -95,7 +95,7 @@ pkgs.runCommand "nuschl-debian-source-${version}-${debianRevision}"
     maintainer = os.environ['NUSCHL_MAINTAINER']
       path = Path('debian/control')
       path.write_text(path.read_text().replace('@MAINTAINER@', maintainer))
-      date = email.utils.formatdate(int(os.environ['SOURCE_DATE_EPOCH']), usegmt=True)
+      date = email.utils.formatdate(int(os.environ['SOURCE_DATE_EPOCH']), usegmt=False).replace('-0000', '+0000')
       Path('debian/changelog').write_text(
           'nuschl (${version}-${debianRevision}) ${distribution}; urgency=medium\n\n'
           '  * Local unsigned offline source packaging validation.\n\n'
