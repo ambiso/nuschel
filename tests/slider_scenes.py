@@ -16,12 +16,12 @@ Checks, with a screenshot of each state (look at them):
    "Stop test" and after Settings closes.
 2. The sensitivity slider as a screen reader sees it: role slider, its name,
    a numeric value in percent with its range, and the value text ("50 % ·
-   opens above 60 % speech probability") as its description. Right arrow
+   opens above 40 % speech probability") as its description. Right arrow
    changes it at once and settings.json is written once, half a second
    later; Delete resets it.
 3. The meter above Sensitivity while the test runs, fed by a private null
    microphone: silence, then a speech-like signal (dsp.rs' `speech_like`),
-   then silence again: "Voice gate closed", "Voice gate open", "Speech
+   then silence again: "Voice gate closed", "Voice gate open", "Voice
    gate closed". The processed input level and speech probability are progress bars
    with numeric values; the level bar marks the gate's floor (one constant
    in nuschl_core, which the worker's own unit test checks it uses).
@@ -307,7 +307,7 @@ class Scenes:
         print("Settings open, microphone test not started: no source-output on the private PulseAudio.", flush=True)
         slider = self.wait_for("slider", "Voice activity sensitivity", "no sensitivity slider")
         assert self.value(slider) == 50.0 and self.maximum(slider) == 100.0, (self.value(slider), self.maximum(slider))
-        assert self.description(slider) == "50 % · opens above 60 % speech probability", self.description(slider)
+        assert self.description(slider) == "50 % · opens above 40 % speech probability", self.description(slider)
         assert self.find("progress bar", "Processed input level") is None, "the meter shows without the microphone test"
         self.shot("01-settings-voice")
         print(f"Sensitivity slider: value {self.value(slider)} of {self.maximum(slider)}, "
@@ -334,6 +334,17 @@ class Scenes:
                    "the reset was not saved", timeout=3)
         print("Delete: back to the default, 50, and saved.", flush=True)
 
+        # The real accessibility SetValue route must never turn NaN/infinity
+        # into a default gain or save an otherwise unchanged setting.
+        start = time.monotonic()
+        for invalid in ["nan", "inf", "-inf"]:
+            slider.bus("set-property", slider.destination, slider.path,
+                       "org.a11y.atspi.Value", "CurrentValue", "d", invalid)
+        time.sleep(0.8)
+        assert self.value(slider) == 50.0 and saved(settings_path, "audio", "vad_sensitivity") == 0.5
+        assert writes.since(start) == 0, "nonfinite AT values changed/saved the setting"
+        print("AT SetValue NaN/+inf/-inf: unchanged and no settings write.", flush=True)
+
         # The microphone test and its meter.
         self.wait_for("push button", "Test microphone", "no Test microphone button").press()
         eventually(lambda: "microphone.monitor" in self.recording() or None,
@@ -342,6 +353,8 @@ class Scenes:
         # The first launch is deafened in its call: the test says it records anyway.
         self.wait_for(None, MUTED_NOTE, "the meter did not say the test records while deafened")
         probability = self.wait_for("progress bar", "Speech probability", "no speech probability bar")
+        legend = self.description(probability)
+        assert "opens above 40 %" in legend and "down to 20 %" in legend, legend
         eventually(lambda: self.find(None, "Voice gate closed"), "the gate state did not read Voice gate closed",
                    timeout=10)
         time.sleep(1.5)

@@ -377,7 +377,7 @@ fn meter(
                 thresholds.close * 100.
             )
         } else {
-            "How sure noise suppression is that this is speech. Not a loudness.".into()
+            "How confident speech detection is that this is speech. Not a loudness.".into()
         },
         reading.map(|reading| (f64::from(reading.voice) * 100., 0., 100.)),
     );
