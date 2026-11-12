@@ -89,10 +89,12 @@ pub struct MessageDocument {
 
 impl MessageDocument {
     /// Whether the document's [`ContentBlock::Break`]s are within their
-    /// budget: at most [`MAX_BREAKS`], never two in a row, and none counting
-    /// more line breaks than a message can hold.
+    /// budget: at most [`MAX_BREAKS`], never two in a row, and all of them
+    /// together at most [`MAX_BREAK_LINES`] line breaks, as many as the
+    /// largest message can hold. A reply asking for more is malformed.
     pub fn breaks_valid(&self) -> bool {
         let mut breaks = 0;
+        let mut lines: usize = 0;
         let mut previous = false;
         for block in &self.blocks {
             let ContentBlock::Break { count } = block else {
@@ -100,7 +102,8 @@ impl MessageDocument {
                 continue;
             };
             breaks += 1;
-            if previous || breaks > MAX_BREAKS || *count as usize > MAX_CONTENT_BYTES {
+            lines = lines.saturating_add(*count as usize);
+            if previous || breaks > MAX_BREAKS || lines > MAX_BREAK_LINES {
                 return false;
             }
             previous = true;
@@ -147,8 +150,8 @@ pub enum ContentBlock {
     /// break: images are never inline). Without one, neighbouring blocks are
     /// one line break apart and nothing precedes the first or follows the
     /// last, so documents built without breaks keep their layout. At most one
-    /// stands between two other blocks ([`MAX_BREAKS`]), and `count` is at
-    /// most the source's line breaks.
+    /// stands between two other blocks ([`MAX_BREAKS`]), and all counts
+    /// together are at most the source's line breaks ([`MAX_BREAK_LINES`]).
     Break { count: u32 },
 }
 
@@ -158,6 +161,10 @@ pub const MAX_BLOCKS: usize = 512;
 /// blocks and one at each end; they have their own budget, so the limit on
 /// other blocks stays as it is.
 pub const MAX_BREAKS: usize = MAX_BLOCKS + 1;
+/// Line breaks all [`ContentBlock::Break`]s of a document count together: no
+/// more than a message of [`MAX_CONTENT_BYTES`] can hold (every one of them
+/// is a typed line break).
+pub const MAX_BREAK_LINES: usize = MAX_CONTENT_BYTES;
 
 impl ContentBlock {
     /// Whether this is a [`ContentBlock::Break`], which holds no content.
@@ -365,6 +372,44 @@ mod tests {
         assert!(!breaks(many.clone()));
         many.truncate(2 * MAX_BREAKS);
         assert!(breaks(many));
+    }
+
+    /// A reply may not ask for more line breaks, all its breaks together,
+    /// than a message can hold: 512 one-letter blocks with a whole message's
+    /// line breaks between each two asked for 133,955,584 of them.
+    #[test]
+    fn breaks_together_stay_within_a_message() {
+        let mut blocks = Vec::new();
+        for index in 0..MAX_BLOCKS {
+            if index > 0 {
+                blocks.push(ContentBlock::Break {
+                    count: MAX_CONTENT_BYTES as u32,
+                });
+            }
+            blocks.push(ContentBlock::text("x"));
+        }
+        assert!(!MessageDocument { blocks }.breaks_valid());
+        // A whole message's line breaks, spread over the gaps, are fine; one
+        // more is not.
+        let spread = |extra: u32| MessageDocument {
+            blocks: vec![
+                ContentBlock::Break {
+                    count: MAX_CONTENT_BYTES as u32 / 2,
+                },
+                ContentBlock::text("x"),
+                ContentBlock::Break {
+                    count: MAX_CONTENT_BYTES as u32 / 2 + extra,
+                },
+            ],
+        };
+        assert!(spread(0).breaks_valid());
+        assert!(!spread(1).breaks_valid());
+        assert!(
+            !MessageDocument {
+                blocks: vec![ContentBlock::Break { count: u32::MAX }],
+            }
+            .breaks_valid()
+        );
     }
 
     #[test]

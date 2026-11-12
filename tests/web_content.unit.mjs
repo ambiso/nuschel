@@ -183,3 +183,12 @@ test("documents carry the line breaks between blocks as breaks, on a budget of t
   assert.throws(()=>validateDocument({blocks:[text("a"),{kind:"break",count:2},{kind:"break",count:2},text("b")]}),/Invalid/);
   assert.equal(protocol.MAX_BREAKS,protocol.MAX_BLOCKS+1);
 });
+test("all breaks together ask for no more line breaks than a message holds",()=>{
+  const text=value=>({kind:"text",text:value});
+  // 512 one-letter blocks, a whole message's line breaks between each two.
+  const hostile=[];for(let i=0;i<protocol.MAX_BLOCKS;i++){if(i)hostile.push({kind:"break",count:protocol.MAX_SOURCE});hostile.push(text("x"));}
+  assert.throws(()=>validateDocument({blocks:hostile}),/Invalid/);
+  const spread=extra=>({blocks:[{kind:"break",count:protocol.MAX_SOURCE/2},text("x"),{kind:"break",count:protocol.MAX_SOURCE/2+extra}]});
+  validateDocument(spread(0));
+  assert.throws(()=>validateDocument(spread(1)),/Invalid/);
+});
