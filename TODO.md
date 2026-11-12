@@ -1,13 +1,14 @@
 # Nuschl TODO
 
-Current focus (user, 2026-11-12): **fix the extremely disruptive long-idle
-VAD false triggering first**. Unmute onset delay and the brief playback gap on
-every mute/unmute remain active but lower priority. The DSP owner is moving from
-matched-worker diagnostics to a bounded production correction with quiet-speech
-and immediate-onset controls; the independent startup owner reviews and validates
-that correction before a playback-lifetime rewrite. Native volume sliders/meter
-are integrated; image quality and font rendering retain separate reviewable
-checkpoints. Voice-host ACME, rail/footer spacing,
+Current focus (user, 2026-11-12): the **long-idle VAD correction is integrated**;
+live user retesting and broader quiet-speech/AEC coverage remain the leading audio
+gate. Unmute onset delay and the brief playback gap on every mute/unmute remain
+open. Intermittent Windows duplex dropouts are under investigation, with evidence
+that the affected machine also lags in another game. Configurable bitrate controls
+have been brought forward into a separate coordinated implementation lane.
+Native volume sliders/meter, font rendering, desktop Markdown and the chat scrollbar
+are integrated with scoped checks below; image quality and memory reductions still
+have separate reviewable checkpoints. Voice-host ACME, rail/footer spacing,
 native voice status and the native ACL/group editor are integrated with the
 remaining gates below. Installed macOS/Xcode and Simulator remain open.
 The relay DNS/kernel checks and explicit-deny correction are integrated.
@@ -56,6 +57,25 @@ checkpoints. A background filesystem watcher alone does not advance a session.
 
 Current integration checkpoint (2026-11-12):
 
+- **Desktop rendering and diagnostics are integrated through `1f2b3b38`.**
+  Preserved font/Markdown and scrollbar histories combine cleanly with the rail
+  badge paint-order correction and receive-side profile statistics. Native default,
+  fmt, core39/content42/IPC22 (one existing ignored)/TUI31/desktop117 and five native
+  content-WASM boundary tests pass; JS27 and the scoped 8 WGPU/5 GPUI font subsets
+  pass. Actual private GNOME/stock-Murmur checks exercise typed/received/restored
+  Markdown, font pixels/geometry, chat thumb/anchors/paging and first/last rail
+  items at real zoom. The final profile-statistics package separately passes
+  distinct directions, omitted counters, live refresh, maximum counters and
+  900 px/200% scrollability. The rebuilt media helper's private replay matches
+  the prior VAD worker's background/speech packet counts and decoded energy/peak
+  metrics exactly, with clean privacy retirement. No Windows audio claim follows.
+  The packaged app source is byte-identical to checked `f4073093`; added queue/audit
+  docs are separate. Green MLS badge runtime and current-source Windows/macOS
+  distributions remain unverified; browser product validation is running.
+  Evidence: `~/.cache/nuschl-next/font-markdown-integration/handoff.json`,
+  `~/.cache/nuschl-chat-scrollbar-merge/handoff.json`,
+  `~/.cache/nuschl-receive-stats-proof/handoff.json` and
+  `~/.cache/nuschl-private-audio/20261112T155036Z/font-markdown-replay/proof.json`.
 - **Continuous volume controls and local microphone-test meter are integrated
   and pushed through `13ec6d77`.** Cubic slider travel preserves stored linear
   gains, with smooth dragging, keyboard/accessibility controls and coalesced
@@ -626,20 +646,21 @@ Later (reported):
       reductions. Preserve the VAD fix, microphone consent and mute/deafen epochs;
       VM evidence must not be presented as physical-device proof. Record latency
       and discontinuities before/after any correction.
-- [ ] Show packet statistics in both directions in user profiles (user,
-      2026-11-12). The session/core already retain Mumble `from_server`, but the
-      desktop only shows `from_client`. Root's staged `f4073093` adds a separate
-      "Packets to client" row and reports missing counters as "Not reported";
-      affected package/runtime checks and integration remain. Its connection
-      statistics calculation also avoids `u32` overflow when adding long-lived
-      good/lost counters. These UDP crypt counters do not diagnose downstream
-      jitter-buffer, decoder or device dropouts; add scoped playout diagnostics
-      rather than treating zero upstream loss as end-to-end audio proof.
-- [ ] Fix the server rail's encryption badge stacking (user, 2026-11-12):
-      the E2EE lock/unlocked icon renders behind the server's surrounding circle.
-      Draw it in front, consistently with the mute/deafen badges. Check both
-      encryption states, selected/unselected and hover animations, first/last
-      rail items, scrolling and zoom without clipping or hiding badges.
+- [x] Show packet statistics in both directions in desktop user profiles
+      (user, 2026-11-12; `f4073093`, integrated above). Already-parsed `from_server`
+      now appears as "Packets to client"; missing counters say "Not reported".
+      Actual private TLS/GNOME checks pass distinct/missing/maximum values,
+      live refresh and narrow/200% scrolling. Connection loss-percentage arithmetic
+      avoids `u32` good+lost overflow (source-reviewed; local counters not forged).
+- [ ] Add scoped capture/playout diagnostics: UDP crypt counters do not diagnose
+      jitter-buffer, decoder or device dropouts. Show transport and local audio
+      counters separately; do not treat zero upstream loss as end-to-end proof.
+- [x] Paint the server rail's encryption badge above its surrounding circle
+      (user, 2026-11-12; `d2796873`, integrated above). The shared security badge
+      follows the ring in paint order, like the mute/deafen badge. Actual red
+      unlocked foreground and first/last/hover/100–200% geometry pass.
+- [ ] Exercise the green lock on an authenticated MLS server in the rail fixture;
+      the paint-order fix is shared, but green-state runtime proof is absent.
 - [ ] Eliminate panics from the main client, server and other credential-bearing
       supervisors (user, 2026-11-12). Audit first-party runtime `unwrap()` and
       `expect()`, explicit panic/assert/unreachable paths, unchecked indexing,
@@ -698,30 +719,23 @@ Later (reported):
       Do not label an unverified implementation VAC-safe. Keep the full overlay
       request open if only the separate Talking UI is available. Use private
       window/compositor fixtures rather than protected/live games for development.
-- [ ] Fix chat Markdown rendering (user, 2026-11-12; possibly an earlier
-      regression). Diagnose typed, received and history-restored messages, their
-      legacy HTML/Markdown classification, worker document delivery and actual
-      native/web/TUI renderers. Preserve newlines, code highlighting and inert
-      resource handling. Obtain a minimal user example where possible and retain
-      a private rendered negative/positive control; existing parser-only tests
-      do not prove messages are displayed correctly. The user confirms native
-      desktop, observed this morning and not yet retested; it may
-      already be corrected. Check the current combined product before editing.
-      Source review finds `ContentRenderer::render` deliberately treats ordinary
-      text literally and handles only fenced code/math, so general emphasis,
-      inline code, links and block Markdown may be missing behavior rather than
-      a new regression. Claude's separate private-GNOME typed/received/restored
-      diagnosis is active before allocating shared renderer edits alongside
-      image quality and chat scrolling. Preserve outbound legacy formatting and
-      the shared send-budget work unless explicitly coordinating a later change.
-- [ ] Add a visible chat-history scrollbar, matching the existing channel-list
-      affordance (user, 2026-11-12). Bind it to the retained virtualized timeline
-      scroll state; dragging, wheel and keyboard movement must preserve message
-      anchors, older/newer paging, unread position and jump-to-latest behavior.
-      Bound overflow/thumb geometry at narrow sizes and real zoom, with no full
-      history scans per frame. Verify native chat first and inspect browser chat
-      for the same missing affordance. Assigned to the UI owner immediately after
-      the in-flight voice-status regression/handoff; not yet implemented.
+- [x] Fix desktop chat Markdown rendering (user, 2026-11-12), integrated
+      above from `f75cdeea`. Ordinary text now reaches the bounded Markdown parser
+      in the content worker; typed, received and restored emphasis, inline code,
+      links, blocks, code/math and exact newlines pass actual private GUI checks.
+      Existing legacy HTML stays inert and retains its supported formatting.
+      Shared core/IPC/JS aggregate input/output checks and frontend break handling
+      are included. Grammar and limitations are in docs/markdown-rendering-plan.md.
+- [ ] Validate the integrated Markdown browser product and actual browser/TUI
+      rendering; native parser, boundary and JS units do not prove all frontend
+      runtime behavior. Current-source Windows/macOS font/rendering proof remains
+      open too; Linux font/Markdown source and private pixel checks are integrated.
+- [x] Add the native chat-history scrollbar (user, 2026-11-12), integrated
+      above from `60f4755c`. It uses the retained virtualized scroll handle and
+      cancels wheel easing on thumb grab. Actual private GUI checks pass idle
+      visibility, drag, wheel, unread/jump-to-latest, keyboard, older-page anchor
+      preservation and 900 px at 100/200%. Browser chat already has overflow/gutter
+      styling; this is not a universal long-history retention or layout proof.
 - [ ] Polls in chat, like the requested Signal-style feature (user,
       2026-11-12). Provide creation, voting and readable results; persist poll
       definitions/votes on Nuschl servers and reconcile reconnects, concurrent
@@ -1928,6 +1942,9 @@ listed below. Plugin data remains the explicit gap.
       browser route epochs also revoke prior queued media.
       Persistent controls/effective-rate UI and the full private-server matrix
       remain open; synthetic codec/budget regressions cover the default slice.
+      Reprioritized by the user on 2026-11-12: Claude's dedicated bitrate lane is
+      preparing shared API ownership before editing the native/browser/TUI paths;
+      no configurable controls are integrated yet.
 - [ ] Complete input-fidelity encoder verification (user, 2026-11-12).
       Audio activation is integrated as `95a1a27f`: all native/browser production
       TX factories use Audio, retaining the 128k requested target, server budget
