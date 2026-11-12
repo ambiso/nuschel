@@ -132,6 +132,7 @@ pub fn exercise(
     // and stalls, not merely a portable simulation of the launcher.
     for post_quantum in [false, true] {
         for mode in ["overflow", "stall"] {
+            println!("Native LPAC adversary role={post_quantum} mode={mode}");
             let mut paths = workers.clone();
             let executable = fault(mode)?;
             if post_quantum {
@@ -141,10 +142,28 @@ pub fn exercise(
             }
             let start = Instant::now();
             assert!(verify(signed, &paths).is_err());
-            assert!(start.elapsed() < Duration::from_secs(10));
             // Windows forbids deleting an image still mapped by a live child.
-            // This makes successful child reaping observable after each case.
-            fs::remove_file(executable)?;
+            // Job termination is asynchronous after the launcher's wait, so
+            // allow a bounded 1s for the image mapping to be released.
+            let cleanup_deadline = Instant::now() + Duration::from_secs(1);
+            loop {
+                match fs::remove_file(&executable) {
+                    Ok(()) => break,
+                    Err(error)
+                        if error.kind() == std::io::ErrorKind::PermissionDenied
+                            && Instant::now() < cleanup_deadline =>
+                    {
+                        std::thread::sleep(Duration::from_millis(20));
+                    }
+                    Err(error) => {
+                        return Err(format!(
+                            "{mode} image still mapped after bounded reap: {error}"
+                        )
+                        .into());
+                    }
+                }
+            }
+            assert!(start.elapsed() < Duration::from_secs(10));
         }
     }
     Ok(())
