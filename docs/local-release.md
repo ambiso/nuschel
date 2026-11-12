@@ -1,5 +1,57 @@
 # Publish a release with a local signing key
 
+After `direnv allow`, run:
+
+```sh
+just release
+```
+
+A terminal confirmation defaults to **No**. It shows the GitHub repository,
+immutable app tag and commit, public hybrid key ID, local private-key path and
+output directory. Tab selects Yes; Enter confirms. This needs an interactive
+terminal. It never generates a key: the enrolled private pair must already be at
+`~/.local/share/nuschl-release-keys/update-v2.secret.json`.
+
+The command infers the version from committed `Cargo.toml` and the repository
+from the single `origin` URL; additional remotes such as contributor forks are
+ignored. The checkout must be clean. An existing `v{version}` tag selects the
+application, even when this publisher checkout is newer. Tags are never moved.
+For a new version without a tag, the confirmation proposes a local tag at clean
+committed HEAD; it creates that tag only after Yes, without pushing it.
+
+The command builds the exact tag's signer and products, then runs the audited
+preparation, hybrid signing and verification checks below. It uploads nothing.
+It prints a unique private temporary directory under
+`${XDG_CACHE_HOME:-~/.cache}/nuschl-release/`. This directory **remains after the
+command exits**: test the `stage/install/windows/` and `stage/install/Nuschl.app/`
+trees, archives in `stage/dist/`, and Linux Nix references in the receipt there.
+Build logs and failed attempts remain available too. Use a disk-backed cache,
+not `/tmp` or another tmpfs.
+
+When those exact artifacts are ready:
+
+```sh
+just release --publish
+```
+
+This selects the last **successfully signed** stage recorded for this repository
+and tag. Failed or cancelled preparation never replaces that record. It checks
+the remembered ledger/manifest/signature/checksum identity and reruns the backend's
+source, Nix-product, artifact and hybrid-signature verification before its one
+publication confirmation. It neither rebuilds nor signs again and needs no
+private key. After Yes, only that exact tag is pushed without force; an identical
+remote tag is unchanged and a different remote tag is refused. The backend then
+uploads a draft and verifies every uploaded digest before making it public. A changed,
+expired, missing, unrelated or already-published stage is refused; no fallback
+stage is guessed. Publication still needs `gh` authentication with the repository
+permissions described below. Preserve failed drafts for explicit inspection.
+
+Both commands use the existing local publisher below; the manual commands are
+available for inspecting individual steps or supplying optional native Mac proof.
+The experimental Mac release works entirely locally with the mandatory ad-hoc
+integrity checks and explicitly records `native_macos_verified=false` when native
+proof is absent. It does not require Apple Developer ID or notarisation.
+
 The long-lived Ed25519 + ML-DSA-44 private pair stays on the operator's machine.
 GitHub builds are optional, read-only verification; no signing secret belongs in
 Actions. The tag workflow builds artifacts but cannot sign or publish them.

@@ -1,6 +1,12 @@
 default:
     @just --list
 
+# Infer local release inputs, confirm once, then keep signed artifacts for review.
+# Positional arguments are passed through argv, never interpolated into shell code.
+[positional-arguments]
+release *args:
+    python3 release/release.py "$@"
+
 check:
     cargo fmt --all -- --check
     cargo clippy --workspace --all-targets -- -D warnings
