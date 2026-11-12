@@ -142,6 +142,16 @@ $owned = @(Get-CimInstance Win32_Process -Filter "Name='nuschl.exe'" | Where-Obj
 '''.replace("__RUN__", run)
 
 
+def copy_notices(source, destination):
+    shutil.copytree(source, destination)
+    # Nix output directories are read-only. Only this private staging copy
+    # needs a writable directory for the synthetic delivery marker; retain all
+    # original notice body bytes and never chmod the package/store source.
+    for directory, _, _ in os.walk(destination):
+        path = Path(directory)
+        path.chmod(path.stat().st_mode | 0o300)
+
+
 def stop_owned(run):
     return owned_processes(run) + "$owned | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }\n"
 
@@ -194,7 +204,7 @@ def exercise_update(args):
     with tempfile.TemporaryDirectory(prefix="nuschl-update-") as temporary:
         root = Path(temporary)
         staging = root / "release"
-        shutil.copytree(notices, staging / "licenses")
+        copy_notices(notices, staging / "licenses")
         initial_files = []
         for program in programs:
             shutil.copyfile(program, staging / program.name)
