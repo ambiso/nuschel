@@ -1300,66 +1300,74 @@ impl RenderOnce for MenuSurface {
         });
         let state = state.read(cx);
         let viewport = window.viewport_size();
-        let width = (viewport.width - px(16.)).max(px(0.)).min(px(320.));
-        let height = (viewport.height - px(16.)).max(px(0.));
+        // Anchored's snapping adds the native client inset only after an
+        // overflow. Keep a real paint gutter in its measured child as well,
+        // so a popup just inside a rounded/resize edge is still fully visible.
+        let inset = window.client_inset().unwrap_or(px(0.));
+        let gutter = inset + px(8.);
+        let reserve = (gutter + inset) * 2.;
+        let width = (viewport.width - reserve).max(px(0.)).min(px(320.));
+        let height = (viewport.height - reserve).max(px(0.));
         let content_height = (height - px(10.)).max(px(0.));
         deferred(
             anchored()
-                .position(self.position)
-                .snap_to_window_with_margin(px(8.))
+                .position(self.position - point(gutter, gutter))
+                .snap_to_window()
                 .child(
-                    div()
-                        .id("context-menu")
-                        .role(Role::Menu)
-                        .aria_label("Context menu")
-                        .w(width)
-                        .max_h(height)
-                        .p_1()
-                        .relative()
-                        .rounded(px(8.))
-                        .bg(color(APP))
-                        .border_1()
-                        .border_color(color(BORDER_STRONG))
-                        .shadow_lg()
-                        .child(
-                            crate::layout::scrollable(
-                                "context-menu-actions",
-                                "Context menu actions",
-                                state.scroll.clone(),
-                            )
-                            .track_focus(&state.focus)
-                            .tab_stop(false)
-                            .max_h(content_height)
+                    div().p(gutter).child(
+                        div()
+                            .id("context-menu")
+                            .role(Role::Menu)
+                            .aria_label("Context menu")
+                            .w(width)
+                            .max_h(height)
+                            .p_1()
+                            .relative()
+                            .rounded(px(8.))
+                            .bg(color(APP))
+                            .border_1()
+                            .border_color(color(BORDER_STRONG))
+                            .shadow_lg()
                             .child(
-                                div()
-                                    .w_full()
-                                    .min_w_0()
-                                    .pr(px(12.))
-                                    .flex()
-                                    .flex_col()
-                                    .children(self.rows),
-                            ),
-                        )
-                        .child(
-                            div().absolute().inset_0().child(
-                                Scrollbar::vertical(&state.scroll)
-                                    .id("context-menu-scrollbar")
-                                    .mode(ScrollbarMode::Always)
-                                    .styles(|styles| {
-                                        styles
-                                            .track(|track| {
-                                                track.width(px(8.)).bg(color(APP).into())
-                                            })
-                                            .thumb(|thumb| {
-                                                thumb
-                                                    .width(px(4.))
-                                                    .bg(color(BORDER_STRONG))
-                                                    .radius(px(2.))
-                                            })
-                                    }),
-                            ),
-                        )
-                        .focus_trap("context-menu-focus", &state.focus),
+                                crate::layout::scrollable(
+                                    "context-menu-actions",
+                                    "Context menu actions",
+                                    state.scroll.clone(),
+                                )
+                                .track_focus(&state.focus)
+                                .tab_stop(false)
+                                .max_h(content_height)
+                                .child(
+                                    div()
+                                        .w_full()
+                                        .min_w_0()
+                                        .pr(px(12.))
+                                        .flex()
+                                        .flex_col()
+                                        .children(self.rows),
+                                ),
+                            )
+                            .child(
+                                div().absolute().inset_0().child(
+                                    Scrollbar::vertical(&state.scroll)
+                                        .id("context-menu-scrollbar")
+                                        .mode(ScrollbarMode::Always)
+                                        .styles(|styles| {
+                                            styles
+                                                .track(|track| {
+                                                    track.width(px(8.)).bg(color(APP).into())
+                                                })
+                                                .thumb(|thumb| {
+                                                    thumb
+                                                        .width(px(4.))
+                                                        .bg(color(BORDER_STRONG))
+                                                        .radius(px(2.))
+                                                })
+                                        }),
+                                ),
+                            )
+                            .focus_trap("context-menu-focus", &state.focus),
+                    ),
                 ),
         )
     }

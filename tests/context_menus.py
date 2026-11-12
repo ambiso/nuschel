@@ -185,7 +185,7 @@ def actions(args, root, shell, application, bot, murmur):
         for width, height, zoom, steps in [
             (1280, 800, 100, 0),
             (900, 600, 100, 0),
-            (900, 600, 200, 5),
+            (900, 800, 200, 5),
         ]:
             close_menu()
             shell.chord("Control_L", "0")
