@@ -4,6 +4,8 @@
 mod config;
 mod codec;
 mod codec_host;
+mod codec_worker;
+mod decode_worker;
 mod decode;
 mod mumble;
 mod persist;
