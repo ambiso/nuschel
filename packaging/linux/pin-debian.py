@@ -19,7 +19,7 @@ import tempfile
 SEEDS = ('libc6-dev libgcc-14-dev libfontconfig-dev libfreetype-dev '
          'libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libxcb1-dev '
          'libx11-dev libxcursor-dev libxi-dev libxrandr-dev libvulkan-dev '
-         'libgl-dev libegl-dev libasound2-dev libpipewire-0.3-dev libpulse-dev').split()
+         'libgl-dev libegl-dev libasound2-dev libpipewire-0.3-dev libpulse-dev libsqlite3-dev').split()
 SIGNERS = {'04B54C3CDCA79751B16BC6B5225629DF75B188BD',
            '41587F7DB8C774BCCF131416762F67A0B2C39DE4'}
 

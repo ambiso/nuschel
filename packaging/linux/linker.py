@@ -7,6 +7,7 @@ sandbox policy is changed here. Used only by the explicit native Nix builder.
 """
 import os
 import json
+import hashlib
 import re
 from pathlib import Path
 import shutil
@@ -120,6 +121,12 @@ def main():
                 inputs = trace.read().decode('utf-8', errors='strict').splitlines()
                 shared = validate_trace(inputs, sysroot)
                 print('verified target native shared inputs: ' + json.dumps(shared))
+                report = env.get('NUSCHL_LINK_REPORT')
+                if report:
+                    output = Path(filtered[filtered.index('-o') + 1])
+                    digest = hashlib.file_digest(output.open('rb'), 'sha256').hexdigest()
+                    Path(report).write_text(json.dumps({'schema': 1, 'shared_link_inputs': shared,
+                        'nix_native_fallbacks': 0, 'sha256': digest}, sort_keys=True, indent=2) + '\n')
     raise SystemExit(result.returncode)
 
 

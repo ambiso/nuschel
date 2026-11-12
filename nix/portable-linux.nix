@@ -5,6 +5,11 @@
   pkgs,
   toolchain,
   projectRoot ? ../.,
+  nativeNotices ? null,
+  desktopFiles ? (import ./desktop-files.nix { inherit pkgs; }).linux,
+  appstreamXML ? null,
+  revision ? null,
+  version ? "0.1.0",
 }:
 let
   inherit (pkgs) lib;
@@ -95,19 +100,72 @@ let
       ${sysroot} ${pkgs.gcc.cc}/bin/gcc "$@"
   '';
   crates = import (projectRoot + /nix/crate2nix.nix) { inherit pkgs toolchain; };
-  leaf =
-    name:
-    crates.project.workspaceMembers.${name}.build.overrideAttrs (old: {
+  leafWith =
+    name: options:
+    (crates.project.workspaceMembers.${name}.build.override options).overrideAttrs (old: {
       preBuild = (old.preBuild or "") + ''
+        mkdir -p "$out/nix-support"
+        export NUSCHL_LINK_REPORT="$out/nix-support/native-link.json"
         export EXTRA_RUSTC_FLAGS="''${EXTRA_RUSTC_FLAGS:-} -C linker=${linker}/bin/nuschl-fhs-cc"
       '';
-      # Nix's normal ELF fixup would restore a store interpreter/RPATH. This
-      # prototype instead validates the resulting target ABI explicitly.
       dontFixup = true;
     });
+  leaf = name: leafWith name { };
+  programs = {
+    nuschl = leaf "nuschl";
+    nuschl-content-worker = leaf "nuschl-content-worker";
+    nuschl-crypto-worker = leaf "nuschl-crypto-worker";
+    nuschl-math-worker = leaf "nuschl-math-worker";
+    nuschl-media-worker = leaf "nuschl-media-worker";
+    nuschl-storage-worker = leaf "nuschl-storage-worker";
+    nuschl-transfer-worker = leaf "nuschl-transfer-worker";
+    nuschl-update-verify-ed25519 = leafWith "nuschl-update-worker" { features = [ "ed25519" ]; };
+    nuschl-update-verify-mldsa44 = leafWith "nuschl-update-worker" { features = [ "mldsa44" ]; };
+  };
+  stage =
+    assert nativeNotices != null;
+    assert revision != null && builtins.match "[0-9a-f]{40}" revision != null;
+    pkgs.runCommand "nuschl-native-fhs-${version}"
+      {
+        nativeBuildInputs = [
+          pkgs.python3
+          pkgs.binutils
+        ];
+      }
+      ''
+        mkdir -p "$out/usr/lib/nuschl" "$out/usr/bin" "$out/usr/share/nuschl/link-receipts"
+        ${lib.concatStringsSep "\n" (
+          lib.mapAttrsToList (name: program: ''
+            install -Dm755 ${program}/bin/${name} "$out/usr/lib/nuschl/${name}"
+            install -Dm644 ${program}/nix-support/native-link.json "$out/usr/share/nuschl/link-receipts/${name}.json"
+          '') programs
+        )}
+        ln -s ../lib/nuschl/nuschl "$out/usr/bin/nuschl"
+        cp -R ${desktopFiles}/share/. "$out/usr/share/"
+        mkdir -p "$out/usr/share/licenses/nuschl"
+        cp -R ${nativeNotices}/share/licenses/nuschl/. "$out/usr/share/licenses/nuschl/"
+        install -Dm644 ${projectRoot}/LICENSE "$out/usr/share/licenses/nuschl/EUPL-1.2"
+        install -Dm644 ${projectRoot}/crates/protocol/proto/LICENSE.mumble "$out/usr/share/licenses/nuschl/Mumble-BSD"
+        ${lib.optionalString (appstreamXML != null) ''
+          mkdir -p "$out/usr/share/metainfo"
+          substitute ${appstreamXML} "$out/usr/share/metainfo/org.nuschl.Nuschl.metainfo.xml" \
+            --replace-fail @VERSION@ ${lib.escapeShellArg version}
+        ''}
+        python3 ${../packaging/linux/audit-stage.py} --stage "$out" \
+          --project-root ${projectRoot} --revision ${lib.escapeShellArg revision} \
+          --version ${lib.escapeShellArg version} --readelf ${pkgs.binutils}/bin/readelf \
+          --rust-version ${lib.escapeShellArg toolchain.version}
+      '';
+
 in
 {
-  inherit metadataCheck sysroot linker;
+  inherit
+    metadataCheck
+    sysroot
+    linker
+    programs
+    stage
+    ;
   tests =
     pkgs.runCommand "nuschl-native-packaging-tests"
       {
@@ -128,6 +186,6 @@ in
               --readelf ${pkgs.binutils}/bin/readelf --patchelf ${pkgs.patchelf}/bin/patchelf
             touch "$out"
       '';
-  content = leaf "nuschl-content-worker";
-  desktop = leaf "nuschl";
+  content = programs.nuschl-content-worker;
+  desktop = programs.nuschl;
 }

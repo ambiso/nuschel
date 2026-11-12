@@ -32,7 +32,8 @@
     "libegl-dev",
     "libasound2-dev",
     "libpipewire-0.3-dev",
-    "libpulse-dev"
+    "libpulse-dev",
+    "libsqlite3-dev"
   ],
   "packages": [
     {
@@ -1184,6 +1185,16 @@
       "sha256": "0a459adaffd901109f7811ab65f58e7a957b4907d05539cf3d1184efdcde0468",
       "size": 914584,
       "depends": "libc6 (>= 2.38)"
+    },
+    {
+      "name": "libsqlite3-dev",
+      "version": "3.46.1-7+deb13u2",
+      "source": "sqlite3",
+      "architecture": "amd64",
+      "filename": "pool/main/s/sqlite3/libsqlite3-dev_3.46.1-7+deb13u2_amd64.deb",
+      "sha256": "56e1945d52292b506c1f0bcb77543fea289ccee857c478dcddded40226e1594d",
+      "size": 1109400,
+      "depends": "libsqlite3-0 (= 3.46.1-7+deb13u2), libc-dev"
     },
     {
       "name": "libsratom-0-0",
@@ -2428,6 +2439,16 @@
       "selected": "libglib2.0-dev"
     },
     {
+      "from": "libsqlite3-dev",
+      "clause": "libsqlite3-0 (= 3.46.1-7+deb13u2)",
+      "selected": "libsqlite3-0"
+    },
+    {
+      "from": "libsqlite3-dev",
+      "clause": "libc-dev",
+      "selected": "libc6-dev"
+    },
+    {
       "from": "libc6",
       "clause": "libgcc-s1",
       "selected": "libgcc-s1"
@@ -3091,6 +3112,11 @@
       "from": "libglib2.0-dev",
       "clause": "libglib2.0-dev-bin (= 2.84.4-3~deb13u5)",
       "selected": "libglib2.0-dev-bin"
+    },
+    {
+      "from": "libsqlite3-0",
+      "clause": "libc6 (>= 2.38)",
+      "selected": "libc6"
     },
     {
       "from": "libcrypt1",
@@ -4388,11 +4414,6 @@
       "selected": "libtinfo6"
     },
     {
-      "from": "libsqlite3-0",
-      "clause": "libc6 (>= 2.38)",
-      "selected": "libc6"
-    },
-    {
       "from": "libtinfo6",
       "clause": "libc6 (>= 2.34)",
       "selected": "libc6"
@@ -4728,6 +4749,6 @@
       "selected": "libmd0"
     }
   ],
-  "download_bytes": 114982844,
+  "download_bytes": 116092244,
   "scope": "deterministic extraction/link sysroot; first concrete alternative/provider selected from this one signed release; not general APT resolution or install proof"
 }

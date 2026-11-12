@@ -24,7 +24,7 @@ PROGRAMS = ('nuschl', 'nuschl-content-worker', 'nuschl-crypto-worker',
 APP_ID = 'org.nuschl.Nuschl'
 # Includes dynamically opened graphical/audio libraries, not only DT_NEEDED.
 DEPENDS = ('bubblewrap, util-linux, desktop-file-utils, hicolor-icon-theme, '
-           'libgcc-s1, libstdc++6, libfontconfig1, libfreetype6, libxkbcommon0, '
+           'libgcc-s1, libstdc++6, libsqlite3-0, libfontconfig1, libfreetype6, libxkbcommon0, '
            'libxkbcommon-x11-0, libwayland-client0, libwayland-cursor0, '
            'libvulkan1, libgl1, libegl1, libx11-6, libxcursor1, libxi6, '
            'libxrandr2, libxcb1, libasound2t64 | libasound2, '
