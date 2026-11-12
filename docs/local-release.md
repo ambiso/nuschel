@@ -53,11 +53,25 @@ Keep staging exclusive to this operation: do not edit it or run two helpers on
 it concurrently. Revalidation catches changed source, products, payloads and tags;
 it is not a defense against a compromised operator account, Nix daemon or OS.
 
-## Obtain native Apple static verification
+## Optional native Apple static verification
 
-Linux cross compilation is not native Apple verification. Signing/publication
-remain blocked until one of these two paths checks the *exact* prepared Mac tree.
-Neither path executes the app, proves Seatbelt/audio/updater runtime behavior,
+Linux cross compilation is not native Apple verification. The experimental
+release can be prepared, signed and published entirely on Linux. Mandatory local
+checks reuse the bounded `tests/cross_macho.py` ad-hoc integrity inspector for both
+slices of all nine programs, their code pages, bundle Info.plist/CodeResources
+special slots and every resource hash. Unknown formats fail closed. These are
+local structural checks, not Apple acceptance.
+
+`dist/macos-verification.json` records `native_macos_verified=false` by default;
+its exact digest and status are bound by the hybrid-signed manifest notes. The
+Mac download is experimental and not natively tested. Developer ID/notarisation
+was explicitly deferred; our hybrid signature authenticates the release without
+claiming an Apple-approved publisher or Gatekeeper acceptance. **Skip to Sign
+locally to use the all-local release path.**
+
+Either optional path below adds native static evidence for the exact prepared
+Mac tree and records `native_macos_verified=true`. Neither path executes the app
+or proves Seatbelt/audio/updater runtime behavior,
 adds Developer ID/notarisation, or claims Gatekeeper publisher acceptance.
 
 **An owned native Mac:** copy the prepared `source/`, `install/Nuschl.app/`,
@@ -88,8 +102,9 @@ The helper queries the real run/job/artifact identities, downloads the native
 report and original artifact, validates the original same-run metadata/notices,
 and compares every file to the locally selected Mac product. A self-asserted JSON
 report is insufficient for this channel. Publication fetches and checks this CI
-evidence again. Expired or unavailable artifacts fail closed; use a native Mac or
-a fresh appropriate build rather than editing a receipt. No signing key enters CI.
+evidence again. Expired, unavailable or invalid optional artifacts are rejected; do not edit a
+receipt to manufacture success. No signing key enters CI. Omitting native
+evidence keeps the honest experimental/not-natively-verified status.
 
 ## Sign locally, then review
 
@@ -106,9 +121,14 @@ python3 release/local-release.py sign "$stage" \
 
 The embedded *tagged* public pair must match the supplied private pair. The helper
 reselects the tag's derivations/NAR receipts, compares installation and archive
-bytes to those immutable products, checks native proof and all notice scopes,
+bytes to those immutable products, checks local ad-hoc integrity, all notice
+scopes and any supplied optional native proof,
 then uses the existing signer to sign and verify both algorithms over exact raw
-v2 bytes. It writes canonical `SHA256SUMS` only after successful verification.
+v2 bytes. It writes canonical `SHA256SUMS` only after successful verification. The hybrid
+signature covers `update.json`; its ledger digest binds the public ledger and all
+archive/static-web hashes, and its Mac-verification digest binds the explicit
+native-status report. These authenticate download bytes without an OS publisher
+certificate. A checksum file alone is not a substitute for verifying those bindings.
 Do not regenerate the key or replace tagged trust to get past a mismatch.
 The prepared metadata retains its ordinary maximum 30-day expiry; if it expires,
 prepare a fresh review rather than bypassing verification. Later unchanged-binary
@@ -143,6 +163,8 @@ python3 tests/local_release.py --signer "$PWD/result-update-signer/bin/nuschl-up
 python3 tests/update_release.py --signer "$PWD/result-update-signer/bin/nuschl-update-sign"
 ```
 
-These fixtures test orchestration and tamper/refusal behavior; they are not native
-Mac acceptance or a production publication. Record the actual native proof and
-final remote result separately.
+These fixtures test orchestration and tamper/refusal behavior; an optional
+`--macos-app /path/to/existing/Nuschl.app` additionally exercises the local
+inspector on produced public bytes. Neither is native Apple acceptance or a
+production publication. Record the actual local-integrity result, optional
+native proof and final remote result separately.

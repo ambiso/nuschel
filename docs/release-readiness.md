@@ -4,7 +4,8 @@ Source audit: 2026-11-11, baseline `15a733bf`. This is a release checklist,
 not a new platform test result. The original baseline used minisign; the current hybrid runtime is described in
 [the update worker README](../apps/update-worker/README.md), with Linux actual-worker
 proof and explicit remaining platform/enrollment gates. Recheck the final integrated
-commit and record actual artifact/native-Mac evidence before publishing. Local Nix
+commit and record actual artifact/local-integrity evidence before publishing; native
+Apple verification is optional and must be reported honestly. Local Nix
 products are accepted with exact derivation/NAR/source receipts; CI is optional.
 
 The chosen first release is the normal `0.1.0` release, described as an early
@@ -49,8 +50,9 @@ permissions, playback and self-update. Mark the Mac artifact untested/experiment
 - [x] Choose `0.1.0` as the normal early-preview version. The eventual tag must be
   `v0.1.0`, matching the workspace and package versions; this decision has not
   created that tag.
-- [ ] Prepare and validate all intended exact-tag local Nix products and native
-  Mac static evidence (owned Mac or successful same-commit key-free CI). The
+- [ ] Prepare and validate all intended exact-tag local Nix products and mandatory
+  local Mac structural/ad-hoc integrity. Native Apple/CI verification is optional
+  additional evidence; mark Mac experimental and not natively verified when absent. The
   reusable build workflow remains optional artifact/verification infrastructure;
   local receipts must not claim invented CI provenance.
 - [x] Implement scoped, fail-closed notice packaging and actual source evidence,

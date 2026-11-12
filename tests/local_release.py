@@ -21,6 +21,7 @@ spec = importlib.util.spec_from_file_location('local_release', ROOT / 'release/l
 local = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(local)
 SIGNER = None
+MACOS_APP = None
 
 
 class LocalRelease(unittest.TestCase):
@@ -77,6 +78,7 @@ class LocalRelease(unittest.TestCase):
         self.addCleanup(patch.stopall)
         patch.object(local, 'select_product', side_effect=lambda flake, name: self.products[name]).start()
         patch.object(local, 'check_installs').start()
+        patch.object(local, 'mac_integrity', return_value={'fixture': 'synthetic; not actual Mach-O proof'}).start()
         auth = local.module(self.repo / 'release/prepare-artifacts.py')
         auth.verify_notices = lambda *a, **kw: None
         patch.object(local, 'authority', return_value=auth).start()
@@ -96,7 +98,6 @@ class LocalRelease(unittest.TestCase):
             'host': {'platform': 'darwin'}, 'commands': [{'fixture': 'not actual Apple proof'}]})
 
     def sign(self):
-        self.mac_fixture()
         local.sign(argparse.Namespace(stage=self.stage, signer=SIGNER, sign_key=self.secret))
 
     def test_real_fixture_hybrid_signatures_bind_ledger_and_exact_assets(self):
@@ -108,11 +109,23 @@ class LocalRelease(unittest.TestCase):
         with self.assertRaises(subprocess.CalledProcessError):
             local.verify_signature(self.stage, SIGNER)
 
-    def test_missing_native_proof_blocks_before_secret_command(self):
-        with patch.object(local, 'run', side_effect=AssertionError('no signer allowed')):
-            # Native proof check itself is strict; no injected native success.
-            with self.assertRaises(ValueError):
-                local.mac_gate(self.stage, local.load(self.stage / 'ledger.json'))
+    def test_absent_native_proof_is_explicit_false_and_integrity_is_required(self):
+        ledger = local.load(self.stage / 'ledger.json')
+        self.assertIsNone(local.mac_gate(self.stage, ledger))
+        self.assertFalse(local.verification_record(self.stage, ledger)['native_macos_verified'])
+        self.sign()
+        signed = local.load(self.stage / 'dist/update.json')
+        self.assertIn('native_macos_verified=false', signed['notes'].splitlines())
+        local.verify_signature(self.stage, SIGNER)
+        with patch.object(local, 'mac_integrity', side_effect=ValueError('bad ad-hoc integrity')):
+            with self.assertRaisesRegex(ValueError, 'ad-hoc'):
+                local.validate(self.stage)
+
+    def test_optional_operator_native_receipt_is_bound_as_true(self):
+        self.mac_fixture()  # synthetic adapter evidence, no actual native claim
+        self.sign()
+        self.assertTrue(local.load(self.stage / 'dist/macos-verification.json')['native_macos_verified'])
+        self.assertIn('native_macos_verified=true', local.load(self.stage / 'dist/update.json')['notes'].splitlines())
 
     @unittest.skipUnless(os.uname().sysname == 'Linux', 'Linux refusal control')
     def test_linux_cannot_mint_native_apple_pass(self):
@@ -139,7 +152,7 @@ class LocalRelease(unittest.TestCase):
         ledger_path = self.stage / 'ledger.json'
         ledger = local.load(ledger_path)
         assets = local.tree(self.stage / 'dist')
-        for name in ('update.json', 'update.json.sig', 'SHA256SUMS', 'release-ledger.json'):
+        for name in ('update.json', 'update.json.sig', 'SHA256SUMS', 'release-ledger.json', 'macos-verification.json'):
             assets.pop(name, None)
         ledger['assets'] = assets
         ledger_path.write_text(json.dumps(ledger))
@@ -294,9 +307,29 @@ class LocalRelease(unittest.TestCase):
         self.assertEqual(calls, [])
 
 
+class ActualMacIntegrity(unittest.TestCase):
+    def test_existing_produced_universal_bundle_and_info_tamper(self):
+        if MACOS_APP is None:
+            self.skipTest('provide --macos-app for existing public produced bytes')
+        report = local.mac_integrity(MACOS_APP)
+        self.assertEqual(set(report['programs']), set(local.PROGRAMS))
+        self.assertTrue(all(len(slices) == 2 for slices in report['programs'].values()))
+        parser = local.module(ROOT / 'tests/cross_macho.py')
+        main = (MACOS_APP / 'Contents/MacOS/nuschl').read_bytes()
+        info = (MACOS_APP / 'Contents/Info.plist').read_bytes()
+        resources = (MACOS_APP / 'Contents/_CodeSignature/CodeResources').read_bytes()
+        with self.assertRaises(ValueError):
+            parser.verify_adhoc(main, 'org.nuschl.Nuschl', info=info + b' ', resources=resources)
+        corrupt = bytearray(main)
+        corrupt[report['programs']['nuschl'][0]['slice_offset'] + 4096] ^= 1
+        with self.assertRaises(ValueError):
+            parser.verify_adhoc(corrupt, 'org.nuschl.Nuschl', info=info, resources=resources)
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--signer', required=True)
+    parser.add_argument('--macos-app', type=Path)
     args, remaining = parser.parse_known_args()
-    SIGNER = args.signer
+    SIGNER, MACOS_APP = args.signer, args.macos_app
     unittest.main(argv=[__file__, *remaining])

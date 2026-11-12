@@ -232,7 +232,10 @@ Publication uses exact tagged local Nix products with derivation/output/NAR rece
 key-free CI native-Mac artifacts are optional proof inputs, accepted only after
 actual run/job/artifact validation and exact local-tree comparison. The private
 signing pair stays local. The draft-first publisher verifies both signatures,
-all payloads, notices, checksums and uploaded digests before finalization. Linux
+all payloads, local Mac structural/ad-hoc integrity, notices, checksums and
+uploaded digests before finalization. Native Apple verification is optional;
+without it the signed release metadata explicitly records
+`native_macos_verified=false`, not Apple/Gatekeeper acceptance. Linux
 references and a deployable static web bundle are included without claiming a
 portable Linux binary. See [local commands and native-Mac gates](../../docs/local-release.md).
 Missing/incomplete bundled notices block signing. The scoped attribution pipeline now recovers actual upstream/native/asset terms,

@@ -173,7 +173,7 @@ Two different kinds of signing are involved:
   over the exact raw `update.json`. There is no minisign/adjacent-key fallback.
   The dedicated production public pair was enrolled on 2026-11-12 (key ID
   `dbc40ac478b51573eaebebb0a40532bec7cf2a87282a98ae08f1a25ee5b42535`).
-  Local signing and exact artifact/native-Mac verification remain operator steps;
+  Local signing and exact artifact/local ad-hoc integrity checks remain operator steps;
   enrollment alone does not establish publication readiness. See [local release
   commands](local-release.md). Missing/incomplete
   runtime notices also block signing. See the [operator and verification

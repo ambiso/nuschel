@@ -337,11 +337,12 @@ def prepare(args):
               'assets': payloads, 'source_kind': 'local-nix; not GitHub CI provenance'}
     write(stage / 'ledger.json', ledger)
     write(stage / 'local.json', {'source_repository': str(repository), 'flake': flake})
+    write(dist / 'macos-verification.json', verification_record(stage, ledger))
     shutil.copyfile(stage / 'ledger.json', dist / 'release-ledger.json')
     raw = load(dist / 'update.json')
     raw['notes'] = f'https://github.com/{args.repository}/releases/tag/{args.tag}\nledger-sha256={sha(stage / "ledger.json")}'
     (dist / 'update.json').write_text(json.dumps(raw, indent=1) + '\n')
-    print(f'Prepared {stage}; unsigned. Native Mac verification and local signing remain required.')
+    print(f'Prepared {stage}; unsigned, local Mac integrity checked. Native Mac verification is optional.')
 
 
 def validate(stage):
@@ -361,7 +362,7 @@ def validate(stage):
     require(sha(stage / 'macos-install.tar') == ledger['macos_archive_sha256'], 'Mac archive changed')
     actual = tree(stage / 'dist')
     require(sha(stage / 'dist/release-ledger.json') == sha(stage / 'ledger.json'), 'public ledger differs')
-    for name in ('update.json', 'update.json.sig', 'SHA256SUMS', 'release-ledger.json'):
+    for name in ('update.json', 'update.json.sig', 'SHA256SUMS', 'release-ledger.json', 'macos-verification.json'):
         actual.pop(name, None)
     require(actual == ledger['assets'], 'release payload changed or assets added/removed')
     manifest = load(stage / 'dist/update.json')
@@ -383,7 +384,59 @@ def validate(stage):
     require(manifest['platforms'] == expected, 'manifest file set/hash/URLs changed')
     check_installs(stage, stage / 'source')
     check_products(stage, ledger, repo)
+    record = load(stage / 'dist/macos-verification.json')
+    require(set(record) == {'format', 'native_macos_verified', 'native_report_sha256', 'integrity'} and
+            record['format'] == 1 and type(record['native_macos_verified']) is bool and
+            record['integrity'] == mac_integrity(stage / 'install/Nuschl.app'),
+            'local Mac integrity record changed')
+    if record['native_macos_verified']:
+        require(record['native_report_sha256'] == mac_gate(stage, ledger) and
+                record['native_report_sha256'] is not None, 'unsupported native Mac claim')
+    else:
+        require(record['native_report_sha256'] is None, 'inconsistent native Mac status')
     return ledger
+
+
+def mac_integrity(app):
+    """Pinned locally produced ad-hoc format; NOT native Apple acceptance."""
+    parser = module(ROOT / 'tests/cross_macho.py')
+    info = (app / 'Contents/Info.plist').read_bytes()
+    resources_path = app / 'Contents/_CodeSignature/CodeResources'
+    require(resources_path.stat().st_size <= 8 * 1024**2, 'oversized CodeResources')
+    resources = resources_path.read_bytes()
+    records = plistlib.loads(resources)
+    require(isinstance(records, dict) and isinstance(records.get('files2'), dict) and
+            len(records['files2']) <= 4096, 'unsupported resource envelope')
+    checked = set()
+    for name, record in records['files2'].items():
+        if isinstance(record, dict) and 'hash2' in record:
+            relative = authority(ROOT).checked_relative(name)
+            file = app / 'Contents' / relative
+            require(file.is_file() and not file.is_symlink() and
+                    bytes.fromhex(sha(file)) == record['hash2'], 'bundle resource digest mismatch')
+            checked.add(name)
+    require(all('Resources/' + name in checked for name in tree(app / 'Contents/Resources')),
+            'bundle resource envelope does not cover every resource')
+    programs = {}
+    for name in PROGRAMS:
+        binary = app / 'Contents/MacOS' / name
+        require(binary.stat().st_size <= 512 * 1024**2, 'oversized Mach-O')
+        programs[name] = parser.verify_adhoc(binary.read_bytes(),
+            'org.nuschl.Nuschl' if name == 'nuschl' else name,
+            info=info if name == 'nuschl' else None,
+            resources=resources if name == 'nuschl' else None)
+    return {'format': 1, 'scope': 'local structural/ad-hoc integrity only', 'programs': programs,
+            'all_resources_covered': True,
+            'limits': ['Not Apple codesign/Gatekeeper acceptance or publisher identity',
+                       'No native macOS runtime, Seatbelt, audio or updater proof',
+                       'No Developer ID/notarization; experimental Mac distribution']}
+
+
+def verification_record(stage, ledger):
+    native = mac_gate(stage, ledger)
+    return {'format': 1, 'native_macos_verified': native is not None,
+            'native_report_sha256': native,
+            'integrity': mac_integrity(stage / 'install/Nuschl.app')}
 
 
 def verify_macos(args):
@@ -467,7 +520,10 @@ def import_ci_macos(args):
 
 
 def mac_gate(stage, ledger):
-    report = load(stage / 'macos-native/report.json')
+    path = stage / 'macos-native/report.json'
+    if not path.exists() and not path.is_symlink():
+        return None
+    report = load(path)
     require(report.get('status') == 'native_apple_static_verified' and
             report.get('artifact_binaries_executed') is False and
             report.get('commit') == ledger['commit'] and
@@ -494,12 +550,14 @@ def checksum_text(dist):
 def sign(args):
     stage = args.stage.resolve(strict=True)
     ledger = validate(stage)
-    native = mac_gate(stage, ledger)
+    verification = verification_record(stage, ledger)
     require(not (stage / 'dist/update.json.sig').exists(), 'already signed; never overwrite staged signatures')
     public = stage / 'source/crates/update/update-trust.json'
     run([args.signer, 'key-status', '--secret-file', args.sign_key, '--public-file', public])
     manifest = load(stage / 'dist/update.json')
-    manifest['notes'] += '\nnative-macos-report-sha256=' + native
+    (stage / 'dist/macos-verification.json').write_text(json.dumps(verification, indent=2, sort_keys=True) + '\n')
+    manifest['notes'] += ('\nmacos-verification-sha256=' + sha(stage / 'dist/macos-verification.json') +
+                          '\nnative_macos_verified=' + str(verification['native_macos_verified']).lower())
     (stage / 'dist/update.json').write_text(json.dumps(manifest, indent=1) + '\n')
     run([args.signer, 'sign', '--secret-file', args.sign_key, '--public-file', public,
          '--manifest', stage / 'dist/update.json', '--signature-file', stage / 'dist/update.json.sig'])
@@ -511,12 +569,15 @@ def sign(args):
 def publish(args):
     stage = args.stage.resolve(strict=True)
     ledger = validate(stage)
-    native = mac_gate(stage, ledger)
-    require('native-macos-report-sha256=' + native in load(stage / 'dist/update.json')['notes'].splitlines(),
-            'native report differs from signed binding')
+    verification = verification_record(stage, ledger)
+    notes = load(stage / 'dist/update.json')['notes'].splitlines()
+    require(load(stage / 'dist/macos-verification.json') == verification and
+            'macos-verification-sha256=' + sha(stage / 'dist/macos-verification.json') in notes and
+            'native_macos_verified=' + str(verification['native_macos_verified']).lower() in notes,
+            'Mac verification status differs from signed binding')
     verify_signature(stage, args.signer)
-    native_report = load(stage / 'macos-native/report.json')
-    if native_report['source'] == 'github-native-success':
+    native_report = load(stage / 'macos-native/report.json') if verification['native_macos_verified'] else None
+    if native_report and native_report['source'] == 'github-native-success':
         with tempfile.TemporaryDirectory(prefix='release-ci-recheck-') as tmp:
             fresh = ci_evidence(stage, ledger, args.gh, native_report['run_id'], Path(tmp))
             require(fresh == native_report, 'CI evidence changed since local signing')

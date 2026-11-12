@@ -103,7 +103,9 @@ was enrolled; no adjacent writable key or minisign fallback is accepted. The
 include shared parent/OS/compiler/hash dependencies and the local signing authority.
 The long-lived hybrid private pair stays local; hosted CI has no signing secret
 or publication authority. [Local release tooling](docs/local-release.md) binds
-exact tagged products and native-Mac evidence before signing and draft-first publication.
+exact tagged products and local ad-hoc bundle integrity before signing and
+draft-first publication. Native Apple verification is optional; absent proof is
+explicitly recorded as not natively verified, with no Apple publisher claim.
 Hybrid verifier/LPAC, library-install and desktop update/restart proof exist on
 recorded fixture sources in a private Windows 11 VM, including exact owned profile
 and persisted update-state continuity. Current-head archive checks and macOS
