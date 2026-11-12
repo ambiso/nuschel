@@ -6,6 +6,8 @@ Never silently fall back to a Nix shared library. No package/runtime behavior or
 sandbox policy is changed here. Used only by the explicit native Nix builder.
 """
 import os
+import json
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -63,6 +65,19 @@ def filter_arguments(arguments, scratch):
     return result
 
 
+def validate_trace(inputs, sysroot):
+    shared = set()
+    for line in inputs:
+        path = line.strip()
+        native = re.search(r'\.so(?:\.|$)', path) or path.endswith('.o') and '.rlib(' not in path
+        if path.startswith('/nix/store/') and native:
+            if not path.startswith(sysroot.rstrip('/') + '/'):
+                raise ValueError('unexpected Nix native link fallback: ' + path)
+            if re.search(r'\.so(?:\.|$)', path):
+                shared.add(path[len(sysroot):])
+    return sorted(shared)
+
+
 def main():
     sysroot, compiler, *arguments = sys.argv[1:]
     root = Path(sysroot)
@@ -75,13 +90,22 @@ def main():
                    '-B' + str(root / 'usr/lib/gcc' / triple / '14') + '/',
                    '-L' + str(root / 'usr/lib' / triple),
                    '-L' + str(root / 'usr/lib/gcc' / triple / '14'),
+                   '-Wl,--sysroot=' + sysroot,
                    '-Wl,-rpath-link,' + str(root / 'usr/lib' / triple),
                    '-Wl,-rpath-link,' + str(root / 'usr/lib' / triple / 'pulseaudio'),
-                   *filtered, '-Wl,--dynamic-linker=/lib64/ld-linux-x86-64.so.2']
+                   *filtered, '-Wl,--dynamic-linker=/lib64/ld-linux-x86-64.so.2', '-Wl,-t']
         env = dict(os.environ)
         for name in ('NIX_LDFLAGS', 'NIX_CFLAGS_COMPILE', 'NIX_CFLAGS_LINK', 'LIBRARY_PATH', 'LD_LIBRARY_PATH'):
             env.pop(name, None)
-        result = subprocess.run(command, env=env)
+        with tempfile.TemporaryFile() as trace:
+            result = subprocess.run(command, env=env, stdout=trace)
+            if not result.returncode:
+                if trace.tell() > 2 * 1024 * 1024:
+                    raise ValueError('native link trace exceeds bound')
+                trace.seek(0)
+                inputs = trace.read().decode('utf-8', errors='strict').splitlines()
+                shared = validate_trace(inputs, sysroot)
+                print('verified target native shared inputs: ' + json.dumps(shared))
     raise SystemExit(result.returncode)
 
 

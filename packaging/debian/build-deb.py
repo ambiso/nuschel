@@ -112,8 +112,10 @@ def validate(stage, arch, ceiling, readelf):
 
 
 def main():
+    global ROOT
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--stage', type=Path, required=True)
+    parser.add_argument('--project-root', type=Path, default=ROOT, help='matching source/policy tree for Nix script staging')
     parser.add_argument('--architecture', choices=['amd64', 'arm64'], required=True)
     parser.add_argument('--maximum-glibc', required=True, help='real target distro ABI ceiling, e.g. 2.41')
     parser.add_argument('--readelf', default='readelf')
@@ -124,6 +126,7 @@ def main():
     parser.add_argument('--output', type=Path)
     parser.add_argument('--dpkg-deb', default='dpkg-deb')
     args = parser.parse_args()
+    ROOT = args.project_root.resolve(strict=True)
     stage = args.stage.resolve(strict=True)
     programs = validate(stage, args.architecture, version(args.maximum_glibc), args.readelf)
     report = {'programs': programs, 'architecture': args.architecture, 'target_glibc_ceiling': args.maximum_glibc,

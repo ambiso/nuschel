@@ -42,6 +42,14 @@ class Packaging(unittest.TestCase):
         self.assertEqual(linker.filter_arguments(['/nix/store/fixture/libstd.rlib'], self.root),
                          ['/nix/store/fixture/libstd.rlib'])
 
+    def test_link_trace_rejects_implicit_nix_shared_or_crt_fallback(self):
+        sysroot = '/nix/store/fixture-target-sysroot'
+        trace = [sysroot + '/usr/lib/libc.so.6', '/nix/store/fixture-rust/libstd.rlib(std.rcgu.o)']
+        self.assertEqual(linker.validate_trace(trace, sysroot), ['/usr/lib/libc.so.6'])
+        for value in ['/nix/store/fixture-host/libc.so.6', '/nix/store/fixture-host/crtbeginS.o']:
+            with self.assertRaisesRegex(ValueError, 'native link fallback'):
+                linker.validate_trace(trace + [value], sysroot)
+
     def test_malformed_elf_is_rejected_before_inspection(self):
         path = self.root / 'bad'; path.write_bytes(b'not an executable')
         with self.assertRaisesRegex(ValueError, 'expected real amd64'):
