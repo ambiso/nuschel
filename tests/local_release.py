@@ -135,6 +135,41 @@ class LocalRelease(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'derivation/output/NAR'):
             local.check_products(self.stage, ledger, self.repo)
 
+    def rewrite_ledger_binding(self):
+        ledger_path = self.stage / 'ledger.json'
+        ledger = local.load(ledger_path)
+        assets = local.tree(self.stage / 'dist')
+        for name in ('update.json', 'update.json.sig', 'SHA256SUMS', 'release-ledger.json'):
+            assets.pop(name, None)
+        ledger['assets'] = assets
+        ledger_path.write_text(json.dumps(ledger))
+        shutil.copyfile(ledger_path, self.stage / 'dist/release-ledger.json')
+        path = self.stage / 'dist/update.json'
+        manifest = local.load(path)
+        manifest['notes'] = 'https://github.com/fixture/project/releases/tag/v0.1.0\nledger-sha256=' + local.sha(ledger_path)
+        path.write_text(json.dumps(manifest))
+
+    def test_coherent_extra_asset_and_instruction_rewrites_are_refused(self):
+        extra = self.stage / 'dist/evil.exe'
+        extra.write_bytes(b'not a selected-tag product')
+        self.rewrite_ledger_binding()
+        with self.assertRaisesRegex(ValueError, 'outside source-selected'):
+            local.validate(self.stage)
+        extra.unlink()
+        (self.stage / 'dist/INSTALL-NIX.txt').write_text('install unrelated source')
+        self.rewrite_ledger_binding()
+        with self.assertRaisesRegex(ValueError, 'instructions changed'):
+            local.validate(self.stage)
+
+    def test_mutated_repository_cannot_enter_signed_installation_instructions(self):
+        path = self.stage / 'ledger.json'
+        ledger = local.load(path)
+        ledger['repository'] = 'fixture/project;curl bad'
+        path.write_text(json.dumps(ledger))
+        with self.assertRaisesRegex(ValueError, 'ledger/source repository'):
+            local.validate(self.stage)
+        self.assertFalse(local.repository_name('../evil'))
+
     def test_source_export_and_tag_movement_are_refused(self):
         (self.stage / 'source/flake.lock').write_text('changed')
         with self.assertRaisesRegex(ValueError, 'source bytes'):
@@ -180,6 +215,20 @@ class LocalRelease(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     local.ci_evidence(self.stage, ledger, 'fixture-gh', '123', self.root / 'unused')
             self.assertEqual(len(calls), 1 if wrong_source else 2)
+
+    def test_tampered_zip_never_reaches_an_archive_decoder(self):
+        path = self.stage / 'dist/nuschl-0.1.0-windows-x86_64.zip'
+        data = bytearray(path.read_bytes())
+        data[-14:-10] = b'\xff\xff\xff\xff'
+        path.write_bytes(data)
+        real = local.zipfile.ZipFile
+        def only_new_archives(file, mode='r', *args, **kwargs):
+            self.assertEqual(mode, 'x', 'mutable archive must never be parsed')
+            return real(file, mode, *args, **kwargs)
+        with patch.object(local.zipfile, 'ZipFile', side_effect=only_new_archives):
+            with self.assertRaisesRegex(ValueError, 'ZIP bytes'):
+                local.archive_tree(path, local.tree(self.stage / 'install/windows'), zipped=True,
+                                   source_root=self.stage / 'install/windows')
 
     def test_links_and_directory_only_fanout_are_bounded(self):
         root = self.root / 'bounded'

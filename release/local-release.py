@@ -233,14 +233,24 @@ def select_product(flake, name):
     return {**selected, 'narHash': info['narHash'], 'source_kind': 'local-nix'}
 
 
-def archive_tree(path, expected, prefix=None, *, zipped=False):
+def archive_tree(path, expected, prefix=None, *, zipped=False, source_root=None):
+    if zipped:
+        # Do not parse/decompress a mutable ZIP at all. Reconstruct our canonical
+        # archive from already store-matched inputs and compare its exact digest.
+        require(source_root is not None and tree(source_root) == expected,
+                'canonical ZIP needs its exact selected input tree')
+        with tempfile.TemporaryDirectory(prefix='release-zip-check-') as temporary:
+            canonical = Path(temporary) / 'expected.zip'
+            canonical_zip(source_root, canonical, prefix)
+            require(sha(path) == sha(canonical), 'ZIP bytes differ from canonical selected product')
+        return
     found, total = {}, 0
-    with (zipfile.ZipFile(path) if zipped else tarfile.open(path, 'r:')) as archive:
-        members = archive.infolist() if zipped else archive
+    with tarfile.open(path, 'r:') as archive:
+        members = archive
         for item in members:
-            name = item.filename if zipped else item.name
-            size = item.file_size if zipped else item.size
-            require(not (item.is_dir() if zipped else not item.isfile()), 'regular-only archive required')
+            name = item.name
+            size = item.size
+            require(item.isfile(), 'regular-only archive required')
             require(len(found) < 32768 and name not in found and size <= 512 * 1024**2,
                     'duplicate/oversized archive member')
             total += size
@@ -249,11 +259,9 @@ def archive_tree(path, expected, prefix=None, *, zipped=False):
                 require(name.startswith(prefix + '/'), 'foreign archive root')
                 name = name[len(prefix) + 1:]
             require(name in expected and name not in found, 'foreign/duplicate archive file')
-            mode = item.external_attr >> 16 if zipped else item.mode
-            if zipped:
-                require(not item.flag_bits & 1 and mode & 0o170000 == 0o100000,
-                        'encrypted or nonregular ZIP member')
-            stream = archive.open(item) if zipped else archive.extractfile(item)
+            require(size == expected[name]['size'], 'archive member size differs from product')
+            mode = item.mode
+            stream = archive.extractfile(item)
             digest, count = hashlib.sha256(), 0
             with stream:
                 while block := stream.read(1024 * 1024):
@@ -263,6 +271,12 @@ def archive_tree(path, expected, prefix=None, *, zipped=False):
             require(count == size, 'truncated archive member')
             found[name] = {'size': size, 'sha256': digest.hexdigest(), 'executable': bool(mode & 0o111)}
     require(found == expected, 'archive differs from exact selected product')
+
+
+def nix_instructions(repository, commit):
+    return (f'Linux requires Nix; no portable Linux binary is supplied.\n'
+            f'nix run github:{repository}/{commit}\n'
+            f'nix build github:{repository}/{commit}#server\n')
 
 
 def check_products(stage, ledger, repository):
@@ -278,19 +292,27 @@ def check_products(stage, ledger, repository):
     require(tree(stage / 'install/Nuschl.app') == mac, 'staged Mac files differ from selected Nix product')
     version = ledger['version']
     archive_tree(stage / 'macos-install.tar', mac, 'Nuschl.app')
-    archive_tree(stage / f'dist/nuschl-{version}-macos-universal.zip', mac, 'Nuschl.app', zipped=True)
-    archive_tree(stage / f'dist/nuschl-{version}-windows-x86_64.zip', mapped, zipped=True)
+    archive_tree(stage / f'dist/nuschl-{version}-macos-universal.zip', mac, 'Nuschl.app', zipped=True,
+                 source_root=stage / 'install/Nuschl.app')
+    archive_tree(stage / f'dist/nuschl-{version}-windows-x86_64.zip', mapped, zipped=True, source_root=stage / 'install/windows')
     archive_tree(stage / f'dist/nuschl-{version}-web-site.tar',
-                 tree(Path(expected['web-site']['output'])))
+                 tree(Path(expected['web-site']['output']), size=512 * 1024**2))
     require(load(stage / f'dist/nuschl-{version}-linux-nix.json') == expected,
             'Linux build references differ from actual selected outputs')
     require(sha(stage / 'dist/flake.lock') == sha(stage / 'source/flake.lock'), 'foreign published lockfile')
+    require((stage / 'dist/INSTALL-NIX.txt').read_text() ==
+            nix_instructions(ledger['repository'], ledger['commit']), 'Linux installation instructions changed')
+
+
+def repository_name(value):
+    return isinstance(value, str) and re.fullmatch(
+        r'[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9][A-Za-z0-9_.-]{0,99}', value) is not None
 
 
 def prepare(args):
     repository = args.source_repo.resolve(strict=True)
     commit = revision(repository, args.tag)
-    require(re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', args.repository), 'invalid repository')
+    require(repository_name(args.repository), 'invalid repository')
     stage = args.output.resolve()
     stage.mkdir(mode=0o700, parents=True, exist_ok=False)
     source = stage / 'source'
@@ -317,6 +339,7 @@ def prepare(args):
         a.verify_notices(Path(products[product]['output']) / 'share/licenses/nuschl', policy, 'linux-nix')
     web = Path(products['web-site']['output'])
     a.verify_notices(web / 'licenses/nuschl', policy, 'web')
+    tree(web, size=512 * 1024**2)
     require((web / 'index.html').is_file() and (web / 'app/index.html').is_file(), 'web entry points missing')
     dist = stage / 'dist'
     dist.mkdir()
@@ -326,9 +349,7 @@ def prepare(args):
     canonical_zip(install / 'Nuschl.app', dist / f'nuschl-{version}-macos-universal.zip', 'Nuschl.app')
     write(dist / f'nuschl-{version}-linux-nix.json', products)
     shutil.copyfile(source / 'flake.lock', dist / 'flake.lock')
-    (dist / 'INSTALL-NIX.txt').write_text(f'Linux requires Nix; no portable Linux binary is supplied.\n'
-        f'nix run github:{args.repository}/{commit}\n'
-        f'nix build github:{args.repository}/{commit}#server\n')
+    (dist / 'INSTALL-NIX.txt').write_text(nix_instructions(args.repository, commit))
     base = f'https://github.com/{args.repository}/releases/download/{args.tag}/'
     # The producer owns all updater naming/path/URL/size rules.
     run([sys.executable, source / 'release/make-update.py', '--version', version, '--base-url', base,
@@ -352,7 +373,13 @@ def prepare(args):
 
 def validate(stage):
     ledger = load(stage / 'ledger.json')
-    require(ledger['format'] == 1 and ledger['tag'] == 'v' + ledger['version'], 'invalid ledger')
+    require(set(ledger) == {'format', 'tag', 'version', 'commit', 'repository',
+        'source_kind_detail', 'publisher_tool_sha256', 'products', 'source_tree',
+        'installations', 'macos_archive_sha256', 'assets', 'source_kind'} and
+        type(ledger['format']) is int and ledger['format'] == 1 and
+        isinstance(ledger['version'], str) and len(ledger['version']) <= 100 and
+        repository_name(ledger['repository']) and
+        ledger['tag'] == 'v' + ledger['version'], 'invalid ledger/source repository')
     repo = Path(load(stage / 'local.json')['source_repository'])
     require(revision(repo, ledger['tag']) == ledger['commit'], 'immutable selected tag moved')
     require(tree(stage / 'source') == ledger['source_tree'], 'source bytes differ from prepared ledger')
@@ -368,14 +395,18 @@ def validate(stage):
     require(manifest['version'] == ledger['version'] and
             f'ledger-sha256={sha(stage / "ledger.json")}' in manifest.get('notes', '').splitlines(),
             'signed source ledger binding absent')
-    expected = {}
+    expected, updater_assets = {}, set()
     for platform, relative in [('windows-x86_64', 'windows'), ('macos-universal', 'Nuschl.app')]:
         expected[platform] = []
         for name, path in module(stage / 'source/release/make-update.py').files_of(stage / 'install' / relative):
             asset = platform + '--' + name.replace('/', '__')
+            updater_assets.add(asset)
             expected[platform].append({'path': name, 'url': f'https://github.com/{ledger["repository"]}/releases/download/{ledger["tag"]}/{asset}',
                                        'size': path.stat().st_size, 'sha256': sha(path)})
             require(sha(stage / 'dist' / asset) == sha(path), 'updater asset differs from installation')
+    allowed = updater_assets | {f'nuschl-{ledger["version"]}-{suffix}' for suffix in
+        ('windows-x86_64.zip', 'macos-universal.zip', 'web-site.tar', 'linux-nix.json')} | {'flake.lock', 'INSTALL-NIX.txt'}
+    require(set(actual) == allowed, 'unexpected/missing release asset outside source-selected product set')
     require(manifest['platforms'] == expected, 'manifest file set/hash/URLs changed')
     check_installs(stage, stage / 'source')
     check_products(stage, ledger, repo)

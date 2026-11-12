@@ -4,7 +4,10 @@ The long-lived Ed25519 + ML-DSA-44 private pair stays on the operator's machine.
 GitHub builds are optional, read-only verification; no signing secret belongs in
 Actions. The tag workflow builds artifacts but cannot sign or publish them.
 The existing `v0.1.0` tag names `ab843f7a213e9673078a120930019258d9760ce3`;
-do not move or recreate it to obtain newer publisher tooling.
+do not move or recreate it to obtain newer publisher tooling. That immutable
+tag retains its historical hosted-publication workflow; its run was canceled.
+Do not rerun that old publishing job. The read-only workflow change applies to
+newer tooling/source, while the independent build workflow can verify the tag.
 
 Use a checkout containing `release/local-release.py` (the publisher tool can be
 newer than the application tag). The helper records that tool's hash separately
