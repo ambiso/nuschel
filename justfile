@@ -107,10 +107,10 @@ readme-screenshot:
     nix shell --inputs-from . nixpkgs#gnome-shell nixpkgs#glib.bin nixpkgs#dbus nixpkgs#imagemagick nixpkgs#oxipng \
         --command python3 tests/readme_screenshot.py "${CARGO_TARGET_DIR:-target}/debug" --output docs/images/nuschl.png
 
-# Regenerate the per-crate Nix build after changing dependencies (Cargo.lock).
+# Regenerate after changing dependencies/manifests, including new local vendors.
 crate2nix:
     nix run --inputs-from . nixpkgs#crate2nix -- generate -f Cargo.toml -o nix/crate2nix/Cargo.nix -h nix/crate2nix/crate-hashes.json
-    nix eval --raw .#legacyPackages.x86_64-linux.crate2nixInputs > nix/crate2nix/inputs.sha256
+    python3 nix/crate2nix-inputs.py > nix/crate2nix/inputs.sha256
 
 fmt:
     cargo fmt --all
