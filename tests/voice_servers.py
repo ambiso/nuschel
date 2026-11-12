@@ -256,7 +256,7 @@ class VoiceTest:
             "audio": {"transmit": "push_to_talk"},
             "shortcuts": {"push-to-talk": "f9", "toggle-mute": "f10", "toggle-deafen": "f11"},
             "appearance": {"theme": "dark"}}))
-        app_env = env | {"NUSCHL_AUDIO_BACKEND": "pulse", "RUST_LOG": os.environ.get("NUSCHL_TEST_LOG", "nuschl=info")}
+        app_env = env | {"PULSE_SERVER": "unix:" + str(self.socket), "NUSCHL_AUDIO_BACKEND": "pulse", "RUST_LOG": os.environ.get("NUSCHL_TEST_LOG", "nuschl=info")}
         app = self.app = self.spawn([str(self.args.binaries / "nuschl"), "--profile-dir", str(profile)], app_env,
                                     "desktop.log")
         eventually(lambda: app.poll() is None and self.shell.window("Nuschl"), "Nuschl window did not appear")
@@ -304,8 +304,8 @@ class VoiceTest:
         print("Listening to both: one media worker, one playback stream, and both servers are heard.", flush=True)
 
         # Beta (the last connected) is the talk server: its microphone, push-to-talk only there.
-        assert "voice here, muted" in self.rail_label("Beta"), self.rail_label("Beta")
-        assert self.rail_label("Alpha").endswith("listening"), self.rail_label("Alpha")
+        assert "Microphone destination · muted" in self.rail_label("Beta"), self.rail_label("Beta")
+        assert self.rail_label("Alpha").endswith("Listening"), self.rail_label("Alpha")
         self.select("Beta")
         self.press("push button", "Unmute")
         self.sees("Beta", muted=False)
@@ -315,7 +315,7 @@ class VoiceTest:
         assert quiet == {"Alpha": 0, "Beta": 0}, f"sent without push-to-talk: {quiet}"
         sent = self.transmit()
         assert sent["Beta"] >= 20 and sent["Alpha"] == 0, f"push-to-talk should reach Beta only: {sent}"
-        assert "talking here" in self.rail_label("Beta")
+        assert "Microphone destination · enabled" in self.rail_label("Beta")
         print(f"Push-to-talk reached the talk server only: {sent}; nothing without it.", flush=True)
         self.hold("F9", True)
         self.shot("2-talking-on-beta")
@@ -323,12 +323,12 @@ class VoiceTest:
         # Someone talks on Alpha, where you listen: its badge pulses.
         self.select("Alpha")
         talker = self.talk(self.peers["Alpha"], 6)
-        eventually(lambda: "someone is talking" in self.rail_label("Alpha"), "Alpha's talker was not shown",
+        eventually(lambda: "someone is speaking" in self.rail_label("Alpha"), "Alpha's talker was not shown",
                    timeout=5)
         self.shot("3-listening-pulse")
         talker.join()
-        card = self.named("Talking on Beta")
-        assert card == "Talking on Beta #Lobby · listening to Alpha #Lobby", card
+        card = eventually(lambda: self.named("Beta #Lobby: Microphone destination · enabled"), "idle PTT destination summary absent")
+        assert card == "Beta #Lobby: Microphone destination · enabled · Alpha #Lobby: Listening", card
 
         # The mute shortcut acts on the talk server, not on Alpha in front.
         self.shell.key("F10")

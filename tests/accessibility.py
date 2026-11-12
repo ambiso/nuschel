@@ -11,9 +11,9 @@ Orca would and checks that:
 - every interactive control has a name (no unlabeled buttons or fields);
 - a control can be operated through AT-SPI alone: "Unmute" is invoked via the
   Action interface, the server sees the user unmuted, the button becomes
-  "Mute" and the voice card "Talking on …";
+  "Mute" and the voice card names its microphone destination;
 - where your voice goes is named: the rail button ("voice here, muted"), the
-  voice card ("Muted on Accessible server #Development") and its place, a
+  voice card ("Accessible server #Development: Microphone destination · muted") and its place, a
   button that goes there;
 - with --gnome-shell (which has a clipboard): a pasted image shows in the
   composer's tray as a named list item, and its "Remove" button works through
@@ -258,7 +258,7 @@ class AccessibilityTest:
                 names = {name for _, _, _, name in nodes}
                 # The voice controls come once the desktop knows it joined, which
                 # can be after the server has told the peer.
-                return nodes if "Ada Lovelace" in " ".join(names) and {"Send", "Disconnect"} <= names else None
+                return nodes if "Ada Lovelace" in " ".join(names) and {"Send", "Disconnect from Accessible server (voice and chat)"} <= names else None
             nodes = eventually(ready, "the accessibility tree did not fill in", timeout=30)
             self.write_tree(nodes, "tree.txt")
             self.check_tree(nodes)
@@ -275,8 +275,8 @@ class AccessibilityTest:
             eventually(lambda: any(role == "push button" and name == "Mute"
                                    for _, _, role, name in snapshot(nuschl)),
                        "the button did not change to Mute", timeout=10)
-            eventually(lambda: "Talking on Accessible server #Development" in
-                       {name for _, _, _, name in snapshot(nuschl)}, "the voice card did not say Talking", timeout=10)
+            eventually(lambda: any(name in ("Accessible server #Development: Microphone destination · enabled", "Accessible server #Development: Speaking")
+                       for _, _, _, name in snapshot(nuschl)), "the voice card did not expose the acknowledged microphone destination", timeout=10)
             print("Unmuted through the AT-SPI Action interface; the server saw it and the button became Mute.",
                   flush=True)
             self.check_shortcuts(nuschl)
@@ -551,7 +551,7 @@ class AccessibilityTest:
             for button in ("Minimize", "Close"):
                 self.find(nodes, "push button", button)
             assert any(role == "push button" and name in ("Maximize", "Restore") for _, _, role, name in nodes)
-        for button in ("Add a server", "Disconnect", "Settings", "Unmute", "Deafen",
+        for button in ("Add a server", "Disconnect from Accessible server (voice and chat)", "Settings", "Unmute", "Deafen",
                        "Search messages", "Send"):
             self.find(nodes, "push button", button)
         self.find(nodes, "tree", "Channels")
@@ -566,8 +566,8 @@ class AccessibilityTest:
         # Where your voice goes: the rail button and the voice card say it, and
         # the card's place is a button that goes there.
         rail = [name for _, _, role, name in nodes if role == "push button" and name.startswith("Accessible server;")]
-        assert rail and rail[0].endswith("; voice here, muted"), f"the rail does not say where the voice is: {rail}"
-        assert "Muted on Accessible server #Development" in {name for _, _, _, name in nodes}, \
+        assert rail and rail[0].endswith("; Microphone destination · muted"), f"the rail does not say where the voice is: {rail}"
+        assert "Accessible server #Development: Microphone destination · muted" in {name for _, _, _, name in nodes}, \
             "the voice card is not named"
         self.find(nodes, "push button", "Go to Accessible server #Development")
 

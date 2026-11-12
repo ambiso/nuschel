@@ -374,6 +374,7 @@ def main():
                 # The rapid-control matrix measures client intent, not the stock
                 # server's shared five-control-message burst limiter.
                 rail_murmur.ini.write_text(rail_murmur.ini.read_text() + "messagelimit=1000\nmessageburst=1000\n")
+                subprocess.run([str(args.murmur), "-ini", str(rail_murmur.ini), "-supw", "owned-status-test"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15)
             rail_murmur.start()
         bots = []
         app = None
@@ -564,7 +565,7 @@ def main():
                 run_layout(args, root, shell, registry, bots, profile, port, pin, shot)
             if "voice-status" in scenes:
                 from voice_status import run as run_status
-                run_status(args, root, shell, registry, bots, profile, rail_port, rail_pin, shot)
+                run_status(args, root, shell, registry, bots, profile, rail_port, rail_pin, shot, rail_murmur)
             if "native-spacing" in scenes:
                 from native_spacing import run as run_spacing
                 run_spacing(args, shell, registry, bots, profile, shot)

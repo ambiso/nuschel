@@ -59,7 +59,7 @@ def run(args, root, shell, registry, bots, profile, port, pin, shot):
             viewport=(frame["x"]-buffer["x"],frame["y"]-buffer["y"],frame["width"],frame["height"])
             current=eventually(lambda:named("status bar","Connection notice"),"notice disappeared")
             dismiss=eventually(lambda:named("push button","Dismiss notice"),"Dismiss missing")
-            disconnect=eventually(lambda:named("push button","Disconnect"),"voice Disconnect missing")
+            disconnect=eventually(lambda:named("push button",f"Disconnect from {SERVER_NAME} (voice and chat)"),"voice Disconnect missing")
             status=eventually(lambda:named(None,"Voice connected"),"fixed voice connection indicator missing")
             stack=eventually(lambda:named(None,"Notifications"),"bounded notification stack missing")
             dismiss.call("Component","GrabFocus")

@@ -48,7 +48,7 @@ def run(args, shell, registry, profile, shot):
         return {'tile_radius':inner,'ring_radius':outer}
     first=eventually(lambda:named('push button','Screenshot server;',True),'first rail absent')
     eventually(lambda:named('push button','Unmute'),'Unmute absent').press()
-    eventually(lambda:named('push button','Screenshot server;',True) if 'talking here' in first.name else None,'first server voice intent not acknowledged')
+    eventually(lambda:named('push button','Screenshot server;',True) if 'Microphone destination · enabled' in first.name else None,'first server voice intent not acknowledged')
     # Capture README content from actual private fixture before introducing a
     # long list. The scene's extra servers remain local/offline bookmarks.
     records=[]
@@ -72,7 +72,7 @@ def run(args, shell, registry, profile, shot):
             use=eventually(lambda:named('menu item','Use voice here'),'last voice route action absent');use.press()
             # Use voice here transfers the already-live route; wait for its
             # acknowledgment instead of toggling a transient old Unmute label.
-            eventually(lambda:'talking here' in node.name,'last voice intent not acknowledged')
+            eventually(lambda:'Microphone destination · enabled' in node.name,'last voice intent not acknowledged')
         for percent,steps in [(100,0),(125,2),(150,3),(200,5)]:
             shell.chord('Control_L','0')
             for _ in range(steps):shell.chord('Control_L','equal');time.sleep(.1)
@@ -93,7 +93,7 @@ def run(args, shell, registry, profile, shot):
             other=eventually(lambda:named('push button',dummy,True),'neighbor bookmark absent');other.press()
             # Browsing another server must preserve voice on the endpoint;
             # unselected icons can now exercise circular -> rounded hover.
-            if 'talking here' not in node.name:
+            if 'Microphone destination · enabled' not in node.name:
                 shot(f'route-failure-{endpoint}-{percent}')
                 (args.output/'route-failure-tree.json').write_text(json.dumps([(r,n) for _,r,n,_ in items(app)]))
                 raise AssertionError(f'{endpoint}/{percent} voice changed after browse: {node.name}')

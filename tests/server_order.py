@@ -34,7 +34,7 @@ def run(args, root, shell, registry, bots, profile, port, pin, shot, app):
     report=args.output/'order-proof.json'
     first,last=original[0]['id'],original[-1]['id']
     eventually(lambda:named('push button','Unmute'),'Unmute absent').press()
-    eventually(lambda:'talking here' in tile(first).name,'primary voice not live')
+    eventually(lambda:'Microphone destination · enabled' in tile(first).name,'primary voice not live')
     visible(tile(last));tile(last).press()
     eventually(lambda:named('push button','Connect'),'last Connect absent').press()
     eventually(lambda:'Connected' in tile(last).name,'last server not connected')
@@ -47,7 +47,7 @@ def run(args, root, shell, registry, bots, profile, port, pin, shot, app):
     eventually(lambda:composer.focused,'composer was not focused')
     shell.type('Draft survives moving servers')
     def invariant():
-        assert 'talking here' in tile(first).name,'voice moved while reordering'
+        assert 'Microphone destination · enabled' in tile(first).name,'voice moved while reordering'
         assert named(None,'Rail last') is not None,'text selection changed'
         assert any(user['name']=='Andi' and user['session']==session and user['channel']==2 for user in bots[0].users.values()),'primary connection/channel changed'
         assert any(user['name']=='Rail Last' and user['session']==peer and user['channel']==0 for user in witness.users.values()),'secondary connection changed'
