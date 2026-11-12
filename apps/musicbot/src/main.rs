@@ -3,6 +3,8 @@
 //! channels; people control the queues on a web page they get a link to.
 mod config;
 mod codec;
+mod codec_worker;
+mod decode_worker;
 mod decode;
 mod mumble;
 mod persist;
