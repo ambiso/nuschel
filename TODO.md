@@ -1017,9 +1017,9 @@ The media worker uses per-speaker adaptive jitter buffers and Opus loss concealm
       permission/ACK-to-send separately on this exact build. The long-idle
       false-trigger symptom also persists; neither is claimed fixed by the
       shared send-limit push.
-- [ ] Fix the interruption of all playback after rapid mute→unmute (about 100 ms;
-      user, 2026-11-12). User confirms output recovers after a short gap.
-      Reproduce
+- [ ] Fix incoming playback interruption on **every mute and every unmute**
+      (user correction, 2026-11-12), with output recovering after a short gap.
+      Individual toggles are the primary case, not just rapid pairs. Reproduce
       with an actual packaged client, owned server continuous received audio and
       private null-sink recording. Trace worker replacement, listen/capture plans,
       epochs, pending settle/retry transitions and actual playback recovery.
@@ -1030,6 +1030,8 @@ The media worker uses per-speaker adaptive jitter buffers and Opus loss concealm
       explicit gain/AEC reference ownership, instead of assuming one worker fixes
       it. The client/startup owner is investigating this alongside the two-second
       unmute stall; general crash/rapid-deafen tests do not close this case.
+      Preserve stable output ownership/lifetime across microphone state changes;
+      reducing a debounce or delaying/replaying audio does not establish continuity.
 - [ ] Investigate reported quieter received user audio after recent/yesterday
       updates (user, 2026-11-12). Compare identical encoded packets, saved user
       and server gains, channel layout, device rate and output settings across
