@@ -835,14 +835,26 @@ listed below. Plugin data remains the explicit gap.
       script/link policy, stale generations and cache revocation. This closes
       the duplicate shared-source report above; Windows GUI confirmation remains
       a platform verification gap, and general document-link activation is separate.
-- [ ] Stock-Murmur hash-only description/comment delivery needs a separate fetch/render
-      follow-up. Native interaction probes (2026-11-12) receive full inline documents
-      correctly, but a long channel description is advertised only by hash and the
-      normal channel view never requests its blob. Opening a profile requests a
-      hash-only comment in `menus::render_comment`, but the arriving full comment
-      is not submitted to the content worker until the profile is opened again.
-      The document-link fixture deliberately uses inline bodies below Murmur's
-      128-byte hash threshold; it does not establish hash-only retrieval/rendering.
+- [ ] Integrate the verified stock-Murmur hash-only document fetch/render fix.
+      The SDK now requests a selected channel's missing description once per hash
+      and binds open-profile comment interest to connection/session/presence.
+      Arriving comments and hash replacements render without reopening; hidden
+      or replaced profiles revoke interest before event processing. Prepared and
+      pending sources are reused. The private old-package baseline reproduces
+      both gaps; the fixed Linux package passes first-selection/first-open,
+      replacement and hidden/reopen checks against stock Murmur, with raw pinned
+      loopback hash/body frames retained. SDK and native unit checks accompany
+      the scoped proof; root integration remains the final gate. See
+      `docs/hash-documents.md`. No Windows/macOS or new browser profile-UI claim.
+- [ ] Audit native legacy blob hash/body normalization separately (source-level
+      finding, not a reproduced exploit). A new small inline description/comment
+      can leave a prior long-body hash in normalized session state, while body-only
+      blob responses are not independently digest-checked. Validate incoming
+      20-byte hash shapes before retaining model metadata as part of that audit.
+      Murmur's synchronous current-body replies use ordered TLS; old-body-after-
+      new-hash reordering is unproven. Preserve valid inline replacements without
+      hash fields, current stored-source checks and HTML sanitization; blindly
+      rejecting against an older retained hash would break legitimate updates.
 - [x] Shared nonselectable document links (2026-11-12): welcome cards, delivered
       channel descriptions and profile comments reuse `BlockText`'s existing
       layout/hit testing, real retained link focus and the safe `open_link`

@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: EUPL-1.2
 """Bounded TEST-ONLY raw Mumble control-frame evidence, owned loopback only."""
+
 import hashlib
 import socket
 import ssl
@@ -41,7 +42,7 @@ def fields(raw):
         elif wire in (1, 2, 5):
             size = integer() if wire == 2 else 8 if wire == 1 else 4
             assert cursor + size <= len(raw)
-            value = raw[cursor:cursor + size]
+            value = raw[cursor : cursor + size]
             cursor += size
         else:
             raise AssertionError("unsupported fixture wire kind")
@@ -55,8 +56,10 @@ def capture(port, pin, peer, description, comment):
     context.check_hostname = False
     context.verify_mode = ssl.CERT_NONE
     deadline = time.monotonic() + 20
-    with context.wrap_socket(socket.create_connection(("127.0.0.1", port), timeout=5),
-                             server_hostname="localhost") as stream:
+    with context.wrap_socket(
+        socket.create_connection(("127.0.0.1", port), timeout=5),
+        server_hostname="localhost",
+    ) as stream:
         assert hashlib.sha256(stream.getpeercert(binary_form=True)).hexdigest() == pin
 
         def send(kind, body):
@@ -84,11 +87,17 @@ def capture(port, pin, peer, description, comment):
         for _ in range(200):
             kind, raw, value = frame()
             if kind == 7 and value.get(1) == [0]:
-                announced["description"] = {"raw_hex": raw.hex(), "hash": value.get(10, [b""])[0].hex(),
-                                            "body_absent": 5 not in value}
+                announced["description"] = {
+                    "raw_hex": raw.hex(),
+                    "hash": value.get(10, [b""])[0].hex(),
+                    "body_absent": 5 not in value,
+                }
             if kind == 9 and value.get(1) == [peer]:
-                announced["comment"] = {"raw_hex": raw.hex(), "hash": value.get(16, [b""])[0].hex(),
-                                        "body_absent": 14 not in value}
+                announced["comment"] = {
+                    "raw_hex": raw.hex(),
+                    "hash": value.get(16, [b""])[0].hex(),
+                    "body_absent": 14 not in value,
+                }
             if kind == 5:
                 break
         else:
@@ -102,12 +111,24 @@ def capture(port, pin, peer, description, comment):
             kind, raw, value = frame()
             if kind == 7 and value.get(1) == [0] and 5 in value:
                 assert value[5] == [description.encode()]
-                replies["description"] = {"raw_hex": raw.hex(), "hash_absent": 10 not in value}
+                replies["description"] = {
+                    "raw_hex": raw.hex(),
+                    "hash_absent": 10 not in value,
+                }
             if kind == 9 and value.get(1) == [peer] and 14 in value:
                 assert value[14] == [comment.encode()]
-                replies["comment"] = {"raw_hex": raw.hex(), "hash_absent": 16 not in value}
+                replies["comment"] = {
+                    "raw_hex": raw.hex(),
+                    "hash_absent": 16 not in value,
+                }
             if len(replies) == 2:
                 break
-        assert len(replies) == 2 and all(value["hash_absent"] for value in replies.values())
-        return {"loopback_pinned": True, "announced": announced, "body_replies": replies,
-                "request_ids_absent": True}
+        assert len(replies) == 2 and all(
+            value["hash_absent"] for value in replies.values()
+        )
+        return {
+            "loopback_pinned": True,
+            "announced": announced,
+            "body_replies": replies,
+            "request_ids_absent": True,
+        }
