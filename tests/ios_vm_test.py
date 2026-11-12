@@ -167,7 +167,7 @@ class Boundaries(unittest.TestCase):
     def test_guest_inspection_never_claims_rendering_or_xctest(self):
         runtimes = json.dumps({"runtimes": [{"identifier": "com.apple.CoreSimulator.SimRuntime.iOS-18-2",
                                            "version": "18.2", "isAvailable": True}]})
-        outputs = ["x86_64\n", "14.5\n", "Xcode 16.2\nBuild version placeholder\n", "18.2\n", runtimes, "{}", "{}"]
+        outputs = ["x86_64\n", "14.8.9\n", "Xcode 16.2\nBuild version placeholder\n", "18.2\n", runtimes, "{}", "{}"]
         with patch.object(vm, "ssh_command", return_value=["fixed-command"]), patch.object(
             vm, "bounded_run", side_effect=[{"exit_code": 0, "output": output} for output in outputs]
         ):
@@ -177,13 +177,25 @@ class Boundaries(unittest.TestCase):
         self.assertFalse(report["simulator_boot_render_and_xctest_proven"])
 
     def test_sdk_version_alone_does_not_prove_a_simulator_runtime(self):
-        outputs = ["x86_64\n", "14.5\n", "Xcode 16.2\n", "18.2\n", "{}", "{}", "{}"]
+        outputs = ["x86_64\n", "14.8.9\n", "Xcode 16.2\n", "18.2\n", "{}", "{}", "{}"]
         with patch.object(vm, "ssh_command", return_value=["fixed-command"]), patch.object(
             vm, "bounded_run", side_effect=[{"exit_code": 0, "output": output} for output in outputs]
         ):
             report = vm.probe(Path("/some/vm"), "nuschl-test", 50922)
         self.assertFalse(report["pinned_versions_match"])
         self.assertFalse(report["pinned_simulator_runtime_available"])
+
+    def test_recovery_version_does_not_match_the_installed_os_candidate(self):
+        runtimes = json.dumps({"runtimes": [{"identifier": "com.apple.CoreSimulator.SimRuntime.iOS-18-2",
+                                           "version": "18.2", "isAvailable": True}]})
+        outputs = ["x86_64\n", "14.6.1\n", "Xcode 16.2\n", "18.2\n", runtimes, "{}", "{}"]
+        with patch.object(vm, "ssh_command", return_value=["fixed-command"]), patch.object(
+            vm, "bounded_run", side_effect=[{"exit_code": 0, "output": output} for output in outputs]
+        ):
+            report = vm.probe(Path("/some/vm"), "nuschl-test", 50922)
+        self.assertTrue(report["macos_boot_observed"])
+        self.assertFalse(report["pinned_versions_match"])
+        self.assertFalse(report["simulator_boot_render_and_xctest_proven"])
 
     def test_container_probe_cleans_only_its_own_random_name(self):
         results = [{"exit_code": 0, "output": '[{"Architecture":"amd64"}]'},

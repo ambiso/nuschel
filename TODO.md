@@ -320,13 +320,21 @@ installed macOS guest, Xcode execution and Simulator graphics remain unproven.
          requires exact local OCI evidence of empty sets/NNP, rejects added caps
          and unsafe boundaries; all 19 host tests passed. Actual stopped-container
          configuration passes; `live_effective_verified=false` remains explicit.
-   - [ ] Observe live init capabilities/NNP after controlled owned-container resume;
-         preserve disk state first. Reconcile exact installed macOS candidate and
-         installer source/hash before installation: existing profile is 14.5,
-         Recovery reports 14.6.1 but does not prove the eventual installed version.
+   - [x] Observe live init capabilities/NNP after backed-up controlled resume:
+         all five masks zero, NoNewPrivs=1, KVM enabled; existing Recovery booted,
+         then stopped cleanly. Both host qcow2 hashes unchanged; target disk1 is
+         blank 80 GiB, persistent (only Recovery/OpenCore use temporary snapshots).
+   - [ ] Acquire/authenticate the exact candidate Sonoma 14.8.9/23J631 installer:
+         official Apple product 140-88558 metadata identifies a 13,654,790,295-byte
+         package, expected catalog SHA-1 recorded in docs/ios-vm.md. No package
+         downloaded; actual SHA-256/signature/payload checks remain. Exact profile
+         repinned from 14.5; Recovery 14.6.1 is explicitly rejected as that candidate.
+         Review target disk/APFS and installation before destructive steps. Recovery
+         exposes a basic IONDRV framebuffer, no IOAccelerator; Metal, installed-OS
+         graphics, Xcode execution and Simulator remain unproven.
    - [x] **Host feasibility tooling** (`tests/ios_vm.py`, `docs/ios-vm.md`): host and
          confined cached-container KVM creation, disk/RAM budgets and immutable
-         registry metadata checks passed; 19 host-side regression tests passed.
+         registry metadata checks passed; 20 host-side regression tests passed.
          `just ios-preflight` and `just ios-vm-check` expose the checks. A later bounded experiment acquired official signed recovery media and booted
          Recovery only. Installed macOS/Xcode, SwiftUI rendering,
          XCTest and Rust-library linking remain unproven in the milestone above.

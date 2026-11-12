@@ -31,7 +31,9 @@ GIB = 1024**3
 UPSTREAM = "aa05a2c9a06aabfc8542c1c373ad1ad0af74ede3"
 IMAGE_DIGEST = "sha256:3a3c82c79bc4e73531f819ccdfa4053b3084efd7c1f645678dbf8b4b3a24369c"
 IMAGE = "docker.io/sickcodes/docker-osx@" + IMAGE_DIGEST
-PROFILE = {"macos": "14.5", "xcode": "16.2", "ios_sdk": "18.2",
+# Installed candidate: Apple's product 140-88558, Sonoma 14.8.9 / 23J631.
+# Recovery 14.6.1 is a separate observation; see docs/ios-vm.md.
+PROFILE = {"macos": "14.8.9", "xcode": "16.2", "ios_sdk": "18.2",
            "simulator_runtime": "18.2", "rust_target": "x86_64-apple-ios"}
 NAME = "nuschl-ios-feasibility"
 MEMORY_FS = {"tmpfs", "ramfs", "hugetlbfs"}

@@ -24,13 +24,16 @@ Retained private-VM console screenshots show `sw_vers` reporting macOS
 signed-chunklist verification; images and logs are under `~/vms/nuschl-ios` and
 `~/.cache/nuschl-ios-vm`. This proves neither an installed macOS guest nor
 Metal, Xcode, Simulator, SwiftUI or XCTest. The owned container currently reports
-`exited`; it has not been restarted for this inspection.
+`exited` after the controlled read-only resume below; it stopped cleanly with
+exit 0. No installed OS was created.
 
 The corrected status helper accepts Podman's expanded dropped-capability list
 only with the matching, bounded local OCI configuration proving empty capability
 sets and `noNewPrivileges: true`; it still rejects added capabilities and unsafe
 mount/device/port profiles. The stopped owned container passes configuration
-checks. `live_effective_verified` remains **false**: no live process was observed.
+checks. The controlled resume also passed all five live capability/NNP checks.
+After stopping, `live_effective_verified` returns **false** again, correctly
+distinguishing current state from retained historical live evidence.
 The launch plan still explicitly requests `--cap-drop ALL` and no new privileges.
 
 The existing Windows harness (`tests/windows_vm.py`) establishes useful patterns:
@@ -45,7 +48,7 @@ directory and strict SSH host-key verification instead of reusing that agent.
 | --- | --- | --- |
 | Docker-OSX source | [`aa05a2c9a06aabfc8542c1c373ad1ad0af74ede3`](https://github.com/sickcodes/Docker-OSX/tree/aa05a2c9a06aabfc8542c1c373ad1ad0af74ede3) | A fixed upstream reference for review |
 | Docker-OSX amd64 image | `docker.io/sickcodes/docker-osx@sha256:3a3c82c79bc4e73531f819ccdfa4053b3084efd7c1f645678dbf8b4b3a24369c` | Frozen image bytes; source-to-image provenance has **not** been verified |
-| Candidate macOS | Sonoma **14.5**, x86_64 | Existing exact profile; reconcile with actual available installer/catalog before installation, since Recovery reports 14.6.1 and does not establish the installed version |
+| Candidate installed macOS | Sonoma **14.8.9 / 23J631**, x86_64 | Explicitly repinned from 14.5 using current Apple metadata; Recovery 14.6.1 is not installed-OS evidence |
 | Candidate Xcode | **16.2 / 16C5032a**, with iOS SDK **18.2** | Authenticated archive plists; no guest installation or execution |
 | Simulator runtime | iOS **18.2**, identifier `com.apple.CoreSimulator.SimRuntime.iOS-18-2` | Must be installed and available independently of the SDK |
 | Rust simulator target | **`x86_64-apple-ios`** | Intel Simulator; `aarch64-apple-ios` is a physical-device target |
@@ -127,7 +130,7 @@ SwiftUI rendering, Xcode startup or native Apple archive-policy proof.
 Parser limits include 1 MiB TOC, bounded certificates/CRLs, 16 MiB PBZX chunks,
 80 MiB LZMA decoder memory, 64 KiB output chunks, finite expanded-byte/entry
 budgets and bounded selected plists. Unknown formats fail rather than falling
-back to an unbounded extractor. Only original source bytes are hashed; no gain,
+back to an unbounded extractor. Only original source bytes are hashed; no
 repair, truncation or version inference changes the supplied archive.
 
 Regression invocation (the source archive stays untouched; tamper tests require
@@ -147,7 +150,7 @@ Public evidence/logs are retained under
 `crl-retrieval.json`, the original `crl-verification.json` failure and
 `xip-final-tests.log`. The private container-inspect JSON is mode 0600 and must
 not be published because container environment fields may contain sensitive data.
-The capability suite has 19 host tests; all **18 archive tests passed** with the
+The capability suite now has 20 host tests; all **18 archive tests passed** with the
 explicit local-media inputs (73.69 seconds). The archive suite covers real signature,
 payload, truncation, untrusted-root, stale/signed CRL and corrupt-CRL failures,
 plus malformed/bounded parser cases. Without explicit supplied-archive/CRL
@@ -299,3 +302,67 @@ Host boundary regression checks (no Apple guest or downloads required):
 ```sh
 TMPDIR=/path/on/disk python3 tests/ios_vm_test.py -v
 ```
+
+## Controlled read-only resume (2026-11-12)
+
+Only the existing container was resumed, 12:45:09–12:53:52 +01:00, after disk-backed
+CoW backups of both host qcow2 files and copies of firmware/OpenCore state.
+Preflight: 629.3 GB disk free, 39.7 GB available RAM, all loopback ports free.
+A five-second resource guard with an exact container ID/start-time lease and
+10-minute ceiling observed minima of 628.37 GB disk free and 35.66 GB available
+RAM. The container stopped cleanly, exit 0; its guard and one-shot report receivers
+are terminal. No new VM, installation, partitioning, license acceptance or login.
+Both host qcow2 hashes are unchanged from their backups.
+
+Actual live init/QEMU PID 696334 had all five capability masks zero and
+`NoNewPrivs=1`, with stable PID/start identity. QMP reports QEMU 10.1.2, KVM enabled;
+`AUDIO_DRIVER=none`. No host audio/GPU/USB/display/credentials were added.
+
+| Actual drive | Persistence / guest mapping |
+| --- | --- |
+| MacHDD `/image` | Persistent writable plain qcow2 → `~/vms/nuschl-ios/macos.qcow2`; no backing/overlay. Guest **disk1**, blank 80 GiB (85.9 GB), no filesystem and not currently installable |
+| OpenCoreBoot | Guest disk0, 402.7 MB EFI/Linux; `snapshot=on`, original OpenCore backing |
+| InstallMedia | Guest disk2, 3.2 GB Recovery, mounted read-only HFS+; `snapshot=on`, read-only host BaseSystem backing |
+| OVMF_CODE / OVMF_VARS | Code read-only; variables writable in retained container layer, backed up separately |
+
+No global `-snapshot` flag exists. OpenCore/Recovery temporary overlays
+`/var/tmp/vl.7HSJY3` and `/var/tmp/vl.4MNJY3` are auto-unlinked while open.
+Their actual fd13/15 sizes were about 196.6 KB each (200,704 allocated bytes);
+initial pathname stat correctly failed ENOENT. Target-disk writes would persist;
+Recovery/OpenCore overlay writes would not. No boot options were changed.
+
+Recovery reports 14.6.1/23G93 x86_64, no APFS containers, and a visible
+1920×1080 GUI. `ioreg` shows `IONDRVFramebuffer` and no `IOAccelerator` entries;
+`system_profiler` is absent. This does not prove Metal or installed-OS graphics.
+`/Install macOS Sonoma.app` has assistant version **19.6.02**, not an OS-version
+promise; it contains no SharedSupport/InstallInfo payload, and Recovery has no
+`softwareupdate` utility. An initial dropped keyboard character broke one find
+probe; the slower repeat and the original failure are retained.
+
+A bounded read-only official Apple catalog fetch identifies product **140-88558**.
+[Its distribution metadata](https://swdist.apple.com/content/downloads/13/30/140-88558-A_TN3FIE7J63/p61cqj3ktmcqilz3q64ls4ekp1os9c8qbp/140-88558.English.dist)
+explicitly declares **Sonoma 14.8.9 / 23J631**, making that the new exact candidate.
+Its 10,317 bytes have SHA-256
+`d38a7d1f71bfc39723000a13375bd824c9dfac41818cabeed6acc816e0422edd`.
+The Apple catalog was 509,149 compressed / 7,051,224 decoded bytes, SHA-256
+`818e1dd43f59c226f27426468875281f7cf1870cbd69b90665db000d3e7a8f76`.
+Only tiny metadata was fetched; no installer package was downloaded.
+
+The proposed [InstallAssistant.pkg](https://swcdn.apple.com/content/downloads/13/30/140-88558-A_TN3FIE7J63/p61cqj3ktmcqilz3q64ls4ekp1os9c8qbp/InstallAssistant.pkg)
+is **13,654,790,295 bytes**, expected catalog SHA-1
+`10632733f9b4ab1397fffc98b53e6790e4c2c1b0`. Its `.pkm` declares
+`com.apple.pkg.InstallAssistant.macOSSonoma`. Whole-package SHA-256, appropriate
+Apple package-signing policy and payload validation are still required after a
+separately bounded acquisition. Metadata hashes do not replace artifact checks.
+The next stages remain acquisition/authentication, then a reviewed target-disk/APFS
+and installation plan. The exact checker rejects Recovery 14.6.1 even with
+otherwise matching Xcode/SDK/runtime listings; no version check was relaxed.
+
+All receipts are under `~/.cache/nuschl-ios-feasibility-next/`: `live-status.json`,
+`pre-resume-backup.json`, `qmp-initial.json`, `drive-persistence.json`,
+`guest-report-response*.jsonl`, `recovery-ready.png`,
+`recovery-version-disk-proof.png`, `post-resume-state.json`,
+`post-resume-disk-hashes.json`, `resume-guard.log`, `catalog-retrieval-2.json`,
+`sonoma-catalog-candidates.json`, `sonoma-metadata-retrieval.json`, and
+`sonoma-installer-metadata.json`. Backups are in the 0700 `pre-resume-backup/`
+subdirectory. No owned guest, receiver, guard or build remains running.
