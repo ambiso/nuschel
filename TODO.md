@@ -25,7 +25,8 @@ Current integration checkpoint (2026-11-12):
   packaged helpers passed sandbox/forgery/deadline/install fixtures; scoped notice
   readers verified the packaged bytes. Later mono-device fold correction
   `abe83021` passed 68 source tests and actual private mono/stereo/DSP checks;
-  it still needs final package assembly. This is local evidence, with no push,
+  its desktop distribution built at `6d054505`, passed notice validation and
+  contains the byte-identical tested worker. This is local evidence, with no push,
   release, production trust enrollment or native Windows/macOS execution implied.
 - **Desktop layout foundation is integrated through `12d6695c`.** Shared finite
   text/action lanes, one bounded notice stack, restored connection indicator,
