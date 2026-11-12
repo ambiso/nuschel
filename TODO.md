@@ -1726,6 +1726,12 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
       the actual private RTC transport passes. No build manifests/lock/graph or
       runtime sandbox policy changed. Precise source/package evidence:
       docs/reviews/2026-11-12-server-rtc-packages.json.
+- [ ] Make manual VM-driver scratch selection explicit: the pinned driver chooses
+      inherited XDG_RUNTIME_DIR before TMPDIR. The complete server-suite proof
+      passed but used 197,558,272 allocated bytes in six owned /run/user/1000
+      tmpfs state directories; they were removed after shutdown. Set both variables
+      to a short owned disk path before future runs, isolate generic node state
+      names and report actual state paths instead of assuming TMPDIR controls them.
 - [ ] Finish the remaining per-crate build migration: Windows desktop, Darwin
       desktop/verifier slices and the explicit `default-crane` fallback still use
       Crane. Native desktop/server/probe/web/witness and native/Windows updater

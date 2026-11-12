@@ -70,12 +70,18 @@ This exercises real default sibling-storage discovery and module hardening;
 it does not replace the separately queued stronger worker boundary.
 
 The warm driver build took 20 seconds (metadata/configuration only). The driver
-then ran outside the Nix daemon with disk-backed state/TMPDIR, no host display or
-audio backend and a five-second 8GiB `/tmp` guard. The first launch was rejected
-before boot because its output directory did not exist; that diagnostic is
-retained, and the complete retry passed. All six owned guests stopped and their
-state was cleaned. No host devices, public Mumble server, production key,
-publication or global/daemon configuration change was used.
+then ran outside the Nix daemon with disk-backed cwd/TMPDIR, no host display or
+audio backend and a five-second 8GiB `/tmp` guard. The pinned driver actually
+prioritized inherited `XDG_RUNTIME_DIR`: its six machine state directories used
+`/run/user/1000` (tmpfs), occupying 197,558,272 allocated bytes after the run.
+Final log inspection caught and corrected the initial disk-state assumption. All
+six guests stopped; only their six owned state directories were then removed.
+Future runs must set both `XDG_RUNTIME_DIR` and `TMPDIR` to an owned short disk
+path before startup, avoiding generic host runtime state names. The first launch
+was rejected before boot because its output directory did not exist; that
+diagnostic is retained, and the complete retry passed. No host devices, public
+Mumble server, production key, publication or global/daemon configuration change
+was used.
 
 See [the structured evidence](reviews/2026-11-12-server-rtc-packages.json). This
 proof freezes the tested package/driver paths and source revision; later unrelated

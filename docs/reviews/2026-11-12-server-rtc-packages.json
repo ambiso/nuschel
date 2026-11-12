@@ -85,9 +85,14 @@
       "time": "0.0"
     },
     "entire_existing_suite_completed": true,
-    "state_directory": "/home/ambiso/.cache/ns-sr-vm",
-    "state_after_cleanup_bytes": 0,
-    "no_host_display_or_audio": "DISPLAY/Wayland removed; invalidPulse; QEMU_AUDIO_DRVnone; no audiohardware in VMstart scripts"
+    "no_host_display_or_audio": "DISPLAY/Wayland removed; invalidPulse; QEMU_AUDIO_DRVnone; no audiohardware in VMstart scripts",
+    "cwd_and_tmpdir": "/home/ambiso/.cache/ns-sr-vm",
+    "actual_state_parent": "/run/user/1000",
+    "actual_state_filesystem": "tmpfs",
+    "allocated_state_bytes_before_cleanup": 197558272,
+    "all_six_owned_state_directories_removed_after_terminal_run": true,
+    "state_reporting_correction": "Inherited XDG_RUNTIME_DIR takes precedence over TMPDIR in pinned test driver. Disk-only machine state was not achieved in this run; future drivers must set both variables to an owned short disk-backed directory.",
+    "state_correction_receipt": "/home/ambiso/.cache/nuschl-server-rtc-build/vm-state-correction.json"
   },
   "builds": {
     "rtc-inventory": {
