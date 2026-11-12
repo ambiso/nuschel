@@ -9,13 +9,61 @@ PID as a normal sound server would. No host audio, GPU, profile or bus is expose
 import argparse
 import hashlib
 import json
+import os
+import select
+import struct
 from pathlib import Path
 import subprocess
 import sys
 import time
 
 
-def inside():
+def live_supervisor(binary, environment, log_path):
+    """Hold input open through a real Status ACK; then shut down and reap."""
+    def send(process, payload):
+        data = json.dumps({'version': 1, 'request_id': 1, 'payload': payload}).encode()
+        process.stdin.write(struct.pack('>I', len(data)) + data)
+        process.stdin.flush()
+
+    with log_path.open('wb') as log:
+        process = subprocess.Popen([str(binary), 'media-sandbox'], stdin=subprocess.PIPE,
+                                   stdout=subprocess.PIPE, stderr=log, env=environment)
+        deadline = time.monotonic() + 8
+        consumed = 0
+        def take(size):
+            nonlocal consumed
+            result = bytearray()
+            while len(result) < size:
+                remaining = deadline - time.monotonic()
+                assert remaining > 0 and select.select([process.stdout], [], [], remaining)[0], 'live ACK timeout'
+                part = os.read(process.stdout.fileno(), size - len(result))
+                assert part, 'worker EOF before Status'
+                consumed += len(part)
+                assert consumed <= 1024 * 1024, 'aggregate reply limit'
+                result.extend(part)
+            return result
+        try:
+            send(process, {'kind': 'set_state', 'epoch': 1, 'muted': True, 'deafened': False})
+            while True:
+                size = struct.unpack('>I', take(4))[0]
+                assert 0 < size <= 1024 * 1024
+                reply = json.loads(take(size))
+                assert reply['version'] == 1 and reply['request_id'] == 0
+                event = reply['payload']
+                if event['kind'] == 'status':
+                    break
+            send(process, {'kind': 'shutdown'})
+            process.stdin.close()
+            process.wait(timeout=5)
+            assert process.returncode == 0
+            return {'ready': event['ready'], 'message': event['message'], 'exit': process.returncode, 'reaped': True}
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.wait()
+
+
+def inside(supervisor=False):
     own = Path('/evidence')
     runtime = own / 'run'
     runtime.mkdir(mode=0o700)
@@ -36,6 +84,19 @@ context.objects = [
                 assert server.poll() is None, 'private server exited'
                 assert time.monotonic() < deadline, 'private socket timeout'
                 time.sleep(.05)
+            if supervisor:
+                results = []
+                for name, directory, expected in ([('baseline', Path('/baseline'), False)] if Path('/baseline').exists() else []) + [('fixed', Path('/stage'), True)]:
+                    env = {**environment, 'PATH': '/usr/bin:/bin', 'NUSCHL_AUDIO_BACKEND': 'pipewire',
+                           'NUSCHL_TEST_SECRET': 'must-not-be-forwarded'}
+                    result = live_supervisor(directory / 'usr/lib/nuschl/nuschl', env, own / (name + '-supervisor.log'))
+                    result.update({'case': name, 'desktop_sha256': hashlib.sha256((directory / 'usr/lib/nuschl/nuschl').read_bytes()).hexdigest(),
+                                   'worker_sha256': hashlib.sha256((directory / 'usr/lib/nuschl/nuschl-media-worker').read_bytes()).hexdigest()})
+                    results.append(result)
+                    (own / 'proof.json').write_text(json.dumps({'production_supervisor': True, 'cases': results,
+                        'scope': 'Actual desktop media-sandbox Status ACK with private virtual PipeWire; muted capture, no physical devices.'}, indent=2) + '\n')
+                    assert result['ready'] == expected, result
+                return
             worker = Path('/stage/usr/lib/nuschl/nuschl-media-worker')
             command = ['/usr/bin/bwrap', '--unshare-all', '--die-with-parent', '--new-session', '--clearenv',
                        '--ro-bind', '/usr/lib', '/usr/lib', '--ro-bind', '/usr/lib64', '/usr/lib64',
@@ -69,12 +130,14 @@ context.objects = [
 
 
 def main():
-    if sys.argv[1:] == ['--inside']:
-        inside()
+    if sys.argv[1:] in (['--inside'], ['--inside', '--supervisor']):
+        inside('--supervisor' in sys.argv[1:])
         return
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ('root', 'stage', 'bwrap', 'scratch'):
         parser.add_argument('--' + name, required=True, type=Path)
+    parser.add_argument('--supervisor', action='store_true')
+    parser.add_argument('--baseline', type=Path)
     args = parser.parse_args()
     args.scratch.mkdir(mode=0o700)  # Refuse to overwrite a failed trial.
     command = [str(args.bwrap), '--unshare-all', '--die-with-parent', '--new-session', '--clearenv',
@@ -82,7 +145,12 @@ def main():
                '--symlink', 'usr/lib64', '/lib64', '--proc', '/proc', '--dev', '/dev', '--tmpfs', '/tmp',
                '--ro-bind', str(args.stage), '/stage', '--bind', str(args.scratch), '/evidence',
                '--ro-bind', str(Path(__file__).resolve()), '/fixture.py',
-               '--', '/usr/bin/python3', '/fixture.py', '--inside']
+               ]
+    if args.baseline:
+        command += ['--ro-bind', str(args.baseline), '/baseline']
+    command += ['--', '/usr/bin/python3', '/fixture.py', '--inside']
+    if args.supervisor:
+        command += ['--supervisor']
     subprocess.run(command, env={}, timeout=45, check=True)
     print(str(args.scratch / 'proof.json'))
 
