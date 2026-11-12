@@ -47,7 +47,12 @@ export function visibleBlocks(document, expanded = false) {
       }
       blocks.push({ ...block, runs });
     } else if (block.kind === "text") blocks.push({ ...block, text: trim(block.text) });
-    else if (block.kind === "math") blocks.push({ ...block, source: trim(block.source) });
+    else if (block.kind === "math") {
+      const preview = trim(block.source);
+      // A collapsed preview must not parse hidden source or turn a partial
+      // formula into another expression. Copy/details retain the original.
+      blocks.push({ ...block, preview, tex: preview === block.source ? block.tex : undefined });
+    }
     else if (block.kind === "image") blocks.push(block);
     lines++;
   }

@@ -1,0 +1,30 @@
+{
+  "package": "temml",
+  "version": "0.14.0",
+  "git_revision": "4ffdf0e56577c426375d0b2818f8895edb5e5030",
+  "npm_integrity": "sha512-tz1LW/5IZpThK8c7ZpdTSH/n56eAj+ThirLieErtKxYC3EKCIiB4sKdRUehAgH+fQmvIKqMfP3gqTLBdLpy9zw==",
+  "entry": "temml/temml.js",
+  "files": [
+    {
+      "file": "temml-MIT.txt",
+      "sha256": "12b4e5592a12baaf50637881f2cb9d66667b26b8d51a73cd8f0d6bcefe176ab6",
+      "origin": "temml@0.14.0 npm archive LICENSE; git 4ffdf0e56577c426375d0b2818f8895edb5e5030"
+    },
+    {
+      "file": "temml-Apache-2.0.txt",
+      "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff",
+      "origin": "Exact Apache-2.0 standard text shipped with pinned Rust 1.99.1; included for credited React utility ancestry"
+    },
+    {
+      "file": "temml-UPSTREAM-NOTICES.txt",
+      "sha256": "458e80c033c67e1044d2459a0d7035aa344eb648d4fb3cd6c66a60af4c6f3143",
+      "origin": "Temml pinned src/utils.js credit; React v0.4.1 historical matching notice; pinned Temml README acknowledgement"
+    },
+    {
+      "file": "temml-KaTeX-historical-MIT.txt",
+      "sha256": "349cac4a16f1ad7d111878a61c9aac4200f25e82bc0b011f01e13b1c8885f5f6",
+      "origin": "https://raw.githubusercontent.com/KaTeX/KaTeX/v0.11.1/LICENSE (conservative historical upstream MIT notice; exact Temml fork revision not asserted)"
+    }
+  ],
+  "limits": "Source-backed notice retention, not an assertion of complete upstream ancestry or legal compliance."
+}

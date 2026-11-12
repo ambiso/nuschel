@@ -1,6 +1,7 @@
 <!-- SPDX-License-Identifier: EUPL-1.2 -->
 <script>
   import { visibleBlocks, codeColor, textRuns, initials, avatarColor, rgbaPixels } from "./presentation.js";
+  import MathFormula from "./MathFormula.svelte";
   let { message } = $props();
   let expanded = $state(false);
   let copied = $state("");
@@ -33,12 +34,12 @@
       {:else if block.kind === "image"}
         <button class="image-button" aria-label="Expand image" onclick={() => viewer = block}><canvas use:pixels={block} aria-label="Image attachment" style:aspect-ratio={`${block.width} / ${block.height}`}></canvas></button>
       {:else if block.kind === "math"}
-        <div class="formula" aria-label="Formula source"><code>{block.source}</code></div>
+        <MathFormula tex={block.tex} source={block.source} preview={block.preview ?? block.source} display={true} />
       {:else if block.role === "rule"}
         <hr>
       {:else}
         <div class="text" class:quote={block.role === "quote"} class:heading={typeof block.role === "object" && block.role?.heading} class:list-item={typeof block.role === "object" && block.role?.item}>
-          {#if block.role?.item}<span class="list-marker">{block.role.item.marker}</span>{/if}{#each textRuns(block) as run}{#if run.link}<a href={run.link} target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer">{run.text}</a>{:else}<span class:bold={run.style.bold} class:italic={run.style.italic} class:underline={run.style.underline} class:strike={run.style.strike} class:inline-code={run.style.code} title={run.math ? "Formula source" : undefined}>{run.text}</span>{/if}{/each}
+          {#if block.role?.item}<span class="list-marker">{block.role.item.marker}</span>{/if}{#each textRuns(block) as run}{#if run.math && !run.style.code && !run.link}<MathFormula tex={run.math} source={run.text} />{:else if run.link}<a href={run.link} target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer">{run.text}</a>{:else}<span class:bold={run.style.bold} class:italic={run.style.italic} class:underline={run.style.underline} class:strike={run.style.strike} class:inline-code={run.style.code}>{run.text}</span>{/if}{/each}
         </div>
       {/if}
     {/each}
