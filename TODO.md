@@ -1401,7 +1401,10 @@ listed below. Plugin data remains the explicit gap.
       Use stable server IDs for rows/actions, accurate per-server updates and
       unambiguous disconnect targets; bounded long-name layout must preserve
       useful status. Preserve explicit multi-server transmit consent and capture
-      epochs. Assigned to the web owner after the spacing proof.
+      epochs. Assigned to the web owner after the spacing proof. Root review
+      caught a missing pending-deafen rail badge and a header that called a
+      TLS/chat connection voice-connected even when voice was unavailable;
+      those corrections need their final verification before integration.
 - [ ] Reconcile rapid self mute/deafen intent with server acknowledgements at
       stock Mumble's default control bucket. The private status baseline hit a
       dropped-control case; a test-only larger bucket isolates UI projection but
@@ -1821,7 +1824,8 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
          and source/CLI checks, without changing the separately managed deployment.
          Implemented in docs/server-operators.md and linked from README/server.md;
          three actual offline module evaluations pass independently at root.
-         Separate voice-host HTTP-01 convenience support remains open above.
+         Separate voice-host HTTP-01 convenience support and its real private
+         issuance/renewal/isolation proof are integrated above.
    - [x] TLS reload on SIGHUP and `minimum_tls_version = "1.3"` (2026-11-11): new
          handshakes get the new certificate, a broken one keeps the old one. The
          NixOS module's manual `certificateFile` credentials are copied at start,
