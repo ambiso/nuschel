@@ -23461,6 +23461,11 @@ rec {
             packageId = "sonora";
             usesDefaultFeatures = false;
           }
+          {
+            name = "speexdsp-resampler";
+            packageId = "speexdsp-resampler";
+            usesDefaultFeatures = false;
+          }
         ];
         devDependencies = [
           {
@@ -36889,6 +36894,17 @@ rec {
           "getrandom" = [ "rand_core/getrandom" ];
         };
         resolvedDefaultFeatures = [ "default" "getrandom" ];
+      };
+      "speexdsp-resampler" = rec {
+        crateName = "speexdsp-resampler";
+        version = "0.1.0";
+        edition = "2018";
+        src = lib.cleanSourceWith { filter = sourceFilter;  src = ../../vendor/speexdsp-resampler; };
+        libName = "speexdsp_resampler";
+        authors = [
+          "Luca Barbato <lu_zero@gentoo.org>"
+        ];
+
       };
       "spin 0.10.1" = rec {
         crateName = "spin";

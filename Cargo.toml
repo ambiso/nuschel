@@ -1,7 +1,7 @@
 [workspace]
 resolver = "3"
 members = ["crates/*", "apps/*"]
-exclude = ["vendor/cpal", "vendor/pulseaudio", "vendor/gpui-pre-windows", "vendor/gpui-pre-linux", "vendor/str0m-rust-crypto", "vendor/ratatui-image", "vendor/gpui-pre-apple", "vendor/gpui-pre-wgpu", "vendor/gpui-pre", "vendor/hpke-rs-libcrux", "vendor/openmls_libcrux_crypto", "vendor/magic-wormhole"]
+exclude = ["vendor/cpal", "vendor/pulseaudio", "vendor/gpui-pre-windows", "vendor/gpui-pre-linux", "vendor/str0m-rust-crypto", "vendor/ratatui-image", "vendor/gpui-pre-apple", "vendor/gpui-pre-wgpu", "vendor/gpui-pre", "vendor/hpke-rs-libcrux", "vendor/openmls_libcrux_crypto", "vendor/magic-wormhole", "vendor/speexdsp-resampler"]
 default-members = ["apps/desktop", "apps/server"]
 
 [workspace.metadata.crane]
@@ -64,6 +64,8 @@ codegen-units = 1
 strip = "debuginfo"
 
 [patch.crates-io]
+# Scalar Rust playback SRC: no allocation in the f32 path, correct LR memory base.
+speexdsp-resampler = { path = "vendor/speexdsp-resampler" }
 # Safe Rust terminal graphics encoding; source formats stay in workers.
 ratatui-image = { path = "vendor/ratatui-image" }
 # Explicit RustCrypto DTLS provider and memory-safe certificate generation.
