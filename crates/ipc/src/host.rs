@@ -575,8 +575,8 @@ pub fn crypto_sandbox_command(executable: &Path, directory: &Path) -> Result<Com
     Ok(sandbox.run(["--data", "/data"]))
 }
 
-/// Audio service sockets and ALSA devices only. No session credentials, home,
-/// D-Bus socket, or network namespace are granted to native audio/codec processing.
+/// Audio service sockets, ALSA devices and public audio configuration. No session
+/// credentials, home, D-Bus socket or network namespace are granted to the worker.
 #[cfg(target_os = "linux")]
 pub fn media_sandbox_command(executable: &Path) -> Result<Command, Error> {
     let mut sandbox = Sandbox::new(executable, &[PERSISTENT_MEMORY.into()])?;
@@ -604,7 +604,15 @@ pub fn media_sandbox_command(executable: &Path) -> Result<Command, Error> {
     if Path::new("/dev/snd").exists() {
         command.args(["--dev-bind", "/dev/snd", "/dev/snd"]);
     }
-    for directory in ["/sys/devices", "/sys/class/sound", "/proc/asound"] {
+    // Distribution libraries need their public defaults as well as shared
+    // objects. User and /etc overrides stay outside this worker's namespace.
+    for directory in [
+        "/sys/devices",
+        "/sys/class/sound",
+        "/proc/asound",
+        "/usr/share/pipewire",
+        "/usr/share/alsa",
+    ] {
         if Path::new(directory).exists() {
             command.args(["--ro-bind", directory, directory]);
         }
