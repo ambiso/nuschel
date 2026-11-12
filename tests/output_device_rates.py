@@ -69,7 +69,7 @@ def main():
         if not report['passed_current']:raise SystemExit(1)
         return
     opus=Reference(args.opus_library);src=Speex(args.speex_library)
-    packets=opus.encode(fixture(2),2);decoded=opus.decode(packets,2)
+    packets=opus.encode(fixture(2),2);decoded=opus.decode(packets,2,phase_inversion_disabled=True)
     cases=[]
     for rate in (() if args.echo_only else (22050,44100,96000)):
         with tempfile.TemporaryDirectory(prefix=f'rate-{rate}-',dir=args.output) as temporary:

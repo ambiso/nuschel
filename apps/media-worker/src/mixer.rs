@@ -44,8 +44,11 @@ struct Speaker {
 
 impl Speaker {
     fn new(now: Instant) -> Result<Self, opus_pure::Error> {
+        let mut decoder = OpusDecoder::new(48_000, 2)?;
+        // Match Mumble: retain intensity-stereo energy when folded to mono.
+        decoder.set_phase_inversion_disabled(true);
         Ok(Self {
-            decoder: OpusDecoder::new(48_000, 2)?,
+            decoder,
             jitter: JitterBuffer::default(),
             pcm: VecDeque::with_capacity(MAX_DECODED),
             volume: 1.,
@@ -286,6 +289,14 @@ mod tests {
         speaker.volume = gain;
         speaker.extend(&frames.iter().flatten().copied().collect::<Vec<_>>());
         mixer.speakers.insert(key, speaker);
+    }
+
+    #[test]
+    fn voice_receivers_explicitly_match_mumbles_phase_setting() {
+        let mut speaker = Speaker::new(Instant::now()).unwrap();
+        assert!(speaker.decoder.phase_inversion_disabled());
+        speaker.decoder.reset_state().unwrap();
+        assert!(speaker.decoder.phase_inversion_disabled());
     }
 
     #[test]

@@ -419,11 +419,11 @@ The unchanged original private DSP suite also passes after the wide mix: echo
 isolation/6 dB volume (`headroom-dsp.log`). This does not close full live
 multispeaker, loss/jitter or perceptual parity.
 
-## Remaining reference decoder setting
+## Explicit reference decoder setting
 
 Stock Mumble sets `OPUS_SET_PHASE_INVERSION_DISABLED(1)` after decoder creation.
-Locked opus-pure's CELT decode currently passes `disable_inv=false` and has no
-obvious public control. The earlier reference-libopus fixtures use defaults, so
+Published opus-pure 0.2.3's CELT decoder passed `disable_inv=false` and exposed
+no public control. The earlier reference-libopus fixtures use defaults, so
 matching those does not establish matching this stock setting.
 
 The independent `tests/opus_phase.py` fixtures now explicitly compare both
@@ -442,11 +442,34 @@ Only three upstream files change; original license/VCS/manifests are retained
 byte-for-byte, with archive identity and patch detail in
 `vendor/opus-pure/NUSCHL-PATCH.md`. All 30 upstream API tests pass, including the
 new default/reset test at every API rate/channel count. A device-free patched
-Rust decoder matches both explicit reference modes at ≥127 dB, including an actual
-midstream reset. This is the API/graph checkpoint; receive-path activation and
-actual native/WASM proofs remain the next separate step. This control deliberately
-trades some stereo rendering quality for mono-fold behavior, matching Mumble;
-it is not universally superior stereo or a perceptual-equivalence guarantee.
+Rust decoder matches both explicit reference modes at ≥127 dB on the original
+intensity/control cases, including an actual midstream reset.
+
+The native Speaker and browser VoiceDecoder now explicitly opt in; generic and
+nonlive decoder defaults remain false. The native decoder/jitter/mixer matches
+independent final-clipped reference stereo at 127–138 dB on the 16/24/32/48 kbit
+and high-rate control fixtures. Actual compiled WASM VoiceDecoder plus real
+Worklet stereo/mono rendering matches at 126–138 dB for stereo and 127–133 dB
+for mono. A deliberate stereo Hybrid/CELT → mono SILK → stereo stream also passes:
+native 93.1 dB (postmix mono fold 101.5 dB), WASM/Worklet 76.7 dB stereo and 76.8 dB
+mono. These are fixed-gain comparisons, with no fitted amplitude or timing.
+All final entropy ranges still match, and an actual midstream reset retains the
+configured synthesis behavior. The 35 dB gate was not weakened. Combined native
+units pass 67, audio-WASM native units 4, Node audio units 14, and the upstream API
+suite 30. The compiled codec is
+`/nix/store/dq866hjy2i1gnfqmk47yfmb3y6xqfx8v-nuschl-web-audio-codec`;
+`phase-receivers-final/proof.json` records all exact per-case results. A fresh
+actual private 48 kHz sink run with explicit stock reference control also passes
+mono source 77.41 dB, stereo 77.41 dB, attenuated overshoot 82.89 dB and 120 ms
+stereo 77.51 dB, including preserved LR. Evidence: `~/.cache/noqphase/proof.json`.
+No host device or microphone was used.
+
+This control deliberately trades some stereo rendering quality for mono-fold
+behavior, matching Mumble; it is not universally superior stereo or a
+perceptual-equivalence guarantee. Native component mono metrics above fold its
+final 48 kHz stereo mix, whereas the Worklet folds the wide LR sum before its
+final clip. Native physical-mono clipping/mapping order under overshoot needs
+its own reference/device fixture; it is not certified by these phase tests.
 
 ## Implementation sequence
 

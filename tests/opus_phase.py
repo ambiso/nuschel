@@ -59,14 +59,23 @@ def main():
     parser.add_argument('--output', required=True, type=Path)
     parser.add_argument('--probe-default', type=Path, help='published Rust decoder, without new control')
     parser.add_argument('--probe', type=Path, help='device-free actual Rust decoder probe')
+    parser.add_argument('--native-test-binary',type=Path)
+    parser.add_argument('--wasm',type=Path,help='actual wasm-bindgen audio codec output')
     parser.add_argument('--require-stock', action='store_true')
     args = parser.parse_args()
+    if args.require_stock and not (args.probe or args.native_test_binary or args.wasm):
+        parser.error("--require-stock requires a Rust/native/WASM receiver")
     args.output.mkdir(parents=True, exist_ok=True)
     reference = PhaseReference(args.opus_library)
     cases = []
-    for kind, bitrate in [('intensity',16000),('intensity',24000),('intensity',32000),('intensity',48000),('low-band-control',128000)]:
+    for kind, bitrate in [('intensity',16000),('intensity',24000),('intensity',32000),('intensity',48000),('low-band-control',128000),('channel-mode-transitions',48000)]:
         name = f'{kind}-{bitrate}'
         packets = reference.encode(fixture(kind), 2, bitrate)
+        if kind == 'channel-mode-transitions':
+            stereo = reference.encode(fixture('intensity'),2,48000)
+            mono = reference.encode(fixture('low-band-control')[::2],1,16000,application=2048,bandwidth=1103)
+            assert any(packet[0] >> 3 < 12 for packet in mono), 'need actual SILK packets'
+            packets = stereo + mono + stereo
         default, ranges = reference.decode_control(packets, False)
         stock, stock_ranges = reference.decode_control(packets, True)
         assert ranges == stock_ranges, 'control must not alter entropy consumption'
@@ -91,6 +100,29 @@ def main():
             metrics['rust']=modes
             if args.require_stock:
                 assert modes['1']['fixed_gain_snr_db']>=35,metrics
+        if args.native_test_binary:
+            native_fixture=args.output/f'{name}-native.json'
+            native_fixture.write_text(json.dumps([{'volume':1,'packets':[list(packet) for packet in packets]}]))
+            output=args.output/f'{name}-native.f32le'
+            import os
+            subprocess.run([str(args.native_test_binary),'--ignored','--exact','mixer::mixer_fixture::dump'],
+                env={**os.environ,'NUSCHL_MIX_INPUT':str(native_fixture.resolve()),'NUSCHL_MIX_OUTPUT':str(output.resolve())},
+                check=True,capture_output=True,timeout=20)
+            clipped=[max(-1,min(1,v)) for v in stock]
+            observed=read_pcm(output)
+            metrics['native_receive']=compare(clipped,observed)
+            fold=lambda pcm:[(a+b)*.5 for a,b in zip(pcm[::2],pcm[1::2])]
+            metrics['native_postmix_mono_fold']=compare(fold(clipped),fold(observed))
+            if args.require_stock:
+                assert metrics['native_receive']['fixed_gain_snr_db']>=35,metrics
+                assert metrics['native_postmix_mono_fold']['fixed_gain_snr_db']>=35,metrics
+        if args.wasm:
+            wasm_fixture=args.output/f'{name}-wasm.json'
+            wasm_fixture.write_text(json.dumps({'packets':[list(packet) for packet in packets],'reference':stock}))
+            output=args.output/f'{name}-wasm-proof.json'
+            subprocess.run(['node','tests/web_opus_phase.mjs',str(args.wasm),str(wasm_fixture),str(output)],check=True,timeout=20)
+            metrics['wasm_receive']=json.loads(output.read_text())
+            if args.require_stock: assert metrics['wasm_receive']['fixed_gain_snr_db']>=35,metrics
         if args.probe_default:
             output=args.output/f'{name}-published-rust.f32le'
             subprocess.run([str(args.probe_default),str(packet_path),str(output),'0'],check=True,capture_output=True,timeout=20)

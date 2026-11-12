@@ -107,13 +107,13 @@ class Reference:
     def __init__(self, library):
         self.lib = ReferenceOpus(library).lib
 
-    def encode(self, samples, channels, bitrate=128000):
+    def encode(self, samples, channels, bitrate=128000, *, application=2049, bandwidth=None):
         error = ctypes.c_int()
-        encoder = self.lib.opus_encoder_create(RATE, channels, 2049, ctypes.byref(error))  # APPLICATION_AUDIO
+        encoder = self.lib.opus_encoder_create(RATE, channels, application, ctypes.byref(error))  # audio by default
         if error.value:
             raise RuntimeError(f"libopus create: {error.value}")
         try:
-            for request, value in [(4002, bitrate), (4006, 0), (4022, channels)]:  # bitrate,VBR,force channels
+            for request, value in [(4002, bitrate), (4006, 0), (4022, channels), *([(4008, bandwidth)] if bandwidth is not None else [])]:  # bitrate,VBR,force channels
                 if self.lib.opus_encoder_ctl(encoder, request, value):
                     raise RuntimeError(f"libopus control {request}")
             packets = []
@@ -160,12 +160,14 @@ class Reference:
         finally:
             self.lib.opus_repacketizer_destroy(repacketizer)
 
-    def decode(self, packets, channels):
+    def decode(self, packets, channels, *, phase_inversion_disabled=False):
         error = ctypes.c_int()
         decoder = self.lib.opus_decoder_create(RATE, channels, ctypes.byref(error))
         if error.value:
             raise RuntimeError(f"libopus create: {error.value}")
         try:
+            control = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_void_p, ctypes.c_int, ctypes.c_int)(("opus_decoder_ctl", self.lib))
+            assert control(decoder, 4046, int(phase_inversion_disabled)) == 0
             samples = []
             for packet in packets:
                 output = (ctypes.c_float * (5760 * channels))()
@@ -261,7 +263,7 @@ def main():
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
     reference = Reference(args.opus_library)
-    report = {"fixed_gain": 1.0, "host_devices": False, "cases": [], "limits": [
+    report = {"fixed_gain": 1.0, "phase_inversion_disabled": True, "host_devices": False, "cases": [], "limits": [
         "Private Pulse 48 kHz monitor only; device-rate resampling remains separate.",
         "No perceptual equivalence or physical device claim."]}
     with tempfile.TemporaryDirectory(prefix="private-pulse-", dir=args.output) as temporary:
@@ -275,13 +277,13 @@ def main():
                 packets = reference.encode(source, channels, bitrate=64000 if duration == 120 else 128000)
                 if duration == 120:
                     packets = reference.aggregate(packets, 6)
-                decoded = reference.decode(packets, 2)
+                decoded = reference.decode(packets, 2, phase_inversion_disabled=True)
                 expected = [value * volume for value in decoded]
                 (args.output / f"fixture-{name}.json").write_text(json.dumps({
                     "channels": channels, "rate": RATE, "frames_per_packet": RATE * duration // 1000,
                     "packets": [list(packet) for packet in packets],
                     "reference_stereo": decoded,
-                    "reference_mono": reference.decode(packets, 1),
+                    "reference_mono": reference.decode(packets, 1, phase_inversion_disabled=True),
                 }) + "\n")
                 actual = playback(args.worker, pulse, packets, args.output / f"{name}.f32le", volume, RATE * duration // 1000)
                 lag = delay_only(expected[::2], actual[::2])

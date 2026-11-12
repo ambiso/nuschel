@@ -79,10 +79,11 @@ impl VoiceDecoder {
         wasm_bindgen(constructor)
     )]
     pub fn new() -> Result<Self, String> {
-        Ok(Self {
-            decoder: OpusDecoder::new(SAMPLE_RATE as i32, OUTPUT_CHANNELS)
-                .map_err(|error| error.to_string())?,
-        })
+        let mut decoder = OpusDecoder::new(SAMPLE_RATE as i32, OUTPUT_CHANNELS)
+            .map_err(|error| error.to_string())?;
+        // Explicit receive setting, matching native/Mumble mono downmix behavior.
+        decoder.set_phase_inversion_disabled(true);
+        Ok(Self { decoder })
     }
 
     /// Interleaved stereo PCM; mono Opus is duplicated without losing stereo
@@ -116,6 +117,16 @@ impl VoiceDecoder {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn receive_decoder_uses_mumbles_phase_setting() {
+        assert!(
+            VoiceDecoder::new()
+                .unwrap()
+                .decoder
+                .phase_inversion_disabled()
+        );
+    }
 
     #[test]
     fn encoded_voice_retains_a_real_tone_and_the_expected_clock_duration() {

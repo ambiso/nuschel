@@ -655,12 +655,20 @@ The media worker uses per-speaker adaptive jitter buffers and Opus loss concealm
       matched complete reference-Mumble multispeaker/loss playback and physical
       listening remain open. See `docs/output-quality.md`; bitrate and synthetic
       tone SNR alone do not establish perceptual equivalence.
-- [ ] Match/test Mumble's explicit `OPUS_SET_PHASE_INVERSION_DISABLED(1)` receive
-      setting before claiming codec parity: locked opus-pure currently passes
-      `disable_inv=false` to CELT decoding and has no obvious public control.
-      Add low-bitrate intensity-stereo and mono-fold fixtures with that exact
-      stock setting, then identify the smallest safe control/API change. Current
-      reference fixtures use libopus defaults; they do not close this setting gap.
+- [x] Match Mumble's explicit `OPUS_SET_PHASE_INVERSION_DISABLED(1)` receive
+      setting. The pinned, minimally patched opus-pure 0.2.3 exposes its existing
+      synthesis control with upstream/generic defaults unchanged; only native
+      Speaker/browser VoiceDecoder opt in. Independent 16/24/32/48 kbit intensity
+      fixtures and actual native/WASM+Worklet stereo/mono comparisons pass;
+      explicit SILK/Hybrid/CELT+channel transitions and reset retain the control,
+      with entropy ranges unchanged. Native 67/audio-WASM 4/Node 14/API 30 tests pass.
+      Preserve published-default mismatch evidence; no full perceptual parity claim.
+- [ ] Match native mono-device clipping/mapping order under decoded overshoot.
+      Native currently clips its 48 kHz stereo mix before the eventual mono-device
+      LR average; Worklet mono folds wide LR before its final clip. Stock Mumble
+      maps channels while accumulating, then clips output. Add an independent
+      overshoot/cancellation fixture and actual mono-sink proof before deciding
+      the smallest safe correction, including fallback-reference consistency.
 
 - [x] Preserve legitimate per-speaker decoded headroom until the final mix.
       Native and browser queues now store raw finite PCM with per-frame gain,

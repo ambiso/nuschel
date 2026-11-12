@@ -29,7 +29,7 @@ def main():
     for index, (sign, volume) in enumerate([(1, 3.), (-1, 2.5)]):
         packets = reference.encode([sign * value for value in source], 2)
         assert max(map(len, packets)) <= 1024
-        pcm = reference.decode(packets, 2)
+        pcm = reference.decode(packets, 2, phase_inversion_disabled=True)
         path = args.output / f'speaker-{index}.f32le'
         write_pcm(path, pcm)
         streams.append({'packets': [list(packet) for packet in packets], 'volume': volume, 'pcm': str(path.resolve())})
@@ -57,7 +57,7 @@ def main():
               'decoded_stream_peaks': [max(map(abs, pcm)) for pcm in decoded], 'native': measured,
               'negative_old_per_speaker_clip': negative, 'worklet': json.loads(browser_path.read_text()),
               'limits': ['Component sum proof, not full live multispeaker/device or jitter/loss parity.',
-                         'Reference decoder defaults; explicit Mumble phase-inversion setting remains separate.']}
+                         'Explicit stock Mumble phase-inversion setting; full device/loss parity remains separate.']}
     (args.output / 'proof.json').write_text(json.dumps(result, indent=2) + '\n')
     print(json.dumps(result))
 
