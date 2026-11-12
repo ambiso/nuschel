@@ -55,7 +55,7 @@ def acceptance(measured, input_rms, *, stopband=False, alias_db=None, reference_
     input_snr = 20*np.log10(input_rms)-measured['rms_error_dbfs']
     maximum = measured['max_abs_error'] <= 2e-6
     rails = {'output_relative_100db_diagnostic': output_gate,
-        'max_abs_error_2e6_gate': maximum, 'input_referenced_snr_db': float(input_snr)}
+        'max_abs_error_2e_minus6_gate': maximum, 'input_referenced_snr_db': float(input_snr)}
     if stopband:
         rails.update({'input_relative_120db_gate': bool(input_snr >= 120),
             'alias_below_minus90db_gate': bool(alias_db <= -90),
@@ -82,9 +82,11 @@ def main():
         frequencies = [('low', 997.), ('high', .35*min(rate, 48000))]
         if rate > 48000: frequencies.append(('alias', 36000.))
         for name, frequency, channels in [*(('tone-'+name, f, 1) for name, f in frequencies),
-                                         ('impulse', 0., 1), ('channel-average2', 997., 2), ('channel-average6', 997., 6)]:
+                                         ('impulse', 0., 1), ('initial-marker', 997., 1), ('channel-average2', 997., 2), ('channel-average6', 997., 6)]:
             if name == 'impulse':
                 mono = np.zeros(rate); mono[rate//10] = .5
+            elif name == 'initial-marker':
+                mono = .2*np.where(t < .08, np.sin(2*np.pi*997*t), np.sin(2*np.pi*3000*t))
             else:
                 mono = .2*np.sin(2*np.pi*frequency*t)
             weights = np.array([1., .5, -.25, .75, -.5, .2][:channels])
@@ -140,7 +142,18 @@ def main():
                 'first_fragment_queued_frames': metadata[1][0]['queued'],
                 'actual_initial_peak': int(np.argmax(abs(outputs[0]))) if name == 'impulse' else None,
                 'reference_initial_peak': int(np.argmax(abs(reference))) if name == 'impulse' else None}
-            if name != 'impulse':
+            if name == 'initial-marker':
+                def power(values, frequency):
+                    phase = 2*np.pi*frequency*np.arange(len(values))/48000
+                    return float(abs(np.sum(values*np.exp(-1j*phase)))**2)
+                beginning = outputs[0][latency:960]
+                following = outputs[0][5760:9600]
+                first_ratio = power(beginning,997)/max(power(beginning,3000),1e-30)
+                later_ratio = power(following,3000)/max(power(following,997),1e-30)
+                assert first_ratio > 20 and later_ratio > 20, (rate, first_ratio, later_ratio)
+                row['initial_marker_power_ratio'] = first_ratio
+                row['following_marker_power_ratio'] = later_ratio
+            if name not in ('impulse','initial-marker'):
                 folded = abs((rate-frequency+24000)%48000-24000)
                 input_level = .2*abs(float(weights.mean()))
                 db = lambda x: float(20*np.log10(max(x/input_level, 1e-15)))

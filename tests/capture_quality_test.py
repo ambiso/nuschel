@@ -33,7 +33,12 @@ def main():
     ordinary, _ = c.mono(ordinary_source,44100)
     zero = metrics(np.repeat(ordinary[:,None],2,axis=1),np.zeros((len(ordinary),2)),48000)
     assert not acceptance(zero,float(np.sqrt(np.mean(ordinary_source.astype(float)**2))))['passed']
-    print('4 real-PCM negative controls passed: original alias, injected leakage, silence, retained strict diagnostic')
+    marker_source = np.fromfile(args.filtered/'44100-initial-marker-source.f32le',dtype='<f4')
+    marker, _ = c.mono(marker_source,44100)
+    delayed = np.concatenate((np.zeros(480),marker[:-480]))
+    delay_error = metrics(np.repeat(marker[:,None],2,axis=1),np.repeat(delayed[:,None],2,axis=1),48000)
+    assert not acceptance(delay_error,float(np.sqrt(np.mean(marker_source.astype(float)**2))))['passed']
+    print('5 real-PCM negative controls passed: original alias, injected leakage, silence, delayed initial marker, retained strict diagnostic')
 
 
 if __name__ == '__main__': main()

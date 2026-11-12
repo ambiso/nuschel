@@ -3,6 +3,9 @@
 """Original private AEC assertions with observed negotiated non48k capture."""
 import argparse
 import json
+import subprocess
+import threading
+import time
 from pathlib import Path
 from capture_unmute import retarget_microphone
 from output_quality import PrivatePulse
@@ -23,8 +26,22 @@ def main():
             root = args.output/str(rate);root.mkdir(mode=0o700)
             pulse = PrivatePulse(args.pulse_bin, root, 48000)
             workers = []
+            feeder = None
             try:
                 mic = retarget_microphone(pulse,rate)
+                # Keep an owned zero-valued stream at the desired input rate.
+                # Otherwise Pulse may retune an idle null mic to the48k room
+                # stream before CPAL opens, silently bypassing the SRC under test.
+                feeder = subprocess.Popen([str(args.pulse_bin/'pacat'), f'--server=unix:{pulse.socket}',
+                    '--playback','--device=mic','--raw','--format=float32le',f'--rate={rate}','--channels=1',
+                    '--latency-msec=20','--process-time-msec=10'],stdin=subprocess.PIPE,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+                silence = bytes(rate*4)
+                def feed():
+                    try:
+                        while feeder.poll() is None: feeder.stdin.write(silence); feeder.stdin.flush()
+                    except (BrokenPipeError,ValueError):pass
+                source_thread = threading.Thread(target=feed,daemon=True); source_thread.start()
+                time.sleep(.1)
                 class Observed(original):
                     def __init__(self,*arguments,**keywords):
                         super().__init__(*arguments,**keywords)
@@ -49,7 +66,12 @@ def main():
                 media_live.Worker=original
                 for worker in workers:
                     if worker.process.poll() is None:worker.stop()
-                pulse.stop()
+                try:
+                    if feeder is not None:
+                        feeder.terminate();feeder.wait(timeout=5);source_thread.join(timeout=2)
+                        try:feeder.stdin.close()
+                        except BrokenPipeError:pass
+                finally:pulse.stop()
     finally:media_live.Worker=original
     report['passed']=True
     report['limits']=['Synthetic private monitor/loopback, not physical devices','Original two-attempt convergence policy retained; every attempt preserved','Not a general non48k AEC reliability claim']
