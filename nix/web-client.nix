@@ -3,6 +3,7 @@
   pkgs,
   lib,
   toolchain,
+  releaseNotices ? null,
 }:
 let
   native = import ./crate2nix.nix { inherit pkgs toolchain; };
@@ -113,7 +114,7 @@ let
     moduleName = "nuschl_content_wasm";
     name = "nuschl-web-content-codec";
   };
-  app = pkgs.buildNpmPackage {
+  rawApp = pkgs.buildNpmPackage {
     pname = "nuschl-web-app";
     version = "0.1.0";
     src = lib.cleanSourceWith {
@@ -146,6 +147,25 @@ let
       cp -R dist/. "$out/"
     '';
   };
+  runtimeNotices =
+    pkgs.runCommand "nuschl-web-runtime-notices" { nativeBuildInputs = [ pkgs.python3 ]; }
+      ''
+        python3 ${../release/web-notices.py} --app ${rawApp} \
+          --lock ${../web/app/package-lock.json} --cargo-lock ${../Cargo.lock} \
+          --temml-source ${../web/app/public/licenses} \
+          --sdk ${wasm} --audio ${audioWasm} --content ${contentWasm} --output "$out"
+      '';
+  app =
+    if releaseNotices == null then
+      rawApp
+    else
+      pkgs.runCommand "nuschl-web-app-with-notices" { } ''
+        cp -R ${rawApp}/. "$out"
+        chmod -R u+w "$out"
+        mkdir -p "$out/licenses/nuschl"
+        cp -R ${releaseNotices}/share/licenses/nuschl/. "$out/licenses/nuschl/"
+      '';
+
 in
 {
   inherit
@@ -153,5 +173,7 @@ in
     wasm
     audioWasm
     contentWasm
+    runtimeNotices
+    rawApp
     ;
 }
