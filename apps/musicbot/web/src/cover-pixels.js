@@ -4,7 +4,7 @@
 export const MAX_EDGE = 400;
 const MAX_ACTIVE = 2, MAX_QUEUED = 64, MAX_CACHE = 64, CACHE_BYTES = 8 * 1024 * 1024;
 const DEADLINE = 10000;
-let active = 0, cacheBytes = 0;
+let active = 0, cacheBytes = 0, painted = 0, paintedBytes = 0;
 const queue = [], cache = new Map();
 
 function aborted() { return new DOMException('Cover request cancelled', 'AbortError'); }
@@ -38,10 +38,10 @@ export function validatePixels(value, maximum = MAX_EDGE) {
 
 async function fetchPixels(url, maximum, signal) {
   const response = await fetch(url, { signal, cache: 'no-store', headers: { Accept: 'application/json' } });
-  if (!response.ok || !/^application\/json(?:;|$)/i.test(response.headers.get('content-type') || '')) throw Error('Cover unavailable');
+  if (!response.ok || !/^application\/json(?:;|$)/i.test(response.headers.get('content-type') || '')) { await response.body?.cancel().catch(() => {}); throw Error('Cover unavailable'); }
   const limit = Math.ceil(maximum * maximum * 4 / 3) * 4 + 4096;
   const declared = response.headers.get('content-length');
-  if (declared && (!/^\d+$/.test(declared) || Number(declared) > limit)) throw Error('Cover response too large');
+  if (declared && (!/^\d+$/.test(declared) || Number(declared) > limit)) { await response.body?.cancel().catch(() => {}); throw Error('Cover response too large'); }
   if (!response.body) throw Error('Cover response missing');
   const reader = response.body.getReader(), bytes = new Uint8Array(limit);
   let size = 0, chunks = 0;
@@ -104,4 +104,28 @@ export function loadCover(url, maximum = MAX_EDGE, signal, namespace) {
     if (queue.length >= MAX_QUEUED) { job.finish(Error('Cover queue full')); job.cleanup(); return; }
     queue.push(job); pump();
   });
+}
+
+/** Retain a bounded viewport bitmap lease; its caller releases on hide/unmount. */
+export function paintCover(canvas, value) {
+  const { width, height, pixels } = value;
+  if (!Number.isInteger(width) || !Number.isInteger(height) || width < 1 || height < 1
+      || width > MAX_EDGE || height > MAX_EDGE || !(pixels instanceof Uint8ClampedArray)
+      || pixels.byteLength !== width * height * 4) throw Error('Invalid Canvas pixels');
+  const bytes = pixels.byteLength;
+  if (painted >= 64 || paintedBytes + bytes > 16 * 1024 * 1024) return null;
+  painted++; paintedBytes += bytes;
+  let live = true;
+  const release = () => {
+    if (!live) return;
+    live = false; painted--; paintedBytes -= bytes;
+    canvas.width = 0; canvas.height = 0;
+  };
+  try {
+    const context = canvas.getContext('2d');
+    if (!context) { release(); return null; }
+    canvas.width = width; canvas.height = height;
+    context.putImageData(new ImageData(pixels, width, height), 0, 0);
+    return release;
+  } catch { release(); return null; }
 }

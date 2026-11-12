@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: EUPL-1.2 -->
 <script>
   import { artUrl } from '../api.js';
-  import { loadCover, MAX_EDGE } from '../cover-pixels.js';
+  import { loadCover, paintCover, MAX_EDGE } from '../cover-pixels.js';
   import Icon from './Icon.svelte';
   import { store } from '../store.svelte.js';
 
@@ -28,17 +28,14 @@
     target.width = 0; target.height = 0;
     if (!url || !shown || !namespace || !allowed || namespaceSignal?.aborted) return;
     const request = new AbortController();
-    let current = true;
-    const invalidate = () => { current = false; request.abort(); ready = false; target.width = 0; target.height = 0; };
+    let current = true, release = null;
+    const invalidate = () => { current = false; request.abort(); release?.(); ready = false; target.width = 0; target.height = 0; };
     namespaceSignal?.addEventListener('abort', invalidate, { once: true });
     loadCover(url, maximum, request.signal, namespace).then(value => {
       if (!current || request.signal.aborted || src !== url || canvas !== target || bound !== maximum
           || !visible || store.browseKey !== namespace || store.connection !== 'open' || store.invalid) return;
-      const context = target.getContext('2d');
-      if (!context) return;
-      target.width = value.width; target.height = value.height;
-      context.putImageData(new ImageData(value.pixels, value.width, value.height), 0, 0);
-      ready = true;
+      release = paintCover(target, value);
+      ready = release !== null;
     }).catch(() => { /* Keep the decorative placeholder; never decode an encoded fallback. */ });
     return () => {
       namespaceSignal?.removeEventListener('abort', invalidate);
@@ -48,7 +45,7 @@
 </script>
 
 <div bind:this={container} class="cover" class:fill={px === null} class:round style:width={px === null ? null : `${px}px`} style:height={px === null ? null : `${px}px`}>
-  <canvas bind:this={canvas} class:ready aria-hidden="true"></canvas>
+  <canvas width="0" height="0" bind:this={canvas} class:ready aria-hidden="true"></canvas>
   {#if !ready}<div class="placeholder"><Icon name="note" size={px ? Math.max(16, Math.round(px * 0.4)) : 48} /></div>{/if}
 </div>
 
