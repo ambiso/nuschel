@@ -9,6 +9,7 @@ publish.workspace = true
 
 [dependencies]
 nuschl-core.workspace = true
+nuschl-ipc.workspace = true
 nuschl-legacy-html.workspace = true
 nuschl-session.workspace = true
 nuschl-protocol.workspace = true

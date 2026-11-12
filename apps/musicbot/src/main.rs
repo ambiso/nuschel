@@ -2,6 +2,7 @@
 //! A Mumble music bot: plays songs from Subsonic servers in one or more
 //! channels; people control the queues on a web page they get a link to.
 mod config;
+mod codec;
 mod decode;
 mod mumble;
 mod persist;
