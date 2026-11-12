@@ -10,6 +10,7 @@ use crate::{
 };
 use bytes::Bytes;
 use nuschl_core::MAX_CONTENT_BYTES;
+use nuschl_core::admin::{AclReply, group_has_local_definition};
 use nuschl_protocol::{
     ControlFrame, MAX_CONTROL_BYTES, control as proto,
     crypt::CryptState,
@@ -202,6 +203,7 @@ pub enum SessionEvent {
     RegisteredUsers(Vec<RegisteredUser>),
     Bans(Vec<Ban>),
     Acl(Acl),
+    AclReply(AclReply),
     /// Resolved names for registered user ids (ACL editor).
     UserNames(BTreeMap<u32, String>),
     /// A voice packet from a legacy codec Nuschl does not decode.
@@ -310,8 +312,14 @@ pub enum Command {
     QueryBans,
     UpdateBans(Vec<Ban>),
     QueryAcl(u32),
+    /// One correlated query per channel, retained until a reply or reconnect.
+    QueryAclDraft {
+        channel: u32,
+        request: u64,
+    },
     UpdateAcl(Acl),
     QueryUserNames(Vec<u32>),
+    QueryUserIds(Vec<String>),
     /// Mark a channel read up to `seq` (Nuschl servers; synced to the
     /// account's other devices).
     MarkRead {
@@ -558,7 +566,8 @@ impl Command {
             Self::Join(id)
             | Self::RemoveChannel(id)
             | Self::RequestPermissions(id)
-            | Self::QueryAcl(id) => {
+            | Self::QueryAcl(id)
+            | Self::QueryAclDraft { channel: id, .. } => {
                 channels.insert(*id);
             }
             Self::CreateChannel { parent, .. } => {
@@ -623,6 +632,8 @@ impl Command {
             | Self::QueryRegisteredUsers
             | Self::UpdateRegisteredUsers(_)
             | Self::QueryBans
+            | Self::QueryUserNames(_)
+            | Self::QueryUserIds(_)
             | Self::UpdateBans(_)
             | Self::SelectVoiceTarget(_)
             | Self::SelectVoiceTargetAt { .. }
@@ -1484,6 +1495,9 @@ struct State {
     /// Installed explicit targets retain authority through later voice packets.
     voice_authorities: BTreeMap<u32, CommandAuthority>,
     permissions: BTreeMap<u32, u32>,
+    /// Never expire/delete an unresolved query: a late wire reply has no ticket
+    /// and must not be attributed to a replacement draft or reused channel ID.
+    acl_queries: BTreeMap<u32, (u64, Option<u64>)>,
     context_actions: BTreeMap<String, ContextAction>,
     unsupported_codec: BTreeSet<u32>,
     /// Bytes of comments, descriptions and avatars in `users` and `channels`.
@@ -1526,6 +1540,7 @@ impl Default for State {
             voice_route: Default::default(),
             voice_authorities: BTreeMap::new(),
             permissions: BTreeMap::new(),
+            acl_queries: BTreeMap::new(),
             context_actions: BTreeMap::new(),
             unsupported_codec: BTreeSet::new(),
             blob_bytes: 0,
@@ -1542,6 +1557,51 @@ impl Default for State {
     }
 }
 impl State {
+    async fn query_acl(
+        &mut self,
+        channel: u32,
+        request: Option<u64>,
+        events: &mpsc::Sender<SessionEvent>,
+    ) -> Result<(), Error> {
+        let error = if self.acl_queries.contains_key(&channel) {
+            Some(
+                "An earlier ACL query for this channel is still unresolved. Wait for its reply or reconnect before reloading.",
+            )
+        } else if self.acl_queries.len() >= 128 {
+            Some("Too many unresolved ACL queries. Reconnect before opening another editor.")
+        } else if !self.channels.contains_key(&channel) {
+            Some("The original channel no longer exists.")
+        } else {
+            None
+        };
+        if let Some(error) = error {
+            if let Some(request) = request {
+                emit(
+                    events,
+                    SessionEvent::AclReply(AclReply {
+                        request,
+                        result: Err(error.into()),
+                    }),
+                )
+                .await?;
+            } else {
+                emit(events, SessionEvent::Notice(error.into())).await?;
+            }
+            return Ok(());
+        }
+        let instance = self.channels[&channel].instance;
+        self.acl_queries.insert(channel, (instance, request));
+        self.queue(
+            kind::ACL,
+            &proto::Acl {
+                channel_id: channel,
+                query: Some(true),
+                ..Default::default()
+            },
+        );
+        Ok(())
+    }
+
     fn encrypted_server(&self) -> bool {
         self.extension
             .as_ref()
@@ -1728,7 +1788,8 @@ impl State {
             ),
             Command::EditChannel { channel, .. }
             | Command::RemoveChannel(channel)
-            | Command::QueryAcl(channel) => may(*channel, p::WRITE),
+            | Command::QueryAcl(channel)
+            | Command::QueryAclDraft { channel, .. } => may(*channel, p::WRITE),
             Command::UpdateAcl(acl) => may(acl.channel, p::WRITE),
             Command::LinkChannels {
                 channel,
@@ -2494,17 +2555,9 @@ impl State {
                     query: Some(false),
                 },
             ),
-            Command::QueryAcl(channel) => {
-                if self.channels.contains_key(&channel) {
-                    self.queue(
-                        kind::ACL,
-                        &proto::Acl {
-                            channel_id: channel,
-                            query: Some(true),
-                            ..Default::default()
-                        },
-                    );
-                }
+            Command::QueryAcl(channel) => self.query_acl(channel, None, events).await?,
+            Command::QueryAclDraft { channel, request } => {
+                self.query_acl(channel, Some(request), events).await?
             }
             Command::UpdateAcl(acl) => self.queue(
                 kind::ACL,
@@ -2514,7 +2567,7 @@ impl State {
                     groups: acl
                         .groups
                         .into_iter()
-                        .filter(|group| !group.inherited)
+                        .filter(group_has_local_definition)
                         .map(|group| proto::acl::ChanGroup {
                             name: group.name,
                             inherited: Some(false),
@@ -2581,6 +2634,19 @@ impl State {
                     &proto::QueryUsers {
                         ids: ids.into_iter().take(1024).collect(),
                         names: Vec::new(),
+                    },
+                );
+            }
+            Command::QueryUserIds(names) => {
+                self.queue(
+                    kind::QUERY_USERS,
+                    &proto::QueryUsers {
+                        ids: Vec::new(),
+                        names: names
+                            .into_iter()
+                            .take(128)
+                            .filter(|name| !name.is_empty() && name.len() <= 512)
+                            .collect(),
                     },
                 );
             }
@@ -3744,42 +3810,72 @@ impl State {
             }
             kind::ACL => {
                 let acl: proto::Acl = decode(&frame)?;
-                emit(
-                    events,
-                    SessionEvent::Acl(Acl {
-                        channel: acl.channel_id,
-                        inherit_acls: acl.inherit_acls.unwrap_or(true),
-                        groups: acl
-                            .groups
-                            .into_iter()
-                            .take(1024)
-                            .map(|group| AclGroup {
-                                name: bounded(group.name, 256),
-                                inherited: group.inherited.unwrap_or(true),
-                                inherit: group.inherit.unwrap_or(true),
-                                inheritable: group.inheritable.unwrap_or(true),
-                                add: group.add,
-                                remove: group.remove,
-                                inherited_members: group.inherited_members,
-                            })
-                            .collect(),
-                        entries: acl
-                            .acls
-                            .into_iter()
-                            .take(4096)
-                            .map(|entry| AclEntry {
-                                apply_here: entry.apply_here.unwrap_or(true),
-                                apply_subs: entry.apply_subs.unwrap_or(true),
-                                inherited: entry.inherited.unwrap_or(true),
-                                user_id: entry.user_id,
-                                group: entry.group.map(|group| bounded(group, 256)),
-                                grant: entry.grant.unwrap_or(0),
-                                deny: entry.deny.unwrap_or(0),
-                            })
-                            .collect(),
-                    }),
-                )
-                .await?;
+                let pending = self.acl_queries.remove(&acl.channel_id);
+                let complete = acl.groups.len() <= 1024
+                    && acl.acls.len() <= 4096
+                    && acl.groups.iter().all(|group| {
+                        group.name.len() <= 256
+                            && group
+                                .add
+                                .len()
+                                .saturating_add(group.remove.len())
+                                .saturating_add(group.inherited_members.len())
+                                <= 8192
+                    })
+                    && acl
+                        .acls
+                        .iter()
+                        .all(|entry| entry.group.as_ref().is_none_or(|group| group.len() <= 256));
+                let current_instance = self
+                    .channels
+                    .get(&acl.channel_id)
+                    .map(|channel| channel.instance);
+                let value = Acl {
+                    channel: acl.channel_id,
+                    inherit_acls: acl.inherit_acls.unwrap_or(true),
+                    groups: acl
+                        .groups
+                        .into_iter()
+                        .take(1024)
+                        .map(|group| AclGroup {
+                            name: bounded(group.name, 256),
+                            inherited: group.inherited.unwrap_or(true),
+                            inherit: group.inherit.unwrap_or(true),
+                            inheritable: group.inheritable.unwrap_or(true),
+                            add: group.add,
+                            remove: group.remove,
+                            inherited_members: group.inherited_members,
+                        })
+                        .collect(),
+                    entries: acl
+                        .acls
+                        .into_iter()
+                        .take(4096)
+                        .map(|entry| AclEntry {
+                            apply_here: entry.apply_here.unwrap_or(true),
+                            apply_subs: entry.apply_subs.unwrap_or(true),
+                            inherited: entry.inherited.unwrap_or(true),
+                            user_id: entry.user_id,
+                            group: entry.group.map(|group| bounded(group, 256)),
+                            grant: entry.grant.unwrap_or(0),
+                            deny: entry.deny.unwrap_or(0),
+                        })
+                        .collect(),
+                };
+                match pending {
+                    Some((instance, Some(request))) => {
+                        let result = if current_instance != Some(instance) {
+                            Err("The original channel no longer exists. Reopen its editor.".into())
+                        } else if !complete {
+                            Err("This ACL exceeds the safe editor limits. It was not loaded or made editable.".into())
+                        } else {
+                            Ok(value)
+                        };
+                        emit(events, SessionEvent::AclReply(AclReply { request, result })).await?;
+                    }
+                    Some((instance, None)) if current_instance != Some(instance) => {}
+                    _ => emit(events, SessionEvent::Acl(value)).await?,
+                }
             }
             kind::QUERY_USERS => {
                 let query: proto::QueryUsers = decode(&frame)?;
@@ -3790,6 +3886,7 @@ impl State {
                             .ids
                             .into_iter()
                             .zip(query.names)
+                            .filter(|(id, _)| *id != u32::MAX)
                             .take(4096)
                             .map(|(id, name)| (id, bounded(name, 512)))
                             .collect(),

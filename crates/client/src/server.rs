@@ -158,6 +158,8 @@ pub struct ServerState {
     pub registered_users: Option<Vec<RegisteredUser>>,
     pub bans: Option<Vec<Ban>>,
     pub acl: Option<Acl>,
+    /// Only correlated responses can initialize/validate an administrative draft.
+    pub acl_reply: Option<nuschl_core::admin::AclReply>,
     pub user_names: BTreeMap<u32, String>,
     pub reconnecting: Option<String>,
     /// Sent and total messages of the text waiting for the server's rate limit.
@@ -246,6 +248,7 @@ impl ServerState {
             registered_users: None,
             bans: None,
             acl: None,
+            acl_reply: None,
             user_names: BTreeMap::new(),
             reconnecting: None,
             outbox: None,

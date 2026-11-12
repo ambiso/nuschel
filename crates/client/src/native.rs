@@ -2915,6 +2915,7 @@ fn server_event(event: SessionEvent) -> Result<ServerEvent, Option<Unmodelled>> 
         SessionEvent::RegisteredUsers(users) => ServerEvent::RegisteredUsers(users),
         SessionEvent::Bans(bans) => ServerEvent::Bans(bans),
         SessionEvent::Acl(acl) => ServerEvent::Acl(acl),
+        SessionEvent::AclReply(reply) => ServerEvent::AclReply(reply),
         SessionEvent::UserNames(names) => ServerEvent::UserNames(names),
         SessionEvent::UnsupportedCodec { session } => ServerEvent::UnsupportedCodec {
             session,

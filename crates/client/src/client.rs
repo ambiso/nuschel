@@ -2360,16 +2360,44 @@ impl Client {
             ServerEvent::ContextActions(actions) => server.context_actions = actions,
             ServerEvent::RegisteredUsers(users) => server.registered_users = Some(users),
             ServerEvent::Bans(bans) => server.bans = Some(bans),
+            ServerEvent::AclReply(reply) => {
+                if let Ok(acl) = &reply.result {
+                    let unknown: BTreeSet<u32> = acl
+                        .entries
+                        .iter()
+                        .filter_map(|entry| entry.user_id)
+                        .chain(acl.groups.iter().flat_map(|group| {
+                            group
+                                .add
+                                .iter()
+                                .chain(&group.remove)
+                                .chain(&group.inherited_members)
+                                .copied()
+                        }))
+                        .filter(|id| !server.user_names.contains_key(id))
+                        .collect();
+                    for ids in unknown.into_iter().collect::<Vec<_>>().chunks(1024) {
+                        let _ = self
+                            .platform
+                            .request(&server.id, Request::QueryUserNames(ids.to_vec()));
+                    }
+                    server.acl = Some(acl.clone());
+                }
+                server.acl_reply = Some(reply);
+            }
             ServerEvent::Acl(acl) => {
                 let unknown: Vec<u32> = acl
                     .entries
                     .iter()
                     .filter_map(|entry| entry.user_id)
-                    .chain(
-                        acl.groups
+                    .chain(acl.groups.iter().flat_map(|group| {
+                        group
+                            .add
                             .iter()
-                            .flat_map(|group| group.add.iter().copied()),
-                    )
+                            .chain(&group.remove)
+                            .chain(&group.inherited_members)
+                            .copied()
+                    }))
                     .filter(|id| !server.user_names.contains_key(id))
                     .collect();
                 if !unknown.is_empty() {

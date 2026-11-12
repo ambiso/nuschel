@@ -270,6 +270,7 @@ pub enum ServerEvent {
     RegisteredUsers(Vec<RegisteredUser>),
     Bans(Vec<Ban>),
     Acl(Acl),
+    AclReply(nuschl_core::admin::AclReply),
     UserNames(BTreeMap<u32, String>),
     /// Someone speaks with a codec Nuschl cannot play (seen at `at_ms`).
     UnsupportedCodec {

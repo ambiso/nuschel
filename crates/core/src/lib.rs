@@ -3,6 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
+pub mod admin;
 pub mod audio;
 pub mod bookmark;
 pub mod model;
