@@ -624,10 +624,8 @@ impl Command {
             | Self::UpdateRegisteredUsers(_)
             | Self::QueryBans
             | Self::UpdateBans(_)
-            | Self::QueryUserNames(_)
             | Self::SelectVoiceTarget(_)
             | Self::SelectVoiceTargetAt { .. }
-            | Self::SetSelf { .. }
             | Self::Identity(_)
             | Self::Mls(
                 crate::mls::MlsCommand::OpenDirect { .. }
@@ -5725,5 +5723,66 @@ mod delayed_action_authority_tests {
         assert!(state.authorize(scoped(lease.clone(), command())).is_some());
         state.users.get_mut(&2).unwrap().instance = 222;
         assert!(state.authorize(scoped(lease, command())).is_none());
+    }
+    #[tokio::test]
+    async fn rapid_voice_intents_old_install_and_stop_cannot_clear_newer_suspension() {
+        let mut state = observed();
+        state.local_muted = false;
+        let packet = || VoicePacket {
+            sender: 0,
+            sequence: 1,
+            opus: vec![0xf8, 0xff, 0xfe],
+            end: false,
+            volume: 1.,
+        };
+        let (events, _) = mpsc::channel(16);
+        let install = |revision| Command::Whisper {
+            revision,
+            id: 1,
+            targets: vec![VoiceTargetSpec::Users(vec![2])],
+        };
+        let lease = snapshot().for_command(&install(1)).unwrap();
+        let a = state.voice_route.suspend();
+        let accepted = state.authorize(scoped(lease.clone(), install(a))).unwrap();
+        state.command(accepted, &events).await.unwrap();
+        assert!(state.outgoing_voice(packet()).is_some());
+        let b = state.voice_route.suspend();
+        let queued_b = scoped(lease.clone(), install(b));
+        let c = state.voice_route.suspend(); // Newest intent may fail enqueue; suspension is already active.
+        assert!(state.authorize(queued_b).is_none());
+        assert_eq!(state.voice_route.revision(), c);
+        assert_eq!(state.voice_route.target(), 31);
+        assert!(state.outgoing_voice(packet()).is_none());
+        let old_stop = Command::SelectVoiceTargetAt { id: 0, revision: c };
+        let d = state.voice_route.suspend();
+        assert!(state.authorize(old_stop).is_none());
+        assert!(!state.admit_voice_target(b, 1));
+        assert_eq!(state.voice_route.revision(), d);
+        assert_eq!(state.voice_route.target(), 31);
+        assert!(state.outgoing_voice(packet()).is_none());
+        // Missing native intent metadata cannot manufacture a fresh actor intent.
+        assert!(state.authorize(scoped(lease, install(0))).is_none());
+        assert_eq!(state.voice_route.revision(), d);
+        let normal = state.voice_route.suspend();
+        assert!(matches!(
+            state.authorize(Command::SelectVoiceTargetAt {
+                id: 0,
+                revision: normal
+            }),
+            Some(Command::SelectVoiceTargetAt { .. })
+        ));
+        assert!(state.admit_voice_target(normal, 0));
+        assert!(state.outgoing_voice(packet()).is_some());
+        let mut reconnected = observed();
+        reconnected.restore_voice_route(state.voice_route.clone());
+        assert_eq!(
+            reconnected.voice_target, 0,
+            "explicit latest normal choice survives reconnect"
+        );
+        state.select_voice_target(1);
+        reconnected.restore_voice_route(state.voice_route.clone());
+        assert_eq!(reconnected.voice_target, 31);
+        assert_eq!(reconnected.voice_route.target(), 31);
+        assert!(reconnected.outgoing_voice(packet()).is_none());
     }
 }

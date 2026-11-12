@@ -202,6 +202,14 @@ impl<T: Platform + ?Sized> Platform for std::sync::Arc<T> {
     fn request(&self, server: &str, request: Request) -> Result<(), String> {
         (**self).request(server, request)
     }
+    fn request_metadata(
+        &self,
+        server: &str,
+        authority: nuschl_core::model::MetadataAuthority,
+        request: Request,
+    ) -> Result<(), String> {
+        (**self).request_metadata(server, authority, request)
+    }
     fn local_history(
         &self,
         server: String,

@@ -4111,4 +4111,54 @@ mod tests {
             25
         );
     }
+    #[test]
+    fn prelogin_hash_only_avatars_wait_for_own_presence_then_fetch_once() {
+        let (mut client, recorder, id) = connected();
+        client.servers[0].own_session = None;
+        client.servers[0].users.remove(&1);
+        client.handle(document_event(
+            &id,
+            ServerEvent::User(User {
+                session: 7,
+                instance: 70,
+                channel: 2,
+                texture_hash: Some("cd".repeat(20)),
+                ..Default::default()
+            }),
+        ));
+        assert!(blob_requests(&recorder).is_empty());
+        client.handle(document_event(&id, ServerEvent::Connected { session: 1 }));
+        assert!(blob_requests(&recorder).is_empty());
+        client.handle(document_event(
+            &id,
+            ServerEvent::User(User {
+                session: 1,
+                instance: 11,
+                channel: 2,
+                ..Default::default()
+            }),
+        ));
+        assert_eq!(
+            blob_requests(&recorder),
+            vec![Request::RequestBlobs {
+                textures: vec![7],
+                comments: vec![],
+                descriptions: vec![]
+            }]
+        );
+        assert_eq!(
+            recorder.metadata.lock().unwrap().last().unwrap().own,
+            (1, 11)
+        );
+        client.handle(document_event(
+            &id,
+            ServerEvent::User(User {
+                session: 1,
+                instance: 11,
+                channel: 2,
+                ..Default::default()
+            }),
+        ));
+        assert_eq!(blob_requests(&recorder).len(), 1);
+    }
 }

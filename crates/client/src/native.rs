@@ -3271,4 +3271,85 @@ mod action_scope_tests {
         missing.users.clear();
         assert!(metadata_command(10, "a", missing, request()).is_err());
     }
+    #[tokio::test]
+    async fn queue_full_new_voice_intent_stays_suspended_with_its_new_revision() {
+        let (commands, mut queued) = mpsc::channel(1);
+        let (sounds, _) = mpsc::channel(1);
+        let route = std::sync::Arc::new(nuschl_session::connection::VoiceRoute::default());
+        let connections = BTreeMap::from([(
+            "a".into(),
+            Connection {
+                generation: 7,
+                voice_route: route.clone(),
+                commands,
+                sounds,
+                task: tokio::spawn(async {}),
+            },
+        )]);
+        let before = route.revision();
+        assert!(voice_intent(&connections, "a", 6, Command::SelectVoiceTarget(0)).is_err());
+        assert_eq!(
+            route.revision(),
+            before,
+            "stale generation cannot suspend a replacement connection"
+        );
+        let b = voice_intent(
+            &connections,
+            "a",
+            7,
+            Command::Whisper {
+                revision: 0,
+                id: 1,
+                targets: vec![nuschl_session::model::VoiceTargetSpec::Users(vec![2])],
+            },
+        )
+        .unwrap();
+        let revision_b = route.revision();
+        enqueue_scoped(
+            &connections,
+            "a",
+            7,
+            Command::Scoped {
+                authority: lease(),
+                command: Box::new(b),
+            },
+        )
+        .unwrap();
+        let c = voice_intent(
+            &connections,
+            "a",
+            7,
+            Command::Whisper {
+                revision: 0,
+                id: 1,
+                targets: vec![nuschl_session::model::VoiceTargetSpec::Users(vec![2])],
+            },
+        )
+        .unwrap();
+        let revision_c = route.revision();
+        assert!(revision_c > revision_b);
+        assert!(
+            enqueue_scoped(
+                &connections,
+                "a",
+                7,
+                Command::Scoped {
+                    authority: lease(),
+                    command: Box::new(c)
+                }
+            )
+            .is_err()
+        );
+        assert_eq!(route.target(), 31);
+        assert_eq!(route.revision(), revision_c);
+        let Some(Command::Scoped { command, .. }) = queued.recv().await else {
+            panic!("queued B missing")
+        };
+        assert!(matches!(*command,Command::Whisper {revision,..} if revision==revision_b));
+        // A later explicit Stop gets another revision; it cannot be confused
+        // with B or with the failed C enqueue.
+        assert!(
+            matches!(voice_intent(&connections,"a",7,Command::SelectVoiceTarget(0)).unwrap(),Command::SelectVoiceTargetAt {revision,id:0} if revision>revision_c)
+        );
+    }
 }
