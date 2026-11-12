@@ -88,6 +88,12 @@ class Packaging(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'escaping or dangling'):
             deb.validate(stage, 'amd64', (2, 41), ARGS.readelf)
 
+    def test_stage_privileged_modes_are_rejected(self):
+        stage = self.root / 'stage'; (stage / 'usr').mkdir(parents=True)
+        path = stage / 'usr/privileged'; path.write_text('fixture'); path.chmod(0o4755)
+        with self.assertRaisesRegex(ValueError, 'privileged mode'):
+            deb.validate(stage, 'amd64', (2, 41), ARGS.readelf)
+
     def test_stage_cannot_supply_maintainer_scripts_or_special_paths(self):
         stage = self.root / 'stage'; (stage / 'DEBIAN').mkdir(parents=True)
         with self.assertRaisesRegex(ValueError, 'without package scripts'):

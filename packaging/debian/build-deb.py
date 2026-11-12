@@ -88,6 +88,8 @@ def validate(stage, arch, ceiling, readelf):
                 raise ValueError(f'escaping or dangling stage link {relative}')
         elif not (path.is_file() or path.is_dir()):
             raise ValueError(f'unsupported special stage file {relative}')
+        elif path.stat().st_mode & 0o6000:
+            raise ValueError(f'privileged mode is forbidden in stage: {relative}')
     programs = {}
     for name in PROGRAMS:
         path = stage / 'usr/lib/nuschl' / name
@@ -144,6 +146,13 @@ def main():
     with tempfile.TemporaryDirectory(prefix='nuschl-deb-', dir=output.parent) as scratch:
         tree = Path(scratch) / 'root'
         shutil.copytree(stage, tree, symlinks=True)
+        # Nix store directories/files are read-only. Their archive modes must
+        # not make /usr read-only on installation, nor prevent control creation.
+        tree.chmod(0o755)
+        for path in tree.rglob('*'):
+            if path.is_symlink():
+                continue
+            path.chmod(0o755 if path.is_dir() or path.stat().st_mode & 0o111 else 0o644)
         control = tree / 'DEBIAN'; control.mkdir()
         docs = tree / 'usr/share/doc/nuschl'; docs.mkdir(parents=True, exist_ok=True)
         own_license = ROOT / 'LICENSE'
@@ -165,7 +174,7 @@ Description: Voice and text chat for Mumble servers
  This package is updated by the system package manager.
 ''')
         env = {**os.environ, 'SOURCE_DATE_EPOCH': str(args.epoch), 'TZ': 'UTC', 'LC_ALL': 'C'}
-        subprocess.run([args.dpkg_deb, '--root-owner-group', '--uniform-compression', '--build', str(tree), str(output)], env=env, check=True)
+        subprocess.run([args.dpkg_deb, '--root-owner-group', '--uniform-compression', '--threads-max=2', '--build', str(tree), str(output)], env=env, check=True)
     report['artifact'] = str(output)
     report['sha256'] = hashlib.sha256(output.read_bytes()).hexdigest()
     print(json.dumps(report, indent=2))
