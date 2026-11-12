@@ -1017,8 +1017,9 @@ The media worker uses per-speaker adaptive jitter buffers and Opus loss concealm
       permission/ACK-to-send separately on this exact build. The long-idle
       false-trigger symptom also persists; neither is claimed fixed by the
       shared send-limit push.
-- [ ] Fix all playback stopping after rapid mute→unmute (about 100 ms; user,
-      2026-11-12). Clarify whether output recovers or remains silent, then reproduce
+- [ ] Fix the interruption of all playback after rapid mute→unmute (about 100 ms;
+      user, 2026-11-12). User confirms output recovers after a short gap.
+      Reproduce
       with an actual packaged client, owned server continuous received audio and
       private null-sink recording. Trace worker replacement, listen/capture plans,
       epochs, pending settle/retry transitions and actual playback recovery.
