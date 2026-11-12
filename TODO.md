@@ -597,12 +597,28 @@ Reported while testing (2026-11-10/11):
 
 Later (reported):
 
+- [ ] Integrate `andir/nuschl`'s `musicbot` branch (user, 2026-11-12), fetched
+      at `c9005e31`: Subsonic playback/queue, browser controls, listener
+      subscriptions, NixOS service and private integration tests. Preserve
+      contributor history. Codex's isolated merge/build owner and independent
+      HTTP/credential reviewer are active. Keep unsafe codec/DSP processing
+      outside the credential-bearing parent; a decoder thread is not the
+      required process boundary. Review API authentication, encoded-path
+      redirects and file-backed ACL access tokens; avoid putting secrets in
+      generated Nix-store settings. Regenerate combined crate2nix inputs and
+      check native packages, policy/notices and owned fake-Subsonic/Murmur tests.
+- [x] Disclose LLM assistance in the README (user, 2026-11-12), following
+      `../nook/README.md`: warning badge and a short AI-assistance section with
+      verification limits, committed at `a598b2d8`.
 - [ ] Add a compact draggable **Talking UI** window (user, 2026-11-12), like
       Mumble's: show current speakers with clear server/channel context using
       the existing actual speech events; retain mute/deafen semantics, stable
       identities, bounded rows and event-driven updates. Support independent
       placement and accessible keyboard controls without stealing game focus.
-      Queue after the current voice-status/chat-scrollbar work; no slot free yet.
+      Claude's phase-one branch `2c06b593` has a private GUI proof and awaits
+      integration. It uses ordinary compositor windows, with no game injection.
+      Linux size restoration and focus/compositor restrictions remain explicit;
+      Windows/macOS runtime is untested. This does not close the overlay request.
 - [ ] Add a game overlay showing who is talking (user, 2026-11-12), with the
       explicit requirement that it must not trigger VAC. Investigate ordinary
       OS/compositor surfaces first, sharing the Talking UI model. Exclude game
@@ -1074,6 +1090,12 @@ The media worker uses per-speaker adaptive jitter buffers and Opus loss concealm
       isolated native metadata/API and no-Pulse private-daemon proof passes,
       including default-name changes and explicit-name collisions. Source is
       integrated through `afda9587`, with the combined native tests passing.
+- [ ] Monitor live default-source and upstream-processing graph changes after
+      startup. The native metadata fallback above resolves a startup snapshot;
+      it does not establish continuous reconfiguration. Reconcile only Nuschl's
+      own nodes when defaults, upstream AEC/NS or devices change; preserve
+      privacy and avoid double processing without rewriting other applications'
+      graph or requiring pipewire-pulse.
 - [ ] Investigate unmute → first-speech latency (user, 2026-11-12; active owner).
       Measure worker/device startup, first captured PCM, VAD/encoder admission and
       first transmitted/received audio separately against stock Mumble. Preserve
