@@ -193,6 +193,17 @@ an installed macOS guest, Xcode availability or Simulator graphics.
          builds, boots in Simulator, renders and runs an automated UI test before
          committing to this environment. Check graphics support explicitly; a booted
          macOS guest alone is insufficient. Keep CI as an optional alternative.
+   - [ ] Verify the supplied Xcode archive before use: local file is
+         2,969,019,672 bytes, SHA-256
+         `0e367d06eb7c334ea143bada5e4422f56688aabff571bedf0d2ad9434b7290de`.
+         This is a fingerprint, not Apple signature/payload verification or proof
+         of the declared Xcode version. Keep extraction and guest scratch on disk.
+   - [ ] Fix the iOS container capability diagnostic before another launch:
+         Podman expands `CapDrop=ALL` into explicit capability names, while
+         `status()` requires a literal `all`. The stopped owned container's OCI
+         configuration has empty capabilities and no-new-privileges; do not
+         relabel that as observed live process capability state. Preserve rejection
+         of added capabilities/unsafe mounts and explicitly check no-new-privileges.
    - [x] **Host feasibility tooling** (`tests/ios_vm.py`, `docs/ios-vm.md`): host and
          confined cached-container KVM creation, disk/RAM budgets and immutable
          registry metadata checks passed; 14 host-side regression tests passed.

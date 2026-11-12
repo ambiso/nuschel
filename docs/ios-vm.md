@@ -7,6 +7,28 @@ does not need to own a Mac or iPhone to run these host checks. The environment i
 observations from that eventual proof; it does not install software, pull images,
 boot macOS, accept credentials, or implement the mobile client.
 
+Latest local checkpoint (2026-11-12): the user supplied `Xcode_16.2.xip` in the
+repository root, excluded by `.gitignore`. It is 2,969,019,672 bytes; its locally
+measured SHA-256 is
+`0e367d06eb7c334ea143bada5e4422f56688aabff571bedf0d2ad9434b7290de`.
+That fingerprint does **not** verify Apple's signature, the archive's declared
+version, payload integrity or completeness. Those checks still precede use.
+
+The later experiment also acquired recovery media and reached a Recovery GUI.
+Retained private-VM console screenshots show `sw_vers` reporting macOS
+14.6.1/23G93 and `uname -m` reporting x86_64. The recovery evidence records Apple
+signed-chunklist verification; images and logs are under `~/vms/nuschl-ios` and
+`~/.cache/nuschl-ios-vm`. This proves neither an installed macOS guest nor
+Metal, Xcode, Simulator, SwiftUI or XCTest. The owned container currently reports
+`exited`; it has not been restarted for this inspection.
+
+The existing status helper reports a capability-profile mismatch because it
+expects a literal `all` in `CapDrop`. Podman instead reports an explicit dropped
+capability list here; the retained OCI configuration has an empty capabilities
+object and `noNewPrivileges: true`. Correct and test that diagnostic before
+using it as a launch gate. Inspection of a stopped configuration is not a runtime
+effective-capability proof.
+
 The existing Windows harness (`tests/windows_vm.py`) establishes useful patterns:
 dedicated disk state, private test accounts, bounded resources, and loopback-only
 host forwards. Its unattended Windows installer/PowerShell agent cannot install
@@ -88,7 +110,8 @@ The plan **does not execute**. Before using it:
 
 1. Acquire the selected Apple guest/recovery/Xcode/runtime materials, record their
    versions, build numbers, origin URLs and SHA-256 hashes, and verify those hashes.
-   No such materials were available in this checkout. The harness does not request
+   See the latest local checkpoint above for the supplied archive and recovery
+   assets; the original host-only assessment predated them. The harness does not request
    personal Apple accounts, accept passwords, or treat public links as hash pins.
 2. Explicitly acquire the pinned Linux container image within the assessed budget.
    Inspect its embedded `/home/arch/OSX-KVM/Launch.sh` and firmware/bootloader inputs.
@@ -129,7 +152,7 @@ only means the requested inspection completed. Check the explicit proof fields.
 
 ## Evidence and remaining gates
 
-Host assessment on 2026-11-11:
+Initial host assessment on 2026-11-11, before the later Recovery experiment:
 
 - Linux x86_64, QEMU 11.1.2, rootless Podman 6.1.4; host KVM API 12 and
   `KVM_CREATE_VM` succeeded.
