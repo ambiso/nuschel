@@ -10,7 +10,12 @@ reports = []
 for machine in machines:  # noqa: F821
     machine.wait_for_unit("dnsmasq.service")
     machine.wait_for_unit("murmur.service")
-    machine.wait_for_unit("nuschl-web-relay.service")
+    try:
+        machine.wait_for_unit("nuschl-web-relay.service", timeout=45)
+    except Exception:
+        for command in ["cat /etc/resolv.conf", "cat /etc/nsswitch.conf", "ss -lntup", "systemctl show nuschl-web-relay.service -p IPAddressAllow -p IPAddressDeny", "journalctl -u nuschl-web-relay.service --no-pager -n 30"]:
+            print(machine.name, command, machine.succeed(command))
+        raise
     machine.wait_for_unit("nginx.service")
     machine.wait_for_open_port(80)
     machine.fail("systemctl is-active nscd.service")

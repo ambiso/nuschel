@@ -15,6 +15,11 @@ let
     networking.interfaces.eth0.useDHCP = lib.mkForce false;
     networking.nameservers = [ "127.0.0.55" ];
     networking.resolvconf.enable = false;
+    # With resolvconf deliberately disabled, the custom case needs its own
+    # static resolver file. The resolved case supplies its usual stub symlink.
+    environment.etc = lib.optionalAttrs (!resolved) {
+      "resolv.conf".text = "nameserver 127.0.0.55\n";
+    };
     system.nssDatabases.hosts = lib.mkForce [
       "files"
       "dns"
