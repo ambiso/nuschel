@@ -845,6 +845,16 @@ The media worker uses per-speaker adaptive jitter buffers and Opus loss concealm
       retention are corrected through `769c479b`; the detailed remaining physical
       device, cold-graph, noise-classifier and playback-continuity work remains
       listed below. Private synthetic timings do not complete this investigation.
+- [ ] Investigate reported quieter received user audio after recent/yesterday
+      updates (user, 2026-11-12). Compare identical encoded packets, saved user
+      and server gains, channel layout, device rate and output settings across
+      relevant revisions. Trace packet gain, jitter ownership, decode/mixing,
+      mono/stereo folding and device normalization; measure fixed-gain RMS/peak
+      and spectral differences. Existing C-component fixtures do not rule out
+      a complete-device regression. Keep this separate from the new slider
+      taper, preserve existing gain semantics, and do not compensate blindly.
+      Root is auditing history; private runtime comparison is queued with the
+      audio/status UI owner after the current spacing proof.
 - [ ] Complete receive/output parity against stock Mumble with independent PCM
       and device proofs before claiming 1:1 quality. The stereo/gain source
       checkpoint preserves native/browser LR and volume; independent native
