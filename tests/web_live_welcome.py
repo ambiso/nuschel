@@ -41,6 +41,15 @@ class Server:
         self.thread = threading.Thread(target=self.accept, daemon=True)
         self.thread.start()
 
+    def initial_limits(self):
+        return integer(1, 48_000) + integer(3, 1) + integer(4, 128) + integer(5, 256) + integer(7, 0)
+
+    def poll_control(self, stream):
+        pass
+
+    def handle_text(self, stream, body):
+        return False
+
     def accept(self):
         while not self.stop.is_set():
             try:
@@ -66,6 +75,8 @@ class Server:
                 def send(kind, body):
                     stream.sendall(struct.pack(">HI", kind, len(body)) + body)
                 while not self.stop.is_set() and time.monotonic() < deadline:
+                    if authenticated:
+                        self.poll_control(stream)
                     try:
                         chunk = stream.recv(64 * 1024)
                     except TimeoutError:
@@ -88,8 +99,12 @@ class Server:
                             send(9, integer(1, 3) + text(3, "live-browser") + integer(5, 0) + integer(9, 1) + integer(10, 1))
                             send(24, text(2, "must-not-show-before-sync"))
                             send(5, integer(1, 3) + integer(2, 48_000) + text(3, "<b>initial.test</b>"))
-                            send(24, integer(1, 48_000) + integer(3, 1) + integer(4, 128) + integer(5, 256) + integer(7, 0))
+                            initial = self.initial_limits()
+                            if initial is not None:
+                                send(24, initial)
                         elif kind == 11 and authenticated:
+                            if self.handle_text(stream, value[5][0]):
+                                continue
                             command = value[5][0].decode()
                             if command == "x" * 129:
                                 with self.lock:
