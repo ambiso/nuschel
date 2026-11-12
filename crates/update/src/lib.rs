@@ -21,7 +21,9 @@
 //! are not handled here.
 
 pub mod auth_format;
+pub mod manifest;
 pub mod trust;
+pub mod verifier_wire;
 
 use cap_std::{ambient_authority, fs::Dir};
 use serde::{Deserialize, Serialize};
@@ -62,6 +64,8 @@ pub enum Error {
     Http(String),
     #[error("the update manifest is not signed by the release key")]
     Signature,
+    #[error("the signed update manifest has expired; check for a current signed release")]
+    Expired,
     #[error("invalid update manifest: {0}")]
     Manifest(String),
     #[error("{0} did not match its published size or checksum")]

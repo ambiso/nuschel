@@ -22,6 +22,7 @@ const MAGIC: &[u8; 8] = b"NUSUPD\0\0";
 const KEY_DOMAIN: &[u8] = b"nuschl.update.key-pair.v2\0";
 pub const MESSAGE_DOMAIN: &[u8] = b"nuschl.update.manifest.v2\0";
 pub const ML_CONTEXT: &[u8] = b"nuschl.update.signature.v2";
+pub const MAX_SIGNED_BYTES: usize = MESSAGE_DOMAIN.len() + 40 + PUBLIC_BYTES + MAX_MANIFEST_BYTES;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
