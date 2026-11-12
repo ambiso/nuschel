@@ -1,0 +1,48 @@
+{
+  "external_components": [
+    {
+      "name": "newcm-math-font",
+      "version": "4.0",
+      "source_package": "typst-assets 0.15.1",
+      "repository": "https://github.com/typst/typst-assets",
+      "revision": "ab9eed7b046c6a29f6cdb8566f4b44fb46a2f57f",
+      "asset": "files/fonts/NewCMMath-Regular.otf",
+      "asset_sha256": "d66ac1cc91c55c24d3636ae2df1238076debdff51841f9893fc5419cc2df3df7",
+      "declared_license": "GUST Font License1.0 / LPPL1.3c-or-later",
+      "files": [
+        {
+          "local": "typst-assets-GUST-NOTICE.txt",
+          "url": "https://raw.githubusercontent.com/typst/typst-assets/ab9eed7b046c6a29f6cdb8566f4b44fb46a2f57f/NOTICE",
+          "source": "GUST/NewComputerModern section, retained verbatim",
+          "sha256": "20afd9162b163d73b0ef1a80864970e00ea7b6791fe660885684ae5e2c8aaf4e"
+        },
+        {
+          "local": "GUST-FONT-LICENSE.txt",
+          "url": "https://tug.org/fonts/licenses/GUST-FONT-LICENSE.txt",
+          "source": "Existing bundled unmodified GUST text",
+          "sha256": "77b2b0e16f14a563726556a474dd5f59b1eeae3cf5beb1e3b97b6796fe357e75"
+        },
+        {
+          "local": "LPPL-1.3c.txt",
+          "url": "https://www.latex-project.org/lppl/lppl-1-3c.txt",
+          "source": "Canonical referenced full LPPL1.3c terms",
+          "sha256": "c1ae6e179a6d28bbd5c483fbacc744acc75e922d598281dc3390aab26126e163"
+        },
+        {
+          "local": "font-name-table.json",
+          "url": "https://raw.githubusercontent.com/typst/typst-assets/ab9eed7b046c6a29f6cdb8566f4b44fb46a2f57f/files/fonts/NewCMMath-Regular.otf",
+          "source": "Exact decoded copyright/family/version/trademark name records",
+          "sha256": "1a5e22ff7aeb3147407542ded733d18460bb4332181ea13de8546dd0f9b155e3"
+        },
+        {
+          "local": "FONT-COPYRIGHT.txt",
+          "url": "https://raw.githubusercontent.com/typst/typst-assets/ab9eed7b046c6a29f6cdb8566f4b44fb46a2f57f/files/fonts/NewCMMath-Regular.otf",
+          "source": "Verbatim embedded copyright plus exact asset/source identity",
+          "sha256": "a531f71d0ff5ebfd71dcc61c13c10153f7d4f39ea33967c90dfd698966bbbd37"
+        }
+      ]
+    }
+  ],
+  "packages": [],
+  "unresolved": []
+}

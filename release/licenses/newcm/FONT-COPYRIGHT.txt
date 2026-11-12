@@ -1,0 +1,9 @@
+Verbatim embedded font copyright/licensing notice (name table ID 0):
+(C) 2019-2026 Antonis Tsolomitis. This work is released under the GUST Font License --  see http://tug.org/fonts/licenses/GUST-FONT-LICENSE.txt for details.
+
+Unmodified font: NewCMMath-Regular.otf
+Font version (embedded name ID 5): 4.0
+SHA-256: d66ac1cc91c55c24d3636ae2df1238076debdff51841f9893fc5419cc2df3df7
+Source: typst-assets 0.15.1, files/fonts/NewCMMath-Regular.otf
+Git revision: ab9eed7b046c6a29f6cdb8566f4b44fb46a2f57f
+Only this GUST-licensed math face is bundled, not NewCM10-Regular or the other text faces.
