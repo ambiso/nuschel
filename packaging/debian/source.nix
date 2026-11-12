@@ -73,6 +73,7 @@ pkgs.runCommand "nuschl-debian-source-${version}-${debianRevision}"
     cp -a ${desktopFiles}/share/. debian/prepared-desktop/share/
     cp ${appstreamXML} debian/prepared-desktop/share/metainfo/org.nuschl.Nuschl.metainfo.xml
     cp -a ${nativeNotices}/share/licenses/nuschl/. debian/prepared-notices/
+    chmod -R u+w debian
     python3 ${./prepare-source.py} --phase debian ${metadataArgs}
     ln -s "$out/nuschl_${version}.orig.tar.xz" ../nuschl_${version}.orig.tar.xz
     dpkg-source --build .
