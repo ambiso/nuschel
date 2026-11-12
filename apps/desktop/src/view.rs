@@ -2150,7 +2150,15 @@ fn timeline_intro(
             server
                 .welcome
                 .as_ref()
-                .filter(|_| is_channel && channel.id == 0),
+                .filter(|_| is_channel && channel.id == 0)
+                .and_then(|source| {
+                    this.ui
+                        .get(&server.id)?
+                        .welcome
+                        .as_ref()
+                        .filter(|(rendered, _)| rendered == source)
+                })
+                .map(|(_, document)| document),
             |view, welcome| {
                 view.child(
                     div()
@@ -2161,7 +2169,10 @@ fn timeline_intro(
                         .border_l_4()
                         .border_color(color(ACCENT))
                         .text_sm()
-                        .child(text!(welcome.clone()).with_id("server-welcome")),
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .children(document_blocks(this, welcome, cx)),
                 )
             },
         )

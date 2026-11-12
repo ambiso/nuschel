@@ -105,7 +105,7 @@ pub enum Update {
         request: u64,
         result: Result<SearchPage, String>,
     },
-    /// Rendered HTML (a description or comment) for a UI to show.
+    /// Rendered HTML for a UI to show; an empty welcome revokes its cache.
     Rendered {
         server: String,
         key: RenderKey,
@@ -166,6 +166,18 @@ struct PendingSend {
     conversation: Conversation,
     target: TextTarget,
     body: String,
+}
+
+/// Welcome content belongs only to the connection that supplied it.
+fn clear_welcome(server: &mut ServerState, updates: &mut Vec<Update>) {
+    if server.welcome.take().is_some() {
+        updates.push(Update::Rendered {
+            server: server.id.clone(),
+            key: RenderKey::Welcome,
+            source: String::new(),
+            document: MessageDocument { blocks: Vec::new() },
+        });
+    }
 }
 
 /// What the voice policy needs of a server. One reconnecting still counts:
@@ -302,6 +314,7 @@ impl Client {
     /// Replace a saved server (its address or name changed), dropping its
     /// connection and what was known of it.
     pub fn replace_server(&mut self, index: usize, bookmark: ServerBookmark) {
+        clear_welcome(&mut self.servers[index], &mut self.updates);
         self.platform.disconnect(&self.servers[index].id);
         self.voice.disconnected(&self.servers[index].id, None);
         self.catalog.replaced(&self.servers[index].id, &bookmark.id);
@@ -310,6 +323,9 @@ impl Client {
     }
 
     pub fn remove_server(&mut self, id: &str) {
+        if let Some(server) = self.servers.iter_mut().find(|server| server.id == id) {
+            clear_welcome(server, &mut self.updates);
+        }
         self.platform.disconnect(id);
         self.voice.disconnected(id, None);
         self.passwords.remove(id);
@@ -331,6 +347,7 @@ impl Client {
             .connect(server.bookmark.clone(), password, deafened)
         {
             Ok(generation) => {
+                clear_welcome(server, &mut self.updates);
                 server.generation = generation;
                 server.muted = true;
                 server.deafened = deafened;
@@ -398,6 +415,7 @@ impl Client {
             return;
         };
         self.platform.disconnect(&server.id);
+        clear_welcome(server, &mut self.updates);
         if server.status == Status::Connected && !server.deafened {
             self.platform.chime(Sound::Disconnected);
         }
@@ -1232,6 +1250,7 @@ impl Client {
                 if let Some(index) = self.current(&server, generation) {
                     let server = &mut self.servers[index];
                     server.status = Status::Disconnected;
+                    clear_welcome(server, &mut self.updates);
                     server.security = SessionSecurity::Unknown;
                     server.certificate = Some(CertificatePrompt {
                         sha256,
@@ -1276,6 +1295,7 @@ impl Client {
                         self.platform.chime(Sound::Disconnected);
                     }
                     server.status = Status::Connecting;
+                    clear_welcome(server, &mut self.updates);
                     server.own_session = None;
                     if let Some(lost) = server.lost_messages() {
                         server.notice = Some(lost);
@@ -1314,6 +1334,7 @@ impl Client {
                 if let Some(index) = self.current(&server, generation) {
                     let state = &mut self.servers[index];
                     let current = match key {
+                        RenderKey::Welcome => state.welcome.as_deref() == Some(source.as_str()),
                         RenderKey::Description(id) => state
                             .channel_view(id)
                             .is_some_and(|channel| channel.description_raw == source),
@@ -2149,7 +2170,16 @@ impl Client {
                     self.sending = None;
                 }
             }
-            ServerEvent::Welcome(text) => server.welcome = Some(text),
+            ServerEvent::Welcome { source, document } if server.status == Status::Connected => {
+                server.welcome = Some(source.clone());
+                self.updates.push(Update::Rendered {
+                    server: server.id.clone(),
+                    key: RenderKey::Welcome,
+                    source,
+                    document,
+                });
+            }
+            ServerEvent::Welcome { .. } => {}
             ServerEvent::Transport(stats) => server.transport = Some(stats),
         }
     }
@@ -3019,9 +3049,92 @@ mod tests {
         client.handle(Input::Server {
             server: id,
             generation: 0,
-            event: ServerEvent::Welcome("old".into()),
+            event: ServerEvent::Welcome {
+                source: "old".into(),
+                document: MessageDocument { blocks: Vec::new() },
+            },
         });
         assert_eq!(client.servers[0].welcome, None);
+    }
+
+    #[test]
+    fn welcome_document_is_delivered_without_turning_worker_markers_into_text() {
+        let (mut client, _, id) = connected();
+        let source = "Welcome to <b>Nuschl</b><br>Second line".to_string();
+        let document = MessageDocument {
+            blocks: vec![ContentBlock::text("Welcome to Nuschl\nSecond line")],
+        };
+        client.handle(Input::Server {
+            server: id.clone(),
+            generation: 1,
+            event: ServerEvent::Welcome {
+                source: source.clone(),
+                document: document.clone(),
+            },
+        });
+        assert_eq!(client.servers[0].welcome.as_deref(), Some(source.as_str()));
+        assert!(client.take_updates().iter().any(|update| matches!(update,
+            Update::Rendered { server, key: RenderKey::Welcome, source: actual, document: rendered }
+                if server == &id && actual == &source && rendered == &document)));
+
+        client.handle(Input::Rendered {
+            server: id,
+            generation: 0,
+            key: RenderKey::Welcome,
+            source,
+            document: MessageDocument {
+                blocks: vec![ContentBlock::text("stale")],
+            },
+        });
+        assert!(client.take_updates().is_empty());
+    }
+
+    #[test]
+    fn welcome_is_revoked_on_disconnect_and_reconnect_and_late_work_is_ignored() {
+        let (mut client, _, id) = connected();
+        let source = "<b>Old welcome</b>".to_string();
+        let document = MessageDocument {
+            blocks: vec![ContentBlock::text("Old welcome")],
+        };
+        let welcome = || Input::Server {
+            server: id.clone(),
+            generation: 1,
+            event: ServerEvent::Welcome {
+                source: source.clone(),
+                document: document.clone(),
+            },
+        };
+        client.handle(welcome());
+        client.take_updates();
+        client.disconnect(0);
+        assert!(client.servers[0].welcome.is_none());
+        assert!(client.take_updates().iter().any(|update| matches!(update,
+            Update::Rendered { key: RenderKey::Welcome, source, document, .. }
+                if source.is_empty() && document.blocks.is_empty())));
+        client.handle(welcome());
+        client.handle(Input::Rendered {
+            server: id.clone(),
+            generation: 1,
+            key: RenderKey::Welcome,
+            source: source.clone(),
+            document: document.clone(),
+        });
+        assert!(client.take_updates().is_empty());
+        assert!(client.servers[0].welcome.is_none());
+
+        client.connect(0, None, false);
+        client.handle(Input::Server {
+            server: id.clone(),
+            generation: 1,
+            event: ServerEvent::Connected { session: 1 },
+        });
+        client.handle(welcome());
+        client.take_updates();
+        client.connect(0, None, false);
+        assert!(client.servers[0].welcome.is_none());
+        assert!(client.take_updates().iter().any(|update| matches!(update,
+            Update::Rendered { key: RenderKey::Welcome, source, document, .. }
+                if source.is_empty() && document.blocks.is_empty())));
     }
 
     #[test]

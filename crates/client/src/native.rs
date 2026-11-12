@@ -1346,7 +1346,13 @@ async fn connect_once(
                         if !content_gap { let _ = events.send(Event::HistoryError("Chat processing is overloaded; some received messages could not be saved.".into())).await; content_gap = true; }
                     } else { content_gap = false; }
                 },
-                SessionEvent::Welcome(body) => { let (text, _) = prepare(&body, true).await; let _ = events.send(Event::Protocol { server: id.clone(), generation, event: SessionEvent::Welcome(text) }).await; },
+                SessionEvent::Welcome(body) => {
+                    let (_, document) = prepare(&body, true).await;
+                    let _ = events.send(Event::Input(Input::Server {
+                        server: id.clone(), generation,
+                        event: ServerEvent::Welcome { source: body, document },
+                    })).await;
+                },
                 event => { let _ = events.send(Event::Protocol { server: id.clone(), generation, event }).await; },
             },
         }
@@ -2561,7 +2567,9 @@ fn server_event(event: SessionEvent) -> Result<ServerEvent, Option<Unmodelled>> 
         SessionEvent::User(user) => ServerEvent::User(user),
         SessionEvent::UserRemoved(session) => ServerEvent::UserRemoved(session),
         SessionEvent::Connected { session, .. } => ServerEvent::Connected { session },
-        SessionEvent::Welcome(text) => ServerEvent::Welcome(text),
+        // The connection loop prepares welcome HTML in the content worker
+        // and delivers its document directly; never print its marker source.
+        SessionEvent::Welcome(_) => return Err(None),
         SessionEvent::PermissionDenied(text) => ServerEvent::PermissionDenied(text),
         SessionEvent::Notice(text) => ServerEvent::Notice(text),
         SessionEvent::Transport(stats) => ServerEvent::Transport(stats),

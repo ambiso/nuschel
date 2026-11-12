@@ -23,6 +23,34 @@ fn page(code: bool) -> Vec<String> {
 }
 
 #[tokio::test]
+async fn welcome_html_retains_document_styles_breaks_and_safe_links() {
+    let prepared = nuschl_ipc::host::prepare_content(worker(),
+        "Welcome to <b>Nuschl</b><br>Second line: <a href='https://example.test/help'>Help</a><a href='javascript:alert(1)'>unsafe</a><script>hidden()</script><img src='https://tracker.invalid/pixel'>", true)
+        .await.unwrap();
+    // The prepared source is a storage format, not something to print directly.
+    assert!(prepared.source.contains(nuschl_core::EMBED));
+    let [ContentBlock::Text { text, spans, .. }] = prepared.document.blocks.as_slice() else {
+        panic!("welcome should contain inert text, never a remotely loaded image");
+    };
+    assert_eq!(text, "Welcome to Nuschl\nSecond line: Helpunsafe[image]");
+    assert!(
+        spans
+            .iter()
+            .any(|span| span.style.bold && &text[span.start..span.end] == "Nuschl")
+    );
+    assert!(
+        spans
+            .iter()
+            .any(|span| span.link.as_deref() == Some("https://example.test/help"))
+    );
+    assert!(spans.iter().all(|span| {
+        span.link
+            .as_deref()
+            .is_none_or(|link| link.starts_with("https://"))
+    }));
+}
+
+#[tokio::test]
 async fn a_history_page_renders_in_order_in_one_worker() {
     let texts = page(true);
     let documents = nuschl_ipc::host::render_many(worker(), &texts).await;

@@ -127,6 +127,8 @@ pub struct ServerState {
     pub notice: Option<String>,
     pub(crate) notice_expires: Option<(String, u64)>,
     pub audio_status: String,
+    /// Current connection's original HTML, used to validate worker renderings;
+    /// UIs display its document, never this source or worker storage markers.
     pub welcome: Option<String>,
     pub certificate: Option<CertificatePrompt>,
     /// The server answered weaker than it did before (the sticky policy).

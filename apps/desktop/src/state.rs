@@ -109,6 +109,8 @@ pub type ServerView = ServerState;
 /// end-to-end state of its direct conversations.
 #[derive(Default)]
 pub struct ServerUi {
+    /// Welcome document converted once, with the original HTML it belongs to.
+    pub welcome: Option<(String, Document)>,
     /// End-to-end state of direct conversations, by the peer's registration number.
     pub e2ee: BTreeMap<u32, nuschl_ipc::crypto::ConversationView>,
     /// Rendered user comments keyed by session, with the raw HTML they came from.
@@ -2364,6 +2366,9 @@ impl Desktop {
                         continue;
                     };
                     match key {
+                        RenderKey::Welcome => {
+                            ui.welcome = (!source.is_empty()).then(|| (source, document.into()));
+                        }
                         RenderKey::Description(id) => {
                             ui.descriptions.insert(id, (source, document.into()));
                         }

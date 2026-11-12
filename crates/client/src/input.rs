@@ -282,6 +282,10 @@ pub enum ServerEvent {
     },
     Notice(String),
     PermissionDenied(String),
-    Welcome(String),
+    /// Original welcome HTML with the content worker's inert rendering.
+    Welcome {
+        source: String,
+        document: MessageDocument,
+    },
     Transport(TransportStats),
 }

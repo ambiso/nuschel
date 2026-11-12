@@ -109,9 +109,11 @@ pub struct ChangeRequest {
     pub moderator: bool,
 }
 
-/// Untrusted Mumble HTML to render: a channel's description or a user's comment.
+/// Untrusted Mumble HTML rendered by the content worker.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RenderKey {
+    /// Transient server welcome; an empty source/document revokes its UI cache.
+    Welcome,
     Description(u32),
     Comment(u32),
 }
