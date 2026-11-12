@@ -1136,23 +1136,16 @@ listed below. Plugin data remains the explicit gap.
       Parent combined distribution, notice and runtime-asset checks pass.
       No new GPUI proof claimed;
       see `docs/welcome-domain.md`.
-- [ ] Preserve omitted fields in sparse non-welcome `ServerConfig` updates.
-      Source review finds browser updates can reset omitted message/image limits
-      and both native/browser updates can restore omitted recording permission
-      to true. Retain the last authenticated value for absent optional fields;
-      explicit zero/default values must retain their protocol meaning. Test
-      restricted recording plus unrelated bandwidth/HTML updates and reconnect
-      defaults in both adapters. Limits replace the shared snapshot, so retain
-      max-users and native bandwidth as well. Welcome-only suppression is a
-      separate fix.
-- [ ] Enforce negotiated browser legacy text-send limits on the actual outgoing
-      UTF-8 HTML/plaintext body. An owned TLS/App diagnostic advertised 128 bytes
-      but received the browser's 129-byte message; Session currently checks only
-      the global 256 KiB ceiling. Include escaping/newline expansion, explicit
-      zero, sparse updates and reconnect defaults; retain rejected drafts.
-      This predates live welcome changes and is assigned to the separate config
-      follow-up. Retaining image limits does not imply attachment sending exists.
-      Retained failing diagnostic: `~/.cache/nuschl-live-welcome/browser-final/`.
+- [ ] Integrate verified sparse `ServerConfig` retention/full snapshots and
+      browser wire-byte text caps. Absent fields preserve message/image limits,
+      max-users, recording false and known bandwidth; welcome-only updates stay
+      separate. Native 82/1 existing ignored, browser 29+6 and actual compiled
+      App/private TLS tests pass, including zero, escaped/newline expansion,
+      retained/retried drafts, sparse changes and reconnect 5000 default. The
+      original 129/128 failure remains retained and its diagnostic now passes.
+      Source is integrated; parent combined checks remain pending. See
+      `docs/server-config.md` and `~/.cache/nuschl-server-config/handoff.json`.
+      No image-send API implied.
 - [ ] Preserve precise browser text-send refusals in the composer error surface.
       The shared client stores the Session's negotiated byte-limit reason, but
       WebClient::send_text replaces it with a generic status/recipient error.

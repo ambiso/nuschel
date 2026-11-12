@@ -81,7 +81,8 @@ Stock Mumble's pinned `Messages.cpp::msgServerConfig` logs nonempty values;
 Nuschl additionally keeps the existing explicit-empty revocation semantics.
 Welcome-only and empty configuration messages no longer emit a full Limits
 replacement, so they cannot reset omitted limits, mute/deaf state or audio intent.
-Mixed/sparse non-welcome Limits merging remains a separate queued correction.
+Mixed/sparse non-welcome Limits merging is corrected in a separate checkpoint;
+see `docs/server-config.md` for its retained-value and send-cap checks.
 
 Scoped verification: 81 native session units passed (one existing ignored),
 27 browser-SDK units and six local relay integrations passed. The real compiled
@@ -94,12 +95,11 @@ welcome. Wire action/error logs and screenshots are retained under
 `~/.cache/nuschl-live-welcome/browser-exact/`. This fixture is not stock Murmur;
 no new native GPUI or physical/mobile-device proof is claimed.
 
-An additional `--check-send-cap` diagnostic found an independent browser defect:
-`Session::send_text` checks only the global 256 KiB cap, so an actual compiled
-SDK sent 129 bytes despite an advertised 128-byte limit. The first failure is
-preserved in `browser-final/`; negotiated wire-body cap enforcement is assigned
-to the separate sparse-configuration follow-up. Passing welcome checks do not
-claim that sending defect is fixed. The complete handoff is
+An additional `--check-send-cap` diagnostic exposed the browser's missing
+negotiated send cap (129 bytes accepted against 128). Its first failure remains
+in `~/.cache/nuschl-live-welcome/browser-final/`. The separate configuration
+checkpoint now enforces actual escaped UTF-8 wire bytes and that same diagnostic
+passes; see `docs/server-config.md`. Welcome's complete scoped handoff remains
 `~/.cache/nuschl-live-welcome/handoff.json`.
 
 ## Appearance preference regression
