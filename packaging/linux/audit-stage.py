@@ -14,6 +14,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--stage', type=Path, required=True)
     parser.add_argument('--project-root', type=Path, required=True)
+    parser.add_argument('--packaging-root', type=Path, required=True, help='actual builder scripts/target pins, separately bound from application source')
     parser.add_argument('--revision', required=True)
     parser.add_argument('--version', required=True)
     parser.add_argument('--readelf', required=True)
@@ -22,7 +23,8 @@ def main():
     if not re.fullmatch(r'[0-9a-f]{40}', args.revision):
         raise ValueError('expected exact source revision')
     root = args.project_root
-    spec = importlib.util.spec_from_file_location('deb', root/'packaging/debian/build-deb.py')
+    packaging = args.packaging_root
+    spec = importlib.util.spec_from_file_location('deb', packaging/'packaging/debian/build-deb.py')
     deb = importlib.util.module_from_spec(spec); spec.loader.exec_module(deb)
     deb.ROOT = root
     programs = deb.validate(args.stage, 'amd64', (2, 41), args.readelf)
@@ -36,11 +38,13 @@ def main():
         metadata['imports'] = sorted({line.split()[-2] if line.rstrip().endswith(')') else line.split()[-1]
                                       for line in output.splitlines() if ' UND ' in line})
         metadata['shared_link_inputs'] = receipt['shared_link_inputs']
-    pins = json.loads((root/'packaging/linux/debian/sysroot-lock.json').read_text())
-    value = {'schema': 1, 'source_revision': args.revision, 'version': args.version,
+    pins = json.loads((packaging/'packaging/linux/debian/sysroot-lock.json').read_text())
+    value = {'schema': 2, 'source_revision': args.revision, 'version': args.version,
              'rust_version': args.rust_version, 'programs': programs,
              'source_hashes': {str(path): hashlib.sha256((root/path).read_bytes()).hexdigest()
-                               for path in map(Path, ['Cargo.lock','Cargo.toml','flake.lock','nix/portable-linux.nix','packaging/linux/linker.py','packaging/linux/debian/sysroot-lock.json'])},
+                               for path in map(Path, ['Cargo.lock','Cargo.toml','flake.lock'])},
+             'packaging_hashes': {str(path): hashlib.sha256((packaging/path).read_bytes()).hexdigest()
+                                  for path in map(Path, ['nix/portable-linux.nix','packaging/linux/linker.py','packaging/linux/audit-stage.py','packaging/debian/build-deb.py','packaging/linux/pin-debian.py','packaging/linux/debian/sysroot-lock.json'])},
              'sysroot_index_sha256': pins['packages_sha256'], 'sysroot_release_sha256': pins['release_sha256'],
              'runtime_native_libraries': 'provided by target distribution; not bundled',
              'updates': 'package-manager-owned; existing Linux in-app updater disabled',

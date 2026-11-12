@@ -154,7 +154,7 @@ let
           install -Dm644 ${appstreamXML} "$out/usr/share/metainfo/org.nuschl.Nuschl.metainfo.xml"
         ''}
         python3 ${../packaging/linux/audit-stage.py} --stage "$out" \
-          --project-root ${projectRoot} --revision ${lib.escapeShellArg revision} \
+          --project-root ${projectRoot} --packaging-root ${../.} --revision ${lib.escapeShellArg revision} \
           --version ${lib.escapeShellArg version} --readelf ${pkgs.binutils}/bin/readelf \
           --rust-version ${lib.escapeShellArg toolchain.version}
       '';
