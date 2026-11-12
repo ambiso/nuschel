@@ -106,12 +106,11 @@ pub fn musicbot_codec_sandbox_command(
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-pub fn musicbot_codec_sandbox_command(
-    _: &Path,
-    _: &[OsString],
-) -> Result<Command, Error> {
+pub fn musicbot_codec_sandbox_command(_: &Path, _: &[OsString]) -> Result<Command, Error> {
     // Keep cross compilation working, but never run an unrestricted fallback.
-    Err(Error::MissingSandboxHelper("musicbot codec containment on this platform"))
+    Err(Error::MissingSandboxHelper(
+        "musicbot codec containment on this platform",
+    ))
 }
 
 /// Seconds of wall-clock time, and on Linux of CPU time, a request may take.
