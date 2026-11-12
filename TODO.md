@@ -998,6 +998,17 @@ listed below. Plugin data remains the explicit gap.
       stale-action cases with private servers, then reject obsolete actions
       before dispatch. Channel actions need equivalent lifecycle review. This
       is a source-level finding; the menu geometry proof does not establish it.
+- [ ] Close the enqueue-to-consume authority gap for delayed native actions.
+      Source review finds that the native command queue survives automatic
+      reconnects, while numeric user/channel targets are checked only for current
+      existence. UI-only generation checks cannot prevent queued work reaching a
+      replacement presence. Bind bounded target-instance envelopes at enqueue and
+      revalidate them in the session actor, including current known permissions.
+      Administrative panels need the same original-target binding as prompts;
+      installed whisper targets must remain bound for subsequent voice packets.
+      If a whisper target expires, drop voice until an explicit new selection;
+      never fall back to normal channel broadcast. These are source findings,
+      pending focused regressions and private-server proof.
 - [ ] cpal's PipeWire host skips `Audio/Source/Virtual` nodes (e.g. filter-chain or
       EasyEffects outputs), so they can be used only as the system default, not picked
       in Nuschl. Fix upstream in cpal or list them through the PulseAudio API.
