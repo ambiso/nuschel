@@ -58,7 +58,9 @@ print(json.dumps({'uid':os.geteuid(),'host_controls_unwritable':True,'effective_
             assert not (process / "root/var/lib/private/nuschl-musicbot").exists()
             assert not (process / "root/run/credentials").exists()
             environment = (process / "environ").read_bytes()
-            assert not environment, "child inherited parent environment"
+            # bwrap 0.12 sets this fixed public value after --clearenv/chdir.
+            # No parent variable, credentials directory or other value is allowed.
+            assert environment == b"PWD=/tmp\0", "unexpected child environment (values withheld)"
             assert {entry.name for entry in (process / "fd").iterdir()} <= {"0", "1", "2"}
             limits = (process / "limits").read_text()
             assert "1073741824" in next(line for line in limits.splitlines() if line.startswith("Max address space"))

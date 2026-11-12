@@ -176,6 +176,10 @@ namespaces, and limits address space to 1 GiB per child. It fails closed if requ
 sandbox tools are unavailable. Windows launch is unsupported and fails closed;
 macOS uses the existing content Seatbelt policy but runtime validation is pending.
 
+After clearing the inherited environment, [bubblewrap 0.12](https://github.com/containers/bubblewrap/blob/v0.12.0/bubblewrap.c#L3195)
+sets only the fixed public `PWD=/tmp` for Rust codec children. No credential or
+parent environment value is admitted by the service inspection fixture.
+
 IPC frames are capped at 64 KiB before allocation. Encoder/duck exchanges have a
 2-second deadline; a decode operation must produce its next reply within 35 seconds
 (excluding consumer backpressure). Network reads have the existing 30-second bound.
