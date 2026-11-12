@@ -230,7 +230,13 @@ fn local_editor(this: &mut Desktop, token: u64) -> Option<&mut Editor> {
     }
 }
 
-pub fn retain_stale(this: &mut Desktop) {
+fn inputs_readonly(editor: &Editor, readonly: bool, cx: &mut Context<Desktop>) {
+    for input in [&editor.target, &editor.group_name, &editor.member] {
+        input.update(cx, |input, cx| input.set_readonly(readonly, cx));
+    }
+}
+
+pub fn retain_stale(this: &mut Desktop, cx: &mut Context<Desktop>) {
     let Some(Panel::Acl { editor, .. }) = this.panel.as_mut() else {
         return;
     };
@@ -238,6 +244,7 @@ pub fn retain_stale(this: &mut Desktop) {
         return;
     }
     editor.stale = true;
+    inputs_readonly(editor, true, cx);
     if let Some(request) = editor.state.pending() {
         editor.state.timeout(request);
     }
@@ -652,6 +659,14 @@ fn query(this: &mut Desktop, token: u64, kind: DraftRequest, cx: &mut Context<De
     if kind == DraftRequest::Check && !require_applied_target(this, token, cx) {
         return;
     }
+    if let Some(editor) = active_editor(this, token) {
+        if editor.lookup.is_some() {
+            editor.state.error = true;
+            editor.state.message =
+                "Finish the account lookup before loading or saving permissions.".into();
+            return;
+        }
+    }
     let request = request_id();
     let channel = match this.panel.as_ref() {
         Some(Panel::Acl {
@@ -661,6 +676,9 @@ fn query(this: &mut Desktop, token: u64, kind: DraftRequest, cx: &mut Context<De
     };
     if !active_editor(this, token).is_some_and(|editor| editor.state.begin(request, kind)) {
         return;
+    }
+    if let Some(editor) = active_editor(this, token) {
+        inputs_readonly(editor, true, cx);
     }
     enqueue_query(this, token, channel, request, cx);
 }
@@ -675,6 +693,7 @@ fn enqueue_query(
     if let Err(error) = send(this, token, Command::QueryAclDraft { channel, request }) {
         if let Some(editor) = active_editor(this, token) {
             editor.state.timeout(request);
+            inputs_readonly(editor, false, cx);
             editor.state.message = error;
             editor.timeout = None;
         }
@@ -686,7 +705,10 @@ fn enqueue_query(
             .await;
         let _ = this.update(cx, |this, cx| {
             if let Some(editor) = active_editor(this, token) {
-                editor.state.timeout(request);
+                if editor.state.pending() == Some(request) {
+                    editor.state.timeout(request);
+                    inputs_readonly(editor, false, cx);
+                }
             }
             cx.notify();
         });
@@ -763,6 +785,7 @@ pub fn sync(this: &mut Desktop, cx: &mut Context<Desktop>) {
             "apply correlated ACL draft response"
         );
         let write = editor.state.receive(&reply);
+        inputs_readonly(editor, write.is_some(), cx);
         if write.is_none() && !editor.state.error {
             editor.selected_rule = None;
             editor.selected_group = None;
@@ -784,6 +807,7 @@ pub fn sync(this: &mut Desktop, cx: &mut Context<Desktop>) {
         if let Err(error) = send(this, token, Command::UpdateAcl(acl)) {
             if let Some(editor) = active_editor(this, token) {
                 editor.state.timeout(request);
+                inputs_readonly(editor, false, cx);
                 editor.state.message = error;
             }
             return;

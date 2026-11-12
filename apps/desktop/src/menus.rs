@@ -1524,10 +1524,10 @@ impl Desktop {
         entries
     }
 
-    pub(crate) fn reconcile_delayed_actions(&mut self) {
+    pub(crate) fn reconcile_delayed_actions(&mut self, cx: &mut Context<Self>) {
         if matches!(self.panel.as_ref(),Some(Panel::Acl {origin,..}) if origin.live_index(self).is_none())
         {
-            crate::acl_editor::retain_stale(self);
+            crate::acl_editor::retain_stale(self, cx);
             return;
         }
         if let Some(panel) = self.panel.as_ref() {
