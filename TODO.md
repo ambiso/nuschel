@@ -550,7 +550,9 @@ Later (reported):
       resource handling. Obtain a minimal user example where possible and retain
       a private rendered negative/positive control; existing parser-only tests
       do not prove messages are displayed correctly. Native desktop is the
-      initial assumption; a separate read-only diagnosis is being delegated
+      confirmed by the user, observed this morning and not yet retested; it may
+      already be corrected. Check the current combined product before editing.
+      A separate read-only diagnosis is being delegated
       before allocating edits alongside image quality and chat scrolling.
 - [ ] Add a visible chat-history scrollbar, matching the existing channel-list
       affordance (user, 2026-11-12). Bind it to the retained virtualized timeline
