@@ -733,6 +733,14 @@ listed below. Plugin data remains the explicit gap.
       script/link policy, stale generations and cache revocation. This closes
       the duplicate shared-source report above; Windows GUI confirmation remains
       a platform verification gap, and general document-link activation is separate.
+- [ ] Activate links in shared nonselectable documents (welcome cards, channel
+      descriptions and user comments). `view::document_blocks` preserves the
+      worker's safe URL spans, styles and accessibility URLs, but does not install
+      the timeline's `SelectionArea::track_links` mouse dispatch or keyboard link
+      navigation. Share the existing layout-based hit testing and `open_link`
+      allowlist/dispatch without inventing a timeline message identity or parsing
+      HTML in the UI; include keyboard/assistive activation and private URL-handler
+      tests. The welcome document-loss fix above does not complete this interaction.
 - [x] `UserStats` (22) for the connection-info dialog.
       Profile bandwidth units corrected (2026-11-12, `d8f5999d`): the protocol
       statistic is bytes/second, so divide by 125 for kbit/s. Server bandwidth
