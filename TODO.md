@@ -718,6 +718,16 @@ listed below. Plugin data remains the explicit gap.
       only for that music track. Selecting it must not unmute, acquire microphone
       consent or alter another track's privacy/processing policy. Verify stereo
       send/playback and voice/music isolation on every client; no preset exists yet.
+- [x] Avoid blocking native microphone processing on PulseAudio reference-stream
+      startup; retain up to 80 ms of processed VAD onset from the current unmuted
+      epoch, with bounded/paced output and strict mute/PTT/echo-guard resets.
+      Private synthetic worker timings and independent libopus marker proof are
+      documented in `docs/unmute-latency.md`; no always-open muted microphone.
+- [ ] Measure remaining unmute latency end-to-end on physical Pulse/PipeWire,
+      Windows and macOS. A fresh virtual Pulse source still takes ~1.3 s before
+      first PCM (independent libpulse reproduces it); classifier evidence takes
+      input frames, and onset retention can queue up to 80 ms. No claim of zero
+      cold hardware latency or complete GUI-to-peer timing proof.
 - [x] Connection status: ping, UDP/TCP indicator, packet loss.
 - [x] Error/reject dialogs from section 4.
 - [x] AT-SPI accessibility coverage through GPUI AccessKit (`tests/accessibility.py`,

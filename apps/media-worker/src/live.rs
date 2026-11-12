@@ -6,6 +6,7 @@
 //! mixes, cancels echo, encodes and talks to the supervisor.
 use crate::{
     adaptive::{Controller, WINDOW},
+    capture_queue::CaptureQueue,
     dsp::{CapturePipeline, FRAME, RATE},
     mixer::{Mixer, Voice},
     probe::EchoProbe,
@@ -85,33 +86,21 @@ struct Reference {
 
 struct Transmit {
     encoder: OpusEncoder,
-    pending: Vec<f32>,
+    queue: CaptureQueue,
     packet: [u8; MAX_PACKET_BYTES],
     sequence: u64,
     active: bool,
 }
 
 impl Transmit {
-    /// Encode the first 20 ms of pending audio, padded with silence. The
-    /// returned copy is the packet's IPC payload.
-    fn encode(&mut self) -> Option<Vec<u8>> {
-        const SAMPLES: usize = 2 * FRAME;
-        if self.pending.len() < SAMPLES {
-            self.pending.resize(SAMPLES, 0.);
-        }
-        // Constrain each 20 ms packet too: VBR must not exceed the selected
-        // destination's payload allowance while meeting its average target.
+    /// Encode exactly 20 ms of already-processed, currently authorized PCM.
+    fn encode(&mut self, samples: &[f32; 2 * FRAME]) -> Option<Vec<u8>> {
         let max_bytes = (self.encoder.bitrate_bps as usize / 400).min(self.packet.len());
         let count = self
             .encoder
-            .encode(
-                &self.pending[..SAMPLES],
-                SAMPLES,
-                &mut self.packet[..max_bytes],
-            )
-            .ok();
-        self.pending.drain(..SAMPLES);
-        Some(self.packet[..count?].to_vec())
+            .encode(samples, 2 * FRAME, &mut self.packet[..max_bytes])
+            .ok()?;
+        Some(self.packet[..count].to_vec())
     }
 }
 
@@ -165,7 +154,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     encoder.packet_loss_perc = 5;
     let mut transmit = Transmit {
         encoder,
-        pending: Vec::with_capacity(2 * FRAME),
+        queue: CaptureQueue::default(),
         packet: [0; MAX_PACKET_BYTES],
         sequence: 0,
         active: false,
@@ -304,6 +293,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         match event {
             Some(Event::Closed | Event::Request(LiveMediaRequest::Shutdown)) => break,
             Some(Event::DeviceError(message)) => {
+                transmit.queue.reset();
+                if transmit.active {
+                    finish(&mut output, &mut transmit, epoch)?;
+                }
                 devices.take();
                 retry_at = Instant::now() + Duration::from_secs(1);
                 emit(
@@ -325,7 +318,11 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     "set_state_unmuted"
                 });
                 let was_transmitting = transmit.active;
-                let capture_changed = state_known && (mute || deaf) != muted;
+                if new_epoch != epoch || mute || deaf {
+                    transmit.queue.reset();
+                }
+                let capture_changed =
+                    state_known && ((mute || deaf) != muted || (new_epoch != epoch && !muted));
                 muted = mute || deaf;
                 epoch = new_epoch;
                 deafened = deaf;
@@ -336,7 +333,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 if was_transmitting && muted {
                     // Audio captured before this request arrived may already
                     // be after the user muted: the terminator is silence.
-                    transmit.pending.clear();
+                    transmit.queue.reset();
                     finish(&mut output, &mut transmit, epoch)?;
                 }
                 if capture_changed && devices.is_some() {
@@ -377,6 +374,12 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     )?;
                     std::process::exit(0);
                 }
+                if requested != settings {
+                    transmit.queue.reset();
+                    if transmit.active {
+                        finish(&mut output, &mut transmit, epoch)?;
+                    }
+                }
                 if requested != settings
                     && let Some(chain) = pipeline.as_mut()
                 {
@@ -400,6 +403,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     )?;
                     std::process::exit(0);
                 }
+                transmit.queue.reset();
                 preview = true;
                 muted = !capture;
                 deafened = false;
@@ -633,34 +637,38 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             if muted || preview {
                 continue;
             }
-            if result.transmit {
-                if first_transmit {
-                    timing.mark("first_open_gate");
-                    first_transmit = false;
-                }
-                transmit.active = true;
-                transmit.pending.extend_from_slice(&capture_frame);
-                if transmit.pending.len() >= 2 * FRAME {
-                    if let Some(opus) = transmit.encode() {
-                        if first_packet {
-                            timing.mark("first_packet");
-                            first_packet = false;
-                        }
-                        emit(
-                            &mut output,
-                            LiveMediaEvent::Packet {
-                                epoch,
-                                sequence: transmit.sequence,
-                                opus,
-                                end: false,
-                            },
-                        )?;
-                    }
-                    transmit.sequence += 2;
-                }
-            } else if transmit.active {
-                finish(&mut output, &mut transmit, epoch)?;
+            if result.transmit && first_transmit {
+                timing.mark("first_open_gate");
+                first_transmit = false;
             }
+            transmit.queue.push(
+                capture_frame,
+                result.transmit,
+                settings.transmit == nuschl_core::audio::TransmitMode::VoiceActivity
+                    && !controller.guard_gate(),
+            );
+        }
+        if let Some(packet) = transmit.queue.due(Instant::now()) {
+            if let Some(opus) = transmit.encode(&packet.samples) {
+                if first_packet {
+                    timing.mark("first_packet");
+                    first_packet = false;
+                }
+                emit(
+                    &mut output,
+                    LiveMediaEvent::Packet {
+                        epoch,
+                        sequence: transmit.sequence,
+                        opus,
+                        end: packet.end,
+                    },
+                )?;
+                transmit.active = !packet.end;
+                if packet.end {
+                    let _ = transmit.encoder.reset_state();
+                }
+            }
+            transmit.sequence += 2;
         }
         if last_cleanup.elapsed() > Duration::from_secs(2) {
             mixer.cleanup(Instant::now());
@@ -681,17 +689,16 @@ fn finish(
     transmit: &mut Transmit,
     epoch: u64,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    if let Some(opus) = transmit.encode() {
-        emit(
-            output,
-            LiveMediaEvent::Packet {
-                epoch,
-                sequence: transmit.sequence,
-                opus,
-                end: true,
-            },
-        )?;
-    }
+    transmit.queue.reset();
+    emit(
+        output,
+        LiveMediaEvent::Packet {
+            epoch,
+            sequence: transmit.sequence,
+            opus: nuschl_core::audio::SILENT_OPUS.to_vec(),
+            end: true,
+        },
+    )?;
     transmit.sequence += 2;
     transmit.active = false;
     let _ = transmit.encoder.reset_state();
@@ -1621,7 +1628,7 @@ mod tests {
         encoder.packet_loss_perc = 5;
         let mut tx = super::Transmit {
             encoder,
-            pending: Vec::new(),
+            queue: CaptureQueue::default(),
             packet: [0; opus_pure::MAX_PACKET_BYTES],
             sequence: 0,
             active: false,
@@ -1635,10 +1642,10 @@ mod tests {
         ] {
             tx.encoder.bitrate_bps = target as i32;
             for frame in 0..8 {
-                tx.pending.extend((0..960).map(|i| {
+                let samples = std::array::from_fn(|i| {
                     (std::f32::consts::TAU * 997. * (frame * 960 + i) as f32 / 48_000.).sin() * 0.3
-                }));
-                let packet = tx.encode().unwrap();
+                });
+                let packet = tx.encode(&samples).unwrap();
                 assert!(packet.len() <= (target / 400) as usize);
                 let mut output = vec![0.; 5760];
                 assert_eq!(decoder.decode(&packet, 5760, &mut output).unwrap(), 960);
@@ -1648,6 +1655,50 @@ mod tests {
 
     use super::*;
     use opus_pure::{MAX_PACKET_SAMPLES, OpusDecoder};
+
+    #[test]
+    fn processed_prefix_marker_fixture_uses_the_real_queue_and_encoder() {
+        let mut queue = CaptureQueue::default();
+        let now = Instant::now();
+        let tone = |frame: usize, frequency: f32| {
+            std::array::from_fn(|i| {
+                (std::f32::consts::TAU * frequency * (frame * FRAME + i) as f32 / 48_000.).sin()
+                    * 0.2
+            })
+        };
+        for frame in 0..8 {
+            queue.push(tone(frame, 997.), false, true);
+            assert!(queue.due(now).is_none(), "a prefix cannot open the gate");
+        }
+        let mut tx = super::Transmit {
+            encoder: OpusEncoder::new(48_000, 1, opus_pure::Application::Voip).unwrap(),
+            queue: CaptureQueue::default(),
+            packet: [0; opus_pure::MAX_PACKET_BYTES],
+            sequence: 0,
+            active: false,
+        };
+        tx.encoder.bitrate_bps = nuschl_core::audio::DEFAULT_VOICE_BITRATE as i32;
+        let mut packets = Vec::new();
+        for frame in 8..20 {
+            queue.push(tone(frame, 3_000.), true, true);
+            let at = now + Duration::from_millis((frame as u64 - 8) * 10);
+            if let Some(packet) = queue.due(at) {
+                packets.push(tx.encode(&packet.samples).unwrap());
+            }
+        }
+        queue.push([0.; FRAME], false, true);
+        for frame in 20..40 {
+            if let Some(packet) = queue.due(now + Duration::from_millis((frame - 8) * 10)) {
+                packets.push(tx.encode(&packet.samples).unwrap());
+            }
+        }
+        assert!(packets.len() >= 10);
+        // An independent libopus fixture consumes these public synthetic bytes.
+        // No file is produced by ordinary unit tests.
+        if let Some(path) = std::env::var_os("NUSCHL_PREFIX_PROOF_OUTPUT") {
+            std::fs::write(path, serde_json::to_vec(&serde_json::json!({"packets": packets, "prefix_hz":997, "following_hz":3000, "prefix_samples":8 * FRAME, "sample_rate":48000})).unwrap()).unwrap();
+        }
+    }
 
     fn device(id: &str, name: &str) -> AudioDevice {
         AudioDevice {

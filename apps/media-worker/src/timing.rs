@@ -16,6 +16,11 @@ struct State {
     first_capture_us: AtomicU64,
     capture_reported: AtomicBool,
 }
+impl Default for Timing {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 impl Timing {
     pub fn new() -> Self {
         Self(Arc::new(State {
