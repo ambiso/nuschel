@@ -50,6 +50,17 @@ checkpoints. A background filesystem watcher alone does not advance a session.
 
 Current integration checkpoint (2026-11-12):
 
+- **Native ACL/group editing, initial codec/limit state and login-rejection
+  ordering are integrated through `049f067c`.** All eight combined distribution
+  and check outputs and actual bundled Linux/web notice readers pass. The
+  combined session suite passes 97 tests with one existing ignored. The native
+  editor's private default-rate stock-Murmur/nuschld matrices and E2EE SuperUser
+  bootstrap retain their exact child-product evidence; web/TUI editing remains
+  open. Eighty actual rejected private-server logins return typed diagnostics,
+  with no Broken pipe, and valid controls pass. Source-identical rail/footer
+  spacing has a 16-case native GNOME/real-zoom proof; broader smallest-window
+  chat usability remains open. Root evidence:
+  `~/.cache/nuschl-integration-20261112/combined-admin-auth/handoff.json`.
 - **Sparse server limits and precise browser refusals are integrated through
   `1db450f3`.** Native 82 session tests (one existing ignored), browser 29 units/
   six relay integrations and actual App/private TLS tests pass. Omitted fields,
@@ -129,7 +140,7 @@ Current integration checkpoint (2026-11-12):
   test verifies password setup/rotation, exact fresh ACL preservation, registered
   account promotion, unpromoted denial and restart persistence. The documented
   stock-Mumble group-editor route applies to compatible-mode servers; Nuschl's
-  own full editors and E2EE bootstrap remain unfinished. See docs/server.md.
+  native editor and E2EE bootstrap are now integrated above. See docs/server.md.
   Relay module tests integrated at `936c9eeb` independently pass six actual
   configurations/eight invariant categories; the later private DNS/BPF proof is
   now integrated above.
@@ -1254,11 +1265,14 @@ listed below. Plugin data remains the explicit gap.
       notices. Same selected server ID/generation is checked; core/App APIs are
       unchanged. Parent distribution, notice and runtime-asset checks pass.
       See `~/.cache/nuschl-server-config/precise-handoff.json`.
-- [ ] Reset shared `ServerState.limits` on reconnect, or publish fresh initial
+- [x] Reset shared `ServerState.limits` on reconnect and publish fresh initial
       limits, when the new connection sends no ServerConfig. Source review finds
-      Client::connect keeps the prior snapshot although each adapter correctly
-      resets its enforcement defaults. Add a generation/stale-event model
-      regression; this is distinct from the verified adapter sparse-field fix.
+      the former Client::connect snapshot was retained; explicit connect and
+      same-generation automatic Reconnecting now clear it. ServerSync publishes
+      initial limits after Connected/Welcome, with advertised bandwidth and
+      legacy defaults. Opus availability stays unknown until CodecVersion.
+      Shared/client/session reset and sparse-codec regressions pass; this is
+      distinct from the adapter sparse-field fix and remaining UTF-16/HTML work.
 - [ ] Complete the shared server-limit/refusal follow-up from independent review:
       enforce HTML total `image_message_length` even when text length is zero;
       count advertised legacy text caps in UTF-16 units while retaining separate
@@ -1367,13 +1381,18 @@ listed below. Plugin data remains the explicit gap.
       race. Current `ActionOrigin`/scoped command rejects SetSelf; extend shared
       authority deliberately without allowing an unrelated server scope to
       reject cross-server mute/deafen privacy stops.
-- [ ] Preserve native bad-password rejection/retry diagnostics reliably. The ACL
+- [x] Preserve native bad-password rejection/retry diagnostics reliably. The ACL
       E2EE bootstrap fixture sometimes gets the correct password retry form and
       sometimes a generic Broken pipe for the same rejected credentials, while
       the owned server logs the explicit rejection. Investigate reader/writer
       handshake error ordering without relaxing authentication or replaying a
       password to an unverified connection. Separate from ACL editing; original
-      private fixture failures remain retained.
+      private fixture failures remain retained. Initial I/O failure now drains
+      only the same verified reader, at most 32 frames/100 ms, for an actual
+      Reject; post-login/non-I/O paths do not wait. EOF/malformed/Sync retains
+      the original error. Root combined session97+1ignored and 80 actual private
+      wrong-password attempts pass, with zero Broken pipe and valid controls.
+      No credential retry or new graphical form-geometry proof is claimed.
 - [ ] Replace per-user/per-server volume +/- controls with real continuous
       sliders (user, 2026-11-12), and remove existing settings sliders' 5% pointer
       quantization. Current menu buttons add/subtract 0.1 amplitude gain; saved
@@ -1392,13 +1411,16 @@ listed below. Plugin data remains the explicit gap.
       and never open the microphone solely by visiting Settings. Bound meter
       update work and verify with private synthetic input, not host capture.
       Claude Code owns this alongside the slider work; not yet implemented.
-- [ ] Restore desktop rail/footer spacing (user, 2026-11-12): Add-a-server's
+- [x] Restore desktop rail/footer spacing (user, 2026-11-12): Add-a-server's
       bottom edge currently touches the window, and Settings/mute/deafen have no
       gaps. The rail now has matching top/bottom padding and the compact control
-      cluster an explicit gap; source is committed, private runtime proof pending.
-      Check positive bottom/control gutters and reachable unclipped controls at
-      small heights, narrow widths and real 100–200% zoom, preserving server-list
-      scrolling and outline gutters. Assigned to the web owner after send-refusal.
+      cluster an explicit gap. Sixteen private GNOME cases at four sizes and
+      real 100/125/150/200% zoom pass, with at least13 logical pixels below Add
+      and4-pixel control gaps. Actual pointer actions/private-server audio ACKs,
+      scrolling, first/last decoration gutters and the cached negative control
+      pass. Root verifies exact tested layout-source hashes and combined build;
+      see docs/native-spacing.md. Full chat usability at860×520/200% remains
+      separate open work.
 - [ ] Full Mumble feature parity for ACLs and group membership (user, 2026-11-12).
       Provide complete ACL/group editors, including adding/removing/reordering
       rules, user and group targets, permission grant/deny, apply-here/apply-to-
