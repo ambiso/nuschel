@@ -98,3 +98,13 @@ mobile audio compatibility, real-device echo cancellation, packet-loss quality,
 or long-running audio performance. Exact run evidence and any incomplete
 assertions are recorded in the integration handoff rather than inferred from a
 green unit suite.
+
+The extended Chromium 156 controller run passed against stock Murmur 1.5.939
+with its default control rate limits: actual server Opus interchange and worklet
+PCM, startup mute, explicit synthetic capture, deafen silence, playback-only
+undeafen, transmission stopping on mute, disposal of a late permission result,
+four rapid deafen toggles and muted reconnect with a new connection generation.
+An independent libopus 1.6.1 decoder verified 27 wire packets (25,920 finite
+samples) against the owned 997 Hz input. No CSP violations, foreign-origin
+requests or browser errors were observed. This is a controller integration
+result; production App control tests are recorded separately.
