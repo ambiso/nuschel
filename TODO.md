@@ -60,6 +60,16 @@ checkpoints. A background filesystem watcher alone does not advance a session.
 
 Current integration checkpoint (2026-11-12):
 
+- **Native distro audio configuration is available inside the media sandbox
+  (`934d508f`).** Only media receives the present read-only public defaults at
+  `/usr/share/pipewire` and `/usr/share/alsa`. The exact rebuilt FHS desktop's
+  production `media-sandbox` action connects to an owned virtual PipeWire server
+  and reports ready with the microphone muted; the old package reports not ready
+  against the same server. Actual child checks verify read-only data mounts,
+  role-only environment, fresh PID/network namespaces and absent host home,
+  profile, audio, GPU and Nix store. Both trials shut down and reap cleanly.
+  This is synthetic startup/confinement evidence, not physical audio quality.
+  Evidence: `~/.cache/nuschl-distro-packaging/tmp/media-production-canaries/proof.json`.
 - **Windows media service pacing is integrated in `c6380f59`.** A Windows-only
   4 ms ticker coalesces at most one wakeup, parks without devices and joins on
   exit; thread-start failure retains the prior timeout fallback. The exact
@@ -2787,11 +2797,13 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
       Audit any redistributed C runtime's licenses/source obligations separately
       from the Rust bundle. Validate install/launch/worker canaries and uninstall
       in owned non-Nix distro environments without host profiles or global state.
-      All nine target ELF links and stage audits now pass; runtime proof remains
-      open. In particular distro PipeWire/ALSA need system configuration data
-      currently absent from the media sandbox's read-only library grants. Prove
-      exact required paths with private fixtures before adding narrowly scoped
-      media-only data mounts; zero Nix RPATH alone does not prove portability.
+      All nine target ELF links and synthetic no-store RPC checks pass; a private
+      CPU-only Debian X11 window renders with lavapipe. Actual production content
+      and media supervisors have scoped confinement/startup checks. The missing
+      PipeWire/ALSA public defaults are fixed above; physical devices, clean
+      distro installation/uninstallation, Arch runtime, Ubuntu AppArmor/userns
+      and final merged flake outputs remain open. Zero Nix RPATH alone does not
+      prove portability.
 - [ ] Produce a pinned Flatpak repository/one-click reference and bundle through
       Nix. Preserve credential-free content/media roles inside Flatpak; a manifest
       around the current nested bubblewrap launcher is insufficient. The Flatpak
@@ -2824,6 +2836,12 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
       `Signed-By` scoped repository keyrings, a dedicated local publication key,
       and no `apt-key`, CI signing secret or reuse of Nuschl's hybrid private pair.
       Account/repository publication is not performed by the preparation task.
+      The cached offline vendor contains 1,270 registry sources;
+      after existing exact-revision licence supplements, 57 source grants remain
+      unresolved. Review the all-source inventory before publishing source
+      packages; runtime notice completeness does not cover every redistributed
+      build/dev/other-platform source. Clean distro source rebuilds with the
+      declared compiler remain required.
 - [ ] Build and validate AUR `PKGBUILD`/`.SRCINFO` and an appropriate immutable
       source or `-bin` artifact from Nix. Pin release/source hashes, retain all
       helpers/licenses and use genuine offline/frozen Cargo preparation for
@@ -2831,6 +2849,11 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
       nonexistent future release URLs do not prove a package builds. Test actual
       install/runtime confinement in an owned clean Arch environment before
       publishing to AUR; no external AUR write has occurred.
+- [ ] Give development distro packages monotonically ordered versions. A bare
+      `+git<sha>` can sort a newer revision below an older one in dpkg/pacman.
+      Tagged releases use the release version; dev metadata must bind a stable
+      monotonic revision component and source hash. Test representative upgrade
+      ordering without recompiling the application solely for package metadata.
 - [x] Reusable independent Linux/native+web, Windows x86_64 and macOS universal
       build jobs, with separate gated publication. Update v2 requires Ed25519 AND
       ML-DSA-44 in two confined fixed-algorithm processes; raw bytes, full public

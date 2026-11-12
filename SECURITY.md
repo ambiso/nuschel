@@ -76,7 +76,9 @@ Do not describe an adapter as sandboxed until its platform policy is implemented
 tested. Native Windows/macOS and mobile require their own capability review. The
 Linux desktop storage runs with only its writable history directory, runtime libraries,
 private temporary storage and inherited IPC. The media profile grants audio sockets
-and ALSA devices, runtime libraries and private temporary storage; it grants no host
+and ALSA devices, runtime libraries, read-only public defaults under
+`/usr/share/pipewire` and `/usr/share/alsa` when present, and private temporary
+storage; it grants no host
 home, D-Bus socket, session credentials, or network namespace. Both long-lived profiles
 have an address-space limit. Media restarts remount recreated audio sockets.
 
