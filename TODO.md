@@ -666,6 +666,16 @@ The media worker uses per-speaker adaptive jitter buffers and Opus loss concealm
       matched complete reference-Mumble multispeaker/loss playback and physical
       listening remain open. See `docs/output-quality.md`; bitrate and synthetic
       tone SNR alone do not establish perceptual equivalence.
+- [ ] Fix the independent ordered SILK/FEC decoder mismatch (2026-11-12,
+      urgent codec investigation). A valid libopus 1.6.1 mono 24 kbit/s VoIP
+      stream with in-band FEC enabled diverges in the direct Rust decoder before
+      any loss or jitter: the first two packets match, packet index 2 differs in
+      PCM and entropy range, and whole-fixture agreement is only 6.30 dB.
+      Fresh output buffers reproduce it. LBRR handling is a hypothesis to test,
+      not an established cause. Preserve the frozen packets/controls/reference
+      evidence under `~/.cache/nuschl-output-quality/codec-lbrr-failure`; do not
+      weaken the gate or mark browser/native FEC parity complete before an
+      independently validated memory-safe correction.
 - [x] Match Mumble's explicit `OPUS_SET_PHASE_INVERSION_DISABLED(1)` receive
       setting. The pinned, minimally patched opus-pure 0.2.3 exposes its existing
       synthesis control with upstream/generic defaults unchanged; only native
