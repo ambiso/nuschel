@@ -174,7 +174,7 @@ Description: Voice and text chat for Mumble servers
  This package is updated by the system package manager.
 ''')
         env = {**os.environ, 'SOURCE_DATE_EPOCH': str(args.epoch), 'TZ': 'UTC', 'LC_ALL': 'C'}
-        subprocess.run([args.dpkg_deb, '--root-owner-group', '--uniform-compression', '--threads-max=2', '--build', str(tree), str(output)], env=env, check=True)
+        subprocess.run([args.dpkg_deb, '--root-owner-group', '--uniform-compression', '--threads-max=2', '--build', str(tree), str(output)], env=env, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     report['artifact'] = str(output)
     report['sha256'] = hashlib.sha256(output.read_bytes()).hexdigest()
     print(json.dumps(report, indent=2))
