@@ -782,6 +782,23 @@ pub fn dialog(
             crate::slider::Setting::Sensitivity,
             cx,
         );
+        // Which way it goes: Mumble's similar slider is a threshold, where
+        // higher is stricter; this one is the other way round.
+        let direction = div()
+            .flex()
+            .justify_between()
+            .gap_3()
+            .text_xs()
+            .text_color(color(TEXT_FAINT))
+            .child(text!("0 %: stricter").with_id(("sensitivity", 3_usize)))
+            .child(text!("100 %: more sensitive").with_id(("sensitivity", 4_usize)));
+        let slider = div()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .child(slider)
+            .child(direction)
+            .into_any_element();
         voice.push(managed(this, "audio.vad_sensitivity", slider));
     }
     if transmit == TransmitMode::PushToTalk
