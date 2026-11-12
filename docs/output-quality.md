@@ -218,6 +218,39 @@ The next candidate is the reviewed scalar Rust SpeexDSP port, tested against the
 same unchanged reference before choosing a production dependency. Do not weaken
 alias/passband requirements or invent a new filter to make a candidate pass.
 
+## Scalar Rust Speex candidate
+
+The published `speexdsp-resampler` 0.1.0 source archive is 11,619 bytes, verified
+against crates.io SHA-256
+`b72d540d5c565dbe1f891d7e21ceb21d2649508306782f1066989fccb0b363d3`
+and retained VCS revision `b543f416aea84140e237bb3747a9d3a01c31fc9c`.
+It has no dependencies, no unsafe source, and includes its BSD-3-Clause terms.
+However, the unmodified f32 path clones delay memory repeatedly (610 allocations
+in the one-second 11,025 Hz probe). A separate original-source diagnostic also
+reproduced incorrect channel-base access: left agreed at 146 dB but right was
+-4.27 dB against the same reference. That diagnostic explicitly bypassed the
+allocation assertion to observe PCM; it is not a passing acceptance run.
+
+A cache-only review patch replaces the hot clone with `mem::take`/buffer reuse,
+passes the correct per-channel memory slice to the unchanged kernel, and replaces
+the magic-tail temporary with `copy_within`. Coefficients and filter arithmetic
+are unchanged. The patched library compiles with `--forbid unsafe_code`.
+`tests/resample_speex.rs` checks zero allocations throughout actual f32 processing,
+equal LR source consumption and invariant callback chunks. The unchanged
+reference comparison agrees at 135.8–156.2 dB, with maximum error 1.04e-7,
+including both channels. Ten-second 11,025/22,050 Hz cases agree at 146 dB;
+there is no rounded 10 ms block clock. Passband and alias/image results match
+reference Speex quality 3; the largest measured alias-level difference is
+0.014 dB around a -94 dB floor. The 48 kHz path bypasses resampling, matching
+Mumble's rate-equal condition.
+
+This candidate is not yet a production converter or committed dependency.
+A minimal documented vendor patch and a preallocated exact-ratio adapter require
+review before integration. Callback allocation/underrun/source-consumption and
+AEC reference timing still need testing in that actual adapter. Evidence:
+`resample-speex-patched-final/proof.json`, `speex-rust-review/metadata.json`,
+`speex-rust-review/original-lr.json`, and `speex-patched-review/` in the owned cache.
+
 ## Implementation sequence
 
 1. Preserve two Opus channels through native per-speaker queues/mixer and browser

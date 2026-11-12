@@ -14,7 +14,7 @@ from pathlib import Path
 import struct
 import subprocess
 
-from output_quality import amplitude
+from output_quality import amplitude, compare
 
 RATE = 48000
 
@@ -45,6 +45,8 @@ class Speex:
         self.lib.speex_resampler_get_output_latency.restype = ctypes.c_int
 
     def convert(self, pcm, rate):
+        if rate == RATE:
+            return list(pcm), 0  # Mumble bypasses SRC when rates match.
         error = ctypes.c_int()
         state = self.lib.speex_resampler_init(2, RATE, rate, 3, ctypes.byref(error))
         assert state and error.value == 0, error.value
@@ -75,7 +77,7 @@ def level(pcm, frequency, rate):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--test-binary', required=True, type=Path)
-    parser.add_argument('--engine', choices=['converter','sonora'], default='converter')
+    parser.add_argument('--engine', choices=['converter','sonora','speex-rust'], default='converter')
     parser.add_argument('--speex-library', required=True, type=Path)
     parser.add_argument('--output', required=True, type=Path)
     args = parser.parse_args()
@@ -89,11 +91,14 @@ def main():
             descriptions.append(('alias', source, abs(source - rate * round(source / rate))))
         elif rate > RATE:
             descriptions.append(('image', 16800, RATE - 16800))
+        if rate in (11025, 22050):
+            descriptions.append(('clock-997', 997, 997))
         impulse = [0.] * (RATE * 2)
         impulse[4800 * 2], impulse[4800 * 2 + 1] = .2, -.13
         peak_positions = {}
         for name, frequency, measured in [*descriptions, ('impulse', 0, 0)]:
-            source = impulse if name == 'impulse' else tone(frequency)
+            seconds = 10 if name == 'clock-997' else 1
+            source = impulse if name == 'impulse' else tone(frequency, seconds)
             input_path = args.output / f'{rate}-{name}-input.f32le'
             write_pcm(input_path, source)
             results = []
@@ -105,7 +110,7 @@ def main():
                     if args.engine == 'converter' else [str(args.test_binary), str(input_path), str(output), str(rate), chunks])
                 subprocess.run(command, env=env, capture_output=True, check=True, timeout=20)
                 pcm = read_pcm(output)
-                assert len(pcm) == rate * 2, (rate, len(pcm))
+                assert len(pcm) == rate * seconds * 2, (rate, len(pcm))
                 results.append(pcm)
             assert results[0] == results[1], (rate, name, 'callback boundaries changed PCM')
             expected, latency = speex.convert(source, rate)
@@ -119,7 +124,8 @@ def main():
                 actual_db, reference_db = level(results[0], measured, rate), level(expected, measured, rate)
                 cases.append({'rate': rate, 'case': name, 'source_frequency': frequency,
                     'measured_frequency': measured, 'converter_db': actual_db, 'reference_db': reference_db,
-                    'delta_db': actual_db - reference_db, 'chunk_exact': True})
+                    'delta_db': actual_db - reference_db, 'chunk_exact': True, 'duration_seconds': seconds,
+                    'full_fixed_gain_reference': compare(expected[:len(results[0])],results[0])})
         cases.append({'rate': rate, 'case': 'delay', **peak_positions, 'chunk_exact': True})
     report = {'engine': args.engine, 'test_binary': str(args.test_binary), 'reference_library': str(args.speex_library),
         'reference_quality': 3, 'host_devices': False, 'gain': 1, 'cases': cases,

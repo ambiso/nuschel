@@ -609,7 +609,11 @@ The media worker uses per-speaker adaptive jitter buffers and Opus loss concealm
       versus reference Speex quality-3 -85.14 dB; 96 kHz imaging is -11.28 dB
       versus -93.96 dB. Exact-ratio Sonora candidate was measured and rejected
       (insufficient passband/alias rejection), not silently integrated. Reviewed
-      scalar Rust Speex candidate and long fractional-clock tests are next.
+      scalar Rust Speex candidate matches source-reference PCM at 135.8–156.2 dB
+      with zero f32-process allocations, including ten-second 11,025/22,050 Hz
+      clocks, after a cache-only reviewed buffer-reuse/channel-base correction.
+      Vendor/dependency and actual converter/callback/AEC integration are still
+      pending; no production SRC improvement is claimed from the probe alone.
       These scoped results do not establish absolute perceptual equivalence.
 
 ### Optional local speech (requested 2026-11-11)
