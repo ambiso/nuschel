@@ -232,6 +232,13 @@ renewal hook or a temporarily incomplete source pair. The helper refuses to
 publish an untrusted ACME bootstrap/self-signed certificate, rather than exposing
 an unexpected trust prompt while issuance is incomplete.
 
+If initial issuance or publication fails, server startup retries every 30 seconds
+without running database checks until a validated runtime pair is readable.
+There is no startup retry limit for this ACME wait. A previously published pair
+can still start the server while a new source pair is rejected. The renewal hook
+and timer never start an intentionally stopped server. The timer currently
+republishes and reloads a valid pair even when its bytes have not changed.
+
 The helper's trust bundle is NixOS `security.pki.caBundle`. Clients still enforce
 their own WebPKI roots; a custom/private server CA is not automatically imported
 into clients. The helper parser handles private keys only in its separate service,

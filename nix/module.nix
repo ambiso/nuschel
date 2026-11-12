@@ -194,6 +194,13 @@ let
       ${pkgs.systemd}/bin/systemctl kill --kill-whom=main --signal=HUP nuschl.service
     fi
   '';
+  requireTLS = pkgs.writeShellScript "nuschl-require-published-tls" ''
+    set -eu
+    if [ ! -r "$1/current/fullchain.pem" ] || [ ! -r "$1/current/key.pem" ]; then
+      echo "Waiting for a validated Nuschl TLS certificate; startup will retry." >&2
+      exit 1
+    fi
+  '';
   # A Murmur database imported once before the first start (docs/server.md):
   # root copies it in for the dynamic user, the service imports it; the
   # marker keeps later starts from trying again.
@@ -571,8 +578,14 @@ in
       ]
       ++ lib.optional localPostgres "postgresql.target"
       ++ lib.optional useACME "nuschl-tls-refresh.service";
-      requires =
-        lib.optional localPostgres "postgresql.target" ++ lib.optional useACME "nuschl-tls-refresh.service";
+      # A failed provisioning attempt must not cancel the server's start job:
+      # the readiness gate below fails closed and Restart retries it. A valid
+      # previously published pair remains usable if a fresh update is rejected.
+      wants = lib.optional useACME "nuschl-tls-refresh.service";
+      requires = lib.optional localPostgres "postgresql.target";
+      unitConfig = lib.optionalAttrs useACME {
+        StartLimitIntervalSec = 0;
+      };
       restartTriggers = [ configFile ];
       serviceConfig = {
         Type = "simple";
@@ -597,15 +610,20 @@ in
         # Migrations and a connection check before the server takes traffic,
         # under the operator lock: never while `nuschld admin` (or an import)
         # uses the database.
-        ExecStartPre = lib.escapeShellArgs (
-          [
-            "${cfg.package}/bin/nuschl-storage-worker"
-            "--server"
-            "--check-database"
-            "--operator-lock"
-          ]
-          ++ databaseArguments
-        );
+        # Do not run database checks/migrations while initial issuance is
+        # unavailable. The server cannot fall back to a self-signed identity:
+        # tlsArguments always names the helper's validated runtime pair.
+        ExecStartPre = lib.optional useACME "${requireTLS} ${tlsRuntime}" ++ [
+          (lib.escapeShellArgs (
+            [
+              "${cfg.package}/bin/nuschl-storage-worker"
+              "--server"
+              "--check-database"
+              "--operator-lock"
+            ]
+            ++ databaseArguments
+          ))
+        ];
         ExecStart = lib.escapeShellArgs (
           [
             "${cfg.package}/bin/nuschld"
@@ -619,7 +637,7 @@ in
           ++ secretArguments
         );
         Restart = "on-failure";
-        RestartSec = "5s";
+        RestartSec = if useACME then "30s" else "5s";
         LimitNOFILE = 65536;
       }
       // hardening;

@@ -7,18 +7,18 @@ is an input to Nix. Run with disk-backed TMPDIR and --output for evidence.
 """
 
 import argparse
+import contextlib
 import json
 import os
-from pathlib import Path
 import shutil
-import subprocess
-import tempfile
-import contextlib
 import signal
 import socket
 import ssl
 import struct
+import subprocess
+import tempfile
 import time
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -339,6 +339,16 @@ def main():
             "acme-finished-voice.test.target" not in states["acme"]["after"]
         )  # helper orders provisioning
         assert "nuschl-tls-refresh.service" in states["acme"]["after"]
+        assert "nuschl-tls-refresh.service" in states["acme"]["wants"]
+        assert "nuschl-tls-refresh.service" not in states["acme"]["requires"]
+        assert states["acme"]["unit"]["StartLimitIntervalSec"] == 0
+        assert main["Restart"] == "on-failure" and main["RestartSec"] == "30s"
+        assert len(main["ExecStartPre"]) == 2
+        assert "nuschl-require-published-tls" in main["ExecStartPre"][0]
+        assert "--check-database" in main["ExecStartPre"][1]
+        for variant in ["manual", "self-signed"]:
+            assert states[variant]["server"]["RestartSec"] == "5s"
+            assert len(states[variant]["server"]["ExecStartPre"]) == 1
         assert (
             "/var/lib/acme/shared.test/"
             in states["reuse"]["helper"]["LoadCredential"][0]
@@ -366,6 +376,7 @@ def main():
         )
         (args.output / "helper-build.log").write_text(build.stderr)
         script = Path(build.stdout.strip()) / "refresh"
+        startup_check = script.parent / "require-runtime"
         assert "PRIVATE KEY" not in script.read_text()
         credentials, runtime = directory / "credentials", directory / "runtime"
         credentials.mkdir(mode=0o700)
@@ -376,13 +387,34 @@ def main():
             "RUNTIME_DIRECTORY": str(runtime),
         }
 
+        def ready(expected):
+            result = subprocess.run(
+                [str(startup_check), str(runtime)],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            assert (result.returncode == 0) == expected, result.stderr
+            assert "PRIVATE KEY" not in result.stdout + result.stderr
+
+        ready(False)
+        # A partial pair cannot get as far as database checks or server start.
+        partial = runtime / "current"
+        partial.mkdir()
+        (partial / "fullchain.pem").write_text("not a published pair")
+        ready(False)
+        shutil.rmtree(partial)
+        records.append(
+            "startup gate rejects missing or partial runtime pair before database checks"
+        )
+
         def publish(key, cert, *, chain=True, expected=True):
             (credentials / "key").write_bytes(key.read_bytes())
             (credentials / "fullchain").write_bytes(
                 cert.read_bytes() + (intermediate_cert.read_bytes() if chain else b"")
             )
             result = subprocess.run(
-                [str(script)], env=env, capture_output=True, text=True
+                [str(script)], check=False, env=env, capture_output=True, text=True
             )
             assert (result.returncode == 0) == expected, result.stderr
             assert "PRIVATE KEY" not in result.stdout + result.stderr
@@ -390,6 +422,7 @@ def main():
 
         first_key, first_cert = leaf("first")
         publish(first_key, first_cert)
+        ready(True)
         first = (runtime / "current").resolve()
         assert (first / "key.pem").stat().st_mode & 0o777 == 0o440
         assert first.stat().st_mode & 0o777 == 0o750
@@ -427,6 +460,7 @@ def main():
             ("expired", *leaf("expired", days="-1"), True),
         ]:
             publish(key, cert, chain=chain, expected=False)
+            ready(True)
             assert (runtime / "current").resolve() == second
             assert (second / "key.pem").read_bytes() == second_key.read_bytes()
             assert not list(runtime.glob(".staging.*"))
@@ -437,6 +471,18 @@ def main():
                 )
                 assert live.process.pid == first_pid
             records.append(f"{label}: previous valid generation retained")
+        if args.binaries:
+            restart_directory = directory / "restart-with-retained-pair"
+            restart_directory.mkdir(mode=0o700)
+            with LiveServer(
+                args.binaries, restart_directory, runtime, root_cert
+            ) as restarted:
+                assert restarted.fingerprint() == ssl.PEM_cert_to_DER_cert(
+                    second_cert.read_text()
+                )
+            records.append(
+                "actual server starts with retained validated pair after source validation fails"
+            )
         malformed_key = directory / "malformed.key"
         malformed_key.write_text("not a private key\n")
         publish(malformed_key, second_cert, expected=False)

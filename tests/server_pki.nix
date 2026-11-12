@@ -69,6 +69,8 @@ in
     server = cfg.systemd.services.nuschl.serviceConfig;
     after = cfg.systemd.services.nuschl.after;
     requires = cfg.systemd.services.nuschl.requires;
+    wants = cfg.systemd.services.nuschl.wants;
+    unit = cfg.systemd.services.nuschl.unitConfig;
     helper =
       if acme && variant != "missing-host" then
         cfg.systemd.services.nuschl-tls-refresh.serviceConfig
@@ -83,5 +85,6 @@ in
   helperScript = pkgs.runCommand "nuschl-private-pki-helper-fixture" { } ''
     mkdir -p "$out"
     cp ${cfg.systemd.services.nuschl-tls-refresh.serviceConfig.ExecStart} "$out/refresh"
+    cp ${lib.head (lib.splitString " " (lib.head cfg.systemd.services.nuschl.serviceConfig.ExecStartPre))} "$out/require-runtime"
   '';
 }
