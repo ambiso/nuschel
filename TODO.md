@@ -543,6 +543,15 @@ Reported while testing (2026-11-10/11):
 
 Later (reported):
 
+- [ ] Fix chat Markdown rendering (user, 2026-11-12; possibly an earlier
+      regression). Diagnose typed, received and history-restored messages, their
+      legacy HTML/Markdown classification, worker document delivery and actual
+      native/web/TUI renderers. Preserve newlines, code highlighting and inert
+      resource handling. Obtain a minimal user example where possible and retain
+      a private rendered negative/positive control; existing parser-only tests
+      do not prove messages are displayed correctly. Native desktop is the
+      initial assumption; a separate read-only diagnosis is being delegated
+      before allocating edits alongside image quality and chat scrolling.
 - [ ] Add a visible chat-history scrollbar, matching the existing channel-list
       affordance (user, 2026-11-12). Bind it to the retained virtualized timeline
       scroll state; dragging, wheel and keyboard movement must preserve message
