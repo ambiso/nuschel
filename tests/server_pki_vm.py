@@ -35,7 +35,9 @@ def wait(predicate, description, seconds=75):
 
 
 def property_of(unit, name):
-    return run("systemctl", "show", unit, "--property", name, "--value").stdout.strip()
+    return run(
+        "systemctl", "show", "--property", name, "--value", "--", unit
+    ).stdout.strip()
 
 
 def prepare(directory):
