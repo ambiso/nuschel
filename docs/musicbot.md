@@ -161,8 +161,8 @@ executable can enter one fixed child role through versioned, size-capped IPC:
 
 - Decode: one child for the current track of each active player. The parent streams
   bounded opaque chunks; the child returns exactly 20 ms of finite stereo PCM per
-  reply. The retained parent queue is 250 frames (5 seconds, 1.92 MiB), plus two
-  32 KiB input chunks, one 64 KiB response and bounded pipe storage.
+  reply. The retained parent queue is 250 frames (5 seconds, 1,920,000 PCM bytes), plus at most
+  five 32 KiB pump/read/write buffers, one 64 KiB response and bounded pipe storage.
 - Encode: one lazy persistent child per player, one 20 ms request at a time.
   It uses Opus Audio, constrained VBR, and at most 992 encoded bytes per reply.
 - Duck: one lazy persistent child per Mumble connection, one packet at a time,
@@ -189,6 +189,8 @@ are 8–384 kHz with at most eight channels (Opus: one or two). Real FFT lengths
 capped at 16,384 samples; each probe/packet operation may read at most 4 MiB.
 Replies are validated before use, and a seek/skip/pause/destination change is checked
 again after asynchronous encoding, before broadcasting or advancing playback.
+An encoded frame rejected by that fence resets the encoder before its next use,
+so an untransmitted frame cannot become hidden predictive encoder history.
 The NixOS service keeps its outer filesystem, device and privilege restrictions,
 allowing only the namespace/mount setup required for the restricted children.
 Actual confinement and service integration checks remain required for this source

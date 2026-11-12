@@ -594,12 +594,22 @@ impl Player {
         let mut held: Option<Vec<f32>> = None;
         let mut decoding: Option<Decoding> = None;
         let mut talking = false;
+        let mut last_bitrate = configured_bitrate;
+        let mut reset_encoder = false;
         let mut underrun = 0;
         let mut deadline: Option<Instant> = None;
         // The gain of the last frame; changes are ramped so they do not click.
         let mut gain = 0.0f32;
         let mut was_ducked = false;
         loop {
+            if reset_encoder {
+                if let Err(error) = encoder.clear().await {
+                    tracing::warn!("{}: encoder reset failed: {error}", self.name);
+                    sleep(Duration::from_millis(500)).await;
+                    continue;
+                }
+                reset_encoder = false;
+            }
             let replace = {
                 let mut state = self.state();
                 if state.start_next(|track| libraries.get(track.library).map(Library::identity)) {
@@ -618,7 +628,7 @@ impl Player {
                 if let Some(previous) = decoding.take() {
                     let finished = previous.frames.is_closed() && previous.frames.is_empty();
                     if talking && !finished {
-                        self.end(&mut encoder).await;
+                        self.end(&mut encoder, last_bitrate).await;
                         talking = false;
                     }
                     previous.cancel().await;
@@ -653,7 +663,7 @@ impl Player {
                 !paused && self.listeners() > 0 && self.bitrate(configured_bitrate) > 0
             }) else {
                 if talking {
-                    self.end(&mut encoder).await;
+                    self.end(&mut encoder, last_bitrate).await;
                     talking = false;
                 }
                 deadline = None;
@@ -703,6 +713,7 @@ impl Player {
                     // while the unique encoder owns its one outstanding request.
                     let mut state = self.state();
                     if !state.matches(running.entry, running.generation) {
+                        reset_encoder = true;
                         continue;
                     }
                     if state.paused
@@ -710,10 +721,12 @@ impl Player {
                         || self.bitrate(configured_bitrate) < bitrate
                     {
                         held = Some(frame);
+                        reset_encoder = true;
                         continue;
                     }
                     match encoded {
                         Ok(opus) => {
+                            last_bitrate = bitrate;
                             gain = next;
                             let playing = state.current.as_mut().unwrap();
                             talking |= self.broadcast_audio(playing, &opus, wall_clock_ms);
@@ -737,7 +750,7 @@ impl Player {
                 Err(TryRecvError::Empty) => {
                     underrun += 1;
                     if underrun == UNDERRUN_END && talking {
-                        self.end(&mut encoder).await;
+                        self.end(&mut encoder, last_bitrate).await;
                         talking = false;
                     }
                     let mut state = self.state();
@@ -767,11 +780,8 @@ impl Player {
 
     /// A frame of silence that closes the transmission, so clients stop
     /// showing the bot as talking.
-    async fn end(&self, encoder: &mut crate::codec_host::Client) {
-        if let Ok(opus) = encoder
-            .encode(vec![0.; FRAME * CHANNELS], MIN_BITRATE)
-            .await
-        {
+    async fn end(&self, encoder: &mut crate::codec_host::Client, bitrate: u32) {
+        if let Ok(opus) = encoder.encode(vec![0.; FRAME * CHANNELS], bitrate).await {
             let _ = self.packets.send(Arc::new(Packet { opus, end: true }));
         }
     }
