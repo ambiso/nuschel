@@ -16,11 +16,22 @@ pkgs.runCommand "nuschl-arch-artifacts-${version}" {
   # is necessary in the Nix build environment, not an Arch install exemption.
   cp ${pkgs.pacman}/etc/makepkg.conf makepkg.conf
   chmod u+w makepkg.conf
-  printf '%s\n' 'COMPRESSZST=(zstd -c -T2 -9 -)' >> makepkg.conf
+  printf '%s\n' 'PKGEXT=.pkg.tar.zst' 'COMPRESSZST=(zstd -c -T2 -9 -)' >> makepkg.conf
   export SRCDEST="$out" PKGDEST="$out/packages" BUILDDIR="$TMPDIR/makepkg"
   export PACKAGER='Local package validation <nobody@example.invalid>'
   mkdir -p "$PKGDEST" "$BUILDDIR"
+  mkdir -p "$TMPDIR/pacman-db" "$TMPDIR/pacman-cache"
+  printf '%s\n' '[options]' "DBPath = $TMPDIR/pacman-db" "CacheDir = $TMPDIR/pacman-cache" \
+    "LogFile = $TMPDIR/pacman.log" 'Architecture = auto' > pacman.conf
+  cat > pacman-metadata <<EOF
+  #!${pkgs.runtimeShell}
+  exec ${pkgs.pacman}/bin/pacman --config "$PWD/pacman.conf" "\$@"
+  EOF
+  chmod +x pacman-metadata
+  export PACMAN="$PWD/pacman-metadata"
   makepkg --config "$PWD/makepkg.conf" --nodeps --nocheck
+  test -s "$out/packages/nuschl-bin-${version}-1-x86_64.pkg.tar.zst"
+  rm pacman.conf pacman-metadata
   rm makepkg.conf
   cd "$out"
   sha256sum *.tar.xz packages/*.pkg.tar.zst > SHA256SUMS
