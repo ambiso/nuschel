@@ -19,7 +19,15 @@
     "features": [
       "nuschl-update-worker/ed25519",
       "nuschl-update-worker/mldsa44"
-    ]
+    ],
+    "standalone": {
+      "rtc-probe": {
+        "packages": [
+          "nuschl-rtc-probe"
+        ],
+        "features": []
+      }
+    }
   },
   {
     "target": "aarch64-unknown-linux-gnu",
@@ -41,7 +49,15 @@
     "features": [
       "nuschl-update-worker/ed25519",
       "nuschl-update-worker/mldsa44"
-    ]
+    ],
+    "standalone": {
+      "rtc-probe": {
+        "packages": [
+          "nuschl-rtc-probe"
+        ],
+        "features": []
+      }
+    }
   },
   {
     "target": "x86_64-pc-windows-gnu",
@@ -75,7 +91,15 @@
     "features": [
       "nuschl-update-worker/ed25519",
       "nuschl-update-worker/mldsa44"
-    ]
+    ],
+    "standalone": {
+      "rtc-probe": {
+        "packages": [
+          "nuschl-rtc-probe"
+        ],
+        "features": []
+      }
+    }
   },
   {
     "target": "aarch64-apple-darwin",
@@ -92,7 +116,15 @@
     "features": [
       "nuschl-update-worker/ed25519",
       "nuschl-update-worker/mldsa44"
-    ]
+    ],
+    "standalone": {
+      "rtc-probe": {
+        "packages": [
+          "nuschl-rtc-probe"
+        ],
+        "features": []
+      }
+    }
   },
   {
     "target": "wasm32-unknown-unknown",

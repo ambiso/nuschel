@@ -9,6 +9,7 @@
 {
   pkgs,
   nuschl,
+  serverPackage ? nuschl,
   module,
   witnessModule,
 }:
@@ -29,7 +30,7 @@ let
       imports = [ module ];
       services.nuschl = {
         enable = true;
-        package = nuschl;
+        package = serverPackage;
         openFirewall = true;
         superUserPasswordFile = "/run/keys/nuschl-superuser";
         settings = {

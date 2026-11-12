@@ -15,7 +15,8 @@
       "newcm-math-font",
       "syntect-default-assets",
       "web-runtime-assets"
-    ]
+    ],
+    "root_group": "all"
   },
   "linux-nix": {
     "targets": [
@@ -68,6 +69,42 @@
       "rust-standard-library",
       "newcm-math-font",
       "syntect-default-assets"
+    ]
+  },
+  "rtc-probe-x86_64-unknown-linux-gnu": {
+    "targets": [
+      "x86_64-unknown-linux-gnu"
+    ],
+    "root_group": "rtc-probe",
+    "external_components": [
+      "rust-standard-library"
+    ]
+  },
+  "rtc-probe-aarch64-unknown-linux-gnu": {
+    "targets": [
+      "aarch64-unknown-linux-gnu"
+    ],
+    "root_group": "rtc-probe",
+    "external_components": [
+      "rust-standard-library"
+    ]
+  },
+  "rtc-probe-x86_64-apple-darwin": {
+    "targets": [
+      "x86_64-apple-darwin"
+    ],
+    "root_group": "rtc-probe",
+    "external_components": [
+      "rust-standard-library"
+    ]
+  },
+  "rtc-probe-aarch64-apple-darwin": {
+    "targets": [
+      "aarch64-apple-darwin"
+    ],
+    "root_group": "rtc-probe",
+    "external_components": [
+      "rust-standard-library"
     ]
   }
 }

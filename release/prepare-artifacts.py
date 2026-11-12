@@ -54,7 +54,25 @@ def notice_scope(policy, scope):
     if scope not in scopes:
         raise ValueError("unknown source-selected notice scope")
     targets = scopes[scope]["targets"]
-    selected = [item for item in policy if item["target"] in targets]
+    group = scopes[scope].get("root_group", "main")
+    selected = []
+    for item in policy:
+        if item["target"] not in targets:
+            continue
+        standalone = item.get("standalone", {})
+        if not isinstance(standalone, dict) or not isinstance(group, str):
+            raise ValueError("invalid source root group")
+        if group == "main":
+            selections = [item]
+        elif group == "all":
+            selections = [item] + [standalone[name] for name in sorted(standalone)]
+        elif group in standalone:
+            selections = [standalone[group]]
+        else:
+            raise ValueError("missing standalone root group")
+        selected.append({"target": item["target"],
+            "packages": list(dict.fromkeys(name for selection in selections for name in selection["packages"])),
+            "features": list(dict.fromkeys(name for selection in selections for name in selection.get("features", [])))})
     if len(selected) != len(targets) or {item["target"] for item in selected} != set(targets):
         raise ValueError("scope targets absent or duplicated in the source authority")
     return selected, set(scopes[scope]["external_components"])

@@ -212,41 +212,37 @@
           mkdir -p "$out/share/licenses/nuschl"
           cp -R ${nativeNoticeBundle}/share/licenses/nuschl/. "$out/share/licenses/nuschl/"
         '';
-        serverCommon = common // {
-          pname = "nuschld";
-          cargoExtraArgs = "-p nuschld -p nuschl-storage-worker";
-          buildInputs = [ ];
-        };
-        rtcCommon = common // {
-          pname = "nuschl-rtc-probe";
-          cargoExtraArgs = "-p nuschl-rtc -p nuschl-rtc-probe";
-          buildInputs = [ ];
-        };
         witnessPackage = pkgs.runCommand "nuschl-witness-0.1.0" { meta.mainProgram = "nuschl-witness"; } ''
           install -Dm755 ${crates.project.workspaceMembers.nuschl-witness.build}/bin/nuschl-witness "$out/bin/nuschl-witness"
           install -Dm644 ${./LICENSE} "$out/share/licenses/nuschl/EUPL-1.2"
           ${installNativeNotices}
         '';
-        rtcPackage = craneLib.buildPackage (
-          rtcCommon
-          // {
-            cargoArtifacts = buildDeps rtcCommon;
-            postInstall = ''
-              install -Dm644 ${./LICENSE} "$out/share/licenses/nuschl/EUPL-1.2"
+        rtcNoticeScope = "rtc-probe-${pkgs.stdenv.hostPlatform.rust.rustcTarget}";
+        rtcNotices = releaseNotices.forScope rtcNoticeScope;
+        rtcPackage =
+          pkgs.runCommand "nuschl-rtc-probe-${common.version}"
+            {
+              meta.mainProgram = "nuschl-rtc-probe";
+            }
+            ''
+              install -Dm755 ${crates.project.workspaceMembers.nuschl-rtc-probe.build}/bin/nuschl-rtc-probe "$out/bin/nuschl-rtc-probe"
+              mkdir -p "$out/share/licenses/nuschl"
+              cp -R ${rtcNotices.bundle}/share/licenses/nuschl/. "$out/share/licenses/nuschl/"
             '';
-          }
-        );
-        serverPackage = craneLib.buildPackage (
-          serverCommon
-          // {
-            cargoArtifacts = buildDeps serverCommon;
-            postInstall = ''
+        serverPackage =
+          pkgs.runCommand "nuschld-${common.version}"
+            {
+              meta.mainProgram = "nuschld";
+            }
+            ''
+              # current_exe() locates the sibling storage worker. Symlinking the
+              # server to its original crate output would lose that adjacency.
+              install -Dm755 ${crates.project.workspaceMembers.nuschld.build}/bin/nuschld "$out/bin/nuschld"
+              install -Dm755 ${crates.project.workspaceMembers.nuschl-storage-worker.build}/bin/nuschl-storage-worker "$out/bin/nuschl-storage-worker"
               install -Dm644 ${./LICENSE} "$out/share/licenses/nuschl/EUPL-1.2"
               install -Dm644 ${./crates/protocol/proto/LICENSE.mumble} "$out/share/licenses/nuschl/Mumble-BSD"
               ${installNativeNotices}
             '';
-          }
-        );
         # Licences, and on Linux the desktop binary under libexec (screen readers
         # announce the executable's name, not ".nuschl-wrapped") with wrappers.
         packageLayout = ''
@@ -583,6 +579,8 @@
         packages.release-notices-windows = releaseNotices.windows.bundle;
         packages.release-notices-macos = releaseNotices.macos.bundle;
         packages.release-notices-web = releaseNotices.web.bundle;
+        packages.release-rtc-license-inventory = rtcNotices.inventory;
+        packages.release-notices-rtc = rtcNotices.bundle;
         # Keep share-link routes at the root; the Svelte client lives at /app/.
         packages.web-site = pkgs.runCommand "nuschl-web-site" { } ''
           cp -R ${./web/site} "$out"
@@ -714,7 +712,7 @@
             vm-home-manager = homeManagerChecks.vm;
             # nuschld under the module with stock clients (`nix build .#checks.x86_64-linux.vm-server`).
             vm-server = import ./nix/vm-server.nix {
-              inherit pkgs;
+              inherit pkgs serverPackage;
               nuschl = package;
               module = self.nixosModules.default;
               witnessModule = self.nixosModules.witness;

@@ -8,9 +8,10 @@ from pathlib import Path
 import runpy
 import sys
 import argparse
+import json
 
 parser = argparse.ArgumentParser(description=__doc__)
-parser.add_argument("--scope", choices=["all", "linux-nix", "linux-aarch64-nix", "windows-x86_64", "macos-universal", "web"], required=True)
+parser.add_argument("--scope", choices=sorted(json.loads(Path(__file__).with_name("notice-scopes.json").read_bytes())), required=True)
 parser.add_argument("directory", type=Path)
 args = parser.parse_args()
 source = Path(__file__).resolve().parent

@@ -14,7 +14,27 @@ let
     scope:
     let
       policy = scopes.${scope} or (throw "unknown release notice scope ${scope}");
-      rootsByTarget = builtins.filter (item: builtins.elem item.target policy.targets) roots;
+      group = policy.root_group or "main";
+      selectRoot =
+        item:
+        let
+          standalone = item.standalone or { };
+          selections =
+            if group == "main" then
+              [ item ]
+            else if group == "all" then
+              [ item ] ++ map (name: standalone.${name}) (builtins.attrNames standalone)
+            else
+              [ (standalone.${group} or (throw "missing standalone root group ${group}")) ];
+        in
+        {
+          inherit (item) target;
+          packages = lib.unique (lib.concatMap (selection: selection.packages) selections);
+          features = lib.unique (lib.concatMap (selection: selection.features or [ ]) selections);
+        };
+      rootsByTarget = map selectRoot (
+        builtins.filter (item: builtins.elem item.target policy.targets) roots
+      );
       external = import ./release-external-notices.nix {
         inherit pkgs toolchain projectRoot;
         # A native package must not gain a web/NPM build dependency for notices.

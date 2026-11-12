@@ -1699,6 +1699,16 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
       manual metadata renewal, verify the downloaded pair, update the protected
       latest ledger and assign the next deadline before the maximum 30-day expiry.
       No cron/reminder service or automatic publication is implemented or implied.
+- [ ] Resolve the standalone RTC probe's previously missing third-party notices:
+      its old package installed only EUPL and no inventory selected its actual
+      str0m/dimpl/RustCrypto closure. Add accurate standalone native scopes and
+      source-pinned original notice bytes; keep the bundle gate closed on any
+      unresolved upstream attribution instead of relabeling desktop notices.
+- [ ] Review the server-mode storage worker's blast-radius boundary separately:
+      it is a direct child with cleared environment, with NixOS service hardening
+      applied to parent and children, rather than the client storage bwrap path.
+      Standalone CLI use and authorized PostgreSQL/file access need a reviewed
+      narrow worker boundary; this builder migration does not redesign it.
 - [ ] Finish the per-crate build migration: the default desktop, web SDK/workers,
       witness and updater helpers use crate2nix, but `flake.nix` still builds
       `server`, `rtc-probe`, Windows and Darwin slices with Crane; the explicit
