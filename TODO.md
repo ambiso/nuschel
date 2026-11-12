@@ -1776,9 +1776,11 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
         (the content worker keeps none), local clipboard image adapters for
         Windows/macOS and terminal-mediated image MIME over SSH. Pure Wayland KGX
         without data-control or XWayland currently refuses image paste explicitly.
-  - [ ] **iOS — cancelled/deferred by the user:** Swift + SwiftUI over UniFFI; staged
-        milestones are retained in "Deferred iOS plan" above. Review mobile processing and
-        codec boundaries; CallKit, background audio, push extension.
+  - [ ] **iOS — feasibility resumed after the supplied Xcode archive:** Swift +
+        SwiftUI over UniFFI; staged milestones remain in "iOS feasibility and app
+        plan" above. Archive integrity, installed macOS/Xcode and Simulator UI
+        remain unproven. Review mobile processing/codec boundaries, CallKit,
+        background audio and push extensions.
   - [ ] **Android — after the initial iOS client**: Kotlin + Compose over UniFFI;
         full protocol natively; workers as `isolatedProcess` services; platform
         echo cancellation; foreground service.
@@ -1800,6 +1802,16 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
           session; voice (WebAudio, getUserMedia, datagrams through the tunnel);
           IndexedDB storage and identity in a Worker; its version requirement; the
           Svelte build in the Nix site package; a real-browser test; WebTransport.
+    - [ ] Bound content-worker retirement/retry before activating the browser
+          content broker. `ContentService.stopWorker()` requests termination and
+          immediately permits replacement; per-instance job/byte bounds do not
+          establish an aggregate bound across still-retiring workers. A throwing
+          `terminate()` also interrupts `expire`/`rejectAll` before promise cleanup
+          (source findings, not a reproduced browser resource-exhaustion proof).
+          Preserve ordinary invalid-image recovery and queued cancellation, while
+          preventing retry/cancel loops from multiplying unresolved owners. Use
+          actual stalled-worker evidence and distinguish logical retirement from
+          physical exit; this producer is currently unused by the App.
     - [ ] Wire the real async browser content broker: preserve SDK-owned original
           authenticated source/mode; bind render tickets to server/connection,
           conversation/message/revision/digest; reject stale derivatives. The
