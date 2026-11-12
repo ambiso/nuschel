@@ -27,7 +27,7 @@ def run(args, root, shell, registry, bots, profile, second_port, second_pin, sho
         x, y = node.centre(); shell.click(g["x"] + x, g["y"] + y, button=button)
     def select(which):
         find(names[which] + ";", prefix=True).press()
-        eventually(lambda: names[which] in shell.window()["title"], "text selection did not change")
+        eventually(lambda: find(names[which] + ";", prefix=True).call("Accessible", "GetState")[0][0] & (1 << 23), "text selection did not change")
     def record(step):
         tree = list(items(app))
         links = [name for _, role, name, _ in tree if role == "push button" and name.startswith("Go to ")]
@@ -49,6 +49,9 @@ def run(args, root, shell, registry, bots, profile, second_port, second_pin, sho
     find("Unmute").press(); eventually(lambda: not own("alpha")["self_muted"], "primary unmute not acknowledged")
     select("beta"); find("Connect").press()
     eventually(lambda: own("beta"), "secondary login absent")
+    if own("beta")["self_deafened"]:
+        record("beta-initial-deafened")
+        find("Undeafen").press(); eventually(lambda: not own("beta")["self_deafened"], "secondary undeafen not acknowledged")
     assert own("beta")["self_muted"] and not own("beta")["self_deafened"]
     initial = record("two-servers-ptt-idle")
     time.sleep(.5)
@@ -74,6 +77,7 @@ def run(args, root, shell, registry, bots, profile, second_port, second_pin, sho
     control = find("Deafen"); x, y = control.centre()
     g = json.loads(shell.eval("JSON.stringify((()=>{const w=global.get_window_actors().map(a=>a.meta_window).find(w=>w.get_title().startsWith('Nuschl'));const b=w.get_buffer_rect();return{x:b.x,y:b.y};})())"))
     shell.click(g["x"] + x, g["y"] + y, count=8)
+    time.sleep(.5); record("rapid-deafen-observed")
     eventually(lambda: own("beta")["self_muted"] and not own("beta")["self_deafened"], "rapid final intent not acknowledged")
     record("rapid-deafen-final")
     find("Unmute").press(); eventually(lambda: not own("beta")["self_muted"], "unmute after rapid gestures failed")
@@ -82,9 +86,8 @@ def run(args, root, shell, registry, bots, profile, second_port, second_pin, sho
     select("beta"); find("Undeafen").press(); eventually(lambda: not own("beta")["self_deafened"], "undeafen failed")
     find("Unmute").press(); eventually(lambda: not own("beta")["self_muted"], "primary unmute failed")
     channel = find("Lobby", role=None)
-    point(channel); point(channel)
     # A real double click is generated with one device gesture.
-    point(channel); g = json.loads(shell.eval("JSON.stringify((()=>{const w=global.get_window_actors().map(a=>a.meta_window).find(w=>w.get_title().startsWith('Nuschl'));const b=w.get_buffer_rect();return{x:b.x,y:b.y};})())")); cx, cy = channel.centre(); shell.click(g["x"] + cx, g["y"] + cy, count=2)
+    g = json.loads(shell.eval("JSON.stringify((()=>{const w=global.get_window_actors().map(a=>a.meta_window).find(w=>w.get_title().startsWith('Nuschl'));const b=w.get_buffer_rect();return{x:b.x,y:b.y};})())")); cx, cy = channel.centre(); shell.click(g["x"] + cx, g["y"] + cy, count=2)
     eventually(lambda: own("beta")["channel"] == 1, "voice channel move did not arrive")
     record("channel-moved")
     edit("beta"); entry = find("Server name", "entry"); entry.call("Component", "GrabFocus"); shell.chord("Control_L", "a"); shell.type("Voice Beta renamed"); find("Save").press(); names["beta"] = "Voice Beta renamed"
@@ -92,7 +95,7 @@ def run(args, root, shell, registry, bots, profile, second_port, second_pin, sho
     record("server-renamed")
     point(find("Offline earlier;", prefix=True), button=3); find("Edit server…", "menu item").press(); find("Remove saved server").press()
     select("alpha"); find("Go to " + names["beta"], prefix=True).press()
-    eventually(lambda: names["beta"] in shell.window()["title"], "voice row navigated through stale runtime index")
+    eventually(lambda: find(names["beta"] + ";", prefix=True).call("Accessible", "GetState")[0][0] & (1 << 23), "voice row navigated through stale runtime index")
     record("earlier-server-removed")
     # End muted on both, then prove the hang-up scope independently of text selection.
     find("Mute").press(); eventually(lambda: own("beta")["self_muted"], "final mute failed")

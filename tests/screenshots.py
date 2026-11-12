@@ -343,7 +343,7 @@ def main():
         murmur = Murmur(args.murmur, root, port)
         bot_options = []
         resizing = "resize" in args.scenes.split(",")
-        if resizing or {"all", "scroll", "search"} & set(args.scenes.split(",")):
+        if resizing or {"all", "scroll", "search", "voice-status"} & set(args.scenes.split(",")):
             # The scroll scene fills several pages of history quickly; the
             # stock server otherwise drops text beyond one message a second.
             # The bots need not wait for it either (Nuschl itself still does).
@@ -369,7 +369,12 @@ def main():
             (root / "rail-server").mkdir()
             rail_port = free_port()
             rail_murmur = Murmur(args.murmur, root / "rail-server", rail_port)
-            rail_murmur.seed(); rail_murmur.start()
+            rail_murmur.seed()
+            if "voice-status" in args.scenes.split(","):
+                # The rapid-control matrix measures client intent, not the stock
+                # server's shared five-control-message burst limiter.
+                rail_murmur.ini.write_text(rail_murmur.ini.read_text() + "messagelimit=1000\nmessageburst=1000\n")
+            rail_murmur.start()
         bots = []
         app = None
         wormhole = None
