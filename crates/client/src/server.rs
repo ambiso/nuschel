@@ -303,9 +303,16 @@ impl ServerState {
             .map(|user| user.channel)
     }
 
-    /// Where local history keeps this server's conversations: bound to its
-    /// address and certificate.
+    /// Where local history keeps this server's conversations: the configured
+    /// CA origin, or its address and explicit certificate pin.
     pub fn history_identity(&self) -> Option<String> {
+        if self.bookmark.certificate_sha256.is_none() {
+            // Offline cache lookup is not permission to trust a network peer.
+            return Some(nuschl_core::bookmark::webpki_history_identity(
+                &self.bookmark.host,
+                self.bookmark.port,
+            ));
+        }
         self.peer_sha256
             .as_ref()
             .or(self.bookmark.certificate_sha256.as_ref())

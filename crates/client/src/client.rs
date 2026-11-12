@@ -349,10 +349,11 @@ impl Client {
         let Some(prompt) = server.certificate.take() else {
             return false;
         };
-        let changed = server
-            .history_identity()
-            .is_some_and(|identity| identity != server.bookmark.history_identity(&prompt.sha256));
+        let identity = server.history_identity();
         server.bookmark.certificate_sha256 = Some(prompt.sha256);
+        // No previously observed peer can stand in for this new explicit pin.
+        server.peer_sha256 = None;
+        let changed = identity != server.history_identity();
         self.updates.push(Update::BookmarksChangedNow);
         if changed {
             self.forget_server_history(index);
@@ -1807,12 +1808,11 @@ impl Client {
             }
             ServerEvent::PeerCertificate(pin) => {
                 let identity = server.history_identity();
-                server.peer_sha256 = Some(pin.clone());
+                server.peer_sha256 = Some(pin);
                 server.security = SessionSecurity::TransportOnly;
-                if server.bookmark.certificate_sha256.is_none() {
-                    server.bookmark.certificate_sha256 = Some(pin);
-                    self.updates.push(Update::BookmarksChangedNow);
-                }
+                // No configured pin means this successful session already
+                // passed WebPKI. Do not turn normal CA renewal into a pin change.
+                // Existing pins, including older pins of unknown origin, stay strict.
                 // Reconnecting to the same server leaves the timeline (and
                 // where the reader is in it) alone; a new identity has
                 // other history.
@@ -2399,6 +2399,7 @@ mod tests {
     #[test]
     fn a_new_certificate_cannot_keep_old_rows_or_accept_an_old_history_page() {
         let (mut client, recorder, id) = connected();
+        client.servers[0].bookmark.certificate_sha256 = Some("ab".repeat(32));
         client.open(0, 2).unwrap();
         let old_ticket = recorder.pages.lock().unwrap().last().unwrap().1.clone();
         client.handle(message(&id, 2, "old certificate's private history", 1));
@@ -2459,6 +2460,35 @@ mod tests {
                 .channels
                 .iter()
                 .find(|channel| channel.id == 2)
+                .unwrap()
+                .timeline
+                .messages
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn webpki_leaf_renewal_keeps_origin_history_without_creating_a_pin() {
+        let (mut client, recorder, id) = connected();
+        assert!(client.servers[0].bookmark.certificate_sha256.is_none());
+        client.open(0, 2).unwrap();
+        let identity = client.servers[0].history_identity();
+        let ticket = recorder.pages.lock().unwrap().last().unwrap().1.clone();
+        client.handle(message(&id, 2, "verified origin history", 1));
+        client.handle(Input::Server {
+            server: id,
+            generation: 1,
+            event: ServerEvent::PeerCertificate("cd".repeat(32)),
+        });
+        assert_eq!(client.servers[0].history_identity(), identity);
+        assert!(client.navigation.accepts(&ticket));
+        assert!(client.servers[0].bookmark.certificate_sha256.is_none());
+        assert_eq!(
+            client.servers[0]
+                .channels
+                .iter()
+                .find(|c| c.id == 2)
                 .unwrap()
                 .timeline
                 .messages

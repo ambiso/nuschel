@@ -212,13 +212,17 @@ impl Session {
     /// A session whose first message (the tunnel's `Open`) is waiting in
     /// [`Session::take_outgoing`].
     pub fn new(login: Login) -> Result<Self, String> {
+        Self::with_roots(login, rustls::RootCertStore::from_iter(webpki_roots()))
+    }
+
+    // Private fixture injection only. No root-store override is exported to JS.
+    fn with_roots(login: Login, roots: rustls::RootCertStore) -> Result<Self, String> {
         let open = tunnel::encode(&Frame::Open {
             host: &login.host,
             port: login.port,
         })
         .ok_or("the server's address is not valid")?;
         let provider = Arc::new(rustls::crypto::ring::default_provider());
-        let roots = rustls::RootCertStore::from_iter(webpki_roots());
         let webpki = WebPkiServerVerifier::builder_with_provider(Arc::new(roots), provider.clone())
             .build()
             .map_err(|error| error.to_string())?;
@@ -498,9 +502,16 @@ impl Session {
             .as_ref()
             .filter(|(_, rejected)| !rejected)
             .map(|(pin, _)| {
-                nuschl_core::bookmark::fingerprint(
-                    format!("{}:{}:{pin}", self.login.host, self.login.port).as_bytes(),
-                )
+                if self.login.pin.is_some() {
+                    nuschl_core::bookmark::fingerprint(
+                        format!("{}:{}:{pin}", self.login.host, self.login.port).as_bytes(),
+                    )
+                } else {
+                    nuschl_core::bookmark::webpki_history_identity(
+                        &self.login.host,
+                        self.login.port,
+                    )
+                }
             })
     }
 
@@ -1135,6 +1146,193 @@ mod tests {
         assert!(s.send_voice(1, vec![1], false).is_err());
         s.disconnected();
         assert_eq!(s.voice_policy(), (true, true));
+    }
+
+    fn pki_authority() -> rcgen::CertifiedIssuer<'static, rcgen::KeyPair> {
+        let mut p = rcgen::CertificateParams::new(Vec::<String>::new()).unwrap();
+        p.distinguished_name
+            .push(rcgen::DnType::CommonName, "Private browser test root");
+        p.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+        p.key_usages = vec![
+            rcgen::KeyUsagePurpose::KeyCertSign,
+            rcgen::KeyUsagePurpose::CrlSign,
+        ];
+        rcgen::CertifiedIssuer::self_signed(p, rcgen::KeyPair::generate().unwrap()).unwrap()
+    }
+    fn pki_leaf(
+        issuer: &rcgen::Issuer<'_, rcgen::KeyPair>,
+        host: &str,
+        expired: bool,
+    ) -> (
+        CertificateDer<'static>,
+        rustls::pki_types::PrivateKeyDer<'static>,
+    ) {
+        let mut p = rcgen::CertificateParams::new(vec![host.into()]).unwrap();
+        p.extended_key_usages = vec![rcgen::ExtendedKeyUsagePurpose::ServerAuth];
+        if expired {
+            p.not_before = rcgen::date_time_ymd(2000, 1, 1);
+            p.not_after = rcgen::date_time_ymd(2001, 1, 1);
+        }
+        let key = rcgen::KeyPair::generate().unwrap();
+        (
+            p.signed_by(&key, issuer).unwrap().der().clone(),
+            rustls::pki_types::PrivateKeyDer::Pkcs8(key.serialize_der().into()),
+        )
+    }
+    fn pki_handshake(
+        pin: Option<String>,
+        root: CertificateDer<'static>,
+        chain: Vec<CertificateDer<'static>>,
+        key: rustls::pki_types::PrivateKeyDer<'static>,
+    ) -> (Session, Vec<u16>) {
+        let mut roots = rustls::RootCertStore::empty();
+        roots.add(root).unwrap();
+        let mut client = Session::with_roots(
+            Login {
+                host: "localhost".into(),
+                port: 64738,
+                username: "fixture".into(),
+                password: Some("private-fixture-password".into()),
+                tokens: vec![],
+                pin,
+            },
+            roots,
+        )
+        .unwrap();
+        let config = rustls::ServerConfig::builder_with_provider(Arc::new(
+            rustls::crypto::ring::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .with_no_client_auth()
+        .with_single_cert(chain, key)
+        .unwrap();
+        let mut server = rustls::ServerConnection::new(Arc::new(config)).unwrap();
+        client.take_outgoing();
+        client.receive(&tunnel::encode(&Frame::Opened { udp: false }).unwrap());
+        let mut application = BytesMut::new();
+        for _ in 0..32 {
+            let mut progress = false;
+            for frame in client.take_outgoing() {
+                if let Ok(Frame::Stream(mut bytes)) = tunnel::decode(&frame) {
+                    progress = true;
+                    server.read_tls(&mut bytes).unwrap();
+                    if server.process_new_packets().is_err() {
+                        break;
+                    }
+                }
+            }
+            while server.wants_write() {
+                progress = true;
+                let mut bytes = Vec::new();
+                server.write_tls(&mut bytes).unwrap();
+                client.receive(&tunnel::encode(&Frame::Stream(&bytes)).unwrap());
+            }
+            let mut bytes = [0; 4096];
+            while let Ok(count) = server.reader().read(&mut bytes) {
+                if count == 0 {
+                    break;
+                }
+                application.extend_from_slice(&bytes[..count]);
+            }
+            if !progress {
+                break;
+            }
+        }
+        let mut frames = vec![];
+        while let Ok(Some(frame)) = decode_control(&mut application) {
+            frames.push(frame.kind);
+        }
+        (client, frames)
+    }
+    #[test]
+    fn private_ca_fullchain_and_leaf_renewal_require_no_pin_or_prompt() {
+        let root = pki_authority();
+        let mut p = rcgen::CertificateParams::new(Vec::<String>::new()).unwrap();
+        p.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+        p.key_usages = vec![
+            rcgen::KeyUsagePurpose::KeyCertSign,
+            rcgen::KeyUsagePurpose::CrlSign,
+        ];
+        let intermediate =
+            rcgen::CertifiedIssuer::signed_by(p, rcgen::KeyPair::generate().unwrap(), &root)
+                .unwrap();
+        let expected = nuschl_core::bookmark::webpki_history_identity("localhost", 64738);
+        let mut previous = None;
+        for _ in 0..2 {
+            let (leaf, key) = pki_leaf(&intermediate, "localhost", false);
+            let (mut session, frames) = pki_handshake(
+                None,
+                root.der().clone(),
+                vec![leaf.clone(), intermediate.der().clone()],
+                key,
+            );
+            assert!(frames.contains(&kind::AUTHENTICATE));
+            assert_eq!(session.history_identity(), Some(expected.clone()));
+            let events = session.take_events();
+            assert!(
+                !events
+                    .iter()
+                    .any(|e| matches!(e, Event::Certificate { .. }))
+            );
+            assert!(
+                events
+                    .iter()
+                    .any(|e| matches!(e, Event::Server(ServerEvent::PeerCertificate(_))))
+            );
+            let current = hex(&Sha256::digest(leaf.as_ref()));
+            if let Some(old) = previous {
+                assert_ne!(old, current);
+            }
+            previous = Some(current);
+        }
+        for (host, expired, include_intermediate) in [
+            ("wrong.test", false, true),
+            ("localhost", true, true),
+            ("localhost", false, false),
+        ] {
+            let (leaf, key) = pki_leaf(&intermediate, host, expired);
+            let mut chain = vec![leaf];
+            if include_intermediate {
+                chain.push(intermediate.der().clone());
+            }
+            let (mut session, frames) = pki_handshake(None, root.der().clone(), chain, key);
+            assert!(session.is_closed());
+            assert!(session.history_identity().is_none());
+            assert!(!frames.contains(&kind::AUTHENTICATE));
+            assert!(
+                session
+                    .take_events()
+                    .iter()
+                    .any(|e| matches!(e, Event::Certificate { .. }))
+            );
+        }
+        let other = pki_authority();
+        let (leaf, key) = pki_leaf(&other, "localhost", false);
+        let (mut session, frames) = pki_handshake(None, root.der().clone(), vec![leaf], key);
+        assert!(session.is_closed());
+        assert!(!frames.contains(&kind::AUTHENTICATE));
+        assert!(
+            session
+                .take_events()
+                .iter()
+                .any(|e| matches!(e, Event::Certificate { .. }))
+        );
+        let (leaf, key) = pki_leaf(&intermediate, "localhost", false);
+        let (mut session, frames) = pki_handshake(
+            Some("00".repeat(32)),
+            root.der().clone(),
+            vec![leaf, intermediate.der().clone()],
+            key,
+        );
+        assert!(session.is_closed());
+        assert!(!frames.contains(&kind::AUTHENTICATE));
+        assert!(
+            session
+                .take_events()
+                .iter()
+                .any(|e| matches!(e, Event::Certificate { changed: true, .. }))
+        );
     }
 
     #[test]

@@ -1666,12 +1666,17 @@ mod tests {
     use super::*;
     use nuschl_core::audio::TransmitMode;
     #[test]
-    fn validates_endpoints_and_binds_history_to_certificate() {
+    fn validates_endpoints_and_distinguishes_ca_origin_from_pinned_history() {
         assert!(ServerBookmark::new("", "mumble://example.org", 64738, "me").is_err());
         assert!(ServerBookmark::new("", "localhost", 0, "me").is_err());
         assert!(ServerBookmark::new("", "localhost", 64738, "").is_err());
-        let server = ServerBookmark::new("", "[::1]", 64738, "me").unwrap();
+        let mut server = ServerBookmark::new("", "[::1]", 64738, "me").unwrap();
         assert_eq!(server.host, "::1");
+        assert_eq!(
+            server.history_identity("one"),
+            server.history_identity("two")
+        );
+        server.certificate_sha256 = Some("one".into());
         assert_ne!(
             server.history_identity("one"),
             server.history_identity("two")

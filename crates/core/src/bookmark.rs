@@ -133,11 +133,28 @@ impl ServerBookmark {
         }
     }
 
-    /// Certificate-bound history identity. A different certificate cannot inherit
-    /// another server's local history just by reusing a display name or endpoint.
+    /// Pins retain their original certificate namespace. Unpinned connections
+    /// require WebPKI, whose identity is the configured origin, not a renewable
+    /// leaf. This cache name does not authorize any network connection.
     pub fn history_identity(&self, peer_sha256: &str) -> String {
-        fingerprint(format!("{}:{}:{}", self.host, self.port, peer_sha256).as_bytes())
+        if self.certificate_sha256.is_some() {
+            fingerprint(format!("{}:{}:{}", self.host, self.port, peer_sha256).as_bytes())
+        } else {
+            webpki_history_identity(&self.host, self.port)
+        }
     }
+}
+
+/// Domain-separated cache identity for a configured, unpinned WebPKI origin.
+/// The verifier must still validate the actual hostname and chain before I/O.
+pub fn webpki_history_identity(host: &str, port: u16) -> String {
+    fingerprint(
+        format!(
+            "nuschl.history.webpki.v1\0{}:{port}",
+            host.to_ascii_lowercase()
+        )
+        .as_bytes(),
+    )
 }
 
 /// Lowercase hex SHA-256.
@@ -146,4 +163,30 @@ pub fn fingerprint(bytes: &[u8]) -> String {
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect()
+}
+
+#[cfg(test)]
+mod pki_history_tests {
+    use super::*;
+    #[test]
+    fn ca_origin_history_survives_leaf_renewal_but_never_aliases_a_pin() {
+        let mut bookmark: ServerBookmark = serde_json::from_str(
+            r#"{"id":"test","name":"test","host":"voice.test","port":64738,"username":"fixture"}"#,
+        )
+        .unwrap();
+        let first = bookmark.history_identity(&"ab".repeat(32));
+        assert_eq!(first, bookmark.history_identity(&"cd".repeat(32)));
+        assert_ne!(first, webpki_history_identity("other.test", 64738));
+        assert_ne!(first, webpki_history_identity("voice.test", 64739));
+        bookmark.certificate_sha256 = Some("ab".repeat(32));
+        assert_eq!(
+            bookmark.history_identity(&"ab".repeat(32)),
+            fingerprint(format!("voice.test:64738:{}", "ab".repeat(32)).as_bytes())
+        );
+        assert_ne!(first, bookmark.history_identity(&"ab".repeat(32)));
+        assert_ne!(
+            bookmark.history_identity(&"ab".repeat(32)),
+            bookmark.history_identity(&"cd".repeat(32))
+        );
+    }
 }
