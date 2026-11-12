@@ -1,65 +1,131 @@
 // SPDX-License-Identifier: EUPL-1.2
-// No session object, credentials, network endpoints or storage API is accepted.
-// This is a separate JS/WASM realm, not a promise of a separate OS process.
-import init,{VoiceEncoder,VoiceDecoder} from "./audio-codec/nuschl_audio_wasm.js";
-import {FRAME,MAX_PACKET,MAX_PCM,OUTPUT_CHANNELS,MAX_STREAMS,decimal} from "./audio-protocol.js";
-let encoder=null,epoch="",enabled=false;
+// No session, credentials, endpoint or storage capability crosses this boundary.
+// Codec/WASM work stays here, never in the UI or AudioWorklet callback.
+import init,{VoiceEncoder,VoicePlayout} from "./audio-codec/nuschl_audio_wasm.js";
+import {FRAME,MAX_PACKET,MAX_STREAMS,decimal} from "./audio-protocol.js";
+let encoder=null,epoch="",enabled=false,receiveEpoch="",playback=false,loaded=false;
+let pendingConfigure=null,port=null,wanted=null,lastRequest=0,lastStart=null,lastDemand=null;
 const speakers=new Map();
-let burst=0,windowStart=performance.now();
-function expire(now) {
-  for(const [speaker,old] of speakers)if(now-old.last>2000){old.decoder.free();speakers.delete(speaker);}
+let burst=0,created=0,windowStart=performance.now();
+const validEpoch=value=>typeof value==="string"&&value.length>0&&value.length<=200;
+const positive=value=>Number.isSafeInteger(value)&&value>0;
+function freeSpeakers() {
+  for(const state of speakers.values())state.receiver.free();
+  speakers.clear();lastDemand=null;
 }
-function free() {
-  encoder?.free();encoder=null;
-  for(const state of speakers.values())state.decoder.free();
-  speakers.clear();
+function expire(now) {
+  for(const [speaker,state] of speakers)if(now-state.last>2000){state.receiver.free();speakers.delete(speaker);}
+}
+function ready() {
+  if(!loaded||!wanted||!port)return;
+  port.postMessage({kind:"playout-ready",epoch:wanted.epoch,enabled:wanted.enabled&&playback&&wanted.epoch===receiveEpoch,clock_generation:wanted.clock_generation});
 }
 function configure(data) {
-  if(data.capture&&(!Number.isInteger(data.bitrate)||data.bitrate<6000||data.bitrate>128000))throw new Error("Invalid voice bitrate");
-  free();epoch=data.epoch;enabled=Boolean(data.capture);
-  if(enabled){encoder=new VoiceEncoder();encoder.set_bitrate(data.bitrate);}
+  if(!validEpoch(data.epoch)||!validEpoch(data.receive_epoch)||typeof data.capture!=="boolean"||typeof data.playback!=="boolean"||
+      data.capture&&(!Number.isInteger(data.bitrate)||data.bitrate<6000||data.bitrate>128000))throw new Error("Invalid media configuration");
+  if(!loaded){pendingConfigure=data;return;}
+  // TX policy changes never destroy an independently authorized receive decoder.
+  if(data.epoch!==epoch||data.capture!==enabled||enabled&&data.bitrate!==encoderBitrate) {
+    encoder?.free();encoder=null;epoch=data.epoch;enabled=data.capture;
+    if(enabled){encoder=new VoiceEncoder();encoder.set_bitrate(data.bitrate);}
+    encoderBitrate=data.bitrate;
+  }
+  if(receiveEpoch!==data.receive_epoch||playback!==data.playback)freeSpeakers();
+  receiveEpoch=data.receive_epoch;playback=data.playback;ready();
 }
-await init();
-postMessage({kind:"ready"});
-setInterval(()=>{expire(performance.now());postMessage({kind:"heartbeat"});},500);
+let encoderBitrate=0;
+function direct(data) {
+  if(!data||typeof data!=="object")return;
+  if(data.kind==="playout-configure") {
+    if(!validEpoch(data.epoch)||typeof data.enabled!=="boolean"||!positive(data.clock_generation))return;
+    if(wanted&&data.clock_generation<wanted.clock_generation)return;
+    if(wanted&&data.clock_generation===wanted.clock_generation) {
+      if(data.epoch===wanted.epoch&&data.enabled===wanted.enabled)ready();
+      return;
+    }
+    if(wanted)freeSpeakers(); // explicit rebuffer/revocation, not a TX change
+    wanted={epoch:data.epoch,enabled:data.enabled,clock_generation:data.clock_generation};
+    lastStart=null;ready();return;
+  }
+  if(data.kind!=="render"||!loaded||!playback||!wanted?.enabled||wanted.epoch!==receiveEpoch||
+      data.epoch!==receiveEpoch||data.clock_generation!==wanted.clock_generation||!positive(data.request)||data.request<=lastRequest||
+      !Number.isSafeInteger(data.start_frame)||data.start_frame<0||data.start_frame>Number.MAX_SAFE_INTEGER-480||data.start_frame%480!==0||data.frames!==480||
+      lastStart!==null&&data.start_frame!==lastStart+480)return;
+  lastRequest=data.request;lastStart=data.start_frame;
+  try {
+    const now=performance.now();
+    // Audio clock is authoritative. After a worker scheduling gap, discard
+    // old decode/packet caches; never run a wall-clock catch-up burst.
+    if(lastDemand!==null&&now-lastDemand>100)freeSpeakers();
+    lastDemand=now;expire(now);
+    const output=[],transfers=[];
+    for(const [speaker,state] of speakers) {
+      const samples=state.receiver.render();
+      if(!samples.length)continue;
+      if(!(samples instanceof Float32Array)||samples.length!==960||!samples.every(Number.isFinite))throw new Error("Invalid playout PCM");
+      const volume=state.receiver.gain();
+      if(!Number.isFinite(volume)||volume<0||volume>4)throw new Error("Invalid playout gain");
+      output.push({speaker,samples,channels:2,frames:480,volume});transfers.push(samples.buffer);
+    }
+    port.postMessage({kind:"playout",epoch:data.epoch,clock_generation:data.clock_generation,request:data.request,start_frame:data.start_frame,frames:480,speakers:output},transfers);
+  } catch(error) {
+    // A fatal render error cannot release backpressure into more decode work.
+    playback=false;freeSpeakers();ready();
+    postMessage({kind:"playout-error",epoch:receiveEpoch,message:String(error?.message||error).slice(0,200)});
+  }
+}
+function packet(data) {
+  if(!playback||data.epoch!==receiveEpoch) {
+    if(validEpoch(data.epoch)&&positive(data.job))postMessage({kind:"packet-queued",epoch:data.epoch,job:data.job});
+    return;
+  }
+  try {
+    if(!Number.isInteger(data.speaker)||data.speaker<0||data.speaker>0xffffffff||!positive(data.job)||
+        !(data.opus instanceof Uint8Array)||data.opus.length<1||data.opus.length>MAX_PACKET||!decimal(data.sequence)||
+        BigInt(data.sequence)>((1n<<63n)-1n)||typeof data.end!=="boolean"||!Number.isFinite(data.volume)||data.volume<0||data.volume>4)throw new Error("Invalid encoded packet");
+    // Full packing validation precedes speaker creation and any timing/gain state.
+    VoicePlayout.validate_packet(data.opus);
+    const now=performance.now();expire(now);
+    if(now-windowStart>=1000){windowStart=now;burst=0;created=0;}
+    if(++burst>2000)throw new Error("Media admission budget exhausted");
+    let state=speakers.get(data.speaker);
+    if(!state) {
+      if(speakers.size>=MAX_STREAMS||created>=MAX_STREAMS)throw new Error("Too many active speakers");
+      created++;state={receiver:new VoicePlayout(),last:now,count:0,window:now};speakers.set(data.speaker,state);
+    }
+    if(now-state.window>=1000){state.window=now;state.count=0;}
+    if(++state.count>200)throw new Error("Speaker admission budget exhausted");
+    state.receiver.push(BigInt(data.sequence),data.opus,data.end,data.volume,BigInt(Math.floor(now*1000)));
+    state.last=now;
+    postMessage({kind:"packet-queued",epoch:receiveEpoch,job:data.job});
+  } catch(error) {
+    postMessage({kind:"media-error",operation:"decode",epoch:receiveEpoch,job:data.job,message:String(error?.message||error).slice(0,200)});
+  }
+}
+// Register before asynchronous WASM initialization. Only the most recent
+// configuration and one transferred port are retained while loading.
 onmessage=({data})=>{
   if(!data||typeof data!=="object")return;
   try {
-    if(data.kind==="configure") {
-      if(typeof data.epoch!=="string"||data.epoch.length>200)throw new Error("Invalid media epoch");
-      configure(data);return;
+    if(data.kind==="playout-port") {
+      if(port||!data.port||typeof data.port.postMessage!=="function"){data.port?.close();return;}
+      port=data.port;port.onmessage=({data})=>direct(data);port.start?.();return;
     }
-    if(data.kind==="close"){free();close();return;}
+    if(data.kind==="configure"){configure(data);return;}
+    if(data.kind==="close"){encoder?.free();encoder=null;freeSpeakers();port?.close();port=null;close();return;}
+    if(!loaded)return;
+    if(data.kind==="decode"){packet(data);return;}
     if(data.epoch!==epoch)return;
     if(data.kind==="encode") {
-      if(!enabled||!encoder||!(data.samples instanceof Float32Array)||data.samples.length!==FRAME)throw new Error("Invalid capture frame");
-      // Bounds precede wasm-bindgen's argument copy into linear memory.
+      if(!enabled||!encoder||!positive(data.job)||!(data.samples instanceof Float32Array)||data.samples.length!==FRAME)throw new Error("Invalid capture frame");
       const opus=encoder.encode(data.samples);
       postMessage({kind:"encoded",epoch,job:data.job,opus},[opus.buffer]);
-    } else if(data.kind==="decode") {
-      if(!Number.isInteger(data.speaker)||data.speaker<0||data.speaker>0xffffffff||
-          !(data.opus instanceof Uint8Array)||data.opus.length<1||data.opus.length>MAX_PACKET||!decimal(data.sequence))throw new Error("Invalid encoded packet");
-      const now=performance.now();
-      expire(now);
-      if(now-windowStart>=1000){windowStart=now;burst=0;}
-      if(++burst>1000)throw new Error("Media decode budget exhausted");
-      let state=speakers.get(data.speaker);
-      if(!state) {
-        if(speakers.size>=MAX_STREAMS)throw new Error("Too many active speakers");
-        state={decoder:new VoiceDecoder(),sequence:null,last:now,count:0,window:now,ended:true};speakers.set(data.speaker,state);
-      }
-      if(now-state.window>=1000){state.window=now;state.count=0;}
-      if(++state.count>200)throw new Error("Speaker decode budget exhausted");
-      const sequence=BigInt(data.sequence);
-      if(state.sequence!==null&&(sequence===state.sequence||!state.ended&&sequence<state.sequence))throw new Error("Repeated or stale voice packet");
-      let samples;
-      try {samples=state.decoder.decode(data.opus);}
-      catch(error){state.decoder.free();speakers.delete(data.speaker);throw error;}
-      if(!(samples instanceof Float32Array)||samples.length<1||samples.length>MAX_PCM*OUTPUT_CHANNELS||samples.length%OUTPUT_CHANNELS!==0)throw new Error("Invalid decoded duration");
-      state.sequence=sequence;state.ended=Boolean(data.end);state.last=now;
-      postMessage({kind:"decoded",epoch,job:data.job,speaker:data.speaker,samples,channels:OUTPUT_CHANNELS,frames:samples.length/OUTPUT_CHANNELS,volume:data.volume},[samples.buffer]);
     }
   } catch(error) {
     postMessage({kind:"media-error",operation:data.kind,epoch,job:data.job,message:String(error?.message||error).slice(0,200)});
   }
 };
+await init();loaded=true;
+if(pendingConfigure){const pending=pendingConfigure;pendingConfigure=null;configure(pending);}
+postMessage({kind:"ready"});ready();
+setInterval(()=>{expire(performance.now());postMessage({kind:"heartbeat"});},500);

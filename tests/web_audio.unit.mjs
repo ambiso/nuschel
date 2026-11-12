@@ -81,19 +81,48 @@ test("a stalled transport closes capture instead of growing an unlimited RPC bac
   await audio.dispose();
 });
 
-test("late decoder replies are discarded while a current realtime frame reaches the worklet",async()=>{
+test("packet inbox stays bounded across stalls and rapid RX revoke/reopen until exact ACK",async()=>{
   const output=[],sent=[];const audio=new BrowserAudio();audio.syncVoice(voice());
   audio.ctx={state:"running",currentTime:0};audio.workerReady=true;audio.nodesReady=true;
   audio.worker={postMessage:message=>sent.push(message),terminate:()=>{}};
   audio.playbackNode={port:{postMessage:message=>output.push(message)},disconnect:()=>{}};
-  const packet={...voice(),speaker:7,sequence:"0",opus:new Uint8Array([0xf8,0xff,0xfe]),end:false,volume:1};
-  assert.equal(audio.receive(packet),true);const current=sent.at(-1);
-  audio.workerMessage({kind:"decoded",epoch:audio.epoch,job:current.job,speaker:7,samples:new Float32Array(AUDIO_FRAME*2),channels:2,frames:AUDIO_FRAME,volume:1});
-  assert.equal(output.length,1);
-  assert.equal(audio.receive({...packet,sequence:"2"}),true);const late=sent.at(-1);
+  const packet=()=>({...audio.voice,speaker:7,sequence:"0",opus:new Uint8Array([0xf8,0xff,0xfe]),end:false,volume:1});
+  for(let index=0;index<16;index++)assert.equal(audio.receive(packet()),true);
+  const first=sent.find(message=>message.kind==="decode");
+  assert.equal(audio.receive(packet()),false);
   await new Promise(resolve=>setTimeout(resolve,150));
-  audio.workerMessage({kind:"decoded",epoch:audio.epoch,job:late.job,speaker:7,samples:new Float32Array(AUDIO_FRAME*2),channels:2,frames:AUDIO_FRAME,volume:1});
-  assert.equal(output.length,1);assert.equal(audio.decodeJobs.size,0);
+  assert.equal(audio.receive(packet()),false,"elapsed time cannot release inbox credit");
+  for(let index=0;index<20;index++) {
+    audio.syncVoice({...voice(),voice_generation:String(100+index*2),deafened:true});
+    audio.syncVoice({...voice(),voice_generation:String(101+index*2)});
+    assert.equal(audio.receive(packet()),false);
+  }
+  assert.equal(audio.decodeJobs.size,16);
+  audio.workerMessage({kind:"packet-queued",epoch:audio.receiveEpoch,job:first.job});
+  assert.equal(audio.decodeJobs.size,16,"wrong RX cannot ACK an old entry");
+  audio.workerMessage({kind:"packet-queued",epoch:first.epoch,job:first.job});
+  assert.equal(audio.decodeJobs.size,15);assert.equal(audio.receive(packet()),true);
+  audio.workerMessage({kind:"packet-queued",epoch:first.epoch,job:first.job});
+  assert.equal(audio.decodeJobs.size,16,"duplicate cannot ACK a newer job");
+  assert.ok(output.every(message=>message.kind==="configure"),"PCM never crosses UI");
+  audio.ctx=null;await audio.dispose();
+});
+
+test("mic mute and bitrate reset TX only, but deafen/route changes revoke RX",async()=>{
+  const messages=[],playback=[];const audio=new BrowserAudio();audio.syncVoice(voice());
+  audio.ctx={state:"running",currentTime:0};audio.workerReady=true;audio.nodesReady=true;
+  audio.worker={postMessage:message=>messages.push(message),terminate:()=>{}};
+  audio.playbackNode={port:{postMessage:message=>playback.push(message)},disconnect:()=>{}};
+  audio.applyPolicy();messages.length=0;playback.length=0;
+  const rx=audio.receiveEpoch,tx=audio.epoch;
+  audio.setLocalPolicy({muted:true});assert.equal(audio.receiveEpoch,rx);assert.notEqual(audio.epoch,tx);
+  audio.syncVoice({...voice(),voice_generation:"10",muted:true,bitrate:24000});
+  assert.equal(audio.receiveEpoch,rx);assert.equal(playback.length,0);
+  assert.ok(messages.every(message=>message.kind!=="configure"||message.receive_epoch===rx));
+  audio.syncVoice({...voice(),voice_generation:"11",deafened:true});assert.notEqual(audio.receiveEpoch,rx);
+  const deaf=audio.receiveEpoch;audio.syncVoice({...voice(),voice_generation:"12"});assert.notEqual(audio.receiveEpoch,deaf);
+  const before=audio.receiveEpoch;audio.syncVoice({...voice(),channel_id:1});assert.notEqual(audio.receiveEpoch,before);
+  assert.ok(playback.every(message=>message.clocked===true));
   audio.ctx=null;await audio.dispose();
 });
 
