@@ -7,7 +7,9 @@
   desktopFiles,
   appstreamXML,
   version,
-  sourceRevision,
+  sourceRevision ? null,
+  sourceNarHash ? null,
+  assetBinding ? null,
   maintainer,
   sourceDateEpoch,
   distribution ? "unstable",
@@ -16,26 +18,37 @@
 assert builtins.match "[0-9][A-Za-z0-9.+~]*" version != null;
 assert builtins.match "[0-9A-Za-z.+~]+" debianRevision != null;
 assert builtins.match "[a-z][a-z0-9-]*" distribution != null;
-assert builtins.match "[0-9a-f]{40}" sourceRevision != null;
+assert
+  (sourceRevision != null && builtins.match "[0-9a-f]{40}" sourceRevision != null)
+  || (sourceNarHash != null && builtins.match "sha256-[A-Za-z0-9+/]{43}=" sourceNarHash != null);
 assert !(pkgs.lib.hasInfix "\n" maintainer || pkgs.lib.hasInfix "\r" maintainer);
 let
-  vendor = craneLib.vendorCargoDeps { cargoLock = projectRoot + /Cargo.lock; };
-  metadataArgs = pkgs.lib.escapeShellArgs [
-    "--revision"
-    sourceRevision
-    "--version"
-    version
-    "--debian-revision"
-    debianRevision
-    "--distribution"
-    distribution
-    "--maintainer"
-    maintainer
-    "--epoch"
-    (toString sourceDateEpoch)
-  ];
+  vendor = craneLib.vendorCargoDeps { cargoLock = projectRoot + "/Cargo.lock"; };
+  metadataArgs = pkgs.lib.escapeShellArgs (
+    [
+      "--version"
+      version
+      "--debian-revision"
+      debianRevision
+      "--distribution"
+      distribution
+      "--maintainer"
+      maintainer
+      "--epoch"
+      (toString sourceDateEpoch)
+    ]
+    ++ pkgs.lib.optionals (sourceRevision != null) [
+      "--revision"
+      sourceRevision
+    ]
+    ++ pkgs.lib.optionals (sourceNarHash != null) [
+      "--source-nar-hash"
+      sourceNarHash
+    ]
+  );
 in
-pkgs.runCommand "nuschl-debian-source-${version}-${debianRevision}"
+pkgs.runCommand
+  (pkgs.lib.strings.sanitizeDerivationName "nuschl-debian-source-${version}-${debianRevision}")
   {
     nativeBuildInputs = [
       pkgs.python3
@@ -45,6 +58,7 @@ pkgs.runCommand "nuschl-debian-source-${version}-${debianRevision}"
     ];
   }
   ''
+    ${pkgs.lib.optionalString (assetBinding != null) "test -s ${assetBinding}"}
     export SOURCE_DATE_EPOCH=${toString sourceDateEpoch}
     export TZ=UTC LC_ALL=C
     mkdir -p "$out" "nuschl-${version}"
@@ -55,6 +69,7 @@ pkgs.runCommand "nuschl-debian-source-${version}-${debianRevision}"
     mkdir -p .cargo/registry-source
     cp -aL ${vendor}/*/. .cargo/registry-source/
     chmod -R u+w .cargo
+    ${pkgs.lib.optionalString (assetBinding != null) "cp ${assetBinding} SOURCE-ASSETS.json"}
     python3 ${./prepare-source.py} --phase upstream ${metadataArgs}
     python3 ${./source-notices.py} --source "$PWD" --vendor "$PWD/.cargo/registry-source" \
       --output SOURCE-NOTICES.json > "$out/source-notice-summary.json"
@@ -71,7 +86,9 @@ pkgs.runCommand "nuschl-debian-source-${version}-${debianRevision}"
     chmod u+w debian/control
     cp ${projectRoot}/LICENSE debian/copyright
     cp -a ${desktopFiles}/share/. debian/prepared-desktop/share/
-    cp ${appstreamXML} debian/prepared-desktop/share/metainfo/org.nuschl.Nuschl.metainfo.xml
+    ${pkgs.lib.optionalString (
+      appstreamXML != null
+    ) "cp ${appstreamXML} debian/prepared-desktop/share/metainfo/org.nuschl.Nuschl.metainfo.xml"}
     cp -a ${nativeNotices}/share/licenses/nuschl/. debian/prepared-notices/
     chmod -R u+w debian
     python3 ${./prepare-source.py} --phase debian ${metadataArgs}

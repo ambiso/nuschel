@@ -9,6 +9,8 @@
   desktopFiles ? (import ./desktop-files.nix { inherit pkgs; }).linux,
   appstreamXML ? null,
   revision ? null,
+  sourceNarHash ? null,
+  assetBinding ? null,
   version ? "0.1.0",
 }:
 assert pkgs.lib.assertMsg (
@@ -22,6 +24,9 @@ let
       ./portable-linux.nix
       ../packaging/debian/build-deb.py
       ../packaging/linux/audit-stage.py
+      ../packaging/linux/default.nix
+      ../packaging/linux/version.nix
+      ../packaging/linux/bind-assets.py
       ../packaging/linux/linker.py
       ../packaging/linux/pin-debian.py
       ../packaging/linux/debian/sysroot-lock.json
@@ -113,7 +118,7 @@ let
     exec ${pkgs.python3}/bin/python3 ${../packaging/linux/linker.py} \
       ${sysroot} ${pkgs.gcc.cc}/bin/gcc "$@"
   '';
-  crates = import (projectRoot + /nix/crate2nix.nix) { inherit pkgs toolchain; };
+  crates = import (projectRoot + "/nix/crate2nix.nix") { inherit pkgs toolchain; };
   leafWith =
     name: options:
     (crates.project.workspaceMembers.${name}.build.override options).overrideAttrs (old: {
@@ -140,8 +145,10 @@ let
   };
   stage =
     assert nativeNotices != null;
-    assert revision != null && builtins.match "[0-9a-f]{40}" revision != null;
-    pkgs.runCommand "nuschl-native-fhs-${version}"
+    assert
+      (revision != null && builtins.match "[0-9a-f]{40}" revision != null)
+      || (sourceNarHash != null && builtins.match "sha256-[A-Za-z0-9+/]{43}=" sourceNarHash != null);
+    pkgs.runCommand (lib.strings.sanitizeDerivationName "nuschl-native-fhs-${version}")
       {
         nativeBuildInputs = [
           pkgs.python3
@@ -149,6 +156,7 @@ let
         ];
       }
       ''
+        ${lib.optionalString (assetBinding != null) "test -s ${assetBinding}"}
         mkdir -p "$out/usr/lib/nuschl" "$out/usr/bin" "$out/usr/share/nuschl/link-receipts"
         ${lib.concatStringsSep "\n" (
           lib.mapAttrsToList (name: program: ''
@@ -166,8 +174,15 @@ let
           mkdir -p "$out/usr/share/metainfo"
           install -Dm644 ${appstreamXML} "$out/usr/share/metainfo/org.nuschl.Nuschl.metainfo.xml"
         ''}
+        ${lib.optionalString (assetBinding != null) ''
+          install -Dm644 ${assetBinding} "$out/usr/share/nuschl/SOURCE-ASSETS.json"
+        ''}
         python3 ${../packaging/linux/audit-stage.py} --stage "$out" \
-          --project-root ${projectRoot} --packaging-root ${packagingSource} --revision ${lib.escapeShellArg revision} \
+          --project-root ${projectRoot} --packaging-root ${packagingSource} \
+          ${lib.optionalString (revision != null) "--revision ${lib.escapeShellArg revision}"} \
+          ${
+            lib.optionalString (sourceNarHash != null) "--source-nar-hash ${lib.escapeShellArg sourceNarHash}"
+          } \
           --version ${lib.escapeShellArg version} --readelf ${pkgs.binutils}/bin/readelf \
           --rust-version ${lib.escapeShellArg toolchain.version}
       '';

@@ -12,8 +12,11 @@ parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--archive', required=True, type=Path)
 parser.add_argument('--version', required=True)
 parser.add_argument('--output', required=True, type=Path)
+parser.add_argument('--package-revision', default='1')
 parser.add_argument('--source-url', help='Explicit immutable HTTPS release URL; absent means a local validation recipe only')
 args = parser.parse_args()
+if not re.fullmatch(r'[1-9][0-9]{0,5}', args.package_revision):
+    parser.error('invalid package revision')
 if not re.fullmatch(r'[0-9][A-Za-z0-9._+]*', args.version):
     parser.error('invalid Arch pkgver')
 if not re.fullmatch(r'nuschl-[A-Za-z0-9._+]+-x86_64\.tar\.xz', args.archive.name):
@@ -29,7 +32,7 @@ recipe = '''# Generated locally from the exact Nix FHS stage; no self-update or 
 # Publication requires an immutable public source URL and clean Arch runtime proof.
 pkgname=nuschl-bin
 pkgver={version}
-pkgrel=1
+pkgrel={package_revision}
 pkgdesc='Mumble-compatible voice and text chat with isolated helpers'
 arch=('x86_64')
 url='https://github.com/ambiso/nuschl'
@@ -47,7 +50,7 @@ sha256sums=('{checksum}')
 package() {{
     cp -a -- "$srcdir/usr" "$pkgdir/usr"
 }}
-'''.format(version=shlex.quote(args.version), source=shlex.quote(source),
+'''.format(version=shlex.quote(args.version), package_revision=args.package_revision, source=shlex.quote(source),
            checksum=hashlib.sha256(args.archive.read_bytes()).hexdigest())
 (args.output / 'PKGBUILD').write_text(recipe)
 (args.output / 'STATUS').write_text('immutable-source-url-configured; clean Arch proof still required\n' if args.source_url else

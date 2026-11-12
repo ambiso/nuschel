@@ -1,5 +1,8 @@
 # Cheap offline packaging-policy fixtures, without a Cargo dependency compile.
 { pkgs }:
+let
+  versionCheck = import ./version-tests.nix { inherit pkgs; };
+in
 pkgs.runCommand "nuschl-distro-metadata-tests"
   {
     nativeBuildInputs = [
@@ -10,6 +13,7 @@ pkgs.runCommand "nuschl-distro-metadata-tests"
     ];
   }
   ''
+    test -e ${versionCheck}
     mkdir -p packaging/linux packaging/debian
     cp ${./version.py} packaging/linux/version.py
     cp ${./version-tests.py} packaging/linux/version-tests.py

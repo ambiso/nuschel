@@ -9,15 +9,20 @@ import re
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--phase', required=True, choices=('upstream', 'debian'))
-parser.add_argument('--revision', required=True)
+parser.add_argument('--revision')
+parser.add_argument('--source-nar-hash')
 parser.add_argument('--version', required=True)
 parser.add_argument('--debian-revision', required=True)
 parser.add_argument('--distribution', required=True)
 parser.add_argument('--maintainer', required=True)
 parser.add_argument('--epoch', required=True, type=int)
 args = parser.parse_args()
-if not re.fullmatch('[0-9a-f]{40}', args.revision) or args.epoch < 0:
+if (args.revision is not None and not re.fullmatch('[0-9a-f]{40}', args.revision)) or args.epoch < 0:
     parser.error('invalid source identity/epoch')
+if args.source_nar_hash is not None and not re.fullmatch(r'sha256-[A-Za-z0-9+/]{43}=', args.source_nar_hash):
+    parser.error('invalid source NarHash')
+if args.revision is None and args.source_nar_hash is None:
+    parser.error('exact revision or source NarHash is required')
 if not re.fullmatch('[0-9][A-Za-z0-9.+~]*', args.version) or not re.fullmatch('[0-9A-Za-z.+~]+', args.debian_revision):
     parser.error('invalid Debian version')
 if not re.fullmatch('[a-z][a-z0-9-]*', args.distribution) or any(c in args.maintainer for c in '\n\r\0'):
@@ -29,7 +34,7 @@ if args.phase == 'upstream':
     config.write_text('[source.crates-io]\nreplace-with="offline-source"\n'
                       '[source.offline-source]\ndirectory=".cargo/registry-source"\n[net]\noffline=true\n')
     Path('SOURCE-PROVENANCE.json').write_text(json.dumps({
-        'revision': args.revision,
+        'revision': args.revision, 'source_nar_hash': args.source_nar_hash,
         'scope': 'Genuine source build; external distro/Launchpad binaries have separate provenance from Nix final-leaf relinks.',
         'publication_gates': ['Review all SOURCE-NOTICES unresolved rows/embedded assets.',
                               'Supply/test Rust >=1.95 build dependencies for the chosen suite.',

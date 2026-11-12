@@ -17,7 +17,7 @@ class Extraction(unittest.TestCase):
             root = own / 'root'
             root.mkdir()
             transport = own / 'tar-stream'
-            transport.write_text('#!/bin/sh\nexec cat "$2"\n')
+            transport.write_text(f'#!{sys.executable}\nimport pathlib,sys\nsys.stdout.buffer.write(pathlib.Path(sys.argv[2]).read_bytes())\n')
             transport.chmod(0o755)
             for case in ('normal', 'escape', 'device', 'hardlink'):
                 with self.subTest(case=case):

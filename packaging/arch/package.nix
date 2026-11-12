@@ -4,7 +4,9 @@
   version,
   sourceDateEpoch,
   sourceURL ? null,
+  packageRevision ? "1",
 }:
+assert builtins.match "[1-9][0-9]{0,5}" packageRevision != null;
 assert pkgs.lib.assertMsg (
   builtins.match "[0-9][A-Za-z0-9._+]*" version != null
 ) "Invalid Arch version";
@@ -27,7 +29,7 @@ pkgs.runCommand "nuschl-arch-artifacts-${version}"
     tar --sort=name --mtime=@${toString sourceDateEpoch} --owner=0 --group=0 --numeric-owner \
       --mode='u=rwX,go=rX' -C ${stage} -c usr | xz --threads=2 > "$out/nuschl-${version}-x86_64.tar.xz"
     python3 ${./generate.py} --archive "$out/nuschl-${version}-x86_64.tar.xz" \
-      --version ${pkgs.lib.escapeShellArg version} --output "$out/aur" \
+      --version ${pkgs.lib.escapeShellArg version} --package-revision ${pkgs.lib.escapeShellArg packageRevision} --output "$out/aur" \
       ${pkgs.lib.optionalString (sourceURL != null) "--source-url ${pkgs.lib.escapeShellArg sourceURL}"}
     cd "$out/aur"
     makepkg --config ${pkgs.pacman}/etc/makepkg.conf --printsrcinfo > .SRCINFO
@@ -49,7 +51,7 @@ pkgs.runCommand "nuschl-arch-artifacts-${version}"
     chmod +x pacman-metadata
     export PACMAN="$PWD/pacman-metadata"
     makepkg --config "$PWD/makepkg.conf" --nodeps --nocheck
-    test -s "$out/packages/nuschl-bin-${version}-1-x86_64.pkg.tar.zst"
+    test -s "$out/packages/nuschl-bin-${version}-${packageRevision}-x86_64.pkg.tar.zst"
     rm pacman.conf pacman-metadata
     rm makepkg.conf
     cd "$out"

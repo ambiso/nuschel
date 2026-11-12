@@ -12,7 +12,7 @@
 assert pkgs.lib.assertMsg (
   architecture == "amd64"
 ) "Only the measured amd64 native stage is currently supported";
-pkgs.runCommand "nuschl-debian-${version}-${architecture}"
+pkgs.runCommand (pkgs.lib.strings.sanitizeDerivationName "nuschl-debian-${version}-${architecture}")
   {
     nativeBuildInputs = [
       pkgs.python3

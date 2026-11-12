@@ -6,7 +6,7 @@
   version,
   debianRevision ? "1",
 }:
-pkgs.runCommand "nuschl-debian-source-check-${version}"
+pkgs.runCommand (pkgs.lib.strings.sanitizeDerivationName "nuschl-debian-source-check-${version}")
   {
     nativeBuildInputs = [
       pkgs.python3
