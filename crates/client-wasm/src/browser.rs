@@ -797,13 +797,22 @@ impl WebClient {
         serde_json::to_string(&snapshot::timeline(&self.client)).unwrap_or_else(|_| "null".into())
     }
 
+    /// IDs, never display positions: live connection indices stay unchanged.
+    pub fn set_server_order(&mut self, raw: String) -> Result<bool, String> {
+        if raw.len() > 64 * 1024 {
+            return Err("Server order exceeds the browser limit.".into());
+        }
+        let ids: Vec<String> = serde_json::from_str(&raw)
+            .map_err(|_| "Server order must be a list of saved server IDs.".to_owned())?;
+        self.client.set_server_order(&ids)
+    }
+
     pub fn bookmarks(&self) -> String {
         serde_json::to_string(
             &self
                 .client
-                .servers
-                .iter()
-                .map(|server| &server.bookmark)
+                .ordered_servers()
+                .map(|(_, server)| &server.bookmark)
                 .collect::<Vec<_>>(),
         )
         .unwrap_or_else(|_| "[]".into())

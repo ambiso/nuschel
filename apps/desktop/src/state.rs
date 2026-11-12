@@ -2563,8 +2563,9 @@ impl Desktop {
     /// of an older state never lands after it.
     pub fn write_servers(&mut self, servers: &[ServerBookmark]) -> std::io::Result<()> {
         self.servers_generation += 1;
+        let servers = self.client.order_bookmarks(servers);
         self.server_writes
-            .write(&self.profile, self.servers_generation, servers)
+            .write(&self.profile, self.servers_generation, &servers)
     }
     /// Save the servers shortly, off the UI thread: a burst of channel
     /// updates (joining a server) becomes one write.
@@ -2594,12 +2595,7 @@ impl Desktop {
         self.servers_unsaved = false;
         self.servers_generation += 1;
         let generation = self.servers_generation;
-        let servers = self
-            .client
-            .servers
-            .iter()
-            .map(|server| server.bookmark.clone())
-            .collect::<Vec<_>>();
+        let servers = self.client.ordered_bookmarks();
         let (profile, writes) = (self.profile.clone(), self.server_writes.clone());
         move || writes.write(&profile, generation, &servers)
     }

@@ -573,12 +573,7 @@ impl App {
         let Some(profile) = &self.profile else {
             return;
         };
-        let bookmarks: Vec<_> = self
-            .client
-            .servers
-            .iter()
-            .map(|server| server.bookmark.clone())
-            .collect();
+        let bookmarks = self.client.ordered_bookmarks();
         if let Err(error) = profile.save_servers(&bookmarks) {
             self.warn(format!("Could not save the servers: {error}"));
         }

@@ -26,6 +26,8 @@ use nuschl_core::{
 use nuschl_protocol::nuschl::{self, v1};
 use std::collections::BTreeMap;
 
+mod order;
+
 /// How often we say we are typing: the server's limit per conversation.
 pub const TYPING_EVERY_MS: u64 = 3_000;
 
@@ -188,8 +190,9 @@ fn seats(servers: &[ServerState]) -> impl Fn(&str) -> Seat + '_ {
 }
 
 pub struct Client {
-    /// Saved servers in their order, with what is known of each.
+    /// Live servers in stable runtime-index order; use ordered_servers() for display.
     pub servers: Vec<ServerState>,
+    catalog: order::Catalog,
     /// Which conversation is open, and where our voice is.
     pub navigation: Navigation,
     /// Which servers get the microphone (the talk servers); the others
@@ -218,7 +221,9 @@ impl Client {
         bookmarks: Vec<ServerBookmark>,
         preferences: Preferences,
     ) -> Self {
+        let catalog = order::Catalog::new(&bookmarks);
         Self {
+            catalog,
             servers: bookmarks.into_iter().map(ServerState::new).collect(),
             navigation: Navigation::default(),
             voice: Voice::default(),
@@ -290,6 +295,7 @@ impl Client {
     /// Add a saved server; returns its index.
     pub fn add_server(&mut self, bookmark: ServerBookmark) -> usize {
         self.servers.push(ServerState::new(bookmark));
+        self.catalog.synchronize(&self.servers);
         self.servers.len() - 1
     }
 
@@ -298,7 +304,9 @@ impl Client {
     pub fn replace_server(&mut self, index: usize, bookmark: ServerBookmark) {
         self.platform.disconnect(&self.servers[index].id);
         self.voice.disconnected(&self.servers[index].id, None);
+        self.catalog.replaced(&self.servers[index].id, &bookmark.id);
         self.servers[index] = ServerState::new(bookmark);
+        self.catalog.synchronize(&self.servers);
     }
 
     pub fn remove_server(&mut self, id: &str) {
@@ -306,6 +314,7 @@ impl Client {
         self.voice.disconnected(id, None);
         self.passwords.remove(id);
         self.servers.retain(|server| server.id != id);
+        self.catalog.synchronize(&self.servers);
     }
 
     /// Connect self-muted; `deafened` too (automatic connections at startup,
