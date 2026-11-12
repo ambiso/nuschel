@@ -1,8 +1,9 @@
 # Nuschl TODO
 
-Current focus (user, 2026-11-12): **server-operator setup, desktop rail/footer
-spacing and the native ACL/group editor**. Browser configuration/send-limit fixes
-are integrated with combined checks running; the iOS installer remains quarantined
+Current focus (user, 2026-11-12): **voice-host ACME setup, desktop rail/footer
+spacing and status, and the native ACL/group editor**. Continuous volume controls
+and a VAD activity meter are queued. Browser configuration/send-limit fixes
+are integrated and verified; the iOS installer remains quarantined
 after a whole-file checksum mismatch. Audio fidelity, unmute latency and hybrid
 update readiness retain their remaining gates below.
 The relay DNS/kernel checks and explicit-deny correction are integrated.
@@ -35,6 +36,23 @@ outside the current task's scope.
 
 Current integration checkpoint (2026-11-12):
 
+- **Sparse server limits and precise browser refusals are integrated through
+  `1db450f3`.** Native 82 session tests (one existing ignored), browser 29 units/
+  six relay integrations and actual App/private TLS tests pass. Omitted fields,
+  explicit zero/false, escaped UTF-8 wire sizes, retained drafts and precise
+  128/16/5000-byte errors have independent checks; stale notices do not leak
+  through empty/global-too-long/disconnected refusals. All eight combined
+  distribution/check outputs, bundled Linux/web notice readers and seven source
+  hashes pass; ten browser runtime assets match the tested product exactly.
+  The shared reconnect-without-ServerConfig snapshot edge remains open below.
+  Root evidence: `~/.cache/nuschl-integration-20261112/server-config/handoff.json`.
+- **The NixOS operator guide is integrated at `257855ae`.** It reviews the
+  supplied cohosted setup and covers complete prerequisites, firewall/ACME,
+  selected TLS credentials, relay DNS, admin bootstrap, storage/backups and
+  witness/client policy. Root independently passes all three actual offline
+  module-evaluation variants; these do not claim deployed health or ACME orders.
+  The README and server reference link the guide. Separate voice-host HTTP-01
+  convenience support and runtime proof remain in progress.
 - **Live welcome updates are integrated through `8d65a1a4`.** Native 81 session
   tests (one existing ignored), browser 27 units/six relay integrations and the
   compiled App with an owned TLS/protobuf fixture pass. Absent/empty/changed/
@@ -1140,21 +1158,21 @@ listed below. Plugin data remains the explicit gap.
       Parent combined distribution, notice and runtime-asset checks pass.
       No new GPUI proof claimed;
       see `docs/welcome-domain.md`.
-- [ ] Integrate verified sparse `ServerConfig` retention/full snapshots and
+- [x] Integrate verified sparse `ServerConfig` retention/full snapshots and
       browser wire-byte text caps. Absent fields preserve message/image limits,
       max-users, recording false and known bandwidth; welcome-only updates stay
       separate. Native 82/1 existing ignored, browser 29+6 and actual compiled
       App/private TLS tests pass, including zero, escaped/newline expansion,
       retained/retried drafts, sparse changes and reconnect 5000 default. The
       original 129/128 failure remains retained and its diagnostic now passes.
-      Source is integrated; parent combined checks remain pending. See
+      Parent combined distribution, notice, source and runtime-asset checks pass. See
       `docs/server-config.md` and `~/.cache/nuschl-server-config/handoff.json`.
       No image-send API implied.
-- [ ] Integrate the precise browser send-refusal wrapper correction: actual
+- [x] Integrate the precise browser send-refusal wrapper correction: actual
       compiled App tests show exact 128/16/5000-byte reasons and retained editable
       drafts; Nothing/global-too-long/disconnected diagnostics do not reuse old
       notices. Same selected server ID/generation is checked; core/App APIs are
-      unchanged. Source is integrated; parent distribution checks remain pending.
+      unchanged. Parent distribution, notice and runtime-asset checks pass.
       See `~/.cache/nuschl-server-config/precise-handoff.json`.
 - [ ] Reset shared `ServerState.limits` on reconnect, or publish fresh initial
       limits, when the new connection sends no ServerConfig. Source review finds
@@ -1616,7 +1634,7 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
          User explicitly excludes migration/state/bookmark/pin-reset work and
          handles state removal/deployment separately; do not deploy or inspect
          real secrets. Assigned to the operator/module owner.
-   - [ ] Review the supplied combined NixOS deployment and provide a server
+   - [x] Review the supplied combined NixOS deployment and provide a server
          operator guide (user, 2026-11-12). Cover imports, ACME/DNS/80+443,
          interface-scoped TCP+UDP 64738, selected fullchain/renewal, browser relay
          DNS/egress, agenix/runtime SuperUser credentials and named admin bootstrap,
@@ -1625,6 +1643,9 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
          and ACME selection align. Explain settings assumed elsewhere; cohosted
          witness state shares a failure/trust domain. Private module evaluation
          and source/CLI checks, without changing the separately managed deployment.
+         Implemented in docs/server-operators.md and linked from README/server.md;
+         three actual offline module evaluations pass independently at root.
+         Separate voice-host HTTP-01 convenience support remains open above.
    - [x] TLS reload on SIGHUP and `minimum_tls_version = "1.3"` (2026-11-11): new
          handshakes get the new certificate, a broken one keeps the old one. The
          NixOS module's manual `certificateFile` credentials are copied at start,
