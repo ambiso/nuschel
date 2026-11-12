@@ -1653,7 +1653,14 @@ impl State {
     }
 
     fn authority_valid(&self, authority: &CommandAuthority) -> bool {
-        if authority.users.len() > MAX_ACTION_TARGETS
+        if authority
+            .users
+            .len()
+            .saturating_add(authority.channels.len())
+            .saturating_add(authority.conversations.len())
+            .saturating_add(authority.accounts.len())
+            > MAX_ACTION_TARGETS
+            || authority.users.len() > MAX_ACTION_TARGETS
             || authority.channels.len() > MAX_ACTION_TARGETS
             || authority.conversations.len() > MAX_ACTION_TARGETS
             || authority.accounts.len() > MAX_ACTION_TARGETS
@@ -5575,6 +5582,15 @@ mod delayed_action_authority_tests {
                     Command::Mls(crate::mls::MlsCommand::OpenDirect { user_id: 303 })
                 ))
                 .is_none()
+        );
+        let mut combined = snapshot();
+        combined.users = vec![(2, 22); 65];
+        combined.channels = vec![(5, 45); 64];
+        assert!(
+            state
+                .authorize(scoped(combined, Command::RequestStats(2)))
+                .is_none(),
+            "combined envelope refs are bounded too"
         );
         lease.users = vec![(2, 22); MAX_ACTION_TARGETS + 1];
         assert!(
