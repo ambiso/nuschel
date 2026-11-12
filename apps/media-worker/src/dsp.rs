@@ -592,14 +592,17 @@ mod tests {
     #[test]
     fn echo_guard_demands_clearer_speech_but_not_in_push_to_talk() {
         let settings = AudioSettings::default();
-        assert!(Gate::new(&settings).update(0.75, -20., false, false));
+        let opening = nuschl_core::audio::gate_thresholds(settings.vad_sensitivity).open;
+        let ordinary = opening + ECHO_GUARD_MARGIN * 0.5;
+        let clear = (opening + ECHO_GUARD_MARGIN + 0.01).min(1.);
+        assert!(Gate::new(&settings).update(ordinary, -20., false, false));
         let mut guarded = Gate::new(&settings);
         assert!(
-            !guarded.update(0.75, -20., false, true),
+            !guarded.update(ordinary, -20., false, true),
             "residual echo opened the gate"
         );
         assert!(
-            guarded.update(0.97, -20., false, true),
+            guarded.update(clear, -20., false, true),
             "clear speech must still pass"
         );
         let mut ptt = Gate::new(&AudioSettings {

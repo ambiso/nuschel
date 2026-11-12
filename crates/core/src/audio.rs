@@ -66,14 +66,25 @@ pub struct GateThresholds {
     pub close: f32,
 }
 
-/// Thresholds for a voice activity sensitivity (0 = only clear speech, 1 = very
-/// sensitive), clamped to 0..=1 as the gate always has.
+/// WebRTC speech-probability thresholds: strict 0%, default 50%, and sensitive
+/// 100% open at 0.9, 0.4, and 0.1 respectively. The two linear segments retain
+/// a strict endpoint without delaying quiet speech at the default setting.
 pub fn gate_thresholds(sensitivity: f32) -> GateThresholds {
-    let sensitivity = sensitivity.clamp(0., 1.);
-    let open = 0.9 - 0.6 * sensitivity;
+    let sensitivity = if sensitivity.is_finite() {
+        sensitivity.clamp(0., 1.)
+    } else {
+        0.5
+    };
+    let open = if sensitivity <= 0.5 {
+        let position = sensitivity * 2.;
+        0.9 * (1. - position) + 0.4 * position
+    } else {
+        let position = (sensitivity - 0.5) * 2.;
+        0.4 * (1. - position) + 0.1 * position
+    };
     GateThresholds {
         open,
-        close: (open - 0.3).max(0.05),
+        close: (open * 0.5).max(0.05),
     }
 }
 
@@ -215,18 +226,39 @@ impl Sound {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn gate_thresholds_keep_the_gates_arithmetic() {
-        for step in 0..=100 {
-            let sensitivity = step as f32 / 100.;
-            let open = 0.9 - 0.6 * sensitivity;
-            let thresholds = gate_thresholds(sensitivity);
-            assert_eq!(thresholds.open.to_bits(), open.to_bits());
-            assert_eq!(thresholds.close.to_bits(), (open - 0.3).max(0.05).to_bits());
+    fn gate_sensitivity_preserves_calibrated_endpoints_and_monotonicity() {
+        assert_eq!(
+            gate_thresholds(0.),
+            GateThresholds {
+                open: 0.9,
+                close: 0.45
+            }
+        );
+        assert_eq!(
+            gate_thresholds(0.5),
+            GateThresholds {
+                open: 0.4,
+                close: 0.2
+            }
+        );
+        assert_eq!(
+            gate_thresholds(1.),
+            GateThresholds {
+                open: 0.1,
+                close: 0.05
+            }
+        );
+        let mut previous = gate_thresholds(0.);
+        for step in 1..=100 {
+            let thresholds = gate_thresholds(step as f32 / 100.);
+            assert!(thresholds.open < previous.open);
+            assert!(thresholds.close < previous.close);
             assert!(thresholds.close < thresholds.open);
+            previous = thresholds;
         }
         assert_eq!(gate_thresholds(-1.), gate_thresholds(0.));
         assert_eq!(gate_thresholds(2.), gate_thresholds(1.));
-        assert_eq!(gate_thresholds(1.).close, 0.05);
+        assert_eq!(gate_thresholds(f32::NAN), gate_thresholds(0.5));
     }
 
     use super::*;
