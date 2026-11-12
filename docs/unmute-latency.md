@@ -74,14 +74,19 @@ Remaining limits are explicit:
   admitted 0 frames with AEC off and 39 with AEC on (maximum voice probabilities
   about 0.564/0.653). Source/AEC/classifier context still needs investigation; no
   warm-up suppression or threshold change conceals it.
-- Current native VAD uses the Sonora/WebRTC RNN at the pre-local-suppression,
-  pre-gain tap; RNNoise remains the suppressor. Earlier RNNoise timings above are
+- Current native VAD requires agreement from Sonora/WebRTC and RNNoise at the
+  pre-local-suppression, pre-gain tap; RNNoise remains the suppressor. Earlier
+  RNNoise timings above are
   historical controls. The new model's default opening threshold is calibrated
   to 0.4: reusing RNNoise's 0.6 threshold delayed some quiet inputs beyond the
   existing 80 ms prefix. The detector is causal and persistent, but classification
   still needs input evidence; the prefix does not make it instantaneous. Quiet
   speech, real acoustic double talk and physical cold-start latency retain their
-  separate verification requirements.
+  separate verification requirements. A matched public capture-queue audit
+  found five additional 10 ms frames omitted across 29 recorded-speech controls
+  at an energy cutoff 30 dB below each clip's peak, and none at 20 dB below.
+  Those quieter frames may include consonants; energy is not a phoneme label.
+  This change does not claim perfect first-syllable retention for every voice.
 - The combined native media process is still replaced on microphone mute/unmute
   or a changed speaking destination. This interrupts incoming playback while it
   restarts. Separating playback lifetime/capabilities is a distinct follow-up;

@@ -97,17 +97,20 @@ suppression, automatic gain and automatic echo handling. In the media worker:
 
 1. Sonora's high-pass stage runs on 10 ms mono frames. Its AEC is enabled when
    the route needs Nuschl cancellation; recognized upstream AEC is reused instead.
-2. A persistent Sonora/WebRTC RNN measures speech probability before local
-   suppression and adaptive gain. Its model already ships with Sonora; this
-   adds no model download. Its state survives gain/suppression setting changes.
+2. A persistent Sonora/WebRTC RNN and the existing RNNoise classifier both
+   observe the signal before local suppression and adaptive gain. The gate uses
+   their lower confidence, requiring agreement: WebRTC rejects the recorded
+   periodic machinery that RNNoise misclassifies, while RNNoise retains its
+   steady-broadband-noise rejection. The WebRTC model already ships with Sonora;
+   there is no model download. Detector state survives gain/suppression changes.
    `nnnoiseless` RNNoise still supplies noise suppression: its processed PCM
    replaces capture when enabled, unless recognized upstream suppression already
-   supplies it. RNNoise's probability is no longer the transmit decision.
+   supplies it.
 3. Sonora AGC2 adaptive digital gain defaults on, with max gain 30 dB and limiter.
    Echo-dominant frames cannot raise gain beyond the remembered near-end ceiling.
    With AGC disabled, a soft limiter above 0.85 remains. The final native frame
    sanitizes nonfinite values and clamps to full scale.
-4. The VAD gate combines the WebRTC speech probability with the unchanged
+4. The VAD gate combines detector agreement with the unchanged
    processed-input floor (-60 dBFS) and 300 ms hangover. The shared
    `audio::gate_thresholds` opens at 0.9 / 0.4 / 0.1 for sensitivity 0% / 50% /
    100%, with two linear segments and a closing threshold half the opening

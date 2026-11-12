@@ -28,8 +28,8 @@ are integrated with scoped proofs; final browser/device/distribution checks stay
 Server reordering and the desktop layout foundation have scoped proofs integrated;
 web image attachments, modern identity/archive flows and full parity remain open.
 The rename/build-cache cleanup is complete. Release publication remains behind
-signing, notice and packaging gates. The last verified push of `main` is `1cbb5103`; this is not a tagged release.
-Later local integrations remain pending their combined verification and push.
+signing, notice and packaging gates. The initial user-requested push was `1cbb5103`; the integration checkpoints
+below identify later checked source. None is a tagged-release claim.
 
 Queue policy (user, 2026-11-12): record every reported or discovered issue here
 when it cannot be fixed immediately. Delegation does not close an issue: retain
@@ -54,6 +54,23 @@ and a five-second heartbeat; the coordinator consumes pending messages at work
 checkpoints. A background filesystem watcher alone does not advance a session.
 
 Current integration checkpoint (2026-11-12):
+
+- **Native VAD detector agreement and calibration are integrated through
+  `27ccab41`.** A persistent existing Sonora/WebRTC RNN and RNNoise both see the
+  pre-local-suppression/pre-gain signal; both must agree. RNNoise suppression,
+  AGC speech boost, the 80 ms prefix and privacy rules remain. Calibrated
+  sensitivity is strict/default/sensitive = 0.9/0.4/0.1, with half-strength close.
+  All eight combined distribution/check outputs, 89 media tests (nine opt-in
+  ignored), core/desktop tests and bundled native/web notice readers pass.
+  The final compiled helper's isolated replay of the private user-authorized
+  walking-pad recording reduces background packets 1627→128 (92.1%), with
+  time-normalized transmitted speech RMS effectively unchanged (+0.014 dB).
+  User-recorded audio remains outside the repository. Broader quiet-onset,
+  double-talk and room coverage remain explicit below. Native default-source
+  metadata fallback is included; its source/API proofs are separate from the
+  noise classification finding. Evidence:
+  `~/.cache/nuschl-integration-20261112/vad-fix/handoff.json`.
+
 
 - **Native voice-status and stable server controls are integrated through
   `3b74c859`.** The shared projection distinguishes destination intent from
@@ -658,6 +675,14 @@ Later (reported):
       attachment/transfer lane; native-first
       scope and safe preview/save authority are being reviewed. Web attachments
       and modern persistent/resumable file delivery remain separately open.
+- [ ] Fix independent Original-image integration findings before merging the
+      frozen quality stack: received snapshots exhausting sender staging quota,
+      failed batches blocking unrelated conversations, lost originals on stale
+      preparation replies, unsafe Save As suggestions and stale viewer jobs.
+      Claude's isolated image-fixes lane owns these attachment functions and
+      regressions. Also retain hidden-tray Escape loss, intake reservations,
+      reconnect/partial-offer behavior and EXIF orientation as explicit work;
+      no image-quality completion claim until the corrected artifact is checked.
 - [ ] Reap crash-orphaned original-image snapshots with a bounded, profile-owned
       cache lifecycle. Normal Arc/drop cancellation cleanup is covered by the
       image-quality work; a process crash can leave read-only staging files.
@@ -788,6 +813,12 @@ Later (reported):
       A printable key in the timeline goes to the composer and is typed there.
 - [ ] An optional Orca step in `tests/accessibility.py` (Orca 51 has a D-Bus test
       interface; a probe exists in the 2026-11-11 session's scratchpad).
+- [ ] Make settings downgrade/unknown-field handling preserve known settings
+      safely. Current whole-file quarantine/default fallback can reset audio or
+      privacy preferences when an older build reads a newer field. Investigate
+      a fail-safe policy, managed/user-setting distinction and diagnostics; no
+      silent defaulting of relay/privacy policy. Recorded from source review,
+      not a reproduced host-profile failure.
 - [ ] Audit total runtime RAM use and remove low-hanging allocation/retention
       costs (user, 2026-11-12). Aim for a chat client near 10 MB where avoidable
       overhead permits; measure feasibility instead of assuming the budget.
@@ -1018,14 +1049,15 @@ The media worker uses per-speaker adaptive jitter buffers and Opus loss concealm
 - [x] Keep replacing the media worker on capture-route/privacy changes so blocked
       native teardown cannot keep the microphone open (decided). In the shared
       multi-server worker, not every server mute/deafen change needs replacement.
-- [ ] Resolve native PipeWire default-source aliases from native metadata for
+- [x] Resolve native PipeWire default-source aliases from native metadata for
       upstream processing detection, without requiring pipewire-pulse. A virtual
       `input_default` does not match a real graph node; the confirmed fallback gap
       can miss upstream RNNoise/AEC. Preserve explicit device selection, same
       bounded graph round trips and capture privacy. The current host can resolve
       through Pulse, so this is not established as the current VAD cause. An
-      isolated native metadata/API and no-Pulse private-daemon proof is ready;
-      final explicit-name collision review and root integration remain open.
+      isolated native metadata/API and no-Pulse private-daemon proof passes,
+      including default-name changes and explicit-name collisions. Source is
+      integrated through `afda9587`, with the combined native tests passing.
 - [ ] Investigate unmute → first-speech latency (user, 2026-11-12; active owner).
       Measure worker/device startup, first captured PCM, VAD/encoder admission and
       first transmitted/received audio separately against stock Mumble. Preserve
@@ -1126,13 +1158,14 @@ The media worker uses per-speaker adaptive jitter buffers and Opus loss concealm
       never be committed. The 80-second recording has a vocalization near four
       seconds and normal speech starting at 67 seconds; background measurements
       exclude the first ten seconds. The already-shipped Sonora/WebRTC RNN is a
-      positive detector-only candidate: primary 30–60 s background gate frames
-      fall 2204/3000 to 66/3000 with identical processed PCM. Preserve RNNoise
-      suppression, a stable pre-local-NS/pre-gain detector tap, persistent state
-      across AGC/NS changes and first-syllable retention. Calibrate the new score
-      thresholds against quiet speech and walking-pad noise before integration;
-      the old 0.6 default can add excessive quiet-speech onset delay. No new model
-      download or Earshot work;
+      detector is now integrated as an agreement check with RNNoise, retaining
+      broadband-noise rejection that WebRTC alone regressed. Final default 0.4/0.2
+      opening/closing thresholds reduce 10–60 s background gate frames 2720→138
+      while preserving processed PCM. The final compiled helper emits 92.1% fewer
+      background packets with unchanged transmitted speech RMS. No new model
+      download or Earshot work. Keep live-app retesting and remaining room/quiet
+      speech validation open; this is a bounded improvement, not universal noise
+      rejection;
       playback-lifetime work remains secondary.
       Claude's separate slider/threshold-helper edits must stay disjoint. Existing
       short DSP checks do not establish long-idle stability.
@@ -1141,6 +1174,17 @@ The media worker uses per-speaker adaptive jitter buffers and Opus loss concealm
       `/nix/store/ci7hdskm7ja8mg45xc9ihws7ddq8adiw-nuschl-0.1.0` (worker SHA-256
       `2c11ffc534e4a67c59a57858e0a2ae7c2b528ce3dc287307d0bb87d6e73960eb`).
       Retain this exact baseline even if restarting the current build changes it.
+- [ ] Broaden new VAD calibration beyond the recorded walking-pad case: very
+      quiet consonants/whispers, sustained speech, physical cold start and real
+      own-AEC/double-talk. The echo-guard +0.3 margin and double-talk telemetry
+      threshold 0.8 now consume a different confidence scale. A public actual-
+      CaptureQueue audit finds five additional 10 ms frames missing relative to
+      the RNNoise baseline across 29 primary controls at clip-relative -30 dB,
+      none at -20 dB; possible quiet onsets are not a perfect phoneme guarantee.
+      The user's energetic speech markers remain equally covered with the
+      existing 80 ms prefix. Do not silently enlarge it or mask onset with a
+      warmup/recording period; measure latency and rejection tradeoffs. High
+      sensitivity can still transmit noise; no hard utterance-duration cutoff.
 - [x] Stop active Earshot evaluation at user request (2026-11-12). Retain the
       isolated comparison and source-safety evidence; no new dependency or VAD
       backend is integrated. The urgent task is fixing long-idle false triggering
