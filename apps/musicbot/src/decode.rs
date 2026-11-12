@@ -149,12 +149,12 @@ async fn transport(
             input
                 .write_all(&bytes)
                 .await
-                .map_err(|_| "decoder stream write failed")?;
+                .map_err(|_| "decoder stream write failed".to_owned())?;
         }
         input
             .shutdown()
             .await
-            .map_err(|_| "decoder stream close failed")
+            .map_err(|_| "decoder stream close failed".to_owned())
     });
     let result = loop {
         if cancelled.load(Ordering::Relaxed) {
