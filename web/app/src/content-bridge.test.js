@@ -35,7 +35,7 @@ test("only the SDK accepted reply becomes visible, with no credential metadata i
   const bridge=new ContentBridge(async(method,id,raw)=>{
     assert.equal(method,"content_complete");assert.equal(id,"7");
     assert.equal(JSON.parse(raw).plain_text,"safe");
-    return JSON.stringify({token:"7",charge:1000,document});
+    return JSON.stringify({token:"7",charge:1000,document,failed:false});
   },{service});
   try {
     assert.equal(bridge.handle({kind:"content_work",operations:[{kind:"render",request:"7",mode:"legacy",source:"<b>safe</b>"}]}),true);

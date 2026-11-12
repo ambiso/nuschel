@@ -65,6 +65,8 @@ pub struct Completion {
     pub source: String,
     pub token: String,
     pub rendered: ValidatedRender,
+    pub failed: bool,
+    pub evicted: Vec<Origin>,
 }
 
 #[derive(Default)]
@@ -181,23 +183,32 @@ impl Jobs {
         }
         let job = self.pending.remove(request).expect("observed job");
         self.pending_bytes -= job.charge;
-        let Some(reply) = reply else {
-            return Ok(None);
-        };
-        let rendered = validate_render(reply)?;
+        let result = reply.map(validate_render).transpose();
+        let failed = !matches!(&result, Ok(Some(_)));
+        let rendered = result.ok().flatten().unwrap_or_else(|| ValidatedRender {
+            document: nuschl_core::MessageDocument {
+                blocks: vec![nuschl_core::ContentBlock::text(
+                    "[Message could not be prepared. Retry or reload to try again.]",
+                )],
+            },
+            plain_text: "[Message could not be prepared. Retry or reload to try again.]".into(),
+            retained_bytes: 1024,
+        });
         let token = request.to_owned();
         // Keep only opaque handles and bounded plain derivatives in the SDK.
         // UI document/pixel retention has its own single global LRU.
         if let Some(previous) = self.handles.remove(&job.origin) {
             self.plain_bytes -= previous.plain_bytes;
         }
+        let mut evicted = Vec::new();
         while self.handles.len() >= MAX_HANDLES
             || self.plain_bytes.saturating_add(rendered.plain_text.len()) > MAX_PLAIN_BYTES
         {
-            let Some((_, old)) = self.handles.pop_first() else {
+            let Some((origin, old)) = self.handles.pop_first() else {
                 break;
             };
             self.plain_bytes -= old.plain_bytes;
+            evicted.push(origin);
         }
         self.plain_bytes += rendered.plain_text.len();
         self.handles.insert(
@@ -213,6 +224,8 @@ impl Jobs {
             source: job.source,
             token,
             rendered,
+            failed,
+            evicted,
         }))
     }
 
@@ -337,8 +350,10 @@ mod tests {
         assert_eq!(jobs.take(DEADLINE_MS, |_, _| true).len(), 1);
         assert!(
             jobs.complete("129", Some("[]"), DEADLINE_MS + 1, |_, _| true)
-                .is_err()
+                .unwrap()
+                .unwrap()
+                .failed
         );
-        assert!(jobs.token(&origin(999)).is_none());
+        assert_eq!(jobs.token(&origin(999)), Some("129"));
     }
 }

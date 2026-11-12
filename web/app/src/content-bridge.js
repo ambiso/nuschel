@@ -25,7 +25,7 @@ function minimumCharge(document) {
 export class DocumentCache {
   constructor({maxBytes=DOCUMENT_BYTES,maxCount=DOCUMENT_COUNT}={}) { this.maxBytes=maxBytes;this.maxCount=maxCount;this.bytes=0;this.entries=new Map(); }
   get(token) { const entry=this.entries.get(token); if(!entry)return null;this.entries.delete(token);this.entries.set(token,entry);return entry.document; }
-  insert(token,document,charge) {
+  insert(token,document,charge,failed=false) {
     if(typeof token!=="string"||!/^[1-9][0-9]{0,19}$/.test(token)||!Number.isSafeInteger(charge)||charge<1||charge>this.maxBytes)return false;
     validateDocument(document);
     if(charge<minimumCharge(document))return false;
@@ -36,7 +36,7 @@ export class DocumentCache {
       this.entries.delete(key);this.bytes-=entry.charge;
     }
     if(this.entries.size>=this.maxCount||this.bytes+charge>this.maxBytes)return false;
-    this.entries.set(token,{document,charge,pins:0});this.bytes+=charge;return true;
+    this.entries.set(token,{document,charge,pins:0,failed});this.bytes+=charge;return true;
   }
   pin(token) { const entry=this.entries.get(token);if(!entry)return null;entry.pins++;let held=true;return()=>{if(held){held=false;entry.pins--;}}; }
   clear() { this.entries.clear();this.bytes=0; }
@@ -44,6 +44,8 @@ export class DocumentCache {
 
 const cache = new DocumentCache();
 export function contentDocument(token) { return cache.get(token); }
+export function contentFailed(token) { return cache.entries.get(token)?.failed ?? false; }
+export function retryContent(token) { active?.command("content_request",token).catch(()=>{}); }
 export function retainDocument(token) {
   if(typeof token!=="string")return()=>{};
   const release=cache.pin(token);
@@ -84,7 +86,7 @@ export class ContentBridge {
       if(this.disposed)return;
       textBytes(raw,MAX_REPLY);
       const accepted=JSON.parse(raw);
-      if(accepted&&Object.keys(accepted).length===3&&cache.insert(accepted.token,accepted.document,accepted.charge))changed();
+      if(accepted&&Object.keys(accepted).length===4&&typeof accepted.failed==="boolean"&&cache.insert(accepted.token,accepted.document,accepted.charge,accepted.failed))changed();
     } catch { /* Original source remains in the SDK for explicit retry. */ }
     finally { this.pending.delete(id); }
   }

@@ -987,6 +987,41 @@ impl WebClient {
         let Some(completed) = completed else {
             return Ok("null".into());
         };
+        for origin in &completed.evicted {
+            if let Origin::Message {
+                server,
+                generation,
+                channel,
+                instance,
+                serial,
+                revision,
+            } = origin
+            {
+                if let Some(message) = self
+                    .client
+                    .servers
+                    .iter_mut()
+                    .find(|state| &state.id == server && state.generation == *generation)
+                    .and_then(|state| {
+                        state
+                            .channels
+                            .iter_mut()
+                            .find(|state| state.id == *channel && state.instance == *instance)
+                    })
+                    .and_then(|state| {
+                        state.timeline.messages.iter_mut().find(|message| {
+                            message.serial == *serial && message.revision == *revision
+                        })
+                    })
+                {
+                    message.document = MessageDocument {
+                        blocks: vec![ContentBlock::text(
+                            "[Preview evicted; reopen this conversation to reload its history.]",
+                        )],
+                    };
+                }
+            }
+        }
         let token = completed.token;
         match &completed.origin {
             Origin::Message {
@@ -1045,7 +1080,7 @@ impl WebClient {
                 });
             }
         }
-        serde_json::to_string(&serde_json::json!({"token":token,"charge":completed.rendered.retained_bytes,"document":completed.rendered.document})).map_err(|_| "Content result could not be serialized.".into())
+        serde_json::to_string(&serde_json::json!({"token":token,"charge":completed.rendered.retained_bytes,"document":completed.rendered.document,"failed":completed.failed})).map_err(|_| "Content result could not be serialized.".into())
     }
 
     pub fn content_request(&mut self, token: String) -> Result<(), String> {
@@ -1192,10 +1227,23 @@ impl WebClient {
 
     /// Apply what arrived; what changed, as JSON (`[{"kind": …}]`).
     pub fn poll(&mut self) -> String {
+        let previous_lifetime = selected_lifetime(&self.client);
         loop {
             let input = self.shared.inputs.borrow_mut().pop_front();
             let Some(input) = input else { break };
             self.client.handle(input);
+        }
+        if let (Some(previous), Some(current)) =
+            (previous_lifetime, selected_lifetime(&self.client))
+        {
+            if previous.0 == current.0 && previous.2 == current.2 && previous != current {
+                // Initial cached/offline channels and reconnects get a NEW
+                // storage request/ticket once the real wire lifetime is known.
+                // Never retarget an old reply or its already-posted render.
+                if let Err(error) = self.client.load_history(None) {
+                    self.client.handle(Input::HistoryError(error));
+                }
+            }
         }
         loop {
             let Some(delivery) = self.shared.deliveries.borrow_mut().pop_front() else {
@@ -1332,6 +1380,9 @@ impl WebClient {
                     messages,
                     next_before,
                 } => {
+                    if !self.client.navigation.accepts(&ticket) {
+                        continue;
+                    }
                     let ids: Vec<i64> = messages.iter().filter_map(|message| message.id).collect();
                     let channel_id = ticket.conversation.channel;
                     self.client.handle(Input::History {
@@ -1490,10 +1541,57 @@ fn content_current(
     client: &Client,
     shared: &Shared,
     origin: &Origin,
-    source: Option<&str>,
+    expected: Option<&str>,
 ) -> bool {
-    content_source(client, shared, origin)
-        .is_some_and(|current| source.is_none_or(|source| source == current))
+    match origin {
+        Origin::Message {
+            server,
+            generation,
+            channel,
+            instance,
+            serial,
+            revision,
+        } => client
+            .servers
+            .iter()
+            .find(|state| &state.id == server && state.generation == *generation)
+            .and_then(|state| {
+                state
+                    .channels
+                    .iter()
+                    .find(|state| state.id == *channel && state.instance == *instance)
+            })
+            .and_then(|state| {
+                state
+                    .timeline
+                    .messages
+                    .iter()
+                    .find(|message| message.serial == *serial && message.revision == *revision)
+            })
+            .is_some_and(|message| expected.is_none_or(|source| source == message.source)),
+        Origin::Welcome {
+            server,
+            generation,
+            revision,
+        } => client
+            .servers
+            .iter()
+            .find(|state| {
+                &state.id == server
+                    && state.generation == *generation
+                    && state.status == nuschl_client::server::Status::Connected
+            })
+            .is_some_and(|state| {
+                state.welcome.as_deref().is_some_and(|source| {
+                    expected.is_none_or(|expected| expected == source)
+                        && shared
+                            .welcomes
+                            .borrow()
+                            .view(server, *generation, Some(source), true)
+                            .is_some_and(|view| &view.token == revision)
+                })
+            }),
+    }
 }
 
 fn image_destination(client: &Client) -> Option<Destination> {
@@ -1532,4 +1630,16 @@ fn image_destination(client: &Client) -> Option<Destination> {
         peer,
         own,
     })
+}
+
+fn selected_lifetime(client: &Client) -> Option<(String, u64, u32, u64)> {
+    let (server, channel) = client.selected_indices()?;
+    let server = &client.servers[server];
+    let channel = &server.channels[channel];
+    Some((
+        server.id.clone(),
+        server.generation,
+        channel.id,
+        channel.instance,
+    ))
 }
