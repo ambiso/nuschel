@@ -3611,6 +3611,19 @@ mod tests {
             2,
             "changed hash while open fetches new body"
         );
+        client.open_comment(0, 7, None);
+        assert_eq!(
+            recorder.rendered.lock().unwrap().len(),
+            1,
+            "repeated opens cannot queue unchanged pending rendering"
+        );
+        client.retain_comment_interest(None);
+        client.open_comment(0, 7, Some(&body));
+        assert_eq!(
+            recorder.rendered.lock().unwrap().len(),
+            1,
+            "matching prepared UI source must reuse its document"
+        );
         client.handle(rendered_comment(&id, &body));
         assert!(
             !client
