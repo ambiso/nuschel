@@ -1,0 +1,69 @@
+# nuschl-musicbot configuration (docs/musicbot.md).
+#
+# Relative *_file paths are read from systemd's credentials directory
+# ($CREDENTIALS_DIRECTORY, LoadCredential) when there is one, otherwise from the
+# directory this file is in.
+
+[web]
+# The web page's plain-HTTP listener; put a TLS proxy in front of it.
+listen = "127.0.0.1:8474"
+# Where people reach the page. The links the bot sends start with it.
+public_url = "https://music.example.org"
+
+[audio]
+# Opus bitrate in bit/s; lowered automatically where a server allows less.
+bitrate = 96000
+# Volume of each queue at start, in percent.
+volume = 40
+# Ducking: each queue starts with these settings; the web page changes them.
+# The music gets quieter while people speak (detected speech, not just an open
+# microphone) and returns after the hold time.
+ducking = true
+duck_level = 30       # percent of the normal volume while people speak
+duck_hold_ms = 800    # at most 10000
+duck_sensitivity = 50 # percent; higher counts quieter or less clear speech
+
+# Music libraries: any Subsonic or OpenSubsonic server (Navidrome, Gonic,
+# Ampache, Airsonic, ...). A search asks all of them.
+
+[[subsonic]]
+name = "Navidrome"
+url = "https://navidrome.example.org"
+# OpenSubsonic API key (servers with apiKeyAuthentication) ...
+api_key_file = "navidrome-api-key"
+
+[[subsonic]]
+name = "Archive"
+url = "https://music.example.net"
+# ... or a username and password (sent as a salted token, never in clear).
+username = "bot"
+password_file = "archive-password"
+# Optional: always transcode to this format. Without it, OpenSubsonic servers
+# with the transcoding extension transcode only what the bot cannot decode, and
+# others send the original file.
+# transcode = "mp3"
+# max_bitrate = 192   # kbit/s, for transcoding
+
+# One Mumble connection per channel; each starts with its own queue. On the
+# web page a channel can play another channel's queue instead.
+
+[[channel]]
+# Short identifier: the queue's name and the folder of this connection's
+# client certificate in the state directory.
+name = "lounge"
+host = "voice.example.org"
+port = 64738
+username = "Music"
+# Path below the root channel; empty for the root channel.
+channel = "Lounge"
+# For servers with a self-signed certificate: its SHA-256 fingerprint.
+# certificate_sha256 = "0123...ef"
+# password_file = "voice-password"
+# tokens = ["music"]
+# force_tcp = false
+
+[[channel]]
+name = "games"
+host = "voice.example.org"
+username = "Music (Games)"
+channel = "Games/Background"

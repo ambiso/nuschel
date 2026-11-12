@@ -29,6 +29,10 @@ wasm-client profile="release":
 web: wasm-client
     cd web/app && npm ci --no-audit --no-fund && npm test && npm run build
 
+# The music bot's Svelte UI, served by nuschl-musicbot from this directory.
+musicbot-web:
+    cd apps/musicbot/web && npm ci --no-audit --no-fund && npm test && npm run build
+
 workers:
     cargo build --workspace
     python3 tests/workers.py

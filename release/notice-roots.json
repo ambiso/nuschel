@@ -21,6 +21,10 @@
       "nuschl-update-worker/mldsa44"
     ],
     "standalone": {
+      "musicbot": {
+        "packages": ["nuschl-musicbot"],
+        "features": []
+      },
       "rtc-probe": {
         "packages": [
           "nuschl-rtc-probe"
@@ -51,6 +55,10 @@
       "nuschl-update-worker/mldsa44"
     ],
     "standalone": {
+      "musicbot": {
+        "packages": ["nuschl-musicbot"],
+        "features": []
+      },
       "rtc-probe": {
         "packages": [
           "nuschl-rtc-probe"
@@ -93,6 +101,10 @@
       "nuschl-update-worker/mldsa44"
     ],
     "standalone": {
+      "musicbot": {
+        "packages": ["nuschl-musicbot"],
+        "features": []
+      },
       "rtc-probe": {
         "packages": [
           "nuschl-rtc-probe"
@@ -118,6 +130,10 @@
       "nuschl-update-worker/mldsa44"
     ],
     "standalone": {
+      "musicbot": {
+        "packages": ["nuschl-musicbot"],
+        "features": []
+      },
       "rtc-probe": {
         "packages": [
           "nuschl-rtc-probe"

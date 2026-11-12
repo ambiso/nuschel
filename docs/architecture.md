@@ -23,6 +23,7 @@ platform decisions reversible without duplicating the session model.
 | `nuschl-content-worker` | Parse and highlight untrusted content | Credentials, microphone, user files, network |
 | `nuschl-media-worker` | Audio device adapters, DSP, Opus | Server credentials, history database, arbitrary files, network |
 | `nuschl-storage-worker` | Own the explicitly selected history database | Server credentials, microphone, network |
+| `nuschl-musicbot` | Per-channel Subsonic playback, ducking, persisted queues/history, authenticated JSON/SSE API and packaged Svelte controls (docs/musicbot.md) | GPUI, workers, user private identity keys |
 
 Worker dependencies are restricted with cargo-deny's wrapper rules. The shell and
 server exchange typed commands and results with workers rather than linking the

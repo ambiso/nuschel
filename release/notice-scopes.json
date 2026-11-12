@@ -14,7 +14,8 @@
       "mingw-w64-runtime",
       "newcm-math-font",
       "syntect-default-assets",
-      "web-runtime-assets"
+      "web-runtime-assets",
+      "musicbot-web-runtime-assets"
     ],
     "root_group": "all"
   },
@@ -106,5 +107,25 @@
     "external_components": [
       "rust-standard-library"
     ]
+  },
+  "musicbot-x86_64-unknown-linux-gnu": {
+    "targets": ["x86_64-unknown-linux-gnu"],
+    "root_group": "musicbot",
+    "external_components": ["rust-standard-library", "musicbot-web-runtime-assets"]
+  },
+  "musicbot-aarch64-unknown-linux-gnu": {
+    "targets": ["aarch64-unknown-linux-gnu"],
+    "root_group": "musicbot",
+    "external_components": ["rust-standard-library", "musicbot-web-runtime-assets"]
+  },
+  "musicbot-x86_64-apple-darwin": {
+    "targets": ["x86_64-apple-darwin"],
+    "root_group": "musicbot",
+    "external_components": ["rust-standard-library", "musicbot-web-runtime-assets"]
+  },
+  "musicbot-aarch64-apple-darwin": {
+    "targets": ["aarch64-apple-darwin"],
+    "root_group": "musicbot",
+    "external_components": ["rust-standard-library", "musicbot-web-runtime-assets"]
   }
 }
