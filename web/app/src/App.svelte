@@ -66,7 +66,7 @@
     }
     return rpc.request(method,args);
   }
-  async function act(method, ...args) { try { return await command(method, ...args); } catch (reason) { error = String(reason); } }
+  async function act(method, ...args) { try { return await command(method, ...args); } catch (reason) { error = String(reason?.message || reason); } }
   function rememberDraft() {
     const key = conversationKey(timeline, selected);
     if (!key) return;
@@ -193,7 +193,7 @@
       const index = editingIndex === null ? await command("add_server",...fields) : await command("edit_server",editingIndex,...fields);
       if (password) await command("connect_with_password",index,password); else await command("connect", index);
       password = ""; await command("open", index, 0); showAdd = false;
-    } catch (reason) { error = String(reason); }
+    } catch (reason) { error = String(reason?.message || reason); }
   }
   function addServer() { editingIndex = null; password = ""; serverName = ""; host = ""; port = 64738; username = selected?.username || ""; pin = ""; showAdd = true; drawer = false; }
   function editServer() { if (!selected) return; editingIndex = selectedIndex; password = ""; serverName = selected.name; host = selected.host; port = selected.port; username = selected.username; pin = selected.pin || ""; showAdd = true; drawer = false; }
@@ -204,7 +204,7 @@
     // Shared SDK Sent identifies both the original conversation and body.
     // A command being queued never clears text typed during an earlier send.
     try { await command("send_text", sent); }
-    catch (reason) { error = String(reason); }
+    catch (reason) { error = String(reason?.message || reason); }
   }
   async function openChannel(id) { rememberDraft(); await act("open", selectedIndex, id); if (mobile) drawer = false; }
   function joinVoice(channel = timeline?.channel) {
@@ -218,14 +218,14 @@
     audioActionPending={server:voice.server_id,muted:!microphoneMuted,deafened:false};
     if (microphoneMuted) void activateAudio({microphone:true});
     else audio?.setLocalPolicy({muted:true});
-    void command("toggle_mute",voiceIndex).catch(reason=>{audioActionPending=null;error=String(reason);});
+    void command("toggle_mute",voiceIndex).catch(reason=>{audioActionPending=null;error=String(reason?.message || reason);});
   }
   function togglePlayback() {
     if (voiceIndex < 0 || !voice?.joined || audioActionPending) return;
     audioActionPending={server:voice.server_id,muted:true,deafened:!playbackDeafened};
     if (playbackDeafened) void activateAudio({microphone:false});
     else audio?.setLocalPolicy({muted:true,deafened:true});
-    void command("toggle_deaf",voiceIndex).catch(reason=>{audioActionPending=null;error=String(reason);});
+    void command("toggle_deaf",voiceIndex).catch(reason=>{audioActionPending=null;error=String(reason?.message || reason);});
   }
   function stopAudio() {
     audio?.setLocalPolicy({muted:true,deafened:true}); audio?.syncVoice(null);
@@ -314,7 +314,7 @@
     if (orderPending || !capabilities.includes("server_order") || sameOrder(ids,servers.map(server => server.id))) return;
     orderPending = true; orderStatus = "Saving server order…";
     try { await command("set_server_order",ids); orderStatus = "Server order saved in this browser."; }
-    catch (reason) { error = String(reason); orderStatus = "Server order was not saved."; }
+    catch (reason) { error = String(reason?.message || reason); orderStatus = "Server order was not saved."; }
     finally { orderPending = false; await tick(); updateUnread(); }
   }
   function dropOrder(event, pointer = false) {
