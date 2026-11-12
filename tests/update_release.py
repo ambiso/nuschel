@@ -211,6 +211,14 @@ class ReleaseGates(unittest.TestCase):
         sums()
         with self.assertRaises(ValueError): self.accept_linux(directory)
 
+    def test_ci_notice_gate_runs_the_same_source_policy_before_payload_upload(self):
+        _, _, notices, _ = self.package()
+        command = [sys.executable, str(REPO/"release/check-notices.py"), str(notices)]
+        good = subprocess.run(command, capture_output=True, text=True, timeout=10)
+        self.assertEqual(good.returncode, 0, good.stderr)
+        (notices/"THIRD-PARTY.json").unlink()
+        self.assertNotEqual(subprocess.run(command, capture_output=True, timeout=10).returncode, 0)
+
     def test_paths_and_https_policy(self):
         for value in ("../escape", "a//b", "CON.txt", "dir/nul", "a.", "a/../b", "A\\b", ".NUSCHL-OLD/file"):
             with self.assertRaises(ValueError, msg=value): make.safe_path(value)

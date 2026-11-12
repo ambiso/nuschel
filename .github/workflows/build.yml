@@ -141,6 +141,9 @@ jobs:
           PYCODE
           (cd dist && sha256sum build-info.json >> SHA256SUMS)
 
+      - name: Require actual complete runtime notice evidence before payload upload
+        run: python3 release/check-notices.py result-web-site/licenses/nuschl
+
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ${{ steps.names.outputs.artifact }}
@@ -252,6 +255,9 @@ jobs:
           PYCODE
           (cd dist && sha256sum build-info.json >> SHA256SUMS)
 
+      - name: Require actual complete runtime notice evidence before payload upload
+        run: python3 release/check-notices.py install/windows/licenses
+
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ${{ steps.names.outputs.artifact }}
@@ -361,6 +367,9 @@ jobs:
           pathlib.Path('dist/build-info.json').write_text(json.dumps(record, indent=2) + '\n')
           PYCODE
           (cd dist && sha256sum build-info.json >> SHA256SUMS)
+
+      - name: Require actual complete runtime notice evidence before payload upload
+        run: python3 release/check-notices.py install/Nuschl.app/Contents/Resources/licenses
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
