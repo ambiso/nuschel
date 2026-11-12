@@ -1696,6 +1696,18 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
       Keep notice inventory/vendoring tools distinct from compiled package
       builders. Cache cleanup being complete does not mean this migration is done;
       serialize flake/graph edits with the release-notice and codec owners.
+- [ ] Close the standalone RTC-probe attribution gap before distributing the
+      migrated package. Its former package installs only EUPL; desktop roots omit
+      its str0m/dimpl/RustCrypto closure. The first actual standalone inventory
+      reports 98 runtime packages and three unresolved original notices:
+      `is` 0.12.0, `str0m-proto` 0.8.0 and `str0m-rust-crypto` 0.7.0. Recover
+      inherited grants from their pinned upstream revision, with precise native
+      scopes; keep the strict bundle gate closed until evidence is verified.
+- [ ] Review the server-mode storage worker's blast-radius boundary separately.
+      It is a direct child with a cleared environment, under the server's NixOS
+      service hardening, rather than the client's restricted storage-worker
+      launcher. The build migration preserves this existing behavior; a separate
+      process alone does not prove filesystem/network/credential confinement.
 - [x] Keep source-dependent notice/runtime postInstall hooks out of Crane's
       buildDepsOnly cache key. Explicit artifact-only dependency passes exclude
       final installation hooks while final products retain notice installation.
