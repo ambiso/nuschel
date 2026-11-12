@@ -20,7 +20,7 @@ use nuschl_core::{
     model::{AclEntry, permission},
 };
 use nuschl_session::connection::Command;
-use std::ops::Range;
+use std::{cell::Cell, ops::Range};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct LookupSelection {
@@ -48,6 +48,7 @@ pub struct Editor {
     target: Entity<InputState>,
     group_name: Entity<InputState>,
     member: Entity<InputState>,
+    input_readonly: Cell<[bool; 3]>,
     rule_scroll: UniformListScrollHandle,
     group_scroll: UniformListScrollHandle,
     member_scroll: [UniformListScrollHandle; 3],
@@ -95,6 +96,7 @@ impl Editor {
             target_user: false,
             target,
             member,
+            input_readonly: Cell::new([false; 3]),
             group_name: input("New group name", window, cx),
             rule_scroll: UniformListScrollHandle::new(),
             group_scroll: UniformListScrollHandle::new(),
@@ -245,13 +247,14 @@ fn inputs_readonly(editor: &Editor, busy: bool, cx: &mut Context<Desktop>) {
                     .filter(|row| row.id == id)
             })
             .is_none();
-    for (input, readonly) in [
-        (&editor.target, target),
-        (&editor.group_name, busy),
-        (&editor.member, member),
-    ] {
-        if input.read(cx).is_readonly() != readonly {
-            input.update(cx, |input, cx| input.set_readonly(readonly, cx));
+    let wanted = [target, busy, member];
+    let previous = editor.input_readonly.replace(wanted);
+    for (index, input) in [&editor.target, &editor.group_name, &editor.member]
+        .into_iter()
+        .enumerate()
+    {
+        if previous[index] != wanted[index] {
+            input.update(cx, |input, cx| input.set_readonly(wanted[index], cx));
         }
     }
 }
