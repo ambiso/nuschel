@@ -14,8 +14,8 @@ worker or trust root. There is no minisign fallback. Production accepts only
 `crates/update/update-trust.json` compiled into the program; that file deliberately
 has **no enrolled keys**. No production secret or CI enrollment was created.
 
-The operator tool supports `keygen`, `public-key`, `key-status`, `sign`, and
-`verify`. It is an explicit offline/CI tool, excluded from client payloads. Its
+The operator tool supports `keygen`, `public-key`, `key-status`, `sign`, `verify`
+and authentication-only `authenticate`. It is an explicit offline/CI tool, excluded from client payloads. Its
 combined verification is a publication check, not the runtime's process boundary.
 
 ## Concrete operator step (execute only when enrollment is approved)
@@ -130,7 +130,11 @@ and before installation.
 Validity is at most 30 days, with at most five minutes of future clock skew.
 Operators must refresh/re-sign the latest metadata before expiry even when
 binaries have not changed, using a nondecreasing version and release time. The
-current tag-create workflow does not implement that refresh operation or an
+offline renewal helper and reviewed [manual procedure](../../docs/update-metadata-refresh.md)
+authenticate the previous raw document, preserve all non-time bytes, record
+original provenance, require the same pair and perform normal verification of
+the renewed document. Explicit expired recovery never grants client acceptance
+to expired data. The tag-create workflow does not perform renewal or implement an
 automatic signing cron. Expired metadata produces an actionable check-for-current-
 release error; a wrong clock can also reject an otherwise valid release. An
 unseen withheld newer release remains undetectable; expiry limits how long an

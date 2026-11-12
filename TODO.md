@@ -1518,11 +1518,17 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
       256-file limit. Full final distribution review remains a separate row;
       metadata evidence is not legal-compliance or native-runtime proof. See
       docs/release-notices.md.
-- [ ] Provide an operator metadata refresh procedure before signed latest metadata
-      expires (maximum 30 days), including unchanged binaries, and actionable
-      expiry/clock recovery. The tag-create workflow is not a refresh procedure;
-      no signing cron, publication or production key operation is authorized by
-      this backlog row.
+- [x] Provide an offline operator metadata refresh helper and manual procedure
+      (docs/update-metadata-refresh.md). Authenticate both original raw signatures,
+      pin the protected ledger's latest hash, preserve every non-time byte, retain
+      binary provenance in an external receipt, require the same pair and normal
+      current-time verification of the renewal. Explicit expired recovery never
+      waives client clock/expiry/rollback rules. Nine fixture tests, 13 updater unit
+      tests and 15 existing release regressions pass; no production operation ran.
+- [ ] After production enrollment/publication approval, perform the first actual
+      manual metadata renewal, verify the downloaded pair, update the protected
+      latest ledger and assign the next deadline before the maximum 30-day expiry.
+      No cron/reminder service or automatic publication is implemented or implied.
 - [ ] Finish the per-crate build migration: the default desktop, web SDK/workers,
       witness and updater helpers use crate2nix, but `flake.nix` still builds
       `server`, `rtc-probe`, Windows and Darwin slices with Crane; the explicit

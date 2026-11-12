@@ -1,0 +1,29 @@
+{
+  "source_commits": [
+    "ff5a5d10",
+    "789f5c8a"
+  ],
+  "operator_only": true,
+  "production_runtime_changed": false,
+  "cargo_graph_changed": false,
+  "production_keys_or_remote_operations": false,
+  "build": {
+    "source": "789f5c8a",
+    "returncode": 0,
+    "elapsed_seconds": 20.00141607504338,
+    "minimum_tmp_free_bytes": 22476152832,
+    "stopped_for_scratch": false
+  },
+  "signer": "/nix/store/li1vj81blzvv9y9kgc9pyh60yvwxzw85-rust_nuschl-update-worker-0.1.0/bin/nuschl-update-sign",
+  "tests": {
+    "real_crypto_refresh_cases": 9,
+    "updater_unit_tests": 13,
+    "existing_release_regressions": 15
+  },
+  "logs": [
+    "refresh-tests.log",
+    "unit-tests.log",
+    "release-tests.log"
+  ],
+  "trust_sha256": "d6ad4266f8de5d48b9264944510c9799ff62ec21507c54fc94644e381c99c945"
+}

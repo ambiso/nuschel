@@ -137,6 +137,16 @@ class SignedRefresh(unittest.TestCase):
             self.cli("authenticate", "--public-file", self.public, "--manifest", self.input,
                      "--signature-file", self.signature, okay=False)
 
+    def test_refresh_is_not_an_implicit_enrolled_pair_rotation(self):
+        self.original()
+        alternate_secret, alternate_public = self.root / "alternate-secret.json", self.root / "alternate-public.json"
+        self.cli("keygen", "--secret-file", alternate_secret, "--public-file", alternate_public)
+        document = json.loads(self.public.read_text())
+        document["keys"].extend(json.loads(alternate_public.read_text())["keys"])
+        self.public.write_text(json.dumps(document))
+        self.secret = alternate_secret
+        self.renew(okay=False)
+
     def test_ledger_hash_validity_limit_and_existing_output_fail_closed(self):
         self.original()
         self.renew(("--expected-manifest-sha256", "00" * 32), okay=False)

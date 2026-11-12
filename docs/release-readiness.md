@@ -67,10 +67,15 @@ permissions, playback and self-update. Mark the Mac artifact untested/experiment
   complete installation file sets and hashes, and exercise update installation
   with disposable profiles. Hybrid migration invalidates the old minisign fixture
   as proof for the new signature path.
-- [ ] Implement and document an operator metadata refresh procedure before the
-  latest signed manifest's 30-day maximum expiry, including unchanged binaries.
-  The tag-create workflow is not that refresh path. Keep expiry/clock errors
-  actionable; do not add an automatic signing cron or waive expiry.
+- [x] Implement and document offline/manual metadata renewal for unchanged
+  binaries, including explicit authenticated expired-source recovery and clock
+  diagnostics. Original artifact bytes/provenance and same-pair authority remain
+  bound; the renewed document must pass ordinary current-time verification.
+  See [the procedure](update-metadata-refresh.md).
+- [ ] After separate enrollment/publication approval, execute the first actual
+  renewal and verify/download/archive its pair and next manual deadline. The
+  tag-create workflow is not an automatic refresh/reminder service; no cron or
+  expiry waiver is introduced.
 - [x] Run the hybrid native library fixture in the private Windows VM: both
   individually featured LPAC verifiers, temporary keys, bound forged answers,
   corrupt siblings, bounded output/stalls, and loopback fetch/apply/cleanup pass.
