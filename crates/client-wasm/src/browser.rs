@@ -166,25 +166,42 @@ impl Shared {
                     {
                         continue;
                     }
-                    let document = self
+                    let mut document = self
                         .welcomes
                         .borrow_mut()
                         .begin(&server, generation, &source);
-                    if let Some(view) =
+                    let view =
                         self.welcomes
                             .borrow()
-                            .view(&server, generation, Some(&source), true)
-                    {
-                        let _ = self.jobs.borrow_mut().request(
-                            Origin::Welcome {
-                                server: server.clone(),
+                            .view(&server, generation, Some(&source), true);
+                    if let Some(view) = view {
+                        let refused = self
+                            .jobs
+                            .borrow_mut()
+                            .request(
+                                Origin::Welcome {
+                                    server: server.clone(),
+                                    generation,
+                                    revision: view.token.clone(),
+                                },
+                                &source,
+                                SourceMode::Legacy,
+                                now_ms(),
+                            )
+                            .is_err();
+                        if refused {
+                            self.welcomes.borrow_mut().fail(
+                                &server,
                                 generation,
-                                revision: view.token.clone(),
-                            },
-                            &source,
-                            SourceMode::Legacy,
-                            now_ms(),
-                        );
+                                &view.token,
+                                &source,
+                            );
+                            document = MessageDocument {
+                                blocks: vec![ContentBlock::text(
+                                    "[Server welcome could not be prepared. Reconnect to retry.]",
+                                )],
+                            };
+                        }
                     }
                     Input::Server {
                         server,
@@ -515,6 +532,8 @@ impl Platform for BrowserPlatform {
 pub struct WebClient {
     client: Client,
     shared: Rc<Shared>,
+    recovery: VecDeque<(Origin, SourceMode)>,
+    recovery_selection: Option<(String, u64, u32, u64)>,
 }
 
 #[wasm_bindgen]
@@ -556,7 +575,12 @@ impl WebClient {
             Vec::new(),
             Preferences::default(),
         );
-        Ok(WebClient { client, shared })
+        Ok(WebClient {
+            client,
+            shared,
+            recovery: VecDeque::new(),
+            recovery_selection: None,
+        })
     }
 
     /// Called whenever something arrived; then call `poll()`.
@@ -989,6 +1013,7 @@ impl WebClient {
 
     /// Sources leave this credential-bearing realm only under SDK-owned leases.
     pub fn content_requests(&mut self) -> String {
+        self.drain_recovery();
         let batch = self
             .shared
             .jobs
@@ -1053,6 +1078,7 @@ impl WebClient {
             now_ms(),
             |origin, source| content_current(&self.client, &self.shared, origin, Some(source)),
         )?;
+        self.drain_recovery();
         let Some(completed) = completed else {
             return Ok("null".into());
         };
@@ -1292,6 +1318,11 @@ impl WebClient {
             self.admit_delivery(delivery);
         }
         self.client.settle();
+        let selected = selected_lifetime(&self.client);
+        self.shared
+            .jobs
+            .borrow_mut()
+            .select(selected.map(|(server, _, channel, _)| (server, channel)));
         self.shared
             .jobs
             .borrow_mut()
@@ -1364,20 +1395,50 @@ impl WebClient {
 // Non-exported helpers keep browser devices outside the SDK/session boundary.
 impl WebClient {
     fn recover_selected_content(&mut self) {
+        self.recovery.clear();
+        self.recovery_selection = selected_lifetime(&self.client);
         let Some((server, channel)) = self.client.selected_indices() else {
             return;
         };
         let server = &self.client.servers[server];
         let channel = &server.channels[channel];
-        let sources =
+        let mut jobs = self.shared.jobs.borrow_mut();
+        jobs.select(Some((server.id.clone(), channel.id)));
+        self.recovery = jobs
+            .recover_rows(&server.id, server.generation, channel)
+            .into();
+        drop(jobs);
+        self.drain_recovery();
+    }
+
+    fn drain_recovery(&mut self) {
+        let selected = selected_lifetime(&self.client);
+        if self.recovery_selection != selected {
+            self.recovery.clear();
+            self.recovery_selection = selected.clone();
             self.shared
                 .jobs
                 .borrow_mut()
-                .recover_rows(&server.id, server.generation, channel);
-        for (origin, mode) in sources {
-            if let Some(source) = content_source(&self.client, &self.shared, &origin) {
-                self.schedule_source(origin, &source, mode);
+                .select(selected.map(|(server, _, channel, _)| (server, channel)));
+            return;
+        }
+        while let Some((origin, mode)) = self.recovery.front().cloned() {
+            // Cursor carries identities/modes only. Original authority and raw
+            // source are rechecked at admission; navigation never rebinds work.
+            let Some(source) = content_source(&self.client, &self.shared, &origin) else {
+                self.recovery.pop_front();
+                continue;
+            };
+            if self
+                .shared
+                .jobs
+                .borrow_mut()
+                .request(origin, &source, mode, now_ms())
+                .is_err()
+            {
+                break;
             }
+            self.recovery.pop_front();
         }
     }
 
@@ -1404,19 +1465,25 @@ impl WebClient {
             .request(origin.clone(), source, mode, now_ms())
             .is_err()
         {
-            let evicted = self
-                .shared
-                .jobs
-                .borrow_mut()
-                .failed(origin.clone(), source, mode)
-                .unwrap_or_default();
-            self.clear_evicted(&evicted);
-            if let Some(message) = content_message_mut(&mut self.client, &origin) {
-                message.document = MessageDocument {
-                    blocks: vec![ContentBlock::text(
-                        "[Content processing is busy. Retry this message preview when pending work finishes.]",
-                    )],
-                };
+            // Queue pressure is not a parser failure. Preserve any readable
+            // derivative and never consume failure-handle/derivative capacity.
+            if !self.shared.jobs.borrow().successful_row(&origin) {
+                if let Some(message) = content_message_mut(&mut self.client, &origin) {
+                    message.document = MessageDocument {
+                        blocks: vec![ContentBlock::text(
+                            "[Content processing is busy; reopen this conversation to prepare it again.]",
+                        )],
+                    };
+                }
+                if self.recovery_selection == selected_lifetime(&self.client)
+                    && self.recovery.len() < nuschl_client::timeline::MAX_TIMELINE
+                    && !self
+                        .recovery
+                        .iter()
+                        .any(|(candidate, _)| candidate == &origin)
+                {
+                    self.recovery.push_back((origin, mode));
+                }
             }
         }
     }
@@ -1608,8 +1675,13 @@ impl WebClient {
     }
 }
 
+#[wasm_bindgen]
+extern "C" {
+    #[wasm_bindgen(js_namespace = performance, js_name = now)]
+    fn content_monotonic_now() -> f64;
+}
 fn now_ms() -> u64 {
-    js_sys::Date::now().max(0.0) as u64
+    content_monotonic_now().max(0.0) as u64
 }
 fn content_source(client: &Client, shared: &Shared, origin: &Origin) -> Option<String> {
     match origin {

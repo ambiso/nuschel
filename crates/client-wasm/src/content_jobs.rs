@@ -10,7 +10,11 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
-const DEADLINE_MS: u64 = 24_000;
+const QUEUE_DEADLINE_MS: u64 = 60_000;
+const EXECUTION_DEADLINE_MS: u64 = 12_000;
+const MAX_FAILED_HANDLES: usize = 128;
+#[cfg(test)]
+const DEADLINE_MS: u64 = QUEUE_DEADLINE_MS;
 const MAX_HANDLES: usize = 4096;
 const MAX_PLAIN_BYTES: usize = 16 * 1024 * 1024;
 
@@ -133,10 +137,11 @@ pub struct Completion {
 #[derive(Default)]
 pub struct Jobs {
     next: u64,
-    pending: BTreeMap<String, Job>,
+    pending: BTreeMap<u64, Job>,
     pending_bytes: usize,
     handles: BTreeMap<Origin, Handle>,
     plain_bytes: usize,
+    selected: Option<(String, u32)>,
 }
 
 impl Jobs {
@@ -168,13 +173,13 @@ impl Jobs {
             .checked_add(1)
             .ok_or("Content ticket counter exhausted.")?;
         self.pending.insert(
-            self.next.to_string(),
+            self.next,
             Job {
                 origin,
                 source: source.into(),
                 mode,
                 charge,
-                deadline: now.saturating_add(DEADLINE_MS),
+                deadline: now.saturating_add(QUEUE_DEADLINE_MS),
                 posted: false,
                 cancelled: false,
                 cancel_sent: false,
@@ -184,6 +189,7 @@ impl Jobs {
         Ok(())
     }
 
+    #[cfg(test)]
     pub fn take(&mut self, now: u64, current: impl Fn(&Origin, &str) -> bool) -> Vec<Operation> {
         self.take_with_failures(now, current).operations
     }
@@ -199,12 +205,13 @@ impl Jobs {
             if !job.cancelled {
                 if !current(&job.origin, &job.source) {
                     job.cancelled = true;
+                    expired.push((job.origin.clone(), job.mode, None));
                 } else if now >= job.deadline {
                     job.cancelled = true;
                     expired.push((
                         job.origin.clone(),
                         job.mode,
-                        <[u8; 32]>::from(Sha256::digest(job.source.as_bytes())),
+                        Some(<[u8; 32]>::from(Sha256::digest(job.source.as_bytes()))),
                     ));
                 }
             }
@@ -216,7 +223,7 @@ impl Jobs {
                 if !job.cancel_sent {
                     job.cancel_sent = true;
                     operations.push(Operation::Cancel {
-                        request: request.clone(),
+                        request: request.to_string(),
                     });
                 }
             }
@@ -224,11 +231,29 @@ impl Jobs {
         });
         let mut failures = Vec::new();
         for (origin, mode, digest) in expired {
-            if let Some(next) = self.next.checked_add(1) {
-                self.next = next;
-                let evicted =
-                    self.install_digest(origin.clone(), digest, mode, next.to_string(), 0, true);
-                failures.push(Failure { origin, evicted });
+            if self.successful_row(&origin) {
+                continue;
+            }
+            if let Some(digest) = digest {
+                if let Some(next) = self.next.checked_add(1) {
+                    self.next = next;
+                    let evicted = self.install_digest(
+                        origin.clone(),
+                        digest,
+                        mode,
+                        next.to_string(),
+                        0,
+                        true,
+                    );
+                    failures.push(Failure { origin, evicted });
+                }
+            } else {
+                // The source lease is gone; only retire the still-resident
+                // placeholder. This grants no authority to the new lifetime.
+                failures.push(Failure {
+                    evicted: vec![origin.clone()],
+                    origin,
+                });
             }
         }
         // Cancelled posted jobs remain charged and occupy a slot until ACK.
@@ -241,9 +266,10 @@ impl Jobs {
                 continue;
             }
             job.posted = true;
+            job.deadline = now.saturating_add(EXECUTION_DEADLINE_MS);
             posted += 1;
             operations.push(Operation::Render {
-                request: request.clone(),
+                request: request.to_string(),
                 source: job.source.clone(),
                 mode: job.mode,
             });
@@ -264,15 +290,18 @@ impl Jobs {
         current: impl FnOnce(&Origin, &str) -> bool,
     ) -> Result<Option<Completion>, &'static str> {
         // A forged reply cannot consume work that has not actually been posted.
-        let Some(job) = self.pending.get(request).filter(|job| job.posted) else {
+        let Ok(request_id) = request.parse::<u64>() else {
+            return Ok(None);
+        };
+        let Some(job) = self.pending.get(&request_id).filter(|job| job.posted) else {
             return Ok(None);
         };
         if job.cancelled || !current(&job.origin, &job.source) {
-            let job = self.pending.remove(request).expect("observed job");
+            let job = self.pending.remove(&request_id).expect("observed job");
             self.pending_bytes -= job.charge;
             return Ok(None);
         }
-        let job = self.pending.remove(request).expect("observed job");
+        let job = self.pending.remove(&request_id).expect("observed job");
         self.pending_bytes -= job.charge;
         let result = if now >= job.deadline {
             Ok(None)
@@ -280,6 +309,9 @@ impl Jobs {
             reply.map(validate_render).transpose()
         };
         let failed = !matches!(&result, Ok(Some(_)));
+        if failed && self.successful_row(&job.origin) {
+            return Ok(None);
+        }
         let rendered = result.ok().flatten().unwrap_or_else(|| ValidatedRender {
             document: nuschl_core::MessageDocument {
                 blocks: vec![nuschl_core::ContentBlock::text(
@@ -336,6 +368,9 @@ impl Jobs {
         plain_bytes: usize,
         failed: bool,
     ) -> Vec<Origin> {
+        if failed && self.successful_row(&origin) {
+            return Vec::new();
+        }
         // A new origin for the SAME resident row replaces its accounting
         // atomically with the adapter's synchronous derivative replacement.
         self.handles.retain(|old, handle| {
@@ -347,13 +382,21 @@ impl Jobs {
             }
         });
         let mut evicted = Vec::new();
-        while self.handles.len() >= MAX_HANDLES
-            || self.plain_bytes.saturating_add(plain_bytes) > MAX_PLAIN_BYTES
-        {
+        while if failed {
+            self.handles.values().filter(|handle| handle.failed).count() >= MAX_FAILED_HANDLES
+        } else {
+            self.handles
+                .values()
+                .filter(|handle| !handle.failed)
+                .count()
+                >= MAX_HANDLES
+                || self.plain_bytes.saturating_add(plain_bytes) > MAX_PLAIN_BYTES
+        } {
             let Some(old_origin) = self
                 .handles
                 .iter()
-                .min_by_key(|(_, handle)| handle.used)
+                .filter(|(_, handle)| handle.failed == failed)
+                .min_by_key(|(origin, handle)| (self.selected.as_ref().is_some_and(|(server, channel)| matches!(origin, Origin::Message { server: id, channel: target, .. } if id == server && target == channel)), handle.used))
                 .map(|(origin, _)| origin.clone())
             else {
                 break;
@@ -438,6 +481,16 @@ impl Jobs {
         }
     }
 
+    pub fn select(&mut self, selected: Option<(String, u32)>) {
+        self.selected = selected;
+    }
+
+    pub fn successful_row(&self, origin: &Origin) -> bool {
+        self.handles
+            .iter()
+            .any(|(stored, handle)| !handle.failed && stored.same_row(origin))
+    }
+
     pub fn pending(&self, origin: &Origin) -> bool {
         self.pending
             .values()
@@ -449,7 +502,11 @@ impl Jobs {
     /// Explicit navigation touches existing selected rows before restoring
     /// missing handles, so old inactive rows are preferred eviction victims.
     pub fn touch(&mut self, origin: &Origin) {
-        if let Some(handle) = self.handles.get_mut(origin) {
+        if let Some(handle) = self
+            .handles
+            .iter_mut()
+            .find_map(|(stored, handle)| stored.same_row(origin).then_some(handle))
+        {
             if let Some(next) = self.next.checked_add(1) {
                 self.next = next;
                 handle.used = next;
@@ -486,11 +543,15 @@ impl Jobs {
                 ))
             })
             .collect();
-        for (origin, _) in &rows {
+        for (origin, _) in rows.iter().rev() {
             self.touch(origin);
         }
         rows.into_iter()
-            .filter(|(origin, _)| self.token(origin).is_none() && !self.pending(origin))
+            .filter(|(origin, _)| {
+                !self.successful_row(origin)
+                    && self.token(origin).is_none()
+                    && !self.pending(origin)
+            })
             .collect()
     }
 
@@ -717,8 +778,13 @@ mod tests {
         jobs.request(origin(2), "revoked", SourceMode::Plain, 0)
             .unwrap();
         let expired = jobs.take_with_failures(DEADLINE_MS, |_, _| false);
-        assert!(expired.failures.is_empty());
+        assert_eq!(expired.failures.len(), 1);
+        assert_eq!(expired.failures[0].evicted, vec![origin(2)]);
         assert!(jobs.token(&origin(2)).is_none());
+        assert!(
+            !jobs.owns_row(&origin(2)),
+            "retirement cannot mint current authority"
+        );
     }
 
     fn resident_model(channels: usize, count: usize) -> Vec<nuschl_client::server::ServerState> {
@@ -908,20 +974,20 @@ mod tests {
         assert!(jobs.token(&first).is_none());
         let recovery = jobs.recover_rows("owned", 1, &servers[0].channels[0]);
         assert_eq!(recovery.len(), 4500 - MAX_HANDLES);
-        for (origin, mode) in recovery {
-            let source = model_message_mut(&mut servers, &origin).source.clone();
-            if jobs.request(origin.clone(), &source, mode, 0).is_err() {
-                let evicted = jobs.failed(origin, &source, mode).unwrap();
-                jobs.clear_evicted(&mut servers, &evicted);
+        // A bounded adapter cursor holds identities/modes, not duplicate raw
+        // source. Queue refusal leaves the existing resident documents intact.
+        let mut recovery: std::collections::VecDeque<_> = recovery.into();
+        jobs.select(Some(("owned".into(), 0)));
+        while !recovery.is_empty() || !jobs.pending.is_empty() {
+            while let Some((origin, mode)) = recovery.front().cloned() {
+                let source = model_message_mut(&mut servers, &origin).source.clone();
+                if jobs.request(origin, &source, mode, 0).is_err() {
+                    break;
+                }
+                recovery.pop_front();
             }
-        }
-        assert!(jobs.pending.len() <= MAX_PENDING_JOBS);
-        assert!(jobs.pending_bytes <= MAX_PENDING_BYTES);
-        for row in 0..900 {
-            let origin = model_origin(&servers[0], 0, row);
-            assert!(jobs.token(&origin).is_some() || jobs.pending(&origin));
-        }
-        while !jobs.pending.is_empty() {
+            assert!(jobs.pending.len() <= MAX_PENDING_JOBS);
+            assert!(jobs.pending_bytes <= MAX_PENDING_BYTES);
             let work = jobs.take(1, |_, _| true);
             assert!(!work.is_empty());
             for operation in work {
@@ -932,8 +998,17 @@ mod tests {
                     .complete(&request, Some(REPLY), 1, |_, _| true)
                     .unwrap()
                     .unwrap();
+                assert!(
+                    !completed.failed,
+                    "a failure token is NOT recovered content"
+                );
                 apply_model(&jobs, &mut servers, completed);
             }
+        }
+        for row in 0..900 {
+            let origin = model_origin(&servers[0], 0, row);
+            assert!(jobs.successful_row(&origin));
+            assert!(!jobs.is_failed(&origin));
         }
         assert_eq!(jobs.plain_bytes, resident_plain_bytes(&servers));
         let after: Vec<_> = servers[0]
@@ -953,5 +1028,88 @@ mod tests {
             after, originals,
             "no IDB reload, mode guess, body/time correlation or unsaved-row loss"
         );
+    }
+    #[test]
+    fn numeric_fifo_and_execution_deadline_start_at_dispatch() {
+        let mut jobs = Jobs::default();
+        for serial in 0..20 {
+            jobs.request(origin(serial), "source", SourceMode::Plain, 0)
+                .unwrap();
+        }
+        let batch = jobs.take_with_failures(QUEUE_DEADLINE_MS - 1, |_, _| true);
+        let ids: Vec<_> = batch
+            .operations
+            .into_iter()
+            .map(|op| match op {
+                Operation::Render { request, .. } => request,
+                _ => panic!(),
+            })
+            .collect();
+        assert_eq!(ids, ["1", "2", "3", "4"]);
+        assert!(batch.failures.is_empty());
+        let done = jobs
+            .complete("1", Some(REPLY), QUEUE_DEADLINE_MS + 1, |_, _| true)
+            .unwrap()
+            .unwrap();
+        assert!(
+            !done.failed,
+            "queue time cannot consume the execution deadline"
+        );
+    }
+
+    #[test]
+    fn failed_metadata_never_evicts_successful_derivatives_or_replaces_valid_rerender() {
+        let mut jobs = Jobs::default();
+        jobs.request(origin(0), "source", SourceMode::Plain, 0)
+            .unwrap();
+        jobs.take(0, |_, _| true);
+        jobs.complete("1", Some(REPLY), 1, |_, _| true).unwrap();
+        let token = jobs.token(&origin(0)).unwrap().to_owned();
+        for serial in 1..1000 {
+            assert!(
+                jobs.failed(origin(serial), "source", SourceMode::Plain)
+                    .unwrap()
+                    .iter()
+                    .all(|candidate| candidate != &origin(0))
+            );
+        }
+        assert_eq!(jobs.token(&origin(0)), Some(token.as_str()));
+        assert_eq!(
+            jobs.handles.values().filter(|handle| handle.failed).count(),
+            MAX_FAILED_HANDLES
+        );
+        jobs.request(origin(0), "source", SourceMode::Plain, 2)
+            .unwrap();
+        let batch = jobs.take(2, |_, _| true);
+        let Operation::Render { request, .. } = &batch[0] else {
+            panic!()
+        };
+        let expired = jobs.take_with_failures(2 + EXECUTION_DEADLINE_MS, |_, _| true);
+        assert!(expired.failures.is_empty());
+        assert!(
+            jobs.complete(request, None, 3 + EXECUTION_DEADLINE_MS, |_, _| true)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(jobs.token(&origin(0)), Some(token.as_str()));
+    }
+
+    #[test]
+    fn reconnect_recovery_preserves_readable_old_origin_and_lru_newest_priority() {
+        let mut servers = resident_model(1, 5);
+        let mut jobs = Jobs::default();
+        for row in 0..5 {
+            let origin = model_origin(&servers[0], 0, row);
+            render_model(&mut jobs, &mut servers, origin);
+        }
+        servers[0].generation += 1;
+        servers[0].channels[0].instance += 1;
+        assert!(
+            jobs.recover_rows("owned", servers[0].generation, &servers[0].channels[0])
+                .is_empty()
+        );
+        let used: Vec<_> = servers[0].channels[0].timeline.messages.iter().map(|message| jobs.handles.iter().find(|(origin, _)| matches!(origin, Origin::Message { serial, .. } if *serial == message.serial)).unwrap().1.used).collect();
+        assert!(used.windows(2).all(|pair| pair[0] < pair[1]));
+        assert_eq!(jobs.plain_bytes, resident_plain_bytes(&servers));
     }
 }
