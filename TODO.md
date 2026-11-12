@@ -1647,6 +1647,14 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
       helpers, exact scoped notices, macOS lipo/signing and Windows GUI
       apply/restart/profile continuity. Existing GUI proof used the former
       both-feature helpers; helper-only runtime tests do not prove new archives.
+- [ ] Complete macOS signature validation beyond a successful cross build.
+      The frozen universal app builds, but pinned rcodesign 0.29's generic
+      verifier rejects its ad-hoc signatures while parsing the empty CMS wrapper
+      and reports its own verifier limitations. Preserve that failed gate.
+      Independent bounded CodeDirectory/page/Info.plist/CodeResources checks are
+      being developed as test evidence; they do not establish native Apple
+      `codesign`, Gatekeeper or runtime acceptance. Do not bypass publisher policy
+      or relabel the original tool error as a passing verification.
 - [ ] Windows installer (Start menu entry, uninstall); today the zip is portable and
       updates itself where it was unpacked.
 - Deferred (user, 2026-11-11: **no Windows or macOS code signing for now**). The
