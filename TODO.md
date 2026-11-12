@@ -28,9 +28,8 @@ are integrated with scoped proofs; final browser/device/distribution checks stay
 Server reordering and the desktop layout foundation have scoped proofs integrated;
 web image attachments, modern identity/archive flows and full parity remain open.
 The rename/build-cache cleanup is complete. Release publication remains behind
-signing, notice and packaging gates. The locally tracked `origin/main` is
-`36eef419` as of this checkout review; this is not a tagged-release claim.
-No push, tag or release is performed by the queue integrations below.
+signing, notice and packaging gates. The last verified push of `main` is `1cbb5103`; this is not a tagged release.
+Later local integrations remain pending their combined verification and push.
 
 Queue policy (user, 2026-11-12): record every reported or discovered issue here
 when it cannot be fixed immediately. Delegation does not close an issue: retain
@@ -43,8 +42,11 @@ works alongside Codex through `~/.cache/nuschl-coordination/to-claude.md` and
 `to-codex.md`, with an active reply-file watcher. Claude owns the received-audio
 attenuation audit, an independent read-only simplification/correctness review,
 the separate volume-slider/VAD-meter implementation, installer authentication
-and poll-design lanes. Codex owners retain ACLs, native spacing/status,
-image quality, NixOS ACME/operator work and queue/integration. Implement
+and poll-design lanes. Claude now also has active isolated Markdown implementation,
+font review, legacy poll implementation and image-quality review agents; a Talking
+UI plan is ready for implementation allocation. Codex owns the urgent VAD change,
+independent speech/onset validation, native PipeWire default-source correction
+and queue/integration. Implement
 in isolated jj workspaces with explicit file/function ownership; exchange frozen
 revisions and evidence before integration. This is collaboration, not a handover.
 The watcher maintains `codex-pending.json`, revisioned message acknowledgements
@@ -1003,6 +1005,14 @@ The media worker uses per-speaker adaptive jitter buffers and Opus loss concealm
 - [x] Keep replacing the media worker on capture-route/privacy changes so blocked
       native teardown cannot keep the microphone open (decided). In the shared
       multi-server worker, not every server mute/deafen change needs replacement.
+- [ ] Resolve native PipeWire default-source aliases from native metadata for
+      upstream processing detection, without requiring pipewire-pulse. A virtual
+      `input_default` does not match a real graph node; the confirmed fallback gap
+      can miss upstream RNNoise/AEC. Preserve explicit device selection, same
+      bounded graph round trips and capture privacy. The current host can resolve
+      through Pulse, so this is not established as the current VAD cause. An
+      isolated native metadata/API and no-Pulse private-daemon proof is ready;
+      final explicit-name collision review and root integration remain open.
 - [ ] Investigate unmute → first-speech latency (user, 2026-11-12; active owner).
       Measure worker/device startup, first captured PCM, VAD/encoder admission and
       first transmitted/received audio separately against stock Mumble. Preserve
