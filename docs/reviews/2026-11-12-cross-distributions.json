@@ -34,15 +34,294 @@
     }
   },
   "gates": {
-    "windows_production_build": "running",
-    "macos_production_build": "pending",
+    "windows_production_build": "passed",
+    "macos_production_build": "running",
     "archive_and_notice_checks": "pending",
-    "windows_gui_fixture": "pending"
+    "windows_gui_fixture": "pending",
+    "windows_imports_helpers_notices": "passed"
   },
   "limits": [
     "Not a GitHub workflow or release",
     "Production public trust remains unenrolled",
     "Native macOS execution remains untested",
     "Only explicitly selected existing Windows guest may be used; no host devices or public servers"
-  ]
+  ],
+  "source_binding": {
+    "revision": "c26529d3df26d9d4e23755bc7c3a7907f5055237",
+    "git_archive_sha256": "5a8bdafd28e757c34e330c45d60a3babd34e5539fbded0231f3bb5cb6a551027",
+    "exported_files": 1619,
+    "all_path_bytes_and_executable_bits_verified": true
+  },
+  "source_binding_regressions": {
+    "tests": 7,
+    "result": "pass"
+  },
+  "windows_production": {
+    "files": {
+      "nuschl-content-worker.exe": {
+        "sha256": "68b64de93fdc9f36933360116a749a275a1ff74c716e391dfb62de2fbf80cab0",
+        "imports": [
+          "DLL Name: bcryptprimitives.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: advapi32.dll",
+          "DLL Name: api-ms-win-core-synch-l1-2-0.dll",
+          "DLL Name: api-ms-win-security-base-l1-2-2.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: ntdll.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: ole32.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: advapi32.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: ntdll.dll",
+          "DLL Name: userenv.dll",
+          "DLL Name: KERNEL32.dll",
+          "DLL Name: msvcrt.dll"
+        ]
+      },
+      "nuschl-crypto-worker.exe": {
+        "sha256": "44c215c38e270377489d76afb7ae3827fb86d9804b20bd50e6122674371dc563",
+        "imports": [
+          "DLL Name: bcryptprimitives.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: advapi32.dll",
+          "DLL Name: api-ms-win-core-synch-l1-2-0.dll",
+          "DLL Name: api-ms-win-security-base-l1-2-2.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: ntdll.dll",
+          "DLL Name: ole32.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: advapi32.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: ntdll.dll",
+          "DLL Name: userenv.dll",
+          "DLL Name: ADVAPI32.dll",
+          "DLL Name: bcrypt.dll",
+          "DLL Name: KERNEL32.dll",
+          "DLL Name: msvcrt.dll"
+        ]
+      },
+      "nuschl-math-worker.exe": {
+        "sha256": "b6972e820b9dae9ee11b695aca83a81815e10716fc0c9d74d39db39f8e25cbe1",
+        "imports": [
+          "DLL Name: bcryptprimitives.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: advapi32.dll",
+          "DLL Name: api-ms-win-core-synch-l1-2-0.dll",
+          "DLL Name: api-ms-win-security-base-l1-2-2.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: ntdll.dll",
+          "DLL Name: ole32.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: advapi32.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: ntdll.dll",
+          "DLL Name: userenv.dll",
+          "DLL Name: KERNEL32.dll",
+          "DLL Name: msvcrt.dll"
+        ]
+      },
+      "nuschl-media-worker.exe": {
+        "sha256": "f16e929b573534ea61382d06642d401f5076303e8ee0dfce14a1a0d338c0f64f",
+        "imports": [
+          "DLL Name: bcryptprimitives.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: mmdevapi.dll",
+          "DLL Name: ole32.dll",
+          "DLL Name: advapi32.dll",
+          "DLL Name: api-ms-win-core-synch-l1-2-0.dll",
+          "DLL Name: api-ms-win-security-base-l1-2-2.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: ntdll.dll",
+          "DLL Name: oleaut32.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: ole32.dll",
+          "DLL Name: api-ms-win-core-winrt-error-l1-1-0.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: oleaut32.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: advapi32.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: ntdll.dll",
+          "DLL Name: ole32.dll",
+          "DLL Name: userenv.dll",
+          "DLL Name: KERNEL32.dll",
+          "DLL Name: msvcrt.dll"
+        ]
+      },
+      "nuschl-storage-worker.exe": {
+        "sha256": "95bb6cb7400aea487f96b476002bbaa51dd865449c420262b1caed4b5ee87c6e",
+        "imports": [
+          "DLL Name: bcryptprimitives.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: advapi32.dll",
+          "DLL Name: api-ms-win-core-synch-l1-2-0.dll",
+          "DLL Name: api-ms-win-security-base-l1-2-2.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: ntdll.dll",
+          "DLL Name: ole32.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: advapi32.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: ntdll.dll",
+          "DLL Name: shell32.dll",
+          "DLL Name: userenv.dll",
+          "DLL Name: ws2_32.dll",
+          "DLL Name: ADVAPI32.dll",
+          "DLL Name: bcrypt.dll",
+          "DLL Name: KERNEL32.dll",
+          "DLL Name: msvcrt.dll"
+        ]
+      },
+      "nuschl-transfer-worker.exe": {
+        "sha256": "fe74bc6ca26c5c4d7bbd78f9ebd50ed43dbb23697a26f33576943b36c5d1a757",
+        "imports": [
+          "DLL Name: bcryptprimitives.dll",
+          "DLL Name: advapi32.dll",
+          "DLL Name: api-ms-win-core-synch-l1-2-0.dll",
+          "DLL Name: api-ms-win-security-base-l1-2-2.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: ntdll.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: ole32.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: advapi32.dll",
+          "DLL Name: iphlpapi.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: ntdll.dll",
+          "DLL Name: userenv.dll",
+          "DLL Name: ws2_32.dll",
+          "DLL Name: ADVAPI32.dll",
+          "DLL Name: bcrypt.dll",
+          "DLL Name: KERNEL32.dll",
+          "DLL Name: msvcrt.dll"
+        ]
+      },
+      "nuschl-update-verify-ed25519.exe": {
+        "sha256": "d36187a199ad9633e054378b21dcb764c5928eabdc73955e7499cce0eaef7cde",
+        "imports": [
+          "DLL Name: KERNEL32.dll",
+          "DLL Name: msvcrt.dll",
+          "DLL Name: ntdll.dll",
+          "DLL Name: USERENV.dll",
+          "DLL Name: WS2_32.dll",
+          "DLL Name: api-ms-win-core-synch-l1-2-0.dll",
+          "DLL Name: bcryptprimitives.dll",
+          "DLL Name: advapi32.dll",
+          "DLL Name: api-ms-win-security-base-l1-2-2.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: psapi.dll",
+          "DLL Name: ole32.dll",
+          "DLL Name: api-ms-win-core-winrt-error-l1-1-0.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: oleaut32.dll",
+          "DLL Name: advapi32.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: userenv.dll"
+        ]
+      },
+      "nuschl-update-verify-mldsa44.exe": {
+        "sha256": "2a26dcb4e44b67d7f702638d111be83c5725566869b473048520d48b6fa44e38",
+        "imports": [
+          "DLL Name: KERNEL32.dll",
+          "DLL Name: msvcrt.dll",
+          "DLL Name: ntdll.dll",
+          "DLL Name: USERENV.dll",
+          "DLL Name: WS2_32.dll",
+          "DLL Name: api-ms-win-core-synch-l1-2-0.dll",
+          "DLL Name: bcryptprimitives.dll",
+          "DLL Name: advapi32.dll",
+          "DLL Name: api-ms-win-security-base-l1-2-2.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: psapi.dll",
+          "DLL Name: ole32.dll",
+          "DLL Name: api-ms-win-core-winrt-error-l1-1-0.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: oleaut32.dll",
+          "DLL Name: advapi32.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: userenv.dll"
+        ]
+      },
+      "nuschl.exe": {
+        "sha256": "2d22b3a7140c9e08c278ba99c2c33522fe7d69faf354dd24fee7d5336df60138",
+        "imports": [
+          "DLL Name: kernel32.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: bcryptprimitives.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: advapi32.dll",
+          "DLL Name: api-ms-win-shcore-scaling-l1-1-1.dll",
+          "DLL Name: comctl32.dll",
+          "DLL Name: d3d11.dll",
+          "DLL Name: d3dcompiler_47.dll",
+          "DLL Name: dcomp.dll",
+          "DLL Name: dwmapi.dll",
+          "DLL Name: dwrite.dll",
+          "DLL Name: dxgi.dll",
+          "DLL Name: gdi32.dll",
+          "DLL Name: imm32.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: ntdll.dll",
+          "DLL Name: ole32.dll",
+          "DLL Name: oleaut32.dll",
+          "DLL Name: shell32.dll",
+          "DLL Name: uiautomationcore.dll",
+          "DLL Name: user32.dll",
+          "DLL Name: winmm.dll",
+          "DLL Name: api-ms-win-core-synch-l1-2-0.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: ntdll.dll",
+          "DLL Name: oleaut32.dll",
+          "DLL Name: api-ms-win-core-winrt-l1-1-0.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: ole32.dll",
+          "DLL Name: advapi32.dll",
+          "DLL Name: api-ms-win-core-winrt-error-l1-1-0.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: oleaut32.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: icuuc.dll",
+          "DLL Name: kernel32.dll",
+          "DLL Name: ntdll.dll",
+          "DLL Name: ole32.dll",
+          "DLL Name: shell32.dll",
+          "DLL Name: userenv.dll",
+          "DLL Name: ws2_32.dll",
+          "DLL Name: KERNEL32.dll",
+          "DLL Name: msvcrt.dll",
+          "DLL Name: ntdll.dll",
+          "DLL Name: advapi32.dll",
+          "DLL Name: bcrypt.dll",
+          "DLL Name: kernel32.dll"
+        ]
+      }
+    },
+    "source_binding": {
+      "revision": "c26529d3df26d9d4e23755bc7c3a7907f5055237",
+      "git_archive_sha256": "5a8bdafd28e757c34e330c45d60a3babd34e5539fbded0231f3bb5cb6a551027",
+      "exported_files": 1619,
+      "all_path_bytes_and_executable_bits_verified": true
+    },
+    "build": {
+      "pid": 214817,
+      "elapsed_seconds": 835.0577526092529,
+      "minimum_tmp_free": 22476152832,
+      "exit_code": 0,
+      "aborted": false
+    },
+    "product": "/nix/store/n2zn1yx1d79wvvxs7nkcib7bywas6ff9-nuschl-windows-x86_64-w64-mingw32-0.1.0",
+    "notice_scope": "windows-x86_64",
+    "result": "pass"
+  },
+  "fixture_incremental_plan": {
+    "derivations": 8,
+    "dependency_pass_rebuilt": false,
+    "note": "one main product, two independent verifier leaves, their update library and notices; production dependency derivation identical"
+  }
 }
