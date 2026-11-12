@@ -924,6 +924,14 @@ listed below. Plugin data remains the explicit gap.
 - [x] Channel descriptions, user comments and avatars through `RequestBlob` (23);
       parse in the content worker; decode images with a memory-safe decoder in a worker.
 - [x] Inline images in legacy HTML messages through the content worker.
+- [ ] Reproduce the reported join/welcome-notice formatting bug (user,
+      2026-11-12): `<b>something.de</b>` appears as `bsomething.de/b` on joining
+      a server. Preserve supported legacy HTML formatting faithfully: display
+      `something.de` in bold, without literal tag names or storage markers.
+      Include a domain inside emphasis in regression coverage and inspect the
+      complete welcome-rendering path, including safe link detection. Earlier
+      scoped welcome fixes below do not close this newly reported case; retain
+      existing sanitization and explicit safe-link activation.
 - [x] Stock-server welcome document rendering (2026-11-12): the native adapter
       discarded the correct worker document and displayed its internal storage
       markers (`bNuschl/b`, link directives) as plain text. It now keeps the typed
