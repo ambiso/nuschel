@@ -68,7 +68,19 @@ The following remain open: actual desktop GUI update/restart using a separately
 built temporary-public-trust source, final Windows distribution archive proof,
 physical Windows hardware, and native macOS Seatbelt/updater proof. Before the
 GUI harness may run, it must install both verifier EXEs with every required helper
-and use unique owned install/profile directories and PIDs. Its current fixed
-four-file initial copy and `Get-Process nuschl | Stop-Process` are unsafe for that
-test scope and have not been used by this proof. The old minisign GUI run does
+and use unique owned install/profile directories and PIDs. A separate source
+checkpoint corrects the historical four-file initial copy and blanket same-name
+process stopping: the full nine-program/notice payload is required, run IDs scope
+paths, file offers and listener jobs, and only matching executable paths may be
+stopped. Five host tests and a real guest test using two same-name managed
+stand-ins at different paths pass; the foreign-path sentinel survives. No desktop
+or update ran in that preflight. Child-only environment configuration avoids
+leaving the harness agent pointed at a fixture update server. Owned UIA focus and
+the legacy button coordinates remain to be checked in the actual GUI flow.
+
+The official cross builder currently enables both verifier Cargo features in one
+workspace build. Its entry points are fixed to their respective algorithm, but
+these individually featured test products do not prove feature-graph or binary
+equivalence for the eventual official archive. Exact packaged-helper/import and
+archive/runtime validation remains a release gate. The old minisign GUI run does
 not renew evidence for the current hybrid updater.

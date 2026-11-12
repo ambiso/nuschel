@@ -13,11 +13,15 @@ marker file), starts Nuschl with NUSCHL_UPDATE_URL pointing at it, clicks
 the marker arrived, a new process runs and the old files are cleaned up.
 """
 import argparse
+import json
+import os
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
 import time
+import uuid
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -25,21 +29,21 @@ VM = [sys.executable, str(HERE / "windows_vm.py")]
 REPO = HERE.parent
 # The update bar's button in a 1280x800 guest with Nuschl maximised.
 UPDATE_BUTTON = (1200, 52)
-UPDATE_PORT = 18765
+REQUIRED_PROGRAMS = {
+    "nuschl.exe", "nuschl-content-worker.exe", "nuschl-crypto-worker.exe",
+    "nuschl-math-worker.exe", "nuschl-media-worker.exe", "nuschl-storage-worker.exe",
+    "nuschl-transfer-worker.exe", "nuschl-update-verify-ed25519.exe",
+    "nuschl-update-verify-mldsa44.exe",
+}
 
 # The production updater has no harness credential. Serve only prefetched,
 # synthetic signed update artifacts on the disposable guest's own loopback.
 # Host files remain authenticated, and no credential enters updater URLs.
 FILE_SERVER = r'''
-if ($global:NuschlUpdateFixture) {
-  Stop-Job $global:NuschlUpdateFixture -ErrorAction SilentlyContinue
-  Remove-Job $global:NuschlUpdateFixture -Force -ErrorAction SilentlyContinue
-}
-$fixture = "$env:TEMP\nuschl-signed-update-fixture"
-Remove-Item -LiteralPath $fixture -Recurse -Force -ErrorAction SilentlyContinue
+$fixture = "$env:TEMP\nuschl-signed-update-fixture-__RUN__"
 New-Item -ItemType Directory -Path $fixture | Out-Null
-foreach ($name in __FILES__) { Get-NuschlTestFile -Name $name -OutFile "$fixture\$name" }
-$global:NuschlUpdateFixture = Start-Job -ArgumentList $fixture,__PORT__ -ScriptBlock {
+foreach ($entry in __FILES__) { Get-NuschlTestFile -Name $entry.remote -OutFile "$fixture\$($entry.local)" }
+$fixtureJob = Start-Job -Name "nuschl-update-__RUN__" -ArgumentList $fixture,__PORT__ -ScriptBlock {
   param($root, $port)
   $listener = New-Object Net.Sockets.TcpListener([Net.IPAddress]::Loopback, $port)
   $listener.Start()
@@ -83,6 +87,7 @@ $global:NuschlUpdateFixture = Start-Job -ArgumentList $fixture,__PORT__ -ScriptB
     }
   } finally { $listener.Stop() }
 }
+"FIXTURE_JOB_ID=$($fixtureJob.Id)"
 Start-Sleep -Seconds 2
 # Fail before starting Nuschl if the fixture did not bind or publish its files.
 $probe = [Net.HttpWebRequest]::Create('http://127.0.0.1:__PORT__/update.json')
@@ -104,6 +109,54 @@ def guest(script, timeout=600):
     return output
 
 
+def payload(build, public_file):
+    """Reject missing helpers, operator tools or a non-fixture desktop first."""
+    programs = sorted((build / "bin").glob("*.exe"))
+    if {path.name for path in programs} != REQUIRED_PROGRAMS:
+        raise ValueError("fixture needs the exact complete desktop/helper payload, without signer/test tools")
+    if any(not path.is_file() or path.is_symlink() for path in programs):
+        raise ValueError("fixture programs must be regular files")
+    if public_file.is_symlink() or not public_file.is_file() or public_file.stat().st_size > 16384:
+        raise ValueError("fixture public trust document must be a bounded regular file")
+    public = public_file.read_bytes()
+    trust = json.loads(public)
+    if trust.get("format") != 2 or len(trust.get("keys", [])) != 1:
+        raise ValueError("one temporary fixture public pair is required")
+    # Necessary build sanity check, not a replacement for reviewed source/build
+    # provenance: RELEASE_TRUST is an include_str constant in the desktop.
+    if public not in (build / "bin/nuschl.exe").read_bytes():
+        raise ValueError("desktop does not embed the exact supplied temporary trust document")
+    notices = build / "share/licenses/nuschl"
+    if notices.is_symlink() or not notices.is_dir() or not (notices / "THIRD-PARTY.json").is_file():
+        raise ValueError("fixture must preserve the actual packaged notice payload")
+    if any(path.is_symlink() for path in notices.rglob("*")):
+        raise ValueError("fixture notices must not contain symlinks")
+    return programs, notices
+
+
+def owned_processes(run):
+    # UUID is generated locally, never supplied by the build/artifacts.
+    assert re.fullmatch(r"[0-9a-f]{32}", run)
+    return r'''$ownedExe = "$env:LOCALAPPDATA\Programs\NuschlUpdateTest\__RUN__\nuschl.exe"
+$owned = @(Get-CimInstance Win32_Process -Filter "Name='nuschl.exe'" | Where-Object { $_.ExecutablePath -eq $ownedExe })
+'''.replace("__RUN__", run)
+
+
+def stop_owned(run):
+    return owned_processes(run) + "$owned | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }\n"
+
+
+def focus_owned(run):
+    guest(owned_processes(run) + r'''
+if ($owned.Count -ne 1) { throw 'expected exactly one owned desktop process' }
+Add-Type -AssemblyName UIAutomationClient
+$condition = New-Object Windows.Automation.PropertyCondition([Windows.Automation.AutomationElement]::ProcessIdProperty, [int]$owned[0].ProcessId)
+$window = [Windows.Automation.AutomationElement]::RootElement.FindFirst([Windows.Automation.TreeScope]::Children, $condition)
+if ($null -eq $window) { throw 'owned desktop window unavailable; no global click allowed' }
+$window.SetFocus()
+''')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("build", type=Path, help="the .#windows result")
@@ -112,74 +165,114 @@ def main():
     parser.add_argument("--secret-file", type=Path, required=True, help="temporary fixture pair only")
     parser.add_argument("--public-file", type=Path, required=True, help="same fixture pair embedded when building the guest app")
     args = parser.parse_args()
+    if "NUSCHL_WINDOWS_VM_DIR" not in os.environ:
+        parser.error("explicit NUSCHL_WINDOWS_VM_DIR for the owned installed guest is required")
+    args.run = uuid.uuid4().hex
+    args.fixture_job = None
     try:
         exercise_update(args)
     finally:
         try:
-            guest("if ($global:NuschlUpdateFixture) { Stop-Job $global:NuschlUpdateFixture; Remove-Job $global:NuschlUpdateFixture -Force; $global:NuschlUpdateFixture = $null }", timeout=30)
+            cleanup = stop_owned(args.run)
+            cleanup += f"Get-Job -Name 'nuschl-update-{args.run}' -ErrorAction SilentlyContinue | ForEach-Object {{ Stop-Job $_; Remove-Job $_ -Force }}\n"
+            for relative in ("Programs/NuschlUpdateTest/", "NuschlUpdateProfiles/"):
+                cleanup += f"Remove-Item -LiteralPath (Join-Path $env:LOCALAPPDATA '{relative}{args.run}') -Recurse -Force -ErrorAction SilentlyContinue\n"
+            cleanup += f"Remove-Item -LiteralPath (Join-Path $env:TEMP 'nuschl-signed-update-fixture-{args.run}') -Recurse -Force -ErrorAction SilentlyContinue\n"
+            guest(cleanup, timeout=30)
         except (subprocess.SubprocessError, OSError, RuntimeError):
             pass
 
 
 def exercise_update(args):
+    programs, notices = payload(args.build, args.public_file)
     args.output.mkdir(parents=True, exist_ok=True)
+    subprocess.run([args.signer, "key-status", "--secret-file", str(args.secret_file),
+                    "--public-file", str(args.public_file)], check=True, capture_output=True)
+    port = int(guest("$listener = New-Object Net.Sockets.TcpListener([Net.IPAddress]::Loopback,0); $listener.Start(); $port = $listener.LocalEndpoint.Port; $listener.Stop(); $port").strip())
+    if not 1024 <= port <= 65535:
+        raise ValueError("unexpected guest loopback fixture port")
     with tempfile.TemporaryDirectory(prefix="nuschl-update-") as temporary:
         root = Path(temporary)
-        subprocess.run([args.signer, "key-status", "--secret-file", str(args.secret_file),
-                        "--public-file", str(args.public_file)], check=True, capture_output=True)
         staging = root / "release"
-        (staging / "licenses").mkdir(parents=True)
-        for program in sorted((args.build / "bin").glob("*.exe")):
+        shutil.copytree(notices, staging / "licenses")
+        initial_files = []
+        for program in programs:
             shutil.copyfile(program, staging / program.name)
-            vm("push", str(program), f"install--{program.name}")
+            remote = f"install-{args.run}--{program.name}"
+            vm("push", str(program), remote)
+            initial_files.append((remote, program.name))
+        for index, notice in enumerate(sorted(path for path in notices.rglob("*") if path.is_file())):
+            relative = "licenses/" + notice.relative_to(notices).as_posix()
+            if not re.fullmatch(r"[A-Za-z0-9_./-]+", relative):
+                raise ValueError("unsupported fixture notice path")
+            remote = f"install-{args.run}-notice-{index}"
+            vm("push", str(notice), remote)
+            initial_files.append((remote, relative))
         (staging / "licenses" / "UPDATE-TEST").write_text("delivered by the update test\n")
         published = root / "published"
         subprocess.run([sys.executable, str(REPO / "release" / "make-update.py"), "--version", "9.9.9",
-                        "--base-url", f"http://127.0.0.1:{UPDATE_PORT}/", "--platform", f"windows-x86_64={staging}",
+                        "--base-url", f"http://127.0.0.1:{port}/", "--platform", f"windows-x86_64={staging}",
                         "--output", str(published), "--sign-key", str(args.secret_file),
                         "--public-key", str(args.public_file), "--signer", args.signer],
                        check=True, capture_output=True)
         artifact_names = []
         for artifact in sorted(published.iterdir()):
             artifact_names.append(artifact.name)
-            vm("push", str(artifact), artifact.name)
-    names = "@(" + ",".join("'" + name + "'" for name in artifact_names) + ")"
-    print(guest(FILE_SERVER.replace("__FILES__", names).replace("__PORT__", str(UPDATE_PORT))), flush=True)
+            vm("push", str(artifact), args.run + "--" + artifact.name)
+    names = "@(" + ",".join("@{remote='" + args.run + "--" + name + "';local='" + name + "'}" for name in artifact_names) + ")"
+    output = guest(FILE_SERVER.replace("__FILES__", names).replace("__PORT__", str(port)).replace("__RUN__", args.run))
+    match = re.search(r"^FIXTURE_JOB_ID=([0-9]+)\r?$", output, re.M)
+    if not match:
+        raise RuntimeError("fixture listener job identity absent")
+    args.fixture_job = int(match[1])
+    print(output, flush=True)
     print(guest(r'''
-$dir = "$env:LOCALAPPDATA\Programs\NuschlUpdateTest"
-Get-Process nuschl -ErrorAction SilentlyContinue | Stop-Process -Force
-Remove-Item -Recurse -Force $dir -ErrorAction SilentlyContinue
+$dir = "$env:LOCALAPPDATA\Programs\NuschlUpdateTest\__RUN__"
+$profile = "$env:LOCALAPPDATA\NuschlUpdateProfiles\__RUN__"
 New-Item -ItemType Directory -Force -Path $dir | Out-Null
-foreach ($f in "nuschl.exe","nuschl-content-worker.exe","nuschl-media-worker.exe","nuschl-storage-worker.exe") {
-  Get-NuschlTestFile -Name "install--$f" -OutFile "$dir\$f"
+foreach ($f in __INITIAL_FILES__) {
+  $destination = Join-Path $dir $f.local
+  New-Item -ItemType Directory -Force -Path (Split-Path -Parent $destination) | Out-Null
+  Get-NuschlTestFile -Name $f.remote -OutFile $destination
 }
-$env:NUSCHL_UPDATE_URL = "http://127.0.0.1:18765/"
-$p = Start-Process "$dir\nuschl.exe" -ArgumentList "--profile-dir","C:\nuschl-update-profile" -PassThru
+$info = New-Object Diagnostics.ProcessStartInfo
+$info.FileName = "$dir\nuschl.exe"
+$info.Arguments = '--profile-dir "' + $profile + '"'
+$info.UseShellExecute = $false
+$info.CreateNoWindow = $true
+$info.EnvironmentVariables['NUSCHL_UPDATE_URL'] = "http://127.0.0.1:__PORT__/"
+$p = [Diagnostics.Process]::Start($info)
 "started $($p.Id)"
-'''), flush=True)
+'''.replace("__RUN__", args.run).replace("__PORT__", str(port)).replace("__INITIAL_FILES__", "@(" + ",".join("@{remote='" + remote + "';local='" + local + "'}" for remote, local in initial_files) + ")")), flush=True)
     time.sleep(8)
+    # Focus only the window belonging to the unique owned install before the
+    # existing fixture's display-level key/click operations.
+    focus_owned(args.run)
     vm("key", "meta_l-up")  # maximise: the update bar's button sits at a known place
     time.sleep(25)  # the first check runs 20 s after start
     vm("screenshot", str(args.output / "update-offered.png"))
+    focus_owned(args.run)
     vm("click", *map(str, UPDATE_BUTTON))
     time.sleep(25)
     vm("screenshot", str(args.output / "update-installed.png"))
-    before = guest('(Get-Process nuschl).Id')
+    before = guest(owned_processes(args.run) + '($owned.ProcessId -join ",")')
+    focus_owned(args.run)
     vm("click", *map(str, UPDATE_BUTTON))  # "Restart now" replaces the update button
     time.sleep(15)
     vm("screenshot", str(args.output / "update-restarted.png"))
-    report = guest(r'''
-$dir = "$env:LOCALAPPDATA\Programs\NuschlUpdateTest"
+    report = guest(owned_processes(args.run) + r'''
+$dir = "$env:LOCALAPPDATA\Programs\NuschlUpdateTest\__RUN__"
 "marker: " + (Test-Path "$dir\licenses\UPDATE-TEST")
 "old files left: " + (Test-Path "$dir\.nuschl-old")
 "staging left: " + (Test-Path "$dir\.nuschl-update")
-"process: " + ((Get-Process nuschl -ErrorAction SilentlyContinue).Id -join ",")
-''')
+"process: " + ($owned.ProcessId -join ",")
+'''.replace("__RUN__", args.run))
     print(report, flush=True)
     assert "marker: True" in report, report
     assert "staging left: False" in report, report
     assert "old files left: False" in report, "the restarted process did not clean up the old files"
-    assert before.strip() and before.strip() not in report.split("process:")[1], "Nuschl did not restart"
+    after = report.split("process:")[1].strip()
+    assert before.strip() and after and before.strip() != after, "Nuschl did not restart into an owned new process"
     print("Windows in-place update: signed manifest verified, files swapped, restarted, old files removed.")
 
 

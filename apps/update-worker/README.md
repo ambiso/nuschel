@@ -200,10 +200,15 @@ plus synthetic tar/metadata/notices to test release-gate mechanics. They do not
 establish legal completeness or run GitHub publication. The Windows updater
 harness requires a separately built fixture tree embedding its temporary public
 pair, with explicit fixture secret/public inputs; copying a public key beside a
-production executable cannot authorize an update. Do not run its current GUI
-script yet: it omits required verifier EXEs from the initial install and stops
-unowned guest Nuschl processes. Those harness defects and the new GUI restart
-proof remain queued separately from the successful native library fixture.
+production executable cannot authorize an update. The GUI harness now requires
+the complete nine-program payload plus actual packaged notices, unique owned
+install/profile/listener/file namespaces, and executable-path-scoped PID cleanup.
+Five host cases and a real Windows same-name foreign-path sentinel check pass.
+Its actual desktop GUI update/restart, owned UIA focus and button geometry still
+require a separate temporary-public-trust build/run. Official cross packages
+currently enable both Cargo verifier features in one workspace build; the fixed
+entry points remain algorithm-specific, but the individually featured test
+products do not prove dependency or packaged-byte equivalence for those archives.
 
 Downloadable CI payloads first run `release/check-notices.py`; failed gates still
 upload diagnostic logs, while binary/static-web payloads remain blocked.

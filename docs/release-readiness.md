@@ -75,10 +75,14 @@ permissions, playback and self-update. Mark the Mac artifact untested/experiment
   individually featured LPAC verifiers, temporary keys, bound forged answers,
   corrupt siblings, bounded output/stalls, and loopback fetch/apply/cleanup pass.
   See [proof and limits](windows-hybrid-update.md); this is not desktop GUI proof.
-- [ ] Correct the GUI harness's omitted verifier binaries and unowned-process
-  stopping, then rerun the actual Windows update/restart flow with a separately
-  built temporary-public-trust source. The old minisign GUI evidence does not
-  establish the current hybrid desktop path.
+- [x] Correct the GUI harness's omitted verifier binaries and unowned-process
+  stopping. Complete-payload host tests and actual guest same-name foreign-path
+  process preservation pass; install/profile/listener/file namespaces are unique.
+- [ ] Run the actual Windows update/restart flow with a separately built temporary-
+  public-trust source, including owned focus and button geometry. Validate the
+  exact official cross/archive helpers: the builder still enables both engine
+  features together, unlike the individually featured native proof products.
+  The old minisign GUI evidence does not establish the current hybrid path.
 - [ ] Review README/install/security/release notes against the final artifacts:
   early-development status; compatible TLS/Mumble voice; MLS experiments and
   historical-key limits; no completed RTC video/screen-sharing claim; Linux via

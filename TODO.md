@@ -920,13 +920,19 @@ listed below. Plugin data remains the explicit gap.
       and guest-loopback library fetch/apply/cleanup. Network initialization is
       denied before a socket exists; distinct SIDs and image deletion are
       supplementary evidence. See docs/windows-hybrid-update.md.
-- [ ] Correct the Windows GUI updater harness before rerunning it: its initial
-      four-program copy omits both required verifier EXEs and other helpers, and
-      its blanket `Get-Process nuschl | Stop-Process` can kill unowned guest
-      processes. Stage the complete required payload, isolate install/profile
-      directories and track/stop only owned PIDs. Then build a separate source
-      embedding only a temporary fixture public pair and prove actual desktop
-      update/restart; native library install proof does not cover that flow.
+- [x] Correct the Windows GUI updater harness's omitted verifier EXEs/helpers and
+      blanket same-name process stopping. It now requires/stages all nine programs
+      and packaged notices, rejects operator/test tools and non-fixture trust,
+      isolates install/profile/listener/files by run ID, and stops only PIDs at
+      the owned executable path. Five host cases and an actual Windows same-name
+      foreign-path sentinel test pass (`windows_update_test.py --guest`).
+- [ ] Build a separate source embedding only a temporary fixture public pair and
+      prove actual Windows desktop update/restart. Revalidate the UIA-owned focus
+      and legacy update-button geometry on that build; native library installation
+      and harness preflight do not cover the GUI flow. Validate the exact official
+      cross/archive helpers too: current `crossCommon` enables both Cargo engine
+      features in one workspace build, so individually featured native test
+      products do not establish packaged dependency/byte equivalence.
 - [ ] Complete unattended Windows desktop/audio/sandbox regression orchestration
       and add UDP (the existing guest-forward voice check used the TCP tunnel).
 - [x] Windows and macOS sandbox profiles for media, storage and content workers.
