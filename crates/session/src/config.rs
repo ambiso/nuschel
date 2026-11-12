@@ -886,6 +886,10 @@ const VOICE_QUALITY_VERSION: u32 = 1;
 const MAX_VOICE_QUALITY_FILE: u64 = 4096;
 /// The settings key, in managed.json.
 const VOICE_BITRATE: &str = "voice_bitrate";
+/// The managed voice bitrate, beside managed.json (read-only, like it): an
+/// earlier version ignores a managed.json with a key it does not know as a
+/// whole, privacy settings included. Same format as voice-quality.json.
+const MANAGED_VOICE_QUALITY_FILE: &str = "managed-voice-quality.json";
 
 /// voice-quality.json.
 #[derive(Serialize, Deserialize)]
@@ -1254,7 +1258,20 @@ impl Profile {
                 None
             }
         };
-        let declared = managed.clone().unwrap_or_default();
+        let mut declared = managed.clone().unwrap_or_default();
+        // In memory only; a problem with it costs only management of the bitrate.
+        match self.load_managed_voice_quality() {
+            Ok(Some(bitrate)) => {
+                declared
+                    .settings
+                    .insert(VOICE_BITRATE.into(), bitrate.into());
+            }
+            Ok(None) => {}
+            Err(error) => problems.push(format!(
+                "The system configuration's {MANAGED_VOICE_QUALITY_FILE} is invalid, so the \
+                 voice bitrate is yours to choose: {error}."
+            )),
+        }
         let (mut settings, managed_settings) =
             self.load_settings(&declared).unwrap_or_else(|error| {
                 problems.push(self.set_aside(SETTINGS_FILE, &error, "default settings"));
@@ -1312,6 +1329,35 @@ impl Profile {
         }
         if managed.servers.len() > MAX_SERVERS {
             return Err(io::Error::other("more than 100 managed servers"));
+        }
+        Ok(managed)
+    }
+
+    /// The bitrate a managed-voice-quality.json beside managed.json sets (the
+    /// configuration folder's own wins over the system's).
+    fn load_managed_voice_quality(&self) -> io::Result<Option<u32>> {
+        let mut managed = None;
+        let system = self.system_managed.as_ref().and_then(|path| path.parent());
+        for directory in system.into_iter().chain([self.config_dir.as_path()]) {
+            let path = directory.join(MANAGED_VOICE_QUALITY_FILE);
+            let described = |error: io::Error| {
+                io::Error::new(error.kind(), format!("{}: {error}", path.display()))
+            };
+            match read_bounded(&path, MAX_VOICE_QUALITY_FILE) {
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                bytes => {
+                    let file: VoiceQualityFile = bytes
+                        .and_then(|bytes| Ok(serde_json::from_slice(&bytes)?))
+                        .map_err(described)?;
+                    if file.version != VOICE_QUALITY_VERSION {
+                        return Err(described(io::Error::other(format!(
+                            "version {} is not known",
+                            file.version
+                        ))));
+                    }
+                    managed = Some(file.voice_bitrate);
+                }
+            }
         }
         Ok(managed)
     }
@@ -3362,5 +3408,116 @@ mod tests {
             assert_eq!(profile.load().settings.voice_bitrate, expected);
             std::fs::remove_dir_all(root).unwrap();
         }
+    }
+
+    #[test]
+    fn a_managed_voice_sidecar_wins_without_touching_managed_json() {
+        let (root, profile) = temporary_profile("bitrate-managed-sidecar");
+        // What Home Manager writes: managed.json with only released keys.
+        write(
+            &profile,
+            "managed.json",
+            r#"{"settings": {"relay_only": true}}"#,
+        );
+        write(
+            &profile,
+            "managed-voice-quality.json",
+            r#"{"version": 1, "voice_bitrate": 96000}"#,
+        );
+        write(
+            &profile,
+            "voice-quality.json",
+            r#"{"version": 1, "voice_bitrate": 256000}"#,
+        );
+        let managed: Map<String, Value> =
+            serde_json::from_str(&read(&profile, "managed.json")).unwrap();
+        let settings_keys: BTreeSet<String> = managed["settings"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect();
+        assert!(settings_keys.is_subset(&released_keys()));
+        let loaded = profile.load();
+        assert!(loaded.problems.is_empty(), "{:?}", loaded.problems);
+        assert_eq!(loaded.settings.voice_bitrate, 96_000);
+        assert!(loaded.settings.relay_only);
+        assert!(loaded.managed.contains("voice_bitrate"));
+        assert!(loaded.managed.contains("relay_only"));
+        // Managed values survive apply; nothing about them is written.
+        let applied = loaded.managed.apply(ClientSettings {
+            voice_bitrate: 192_000,
+            relay_only: false,
+            ..loaded.settings.clone()
+        });
+        assert_eq!((applied.voice_bitrate, applied.relay_only), (96_000, true));
+        profile.save_settings(&applied, &loaded.managed).unwrap();
+        assert!(!read(&profile, "settings.json").contains("voice_bitrate"));
+        assert!(sidecar(&profile).unwrap().contains("256000"));
+        assert!(profile.save_voice_bitrate(64_000, &loaded.managed).is_err());
+        assert_eq!(
+            read(&profile, "managed-voice-quality.json"),
+            r#"{"version": 1, "voice_bitrate": 96000}"#
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn an_invalid_managed_voice_sidecar_keeps_every_other_managed_setting() {
+        for contents in [
+            "{broken",
+            r#"{"version": 2, "voice_bitrate": 96000}"#,
+            r#"{"version": 1, "voice_bitrate": "fast"}"#,
+        ] {
+            let (root, profile) = temporary_profile("bitrate-managed-invalid");
+            write(
+                &profile,
+                "managed.json",
+                r#"{"settings": {"relay_only": true}}"#,
+            );
+            write(&profile, "managed-voice-quality.json", contents);
+            write(
+                &profile,
+                "voice-quality.json",
+                r#"{"version": 1, "voice_bitrate": 192000}"#,
+            );
+            let loaded = profile.load();
+            assert_eq!(loaded.problems.len(), 1, "{:?}", loaded.problems);
+            assert!(
+                loaded.problems[0].contains("managed-voice-quality.json is invalid")
+                    && loaded.problems[0].contains("yours to choose"),
+                "{:?}",
+                loaded.problems
+            );
+            // Privacy stays managed; the bitrate is the user's.
+            assert!(loaded.settings.relay_only);
+            assert!(loaded.managed.contains("relay_only"));
+            assert!(!loaded.managed.contains("voice_bitrate"));
+            assert_eq!(loaded.settings.voice_bitrate, 192_000);
+            assert!(!profile.config_dir.join("managed.json.invalid").exists());
+            std::fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn the_own_managed_voice_sidecar_wins_over_the_systems() {
+        let (root, mut profile) = temporary_profile("bitrate-managed-system");
+        let system = root.join("system/nuschl");
+        fs::create_dir_all(&system).unwrap();
+        fs::write(system.join("managed.json"), r#"{"settings": {}}"#).unwrap();
+        fs::write(
+            system.join("managed-voice-quality.json"),
+            r#"{"version": 1, "voice_bitrate": 64000}"#,
+        )
+        .unwrap();
+        profile.system_managed = Some(system.join("managed.json"));
+        assert_eq!(profile.load().settings.voice_bitrate, 64_000);
+        write(
+            &profile,
+            "managed-voice-quality.json",
+            r#"{"version": 1, "voice_bitrate": 192000}"#,
+        );
+        assert_eq!(profile.load().settings.voice_bitrate, 192_000);
+        std::fs::remove_dir_all(root).unwrap();
     }
 }
