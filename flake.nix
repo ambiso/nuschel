@@ -221,6 +221,7 @@
           mkdir -p "$out/libexec/nuschl"
           mv "$out/bin/nuschl" "$out/libexec/nuschl/nuschl"
           for worker in nuschl-content-worker nuschl-crypto-worker nuschl-math-worker nuschl-media-worker nuschl-storage-worker nuschl-transfer-worker nuschl-update-verify-ed25519 nuschl-update-verify-mldsa44; do
+            test -f "$out/bin/$worker"
             ln -s "../../bin/$worker" "$out/libexec/nuschl/$worker"
           done
           makeWrapper "$out/libexec/nuschl/nuschl" "$out/bin/nuschl" "''${runtimeFlags[@]}"
@@ -245,7 +246,14 @@
           common
           // {
             inherit cargoArtifacts;
-            postInstall = packageLayout;
+            # Workspace defaults deliberately do not enable verifier engines.
+            # Reuse the two individually featured builds rather than combining
+            # algorithm dependencies in a single workspace feature set.
+            postInstall = ''
+              install -Dm755 ${updateEdVerifier}/bin/nuschl-update-verify-ed25519 "$out/bin/nuschl-update-verify-ed25519"
+              install -Dm755 ${updateMlVerifier}/bin/nuschl-update-verify-mldsa44 "$out/bin/nuschl-update-verify-mldsa44"
+              ${packageLayout}
+            '';
           }
         );
         # The desktop package from per-crate derivations (crate2nix): a change
