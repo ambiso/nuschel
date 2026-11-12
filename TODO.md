@@ -2,13 +2,13 @@
 
 Current focus (user, 2026-11-12): **unmute-to-first-speech latency, stereo receive
 and output fidelity, and hybrid update readiness**. Independent owners now cover
-iOS environment readiness, live welcome updates and the native
-ACL/group editor.
+the TLS certificate report, sparse server-configuration limits and the native
+ACL/group editor. iOS Recovery/archive evidence is retained for the next stage.
 The relay DNS/kernel checks and explicit-deny correction are integrated.
 The measured playback clipping correction and SuperUser bootstrap guide
 are integrated. Transmit quality evidence and the exact native welcome-domain
 regression are integrated, along with the browser's initial welcome surface
-and central text-size correction. Live welcome updates remain in progress.
+and central text-size correction. Live welcome updates are also integrated.
 Full Mumble ACL/group editing parity is explicitly queued below. Native action
 authority, content/math worker retirement and
 the standalone server/RTC per-crate build migration are integrated with scoped
@@ -33,6 +33,15 @@ outside the current task's scope.
 
 Current integration checkpoint (2026-11-12):
 
+- **Live welcome updates are integrated through `8d65a1a4`.** Native 81 session
+  tests (one existing ignored), browser 27 units/six relay integrations and the
+  compiled App with an owned TLS/protobuf fixture pass. Absent/empty/changed/
+  repeated sources, stale tokens and reconnects have distinct checks; welcome-only
+  updates emit no Limits/audio changes. All eight combined build/check outputs
+  and both bundled notice readers pass, and all ten browser runtime assets match
+  the tested product exactly. This adds no native GUI or stock-Murmur live-update
+  proof. Sparse-limit merging and browser send caps remain separate open fixes.
+  Root evidence: `~/.cache/nuschl-integration-20261112/live-welcome/handoff.json`.
 - **Initial browser welcome and text-size fixes are integrated through
   `99931b5e`.** The SDK worker produces bounded typed documents; exact-source
   dismissal tokens, reconnect/replacement, inert resource canaries, bold domains,
@@ -1108,13 +1117,14 @@ listed below. Plugin data remains the explicit gap.
       domain proof already passes; no new native fix claimed. Parent source,
       runtime-asset, distribution and notice checks pass; see
       `docs/welcome-domain.md` and the integration checkpoint above.
-- [ ] Integrate the verified live `ServerConfig.welcome_text` implementation:
+- [x] Integrate the verified live `ServerConfig.welcome_text` implementation:
       both session adapters now apply connected, exact bounded source updates;
       None preserves, empty revokes, repeats remain dismissed and fresh
       connections reset. Welcome-only updates emit no Limits/audio changes.
       Native 81/1 existing ignored, browser 27+6 and an actual compiled App/private
       TLS framing fixture pass (320/390/1280, old-token/old-connection/canaries).
-      Parent combined checks remain pending. No new GPUI proof claimed;
+      Parent combined distribution, notice and runtime-asset checks pass.
+      No new GPUI proof claimed;
       see `docs/welcome-domain.md`.
 - [ ] Preserve omitted fields in sparse non-welcome `ServerConfig` updates.
       Source review finds browser updates can reset omitted message/image limits
@@ -1537,6 +1547,16 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
    - [x] Persist channel listeners for registered users (2026-11-11): stored with
          their volume, restored after `ServerSync` with Listen and the limits checked
          again (Murmur does not check), removed with the user or channel.
+   - [ ] Investigate the deployed nuschl.eu certificate prompt (user, 2026-11-12):
+         desktop shows "Confirm server certificate" with `UnknownIssuer`.
+         Native code already verifies unpinned chains with WebPKI; the module
+         requires explicit `hostName` plus `tls.useACMEHost`/`tls.enableACME` to
+         select the voice listener's certificate. Verify the deployment selects
+         the intended trusted full chain, retaining chain/name/expiry validation.
+         Distinguish a self-signed/default leaf from missing intermediates; do
+         not assume nginx HTTPS certificate selection applies to the voice port.
+         Owned loopback fixtures only; existing private module lifecycle proof
+         does not establish the current public deployment's configuration.
    - [x] TLS reload on SIGHUP and `minimum_tls_version = "1.3"` (2026-11-11): new
          handshakes get the new certificate, a broken one keeps the old one. The
          NixOS module's manual `certificateFile` credentials are copied at start,
