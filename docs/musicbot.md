@@ -168,7 +168,8 @@ executable can enter one fixed child role through versioned, size-capped IPC:
 - Duck: one lazy persistent child per Mumble connection, one packet at a time,
   at most 1 KiB per packet and 64 retained speaker states.
 
-These are process costs, not additional user audio streams. Children have no audio
+Each role also has bubblewrap namespace supervision processes. These are process
+costs, not additional user audio streams. Children have no audio
 socket or device access. The Linux launcher clears the environment, exposes only
 read-only runtime files and private temporary storage, unshares networking and other
 namespaces, and limits address space to 1 GiB per child. It fails closed if required
@@ -191,10 +192,23 @@ Replies are validated before use, and a seek/skip/pause/destination change is ch
 again after asynchronous encoding, before broadcasting or advancing playback.
 An encoded frame rejected by that fence resets the encoder before its next use,
 so an untransmitted frame cannot become hidden predictive encoder history.
-The NixOS service keeps its outer filesystem, device and privilege restrictions,
-allowing only the namespace/mount setup required for the restricted children.
-Actual confinement and service integration checks remain required for this source
-checkpoint; separate executables alone do not establish those guarantees.
+The NixOS service retains DynamicUser, ProtectSystem=strict, ProtectHome,
+PrivateDevices, NoNewPrivileges, empty capabilities, MDWE and its syscall filter.
+Namespace setup is restricted to the kinds used by bubblewrap; mount/unshare/setns/
+capset are explicitly permitted. AF_NETLINK is needed to initialize the child's
+private loopback. The parent uses ProcSubset=all so bwrap can read overflow IDs.
+ProtectProc=invisible remains enabled. ProtectHostname=private preserves UTS
+isolation. ProtectKernelTunables/ProtectKernelLogs are disabled because their
+locked proc bind mounts prevent Linux from mounting a genuinely private proc in
+an unprivileged nested namespace. Sysfs stays read-only; DynamicUser/empty
+capabilities prevent host sysctl writes, kernel-log syscalls are explicitly denied,
+and PrivateDevices excludes /dev/kmsg. No host proc is bound into a codec child.
+These are measured service-policy changes, not an unrestricted worker fallback.
+
+The owned Linux launcher and service-profile replica denied a synthetic credential
+file, a loopback listener and a synthetic credential environment variable. Actual
+full final-service regression remains required for the latest module settings;
+Windows/macOS runtime and all-format corpus coverage remain unverified.
 
 Use `tokens_file = "channel-tokens"` for private Mumble ACL tokens; its contents
 are a JSON array of token strings supplied through `credentials.channel-tokens`.

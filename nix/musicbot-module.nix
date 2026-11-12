@@ -184,18 +184,29 @@ in
         ProtectSystem = "strict";
         ProtectHome = true;
         ProtectClock = true;
-        ProtectHostname = true;
-        ProtectKernelLogs = true;
-        ProtectKernelTunables = true;
+        # Retain UTS isolation without locked /proc/sys/kernel/{host,domain}name
+        # bind mounts, which prevent a nested unprivileged private proc mount.
+        ProtectHostname = "private";
+        # These options install locked /proc submounts. Linux then refuses
+        # bwrap's private proc mount, even in its new user/PID namespaces.
+        # The unprivileged parent has no capabilities; kernel-log syscalls are
+        # denied below and /dev/kmsg is absent from PrivateDevices. Root-owned
+        # host tunables remain unwritable, and sysfs remains read-only.
+        ProtectKernelLogs = false;
+        ProtectKernelTunables = false;
+        ReadOnlyPaths = [ "/sys" ];
         ProtectKernelModules = true;
         ProtectControlGroups = true;
         ProtectProc = "invisible";
-        ProcSubset = "pid";
+        # bwrap reads overflowuid/overflowgid before entering its namespace.
+        ProcSubset = "all";
         # Mumble over TCP and UDP, the libraries over HTTP(S), DNS through the system resolver.
         RestrictAddressFamilies = [
           "AF_UNIX"
           "AF_INET"
           "AF_INET6"
+          # bwrap initializes its private loopback using NETLINK_ROUTE.
+          "AF_NETLINK"
         ];
         # The codec children create private user/mount/network/etc namespaces.
         # They retain no service credentials, audio devices or host networking.
@@ -228,6 +239,7 @@ in
           "unshare"
           "setns"
           "capset"
+          "~syslog"
         ];
       };
     };

@@ -84,6 +84,17 @@ let
       && service.ProtectHome
       && service.MemoryDenyWriteExecute
       && service.CapabilityBoundingSet == "";
+    privateProcLaunchCompatible =
+      service.ProcSubset == "all"
+      && service.ProtectProc == "invisible"
+      && service.ProtectHostname == "private"
+      && !service.ProtectKernelTunables
+      && !service.ProtectKernelLogs;
+    kernelAuthorityStillDenied =
+      builtins.elem "~syslog" service.SystemCallFilter
+      && service.ReadOnlyPaths == [ "/sys" ]
+      && service.CapabilityBoundingSet == "";
+    privateLoopbackSetup = builtins.elem "AF_NETLINK" service.RestrictAddressFamilies;
     stateOwnerOnly = service.StateDirectoryMode == "0700" && service.UMask == "0077";
     startupValidated = builtins.isString service.ExecStart;
   };
