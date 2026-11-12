@@ -128,7 +128,7 @@ let
           "content-codec"
         ]);
     };
-    npmDepsHash = "sha256-zDYMAXXhJzcB09V/CnuclOqngsob7YP2cMFiGL1J5SE=";
+    npmDepsHash = "sha256-h/RXhIxLqP2oHGnePhMKUdhi/NfX10QEAlASEInQpL8=";
     postPatch = ''
       mkdir -p src/sdk src/audio-codec src/content-codec
       cp ${wasm}/* src/sdk/
