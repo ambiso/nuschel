@@ -87,6 +87,41 @@ pub struct MessageDocument {
     pub blocks: Vec<ContentBlock>,
 }
 
+impl MessageDocument {
+    /// Whether a worker's document is within every budget its consumers rely
+    /// on: at most [`MAX_BLOCKS`] blocks other than breaks, and its breaks
+    /// within theirs ([`MessageDocument::breaks_valid`]). One that is not is
+    /// malformed and refused before anything converts, copies or lays it out
+    /// (the desktop's and the browser's boundaries alike).
+    pub fn within_limits(&self) -> bool {
+        let blocks = self.blocks.iter().filter(|block| !block.is_break()).count();
+        blocks <= MAX_BLOCKS && self.breaks_valid()
+    }
+
+    /// Whether the document's [`ContentBlock::Break`]s are within their
+    /// budget: at most [`MAX_BREAKS`], never two in a row, and all of them
+    /// together at most [`MAX_BREAK_LINES`] line breaks, as many as the
+    /// largest message can hold. A reply asking for more is malformed.
+    pub fn breaks_valid(&self) -> bool {
+        let mut breaks = 0;
+        let mut lines: usize = 0;
+        let mut previous = false;
+        for block in &self.blocks {
+            let ContentBlock::Break { count } = block else {
+                previous = false;
+                continue;
+            };
+            breaks += 1;
+            lines = lines.saturating_add(*count as usize);
+            if previous || breaks > MAX_BREAKS || lines > MAX_BREAK_LINES {
+                return false;
+            }
+            previous = true;
+        }
+        true
+    }
+}
+
 /// Renderers receive text and styles, never executable HTML or instructions to fetch URLs.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -118,9 +153,35 @@ pub enum ContentBlock {
     /// formula as written, for copying, screen readers and when it cannot
     /// be shown.
     Math { source: String, tex: String },
+    /// The line breaks typed between the neighbouring blocks, or before the
+    /// first or after the last: `count - 1` blank lines between two blocks,
+    /// `count` blank lines at the start or end, and 0 keeps a display formula
+    /// on the line of the text beside it (next to an image it is one line
+    /// break: images are never inline). Without one, neighbouring blocks are
+    /// one line break apart and nothing precedes the first or follows the
+    /// last, so documents built without breaks keep their layout. At most one
+    /// stands between two other blocks ([`MAX_BREAKS`]), and all counts
+    /// together are at most the source's line breaks ([`MAX_BREAK_LINES`]).
+    Break { count: u32 },
 }
 
+/// Blocks of every other kind per document (the content worker's limit).
+pub const MAX_BLOCKS: usize = 512;
+/// [`ContentBlock::Break`]s per document: at most one between two other
+/// blocks and one at each end; they have their own budget, so the limit on
+/// other blocks stays as it is.
+pub const MAX_BREAKS: usize = MAX_BLOCKS + 1;
+/// Line breaks all [`ContentBlock::Break`]s of a document count together: no
+/// more than a message of [`MAX_CONTENT_BYTES`] can hold (every one of them
+/// is a typed line break).
+pub const MAX_BREAK_LINES: usize = MAX_CONTENT_BYTES;
+
 impl ContentBlock {
+    /// Whether this is a [`ContentBlock::Break`], which holds no content.
+    pub fn is_break(&self) -> bool {
+        matches!(self, ContentBlock::Break { .. })
+    }
+
     /// A plain paragraph.
     pub fn text(text: impl Into<String>) -> Self {
         ContentBlock::Text {
@@ -276,6 +337,102 @@ mod tests {
             }
         );
         assert_eq!(policy.preview(body, true).text, body);
+    }
+
+    #[test]
+    fn breaks_have_their_own_shape_and_budget() {
+        let document = MessageDocument {
+            blocks: vec![
+                ContentBlock::Break { count: 2 },
+                ContentBlock::text("a"),
+                ContentBlock::Break { count: 0 },
+                ContentBlock::Math {
+                    source: "$$x$$".into(),
+                    tex: "x".into(),
+                },
+            ],
+        };
+        let json = serde_json::to_string(&document).unwrap();
+        assert!(
+            json.starts_with(r#"{"blocks":[{"kind":"break","count":2},"#),
+            "{json}"
+        );
+        assert_eq!(
+            serde_json::from_str::<MessageDocument>(&json).unwrap(),
+            document
+        );
+        assert!(document.breaks_valid());
+        assert!(
+            serde_json::from_str::<MessageDocument>(
+                r#"{"blocks":[{"kind":"break","count":1,"extra":1}]}"#
+            )
+            .is_err()
+        );
+        // Two in a row, too many, or more line breaks than a message holds.
+        let breaks = |blocks: Vec<ContentBlock>| MessageDocument { blocks }.breaks_valid();
+        let one = || ContentBlock::Break { count: 1 };
+        assert!(!breaks(vec![one(), one()]));
+        assert!(!breaks(vec![ContentBlock::Break {
+            count: MAX_CONTENT_BYTES as u32 + 1
+        }]));
+        let mut many = Vec::new();
+        for _ in 0..=MAX_BREAKS {
+            many.extend([one(), ContentBlock::text("x")]);
+        }
+        assert!(!breaks(many.clone()));
+        many.truncate(2 * MAX_BREAKS);
+        assert!(breaks(many));
+    }
+
+    /// A reply may not ask for more line breaks, all its breaks together,
+    /// than a message can hold: 512 one-letter blocks with a whole message's
+    /// line breaks between each two asked for 133,955,584 of them.
+    #[test]
+    fn breaks_together_stay_within_a_message() {
+        let mut blocks = Vec::new();
+        for index in 0..MAX_BLOCKS {
+            if index > 0 {
+                blocks.push(ContentBlock::Break {
+                    count: MAX_CONTENT_BYTES as u32,
+                });
+            }
+            blocks.push(ContentBlock::text("x"));
+        }
+        assert!(!MessageDocument { blocks }.breaks_valid());
+        // A whole message's line breaks, spread over the gaps, are fine; one
+        // more is not.
+        let spread = |extra: u32| MessageDocument {
+            blocks: vec![
+                ContentBlock::Break {
+                    count: MAX_CONTENT_BYTES as u32 / 2,
+                },
+                ContentBlock::text("x"),
+                ContentBlock::Break {
+                    count: MAX_CONTENT_BYTES as u32 / 2 + extra,
+                },
+            ],
+        };
+        assert!(spread(0).breaks_valid());
+        assert!(!spread(1).breaks_valid());
+        assert!(
+            !MessageDocument {
+                blocks: vec![ContentBlock::Break { count: u32::MAX }],
+            }
+            .breaks_valid()
+        );
+    }
+
+    /// The desktop's and the browser's boundaries refuse a document of more
+    /// blocks than the worker makes (`within_limits`); breaks do not count.
+    #[test]
+    fn documents_have_one_budget_for_their_blocks() {
+        let document = |count: usize| MessageDocument {
+            blocks: (0..count)
+                .flat_map(|_| [ContentBlock::text("x"), ContentBlock::Break { count: 2 }])
+                .collect(),
+        };
+        assert!(document(MAX_BLOCKS).within_limits());
+        assert!(!document(MAX_BLOCKS + 1).within_limits());
     }
 
     #[test]

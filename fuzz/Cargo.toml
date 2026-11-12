@@ -44,6 +44,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "markdown"
+path = "fuzz_targets/markdown.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "server_messages"
 path = "fuzz_targets/server_messages.rs"
 test = false

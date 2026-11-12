@@ -349,6 +349,10 @@ fn server_rail(this: &Desktop, selected: Option<usize>, cx: &mut Context<Desktop
                                 ),
                             }
                         })
+                        .when_some(
+                            crate::voice::rail_ring(this, server, radius),
+                            |tile, ring| tile.child(ring),
+                        )
                         .child(
                             div()
                                 .absolute()
@@ -361,10 +365,6 @@ fn server_rail(this: &Desktop, selected: Option<usize>, cx: &mut Context<Desktop
                                 .items_center()
                                 .justify_center()
                                 .child(security_icon(server.security, index, 12.)),
-                        )
-                        .when_some(
-                            crate::voice::rail_ring(this, server, radius),
-                            |tile, ring| tile.child(ring),
                         )
                         .when_some(
                             crate::voice::rail_badge(this, index, server),
@@ -2006,6 +2006,45 @@ fn conversation(
                                     .child(div().flex_shrink_0().h(shown.below).children(below)),
                             ),
                     )
+                    .child(
+                        div()
+                            .id("chat-history-scrollbar-area")
+                            .absolute()
+                            .top_0()
+                            .bottom_0()
+                            .right_0()
+                            .w(px(12.))
+                            .role(Role::Group)
+                            .aria_label("Chat history scrollbar")
+                            // A thumb grab takes over immediately, even before
+                            // its first move changes the retained scroll offset.
+                            .capture_any_mouse_down(cx.listener(
+                                |this, event: &MouseDownEvent, _, _| {
+                                    if event.button == MouseButton::Left {
+                                        this.cancel_chat_scroll();
+                                    }
+                                },
+                            ))
+                            .child(
+                                Scrollbar::vertical(&this.scroll)
+                                    .id("chat-history-scrollbar")
+                                    .mode(ScrollbarMode::Always)
+                                    .styles(|styles| {
+                                        styles
+                                            .track(|track| {
+                                                track.width(px(8.)).bg(color(MAIN).into())
+                                            })
+                                            .thumb(|thumb| {
+                                                thumb
+                                                    .width(px(4.))
+                                                    .bg(color(BORDER_STRONG))
+                                                    .radius(px(2.))
+                                            })
+                                            .thumb_hover(|thumb| thumb.bg(color(TEXT_FAINT)))
+                                            .thumb_active(|thumb| thumb.bg(color(TEXT_MUTED)))
+                                    }),
+                            ),
+                    )
                     .when_some(jump_pill(this, channel, cx), |view, pill| view.child(pill)),
             ),
         })
@@ -2902,12 +2941,8 @@ fn message_row(
                             order,
                             hovered.map(|hovered| (hovered.block, hovered.link)),
                             texts,
-                            div()
-                                .flex()
-                                .flex_col()
-                                .flex_shrink_0()
-                                .gap_2()
-                                .children(blocks),
+                            // The message's lines are its breaks: no gaps.
+                            div().flex().flex_col().flex_shrink_0().children(blocks),
                         ))
                         .when(clamped && ui.has_more(), |content| {
                             // Fade the cut-off edge into the row background
@@ -3521,17 +3556,39 @@ fn blocks(
     cx: &mut Context<Desktop>,
 ) -> Vec<AnyElement> {
     crate::math::prepare(this, cx);
+    // Code asks for a monospace face when the configured code font is missing.
+    let code_font = crate::document::resolve_code_font(cx);
+    // The height of one line of message text (GPUI's default line height).
+    let line = px((this.settings.appearance.text_size * 1.618_034).round());
+    let last = document.blocks.len().saturating_sub(1);
     document
         .blocks
         .iter()
         .enumerate()
         .map(|(index, block)| match block {
+            // `count - 1` empty lines between blocks, `count` at either end;
+            // a display formula written within a line follows directly.
+            Block::Break(count) => {
+                let edge = index == 0 || index == last;
+                let lines = if edge {
+                    *count
+                } else {
+                    count.saturating_sub(1)
+                };
+                div()
+                    .id(("break", index))
+                    .flex_shrink_0()
+                    .h(line * lines.min(4096) as f32)
+                    .into_any_element()
+            }
             Block::Text {
                 kind: Kind::Rule, ..
             } => div()
-                .my_1()
-                .h(px(1.))
-                .bg(color(BORDER_STRONG))
+                .id(("rule", index))
+                .h(line)
+                .flex()
+                .items_center()
+                .child(div().w_full().h(px(1.)).bg(color(BORDER_STRONG)))
                 .into_any_element(),
             Block::Text {
                 text,
@@ -3583,30 +3640,18 @@ fn blocks(
                         .border_color(color(BORDER_STRONG))
                         .text_color(color(TEXT_MUTED))
                         .child(content),
-                    Kind::Item { depth, marker } => {
-                        // Items of one list sit closer than other blocks.
-                        let follows = index > 0
-                            && matches!(
-                                document.blocks[index - 1],
-                                Block::Text {
-                                    kind: Kind::Item { .. },
-                                    ..
-                                }
-                            );
-                        block
-                            .flex()
-                            .pl(px(f32::from(depth - 1) * 18.))
-                            .when(follows, |item| item.mt(px(-4.)))
-                            .child(
-                                div()
-                                    .min_w(px(18.))
-                                    .pr_1()
-                                    .flex_shrink_0()
-                                    .text_color(color(TEXT_MUTED))
-                                    .child(marker.clone()),
-                            )
-                            .child(div().flex_1().min_w_0().child(content))
-                    }
+                    Kind::Item { depth, marker } => block
+                        .flex()
+                        .pl(px(f32::from(depth - 1) * 18.))
+                        .child(
+                            div()
+                                .min_w(px(18.))
+                                .pr_1()
+                                .flex_shrink_0()
+                                .text_color(color(TEXT_MUTED))
+                                .child(marker.clone()),
+                        )
+                        .child(div().flex_1().min_w_0().child(content)),
                     Kind::Paragraph | Kind::Rule => block.child(content),
                 }
                 .into_any_element()
@@ -3679,7 +3724,7 @@ fn blocks(
                     .bg(color(APP))
                     .border_1()
                     .border_color(color(BORDER))
-                    .font_family(theme::mono_font())
+                    .font_family(code_font.clone())
                     .text_sm()
                     .flex()
                     .flex_col()

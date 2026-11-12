@@ -16,7 +16,7 @@ platform decisions reversible without duplicating the session model.
 | `nuschl-session` | Native TLS/control sessions, identities, bookmarks and worker supervision | GPUI, SQLite implementation, content parser, codecs |
 | `nuschl-cli` | Diagnostic frontend using the real session implementation | GPUI, audio codecs |
 | `nuschl-ipc` | Versioned worker messages, framing, and native supervision | Content parser, SQLite, codecs |
-| `nuschl-content` | Literal text, fenced code parsing, syntax highlighting | Network access, database, native regex engines |
+| `nuschl-content` | Message Markdown and formulas in one bounded parse (syntax hidden, lines kept), legacy HTML to inert text, syntax highlighting | Network access, database, native regex engines |
 | `nuschl-storage` | SQLx/Tokio history operations for SQLite and PostgreSQL | UI, session credentials, arbitrary SQL from IPC |
 | `nuschl` | GPUI desktop shell and native application supervision | Direct parser, database, or codec implementation |
 | `nuschld` | Server session/routing authority and native transports | GPUI, content parser, audio decoding |
@@ -88,7 +88,9 @@ building latency; apply a different durability policy to chat.
 ## Content and history
 
 Store the original message independently of its presentation. Preserve newlines and
-blank lines; interpret fenced code without interpreting raw HTML or loading resources.
+blank lines (between blocks as `ContentBlock::Break`s); interpret Markdown (code,
+formulas, emphasis, links to allowed targets, headings, lists, quotes, rules) without
+interpreting raw HTML or loading resources.
 The content worker returns text and style runs, not HTML, scripts, or image URLs to
 execute. Renderer adapters remain responsible for selection, accessibility, focus,
 layout, and a keyboard-accessible Show more action.

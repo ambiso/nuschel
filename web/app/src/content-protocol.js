@@ -55,12 +55,27 @@ function role(value) {
     textBytes(value.item.marker, 32);
   }
 }
+// Blocks per document, and the line breaks between them (`break`, at most one
+// between two other blocks and one at each end) on a budget of their own:
+// together no more line breaks than the largest message holds.
+export const MAX_BLOCKS = 512;
+export const MAX_BREAKS = MAX_BLOCKS + 1;
+export const MAX_BREAK_LINES = MAX_SOURCE;
 export function validateDocument(document) {
   fields(document, ["blocks"]);
-  if (!Array.isArray(document.blocks) || document.blocks.length > 512) fail();
-  const budget = {pixels:0, images:0, text:0, spans:0, runs:0};
+  if (!Array.isArray(document.blocks) || document.blocks.length > MAX_BLOCKS + MAX_BREAKS) fail();
+  const budget = {pixels:0, images:0, text:0, spans:0, runs:0, blocks:0, breaks:0, lines:0};
   const text = value => { const bytes = textBytes(value, MAX_SOURCE); budget.text += bytes.length; if (budget.text > MAX_SOURCE) fail(); return bytes; };
+  let previousBreak = false;
   for (const block of document.blocks) {
+    if (block?.kind === "break") {
+      fields(block, ["kind", "count"]);
+      if (!integer(block.count, 0, MAX_SOURCE) || previousBreak || ++budget.breaks > MAX_BREAKS ||
+          (budget.lines += block.count) > MAX_BREAK_LINES) fail();
+      previousBreak = true; continue;
+    }
+    previousBreak = false;
+    if (++budget.blocks > MAX_BLOCKS) fail();
     if (block?.kind === "image") { image(block, budget); continue; }
     if (block?.kind === "text") {
       fields(block, ["kind", "text", "spans", "role"]);
