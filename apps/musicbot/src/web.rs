@@ -77,7 +77,7 @@ async fn headers(mut response: Response) -> Response {
         (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
         (
             header::CONTENT_SECURITY_POLICY,
-            "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; \
+            "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'none'; \
              connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
         ),
         (HeaderName::from_static("x-robots-tag"), "noindex"),
