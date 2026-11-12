@@ -64,61 +64,15 @@ impl Token {
 /// CommonMark ranks code spans, autolinks and raw HTML above every other
 /// inline construct, but pulldown-cmark 0.13 lets a `$` before a code span
 /// pair with a `$` inside it (`$a `$x$` b`). So the text is parsed in that
-/// order: first without math, and what is code (spans and blocks), an
-/// autolink or HTML there has its content masked, byte for byte, keeping
-/// line breaks, as are the bare URLs the linkifier links
-/// ([`crate::bare_urls`]); then the masked text is parsed with math. No `$`
-/// inside those is seen by the second parse, and a token that would take in
-/// masked bytes differs from the text and is refused (`Token::new`).
+/// order, by the shared scan Markdown uses too (`crate::markdown`): first
+/// without math, and what is code (spans and blocks), an autolink or inline
+/// HTML there has its content masked, byte for byte, keeping line breaks,
+/// as are the bare URLs the linkifier links ([`crate::bare_urls`]); then
+/// the masked text is parsed with math. No `$` inside those is seen by the
+/// second parse, and a token that would take in masked bytes differs from
+/// the text and is refused (`Token::new`).
 pub fn tokens(source: &str) -> Vec<Token> {
-    use pulldown_cmark::{Event, LinkType, Options, Parser, Tag, TagEnd};
-    let mut masked = source.as_bytes().to_vec();
-    let mut mask = |range: std::ops::Range<usize>| {
-        for byte in &mut masked[range] {
-            if !matches!(*byte, b'\n' | b'\r') {
-                *byte = b'x';
-            }
-        }
-    };
-    let mut code_block = false;
-    for (event, range) in Parser::new(source).into_offset_iter() {
-        match event {
-            Event::Start(Tag::CodeBlock(_)) => code_block = true,
-            Event::End(TagEnd::CodeBlock) => code_block = false,
-            Event::Text(_) if code_block => mask(range),
-            // Inside the delimiters: backticks and angle brackets stay.
-            Event::Code(_) => {
-                let text = &source[range.clone()];
-                let ticks = text.len() - text.trim_start_matches('`').len();
-                if text.len() >= 2 * ticks {
-                    mask(range.start + ticks..range.end - ticks);
-                }
-            }
-            Event::InlineHtml(_) | Event::Html(_) if range.len() >= 2 => {
-                mask(range.start + 1..range.end - 1)
-            }
-            Event::Start(Tag::Link {
-                link_type: LinkType::Autolink | LinkType::Email,
-                ..
-            }) if range.len() >= 2 => mask(range.start + 1..range.end - 1),
-            _ => {}
-        }
-    }
-    // Bare URLs bind tighter too: `https://a.example/$x$` stays a link.
-    for (range, _) in crate::bare_urls(source) {
-        mask(range);
-    }
-    let Ok(masked) = String::from_utf8(masked) else {
-        return Vec::new();
-    };
-    Parser::new_ext(&masked, Options::ENABLE_MATH)
-        .into_offset_iter()
-        .filter_map(|(event, range)| match event {
-            Event::InlineMath(tex) => Token::new(source, range, &tex, false),
-            Event::DisplayMath(tex) => Token::new(source, range, &tex, true),
-            _ => None,
-        })
-        .collect()
+    crate::markdown::tokens(source)
 }
 
 /// The grammar as a table: input → the formulas found in it, as written
@@ -325,8 +279,8 @@ mod spec {
         assert_eq!(found(&document), [("$y$".into(), "y".into(), 'i')]);
     }
 
-    /// Nothing changes the text: a document's text, formulas as written,
-    /// is the message's.
+    /// Formulas are shown as written: a document's text, formulas included,
+    /// is the message's with exactly the hidden Markdown syntax left out.
     #[test]
     fn formulas_keep_the_text_as_typed() {
         let renderer = ContentRenderer::default();
@@ -335,16 +289,23 @@ mod spec {
             "$a_1 * b_2$ `$code$` \\$ $$x$$$$y$$",
         ] {
             let document = renderer.render(input).unwrap();
-            let text: String = document
-                .blocks
+            crate::markdown::check(input, &document).unwrap();
+            assert_eq!(
+                found(&document),
+                [
+                    ("$\\pi r^2$", "\\pi r^2", 'i'),
+                    ("$$\\int_0^1 x\\,dx$$", "\\int_0^1 x\\,dx", 'd'),
+                ]
                 .iter()
-                .map(|block| match block {
-                    ContentBlock::Text { text, .. } => text.as_str(),
-                    ContentBlock::Math { source, .. } => source.as_str(),
-                    _ => "",
-                })
-                .collect();
-            assert_eq!(text, input);
+                .chain(&[
+                    ("$a_1 * b_2$", "a_1 * b_2", 'i'),
+                    ("$$x$$", "x", 'd'),
+                    ("$$y$$", "y", 'd'),
+                ])
+                .filter(|(written, ..)| input.contains(written))
+                .map(|(written, tex, kind)| ((*written).into(), (*tex).into(), *kind))
+                .collect::<Vec<(String, String, char)>>()
+            );
         }
     }
 }

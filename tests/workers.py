@@ -103,11 +103,29 @@ def check_workers(binaries):
     assert [(span["start"], span["end"], span["style"]["bold"]) for span in block["spans"]] == [(0, 4, True)], legacy
     assert rendered["status"] == "rendered"
     blocks = rendered["value"]["blocks"]
-    assert blocks[0]["text"] == "first\n\nsecond\n"
+    # The line break before the fence is between the blocks, not in the text.
+    assert blocks[0]["text"] == "first\n\nsecond"
     code = next(block for block in blocks if block["kind"] == "code")
     assert code["language"] == "rust"
     assert "".join(run["text"] for run in code["runs"]) == "fn main() {}\n"
     assert len({tuple(run["foreground"]) for run in code["runs"]}) > 1
+
+    # Markdown (docs/desktop.md, "Markdown"): styles and roles, no delimiters,
+    # the blank line after the heading as a break of 2.
+    markdown, = exchange(binaries / "nuschl-content-worker", [{
+        "kind": "render",
+        "text": "# Title\n\n**bold** *it* `code` [link](https://example.test/x)\n> quoted\n\n---\n- item",
+    }])
+    assert markdown["status"] == "rendered", markdown
+    blocks = markdown["value"]["blocks"]
+    texts = [block for block in blocks if block["kind"] == "text"]
+    assert [block.get("role", "paragraph") for block in texts] == [
+        {"heading": 1}, "paragraph", "quote", "rule", {"item": {"depth": 1, "marker": "•"}}], blocks
+    assert [block["text"] for block in texts] == ["Title", "bold it code link", "quoted", "", "item"], blocks
+    assert {"kind": "break", "count": 2} in blocks, blocks
+    spans = {texts[1]["text"][span["start"]:span["end"]]: span for span in texts[1]["spans"]}
+    assert spans["bold"]["style"]["bold"] and spans["it"]["style"]["italic"], spans
+    assert spans["code"]["style"]["code"] and spans["link"]["link"] == "https://example.test/x", spans
 
     formula, refused = exchange(binaries / "nuschl-math-worker", [
         {"tex": "\\frac{a}{b} + x^2", "display": False, "size": 20.0},

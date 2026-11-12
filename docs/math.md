@@ -20,12 +20,12 @@ desktop: caches masks, tints them with the text colour, paints them on the basel
 
 ## Syntax: one grammar
 
-Formulas are tokens of the Markdown grammar that also finds fenced code
-blocks: pulldown-cmark 0.13 (`crates/content/src/math.rs`, `tokens`), with no
-regular expression or other scan of the text before or after it. Nuschl does
-not render the rest of Markdown (a message's text is literal apart from fenced
-code and formulas), but the parser decides what is code, an autolink or HTML,
-and so where math cannot be.
+Formulas are tokens of the Markdown grammar Nuschl renders messages with
+([desktop.md](desktop.md#markdown)): pulldown-cmark 0.13, one shared scan for
+formulas and the rest of Markdown (`crates/content/src/markdown.rs`;
+`math::tokens` is that scan), with no regular expression or other scan of the
+text before or after it. The parser decides what is code, an autolink or HTML,
+and so where math cannot be; formulas then bind tighter than emphasis and links.
 
 CommonMark ranks code spans, autolinks and raw HTML above every other inline
 construct, and Nuschl adds the bare URLs it links (`bare_urls`, the
@@ -33,10 +33,13 @@ linkifier's own detection). pulldown-cmark's math (`Options::ENABLE_MATH`) does 
 before a code span can pair with a `$` inside it (``$a `$x$` b`` gives the
 formula ``a ` ``, and the code span is gone), which the fuzzer found. So the
 text is parsed in CommonMark's order: once without math, where the contents of
-code spans, code blocks, autolinks and HTML, and bare URLs, are masked byte for
-byte (line breaks kept, so every offset stays); then the masked text with math. The
-second parse never sees a `$` inside code, and a token that takes in masked
-bytes differs from the text and is refused.
+code spans, code blocks, inline HTML and bare URLs, and autolinks but their
+scheme (so they stay autolinks), are masked byte for byte (line breaks kept, so
+every offset stays); then the masked text with math and strikethrough, which
+also gives the Markdown structure. The second parse never sees a `$` inside
+code, and a token that takes in masked bytes differs from the text and is
+refused. A refused token's delimiters are masked and the text is parsed once
+more, so what it took in is Markdown again (``$x `y` z$`` shows the code span).
 
 | Construct | Rule |
 | --- | --- |
@@ -47,8 +50,8 @@ bytes differs from the text and is refused.
 | Prices | `$5 and $10` is text: the `$` before 10 follows a space, so it cannot close, and the formula would contain it. |
 | Escapes | `\$` is a dollar sign and never a delimiter. Inside a formula nothing is unescaped: the LaTeX is the bytes typed (`$a \$ b \_ \{$` keeps every backslash). |
 | Code | Code spans (backticks), fenced and indented code blocks bind tighter: nothing in them is math, `$` included. A formula never contains a backtick. |
-| Emphasis | Formulas bind tighter: `*` and `_` inside one are LaTeX. Emphasis around a formula leaves it whole (`*$x$*`). |
-| Links | A bare URL (`https://`, `http://`, `mumble://`, as the linkifier finds it) binds tighter, like code: `https://a.example/?q=$x$` is a link, whole. Formulas in a Markdown link's text count (`[$x$](…)`; Nuschl shows Markdown links as typed); none in its destination, in an autolink `<https://…>` or in HTML. |
+| Emphasis | Formulas bind tighter: `*` and `_` inside one are LaTeX (`$*x*$` is a formula). Emphasis around a formula leaves it whole (`*$x$*` is an italic formula). |
+| Links | A bare URL (`https://`, `http://`, `mumble://`, as the linkifier finds it) binds tighter, like code: `https://a.example/?q=$x$` is a link, whole. Formulas in a Markdown link's text count (`[$x$](…)`, shown as a formula in the link); none in its destination, in an autolink `<https://…>` or in HTML. |
 | Raw HTML | Inline tags are tokens and formulas around them count (`<span>$x$</span>`); an HTML block (a line starting `<div>` and so on, up to a blank line) holds none. |
 | Line breaks | An inline formula may continue on the next line of its paragraph; no formula spans a blank line. |
 | Lists and quotes | A formula within a line of an item or quote counts. One whose continuation lines carry `>` or indentation does not: its bytes would not be its LaTeX. |
@@ -88,7 +91,9 @@ was typed. Each of those cases is a row of the spec test in
 fuzz target checks the invariants for any input: every token is exactly the
 bytes between its delimiters, none overlaps what is code when the same text is
 parsed without math or a URL the linkifier links, the document shows the tokens in order as written, and
-the document's text, formulas included, is the message's.
+the document's text, formulas included, is the message's with exactly the
+Markdown syntax it hides left out (`markdown::check`, also run by the
+`markdown` fuzz target and the property test over generated messages).
 
 ### Messages from stock clients (HTML)
 

@@ -85,7 +85,7 @@ pub enum Kind {
 
 #[derive(Clone)]
 pub enum Block {
-    /// Text without the newlines that separated it from a neighbouring block.
+    /// Text with its line breaks; those between blocks are [`Block::Break`]s.
     Text {
         text: SharedString,
         highlights: Highlights,
@@ -112,13 +112,17 @@ pub enum Block {
     },
     /// A display formula: `source` as written (copied, read out, and shown
     /// when the formula cannot be), `tex` for the math worker. `joined`:
-    /// written on the same line as the text before it, and after it (copying
-    /// adds no line break there).
+    /// written on the same line as the text before it, and after it (a
+    /// break of 0 there; copying adds no line break).
     Math {
         source: SharedString,
         tex: SharedString,
         joined: (bool, bool),
     },
+    /// The line breaks typed between the neighbouring blocks, or before the
+    /// first or after the last (`nuschl_core::ContentBlock::Break`): drawn as
+    /// `count - 1` empty lines between blocks, `count` at either end.
+    Break(u32),
 }
 
 impl Block {
@@ -128,7 +132,7 @@ impl Block {
         match self {
             Block::Text { text, .. } | Block::Code { text, .. } => Some(text),
             Block::Math { source, .. } => Some(source),
-            Block::Image { .. } => None,
+            Block::Image { .. } | Block::Break(_) => None,
         }
     }
 }
@@ -139,6 +143,66 @@ pub struct Document {
     /// Interaction callbacks borrow this lease; replacing a cached document
     /// revokes old-frame actions without retaining its text or pixels.
     pub(crate) lease: Arc<()>,
+}
+
+/// The family code in messages is drawn in: the configured code font when
+/// the text system has it, in the spelling the text system reports, else the
+/// `monospace` generic family (the platform's monospace face). The text
+/// system finds a family by its exact name (cosmic-text), so a font
+/// configured in another case is asked for by its installed name. GPUI picks
+/// a missing family's fallback by its name, so a missing code font without a
+/// mono-sounding name (Iosevka, Hack; Menlo and Monaco are not in that
+/// heuristic either) would be drawn in a proportional face; code asks for
+/// monospace instead.
+pub fn code_family(configured: &str, available: &[String]) -> SharedString {
+    let generic = ["monospace", "mono", "ui-monospace"]
+        .into_iter()
+        .find(|name| configured.eq_ignore_ascii_case(name));
+    if let Some(generic) = generic {
+        return SharedString::from(generic);
+    }
+    let installed = available
+        .iter()
+        .find(|family| family.as_str() == configured)
+        .or_else(|| {
+            available
+                .iter()
+                .find(|family| family.eq_ignore_ascii_case(configured))
+        });
+    match installed {
+        Some(family) => SharedString::from(family.clone()),
+        None => SharedString::from("monospace"),
+    }
+}
+
+thread_local! {
+    /// The configured code font and the family it resolved to.
+    static CODE_FONT: std::cell::RefCell<Option<(SharedString, SharedString)>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// [`code_family`] for the configured code font, looked up in the text system
+/// once per configured font (documents call this before laying out code).
+pub fn resolve_code_font(cx: &gpui_kit::App) -> SharedString {
+    let configured = theme::mono_font();
+    CODE_FONT.with_borrow_mut(|cached| match cached {
+        Some((name, family)) if *name == configured => family.clone(),
+        _ => {
+            let family = code_family(&configured, &cx.text_system().all_font_names());
+            *cached = Some((configured, family.clone()));
+            family
+        }
+    })
+}
+
+/// The code font as last resolved ([`resolve_code_font`]), or the configured
+/// one when it changed since.
+pub fn code_font() -> SharedString {
+    let configured = theme::mono_font();
+    CODE_FONT.with_borrow(|cached| match cached {
+        Some((name, family)) if *name == configured => family.clone(),
+        _ => configured,
+    })
 }
 
 /// Build a GPUI image from worker RGBA pixels (GPUI expects BGRA).
@@ -162,20 +226,22 @@ pub fn render_image(width: u32, height: u32, rgba: &str) -> Option<Arc<RenderIma
 }
 
 impl From<MessageDocument> for Document {
-    fn from(document: MessageDocument) -> Self {
-        let last = document.blocks.len().saturating_sub(1);
-        // Whether each block continues the line of the text before it, and
-        // the text after it continues its line.
-        let text = |index: Option<usize>| match index.and_then(|index| document.blocks.get(index)) {
-            Some(ContentBlock::Text { text, .. }) if !text.is_empty() => Some(text.clone()),
-            _ => None,
+    fn from(mut document: MessageDocument) -> Self {
+        // Breaks asking for more line breaks than a message holds are
+        // malformed: dropped before anything copies or lays them out.
+        if !document.breaks_valid() {
+            document.blocks.retain(|block| !block.is_break());
+        }
+        // Whether each block is written on the line of the block before it,
+        // and the block after it on its line: a break of 0 between them.
+        let zero = |index: Option<usize>| {
+            matches!(
+                index.and_then(|index| document.blocks.get(index)),
+                Some(ContentBlock::Break { count: 0 })
+            )
         };
         let joined: Vec<(bool, bool)> = (0..document.blocks.len())
-            .map(|index| {
-                let before = text(index.checked_sub(1)).is_some_and(|text| !text.ends_with('\n'));
-                let after = text(Some(index + 1)).is_some_and(|text| !text.starts_with('\n'));
-                (before, after)
-            })
+            .map(|index| (zero(index.checked_sub(1)), zero(Some(index + 1))))
             .collect();
         Self {
             blocks: document
@@ -183,13 +249,10 @@ impl From<MessageDocument> for Document {
                 .into_iter()
                 .enumerate()
                 .map(|(index, block)| match block {
-                    ContentBlock::Text { text, spans, role } => {
-                        text_block(text, spans, role, index, last)
-                    }
+                    ContentBlock::Text { text, spans, role } => text_block(text, spans, role),
                     ContentBlock::Code { language, runs } => code(language, runs),
-                    ContentBlock::Math { source, tex } => {
-                        math_block(source, tex, joined[index], index, last)
-                    }
+                    ContentBlock::Math { source, tex } => math_block(source, tex, joined[index]),
+                    ContentBlock::Break { count } => Block::Break(count),
                     ContentBlock::Image {
                         width,
                         height,
@@ -202,13 +265,7 @@ impl From<MessageDocument> for Document {
                             height,
                             source: source.map(Arc::from),
                         },
-                        None => text_block(
-                            "[image]".into(),
-                            Vec::new(),
-                            TextRole::Paragraph,
-                            index,
-                            last,
-                        ),
+                        None => text_block("[image]".into(), Vec::new(), TextRole::Paragraph),
                     },
                 })
                 .collect(),
@@ -248,19 +305,12 @@ fn highlight(style: Style, link: bool, light: bool) -> HighlightStyle {
     }
 }
 
-/// A text block without the newlines that separate it from a neighbouring
-/// block (the block layout spaces them; newlines inside it are kept), its
-/// styles and links, and what it is: all checked again here, since the
-/// worker's reply is not trusted to be ordered, in range or limited to the
-/// allowed schemes.
-fn text_block(text: String, spans: Vec<Span>, role: TextRole, index: usize, last: usize) -> Block {
+/// A text block with every line break in it (those between blocks are
+/// breaks of their own), its styles and links, and what it is: all checked
+/// again here, since the worker's reply is not trusted to be ordered, in
+/// range or limited to the allowed schemes.
+fn text_block(text: String, spans: Vec<Span>, role: TextRole) -> Block {
     let mut kept = 0..text.len();
-    if index < last {
-        kept.end = text.trim_end_matches(['\n', '\r']).len();
-    }
-    if index > 0 {
-        kept.start = kept.end - text[..kept.end].trim_start_matches(['\n', '\r']).len();
-    }
     let kind = match role {
         TextRole::Paragraph => Kind::Paragraph,
         TextRole::Heading(level) => Kind::Heading(level.clamp(1, 3)),
@@ -328,15 +378,9 @@ fn text_block(text: String, spans: Vec<Span>, role: TextRole, index: usize, last
 
 /// A display formula, or its source as a paragraph when its LaTeX is too
 /// long to send to the math worker.
-fn math_block(
-    source: String,
-    tex: String,
-    joined: (bool, bool),
-    index: usize,
-    last: usize,
-) -> Block {
+fn math_block(source: String, tex: String, joined: (bool, bool)) -> Block {
     if tex.len() > nuschl_ipc::math::MAX_TEX_BYTES || tex.trim().is_empty() {
-        return text_block(source, Vec::new(), TextRole::Paragraph, index, last);
+        return text_block(source, Vec::new(), TextRole::Paragraph);
     }
     Block::Math {
         source: source.into(),
@@ -363,7 +407,11 @@ fn code(language: Option<String>, runs: Vec<CodeRun>) -> Block {
             },
         ));
     }
-    let trimmed = text.trim_end_matches(['\n', '\r']).len();
+    // The line break before a closing fence ends the last line; the code's
+    // other lines, blank ones included, are drawn.
+    let trimmed = text
+        .strip_suffix('\n')
+        .map_or(text.len(), |text| text.trim_end_matches('\r').len());
     text.truncate(trimmed);
     dark.retain_mut(|(range, _)| {
         range.end = range.end.min(trimmed);
@@ -425,8 +473,9 @@ impl Document {
     }
 
     /// What "Copy message" copies: text as text, code as its code, formulas
-    /// as written, one block per line (a formula written within a line stays
-    /// in it); images are left out.
+    /// as written, with the message's lines (blank lines between blocks
+    /// included, and a formula written within a line in it); images are left
+    /// out.
     pub fn plain_text(&self) -> String {
         self.join(self.blocks.iter().enumerate().filter_map(|(index, block)| {
             let text = match block {
@@ -434,15 +483,16 @@ impl Document {
                     text,
                     kind: Kind::Item { marker, .. },
                     ..
-                } => format!("{marker} {text}").into(),
+                } if !marker.is_empty() => format!("{marker} {text}").into(),
                 _ => Cow::from(block.text()?.as_ref()),
             };
             Some((index, text))
         }))
     }
 
-    /// Blocks' texts (by block index, in order) on lines of their own, apart
-    /// from display formulas written within a line.
+    /// Blocks' texts (by block index, in order) with the line breaks between
+    /// them: a break's count, else one, less one for each block left out
+    /// between them (an image, on lines of its own).
     pub fn join<'a>(&self, parts: impl IntoIterator<Item = (usize, Cow<'a, str>)>) -> String {
         let mut joined = String::new();
         let mut previous = None;
@@ -450,31 +500,30 @@ impl Document {
             if part.is_empty() {
                 continue;
             }
-            if previous.is_some() {
-                let same_line = previous == index.checked_sub(1)
-                    && (matches!(
-                        self.blocks.get(index),
-                        Some(Block::Math {
-                            joined: (true, _),
-                            ..
-                        })
-                    ) || matches!(
-                        index
-                            .checked_sub(1)
-                            .and_then(|index| self.blocks.get(index)),
-                        Some(Block::Math {
-                            joined: (_, true),
-                            ..
-                        })
-                    ));
-                if !same_line {
-                    joined.push('\n');
-                }
+            if let Some(previous) = previous {
+                let lines = self.line_breaks(previous, index);
+                joined.extend(std::iter::repeat_n('\n', lines));
             }
             joined.push_str(&part);
             previous = Some(index);
         }
         joined
+    }
+
+    /// The line breaks between blocks `from` and `to` (which are not breaks).
+    fn line_breaks(&self, from: usize, to: usize) -> usize {
+        let (mut breaks, mut left_out) = (0, 0);
+        let mut gap = None;
+        for block in self.blocks.iter().take(to + 1).skip(from + 1) {
+            match block {
+                Block::Break(count) => gap = Some(*count as usize),
+                _ => {
+                    breaks += gap.take().unwrap_or(1);
+                    left_out += 1;
+                }
+            }
+        }
+        breaks.saturating_sub(left_out - 1)
     }
 }
 
@@ -484,6 +533,57 @@ mod tests {
     use super::{Block, Document, render_image};
     use base64::Engine as _;
     use nuschl_core::{CodeRun, ContentBlock, MessageDocument, Span, Style, TextRole};
+
+    #[test]
+    fn code_asks_for_monospace_when_its_font_is_missing() {
+        let installed = ["Adwaita Mono".to_owned(), "DejaVu Sans".to_owned()];
+        // A missing family without a mono-sounding name, and any other.
+        assert_eq!(
+            super::code_family("Iosevka", &installed).as_ref(),
+            "monospace"
+        );
+        assert_eq!(super::code_family("Hack", &installed).as_ref(), "monospace");
+        assert_eq!(super::code_family("Fira Code", &[]).as_ref(), "monospace");
+        // An installed one, by its installed name, and the generic families.
+        assert_eq!(
+            super::code_family("adwaita mono", &installed).as_ref(),
+            "Adwaita Mono"
+        );
+        assert_eq!(super::code_family("monospace", &[]).as_ref(), "monospace");
+        assert_eq!(
+            super::code_family("ui-monospace", &[]).as_ref(),
+            "ui-monospace"
+        );
+    }
+
+    /// The text system finds a family only by its exact name (cosmic-text):
+    /// a code font configured in another case must come back as the
+    /// installed family's spelling. Hack and Iosevka are monospace without a
+    /// name GPUI's fallback would recognise as monospace, so the wrong
+    /// spelling would draw them proportional.
+    #[test]
+    fn code_uses_the_installed_spelling_of_its_font() {
+        let installed = [
+            "DejaVu Sans".to_owned(),
+            "Hack".to_owned(),
+            "Iosevka Term".to_owned(),
+        ];
+        assert_eq!(super::code_family("hack", &installed).as_ref(), "Hack");
+        assert_eq!(
+            super::code_family("IOSEVKA TERM", &installed).as_ref(),
+            "Iosevka Term"
+        );
+        assert_eq!(super::code_family("Hack", &installed).as_ref(), "Hack");
+        // Not installed in any spelling: the monospace family.
+        assert_eq!(
+            super::code_family("iosevka", &installed).as_ref(),
+            "monospace"
+        );
+        assert_eq!(
+            super::code_family("Menlo", &installed).as_ref(),
+            "monospace"
+        );
+    }
 
     #[test]
     fn saved_images_keep_their_bytes_and_type() {
@@ -522,7 +622,8 @@ mod tests {
         };
         let document = Document::from(MessageDocument {
             blocks: vec![
-                ContentBlock::text("Hi!\nThe patch:\n\n"),
+                ContentBlock::text("Hi!\nThe patch:"),
+                ContentBlock::Break { count: 2 },
                 ContentBlock::Code {
                     language: None,
                     runs: vec![run("fn main() {}"), run("\n")],
@@ -533,7 +634,8 @@ mod tests {
                     rgba: base64::engine::general_purpose::STANDARD.encode([0, 0, 0, 0]),
                     source: None,
                 },
-                ContentBlock::text("\nThanks\n"),
+                ContentBlock::text("Thanks"),
+                ContentBlock::Break { count: 1 },
             ],
         });
         assert!(
@@ -543,7 +645,7 @@ mod tests {
             language,
             text,
             highlights,
-        } = &document.blocks[1]
+        } = &document.blocks[2]
         else {
             panic!("not code");
         };
@@ -555,24 +657,100 @@ mod tests {
             highlights[0].1.font_weight,
             Some(gpui_kit::FontWeight::BOLD)
         );
-        // Only separators next to other blocks are trimmed: the last block keeps its end.
-        assert!(matches!(&document.blocks[3], Block::Text { text, .. } if text == "Thanks\n"));
+        assert!(matches!(document.blocks[1], Block::Break(2)));
+        assert!(matches!(&document.blocks[4], Block::Text { text, .. } if text == "Thanks"));
+        // Copying keeps the blank line; the image is left out.
         assert_eq!(
             document.plain_text(),
-            "Hi!\nThe patch:\nfn main() {}\nThanks\n"
+            "Hi!\nThe patch:\n\nfn main() {}\nThanks"
+        );
+        // A blank last line of code is drawn; the line break before the
+        // closing fence is not a line.
+        let document = Document::from(MessageDocument {
+            blocks: vec![ContentBlock::Code {
+                language: None,
+                runs: vec![run("a\n\n")],
+            }],
+        });
+        assert!(matches!(&document.blocks[0], Block::Code { text, .. } if text == "a\n"));
+    }
+
+    /// A document whose breaks ask for more line breaks than a message holds
+    /// (prepared replies reach the desktop without the host's check) loses
+    /// its breaks here, before anything copies or lays them out.
+    #[test]
+    fn breaks_over_their_budget_are_dropped_before_conversion() {
+        for blocks in [
+            vec![
+                ContentBlock::text("a"),
+                ContentBlock::Break { count: u32::MAX },
+                ContentBlock::text("b"),
+            ],
+            (0..512)
+                .flat_map(|_| {
+                    [
+                        ContentBlock::Break { count: 262_144 },
+                        ContentBlock::text("x"),
+                    ]
+                })
+                .collect(),
+        ] {
+            let document = Document::from(MessageDocument { blocks });
+            assert!(
+                !document
+                    .blocks
+                    .iter()
+                    .any(|block| matches!(block, Block::Break(_))),
+                "breaks kept"
+            );
+            assert!(document.plain_text().len() < 2048);
+        }
+    }
+
+    #[test]
+    fn breaks_are_lines_and_copying_keeps_them() {
+        let item = |text: &str, marker: &str| ContentBlock::Text {
+            text: text.into(),
+            spans: Vec::new(),
+            role: TextRole::Item {
+                depth: 1,
+                marker: marker.into(),
+            },
+        };
+        let document = Document::from(MessageDocument {
+            blocks: vec![
+                ContentBlock::Break { count: 2 },
+                ContentBlock::text("a"),
+                ContentBlock::Break { count: 3 },
+                item("b", "•"),
+                item("more of b", ""),
+                ContentBlock::text("c\n\nd\n"),
+                ContentBlock::Break { count: 1 },
+            ],
+        });
+        assert!(matches!(document.blocks[0], Block::Break(2)));
+        assert!(matches!(document.blocks[2], Block::Break(3)));
+        // Text keeps every line break, at its edges too.
+        assert!(matches!(&document.blocks[5], Block::Text { text, .. } if text == "c\n\nd\n"));
+        // Breaks between blocks are copied, those at the edges are not; an
+        // item that goes on after a block inside it has no second marker.
+        assert_eq!(document.plain_text(), "a\n\n\n• b\nmore of b\nc\n\nd\n");
+        let caret = |block, offset| crate::selection::Caret { block, offset };
+        assert_eq!(
+            crate::selection::selected_text(&document, caret(1, 0), caret(5, 1)),
+            "a\n\n\nb\nmore of b\nc"
         );
     }
 
     #[test]
-    fn links_from_the_worker_are_checked_and_follow_the_trimmed_text() {
+    fn links_from_the_worker_are_checked() {
         let span = |start, end, url: &str| Span {
             start,
             end,
             link: Some(url.into()),
             ..Default::default()
         };
-        // Between two code blocks, so its separating newlines are trimmed.
-        let text = "\nsee a.example, b and c\n";
+        let text = "see a.example, b and c";
         let code = || ContentBlock::Code {
             language: None,
             runs: Vec::new(),
@@ -583,11 +761,11 @@ mod tests {
                 ContentBlock::Text {
                     text: text.into(),
                     spans: vec![
-                        span(5, 14, "https://a.example"),
+                        span(4, 13, "https://a.example"),
                         // Overlapping, disallowed or out of range: clipped or dropped.
-                        span(10, 17, "https://overlap.example"),
-                        span(16, 17, "javascript:alert(1)"),
-                        span(22, 99, "https://c.example"),
+                        span(9, 16, "https://overlap.example"),
+                        span(15, 16, "javascript:alert(1)"),
+                        span(21, 99, "https://c.example"),
                     ],
                     role: TextRole::Paragraph,
                 },
@@ -704,7 +882,7 @@ mod tests {
         let document = Document::from(MessageDocument {
             blocks: vec![
                 ContentBlock::Text {
-                    text: "Area $\\pi r^2$ and $x$\n".into(),
+                    text: "Area $\\pi r^2$ and $x$".into(),
                     spans: vec![math(5, 14, "\\pi r^2"), math(19, 22, "x")],
                     role: TextRole::Paragraph,
                 },
@@ -741,21 +919,38 @@ mod tests {
             document.plain_text(),
             "Area $\\pi r^2$ and $x$\n$$\\sum_i x_i$$\n$$too long$$"
         );
-        // A display formula within a line is copied within it.
+        // A display formula within a line (breaks of 0 around it) is copied
+        // within it.
         let document = Document::from(MessageDocument {
             blocks: vec![
                 ContentBlock::text("so "),
+                ContentBlock::Break { count: 0 },
                 ContentBlock::Math {
                     source: "$$x$$".into(),
                     tex: "x".into(),
                 },
-                ContentBlock::text(" and\n"),
+                ContentBlock::Break { count: 0 },
+                ContentBlock::text(" and"),
                 ContentBlock::Math {
                     source: "$$y$$".into(),
                     tex: "y".into(),
                 },
             ],
         });
+        assert!(matches!(
+            document.blocks[2],
+            Block::Math {
+                joined: (true, true),
+                ..
+            }
+        ));
+        assert!(matches!(
+            document.blocks[5],
+            Block::Math {
+                joined: (false, false),
+                ..
+            }
+        ));
         assert_eq!(document.plain_text(), "so $$x$$ and\n$$y$$");
     }
 }

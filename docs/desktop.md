@@ -95,9 +95,11 @@ The design and its measurements: [architecture.md](architecture.md#audio-configu
 ### Messages
 
 - Enter sends and Shift+Enter starts a new line (switchable in Settings).
-- Newlines and blank lines stay visible. Ordinary text is literal; HTML from stock
-  clients is made inert.
-- Fenced code is highlighted (in the content worker, with Syntect's Rust regex
+- Messages are Markdown with the syntax hidden: **bold**, *italic*, `code`,
+  ~~strikethrough~~, links, headings, lists, quotes and rules
+  ([Markdown](#markdown)). Every newline and blank line stays where it was typed.
+  HTML from stock clients is made inert.
+- Code blocks are highlighted (in the content worker, with Syntect's Rust regex
   backend). LaTeX between `$…$` and `$$…$$` is typeset ([math.md](math.md)).
 - Inline images are decoded in a sandboxed worker. Ctrl+V pastes an image: it is
   re-encoded in the worker to fit the server's limit and sent the way stock Mumble
@@ -110,6 +112,48 @@ The design and its measurements: [architecture.md](architecture.md#audio-configu
   policy as message links; rendering a document does not fetch its links.
 - Long messages collapse by measured height behind **Show more**.
 - Ctrl+. or Ctrl+; opens an emoji picker.
+
+### Markdown
+
+A message is CommonMark, read by the content worker in one parse with the math
+of [math.md](math.md), and shown with its syntax hidden. What is typed is what
+is stored and sent: stock Mumble users see the Markdown as typed, and editing
+a message loads its source. Copying a message or a selection copies what is
+shown (`**word**` copies as `word`), with the message's lines.
+
+- **Rendered:** emphasis and strong emphasis (`*`, `_`, CommonMark's rules, so
+  `snake_case` stays as typed and `__init__` is bold "init"); code spans; links
+  to `http`, `https` and `mumble` targets (`[text](https://…)`, titles
+  dropped) and `<https://…>`; headings (`#` to `######`, levels 4 to 6 drawn
+  as 3, and `Title` over `===` or `---`); bullet and numbered lists (numbered
+  from the first number, nested up to four levels); block quotes; rules
+  (`---`); fenced and four-space indented code; `~~strikethrough~~`;
+  backslash escapes and hard line breaks; formulas.
+- **Shown as typed:** raw HTML, images (`![alt](src)` is never fetched),
+  reference links and their definitions, links to other schemes (and past 128
+  links a message), email autolinks, entity references (`&amp;`), a single
+  `~`, tables, task lists and footnotes. A file offer is never Markdown.
+- **Lines are kept exactly.** A message has as many lines as were typed: a
+  line break is a line break and a blank line a blank line, inside a paragraph
+  and next to headings, lists, quotes, rules, code and formulas alike, in the
+  desktop, the terminal and the web client. Only a fence line or a heading's
+  `===` underline is drawn by its block. Unlike CommonMark, a single line
+  break is never joined into a space, and blank lines between blocks are not
+  merged.
+- Code and formulas bind tighter than emphasis: nothing inside a code span,
+  code block, formula or link address is Markdown, and emphasis around a
+  formula keeps it whole (`*$x$*`).
+- Nested quotes are drawn as one quote, a list inside a quote as a list, and
+  levels 4 to 6 as level 3.
+- A message has at most 512 blocks (paragraphs, headings, list items, quotes,
+  rules, code blocks, formulas, images). Past them, the rest of the message is
+  shown as typed.
+- Stock clients' HTML gets the same rules on its visible text, so a message a
+  Nuschl user sent looks the same on Murmur as on a Nuschl server; literal `*`
+  from an old stock client can become emphasis.
+
+The design and the decisions behind it are in
+[markdown-rendering-plan.md](markdown-rendering-plan.md).
 
 Settings → Privacy → **Relay-only connections** (`relay_only`, off by default)
 uses the configured rendezvous and transit relay without gathering or sharing

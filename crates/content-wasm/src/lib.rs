@@ -113,7 +113,9 @@ fn image_input(bytes: &[u8]) -> Result<(), String> {
 }
 
 fn constrain_document(document: &mut MessageDocument) -> Result<(), String> {
-    if document.blocks.len() > 512 {
+    // The same budgets the desktop's boundary checks (`within_limits`):
+    // blocks, and the line breaks between them on a budget of their own.
+    if !document.within_limits() {
         return Err("Document exceeds the block limit.".into());
     }
     let mut pixels = 0;

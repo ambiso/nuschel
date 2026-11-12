@@ -177,8 +177,8 @@ forwarded to other users or returned in pages.
   attachments? }` → `ChatAck { request_id, conversation, seq, server_time }` once the
   message is durably stored, or an error (permission, size, rate limit with
   `retry_after`). The client shows the message as pending until the ack.
-- `content` is what the user typed, with a `format` tag (Nuschl Markdown with fenced
-  code today); every stored message keeps its format. `reply_to` is a `seq` in the
+- `content` is what the user typed, with a `format` tag (Nuschl Markdown,
+  [desktop.md](desktop.md#markdown)); every stored message keeps its format. `reply_to` is a `seq` in the
   same conversation (at most the head), never a copied excerpt. Attachments are
   references to the sender's own uploads (§8).
 - **Stock clients' copy is made by the server** from `content`, with the same pure
