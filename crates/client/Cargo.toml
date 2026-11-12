@@ -16,6 +16,7 @@ native = ["dep:nuschl-ipc", "dep:nuschl-session", "dep:tokio", "nuschl-core/uuid
 [dependencies]
 nuschl-core.workspace = true
 nuschl-ipc = { workspace = true, optional = true }
+nuschl-legacy-html.workspace = true
 nuschl-protocol.workspace = true
 nuschl-session = { workspace = true, optional = true }
 serde = { version = "1.0.229", features = ["derive"] }

@@ -22606,6 +22606,10 @@ rec {
             optional = true;
           }
           {
+            name = "nuschl-legacy-html";
+            packageId = "nuschl-legacy-html";
+          }
+          {
             name = "nuschl-protocol";
             packageId = "nuschl-protocol";
           }
@@ -22677,6 +22681,10 @@ rec {
           {
             name = "nuschl-core";
             packageId = "nuschl-core";
+          }
+          {
+            name = "nuschl-legacy-html";
+            packageId = "nuschl-legacy-html";
           }
           {
             name = "nuschl-protocol";

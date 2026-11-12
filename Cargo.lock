@@ -6911,6 +6911,7 @@ version = "0.1.0"
 dependencies = [
  "nuschl-core",
  "nuschl-ipc",
+ "nuschl-legacy-html",
  "nuschl-protocol",
  "nuschl-session",
  "serde",
@@ -6928,6 +6929,7 @@ dependencies = [
  "nuschl-client",
  "nuschl-content",
  "nuschl-core",
+ "nuschl-legacy-html",
  "nuschl-protocol",
  "nuschl-web-relay",
  "prost",
