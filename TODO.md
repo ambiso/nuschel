@@ -2,8 +2,11 @@
 
 Current focus (user, 2026-11-12): **unmute-to-first-speech latency, stereo receive
 and output fidelity, and hybrid update readiness**. Independent owners now cover
-receive clipping/reference correspondence, transmit quality evidence and legacy
-welcome rendering. Native action authority, content/math worker retirement and
+receive clipping/reference correspondence, relay DNS validation and SuperUser
+bootstrap guidance. Transmit quality evidence and the exact native welcome-domain
+regression are integrated; the missing web welcome surface remains open.
+Full Mumble ACL/group editing parity is explicitly queued below. Native action
+authority, content/math worker retirement and
 the standalone server/RTC per-crate build migration are integrated with scoped
 proofs. Native and browser transmit encoders now use Audio; RestrictedLowDelay
 quality equivalence remains open. Browser initialization recovery is integrated.
@@ -26,6 +29,13 @@ outside the current task's scope.
 
 Current integration checkpoint (2026-11-12):
 
+- **Shared-checkout relay commits are repaired.** `24a810a0` and `8a84f4b9`
+  are consolidated into relay-only `7ed9b7b2`; the accidentally captured TODO
+  milestone update is a separate docs-only `f8a69fa1`. A before/after comparison
+  proves identical final files. The default kernel exception is only resolved's
+  dedicated `127.0.0.53` when enabled, with explicit custom resolver addresses.
+  Independent module/runtime validation and clearer dedicated-address guidance
+  are in progress; no deployment or push was performed by this integration.
 - **Native action authority and the Audio transmit profile are integrated through
   `95a1a27f`.** All 17 authority production files match the reviewed private-server
   source exactly. Its 87 desktop, 107 client and 79 session tests and real permission
