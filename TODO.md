@@ -1031,13 +1031,29 @@ listed below. Plugin data remains the explicit gap.
 - [x] CELT-only servers: decide between explicit "unsupported codec" notice (preferred,
       no memory-safe CELT exists) and support.
       Decided: an explicit notice; text chat keeps working.
-- [x] Admin features: `UserList` (18), `BanList` (10), `ACL` (13), `QueryUsers` (14),
-      channel editing and moving users.
+- [x] Administration protocol support: `UserList` (18), `BanList` (10), `ACL` (13),
+      `QueryUsers` (14), channel editing and moving users. This does not establish
+      complete client editing parity; see the ACL/group requirement below.
 - [ ] `PluginDataTransmission` (26), lower priority.
 - Positional audio: skipped for now (nobody we know uses it).
 
 ### 6. Desktop UI for these features
 
+- [ ] Full Mumble feature parity for ACLs and group membership (user, 2026-11-12).
+      Provide complete ACL/group editors, including adding/removing/reordering
+      rules, user and group targets, permission grant/deny, apply-here/apply-to-
+      subchannels flags, channel ACL inheritance, group creation/removal,
+      inherit/inheritable flags, and explicit/inherited member additions and
+      exclusions. Resolve registered users by stable account/registration ID;
+      support bootstrapping a normal account into the root admin group.
+      Current desktop only changes existing permission bits, removes rules,
+      adds @all rules and displays group member counts; group membership is
+      read-only. Preserve unrelated ACLs/groups and reject obsolete drafts or
+      retained controls after response, target or connection replacement.
+      Cover the supported desktop/web/TUI surfaces and server semantics with
+      private stock-Mumble/nuschld interoperability, permission-denial controls,
+      inheritance/order cases and persistence across reconnect/server restart.
+      Track offline admin-CLI ACL/group commands in the existing server follow-up.
 - [x] Users listed inside the channel tree with talking indicators and mute/deafen/
       suppress icons.
 - [x] Context menus: user (direct message, local volume/mute, info, whisper), channel
