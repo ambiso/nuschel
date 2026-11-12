@@ -41,9 +41,10 @@ async function worker() {
     postMessage(message,transfers) { posts.push({message,transfers}); },
   });
   const module = new vm.SourceTextModule(await readFile(new URL("../web/app/src/sdk.worker.js",import.meta.url),"utf8"),{context});
-  await module.link((specifier)=> {
+  await module.link(async (specifier)=> {
     if (specifier === "./sdk/nuschl_client_wasm.js") return new vm.SyntheticModule(["default","WebClient"],function() {this.setExport("default",async()=>{});this.setExport("WebClient",Client);},{context});
     if (specifier === "./history.js") return new vm.SyntheticModule(["openHistory"],function() {this.setExport("openHistory",async()=>({bookmarks:async()=>"[]"}));},{context});
+    if (specifier === "./server-order.js") return new vm.SourceTextModule(await readFile(new URL("../web/app/src/server-order.js",import.meta.url),"utf8"),{context});
     throw new Error(`unexpected import: ${specifier}`);
   });
   await module.evaluate();

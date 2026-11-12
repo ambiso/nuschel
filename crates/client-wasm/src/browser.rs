@@ -915,7 +915,7 @@ impl WebClient {
 
     /// Every server with its status, channels and users, as JSON.
     pub fn servers(&self) -> String {
-        serde_json::to_string(&snapshot::servers(&self.client.servers))
+        serde_json::to_string(&snapshot::ordered_servers(&self.client))
             .unwrap_or_else(|_| "[]".into())
     }
 }

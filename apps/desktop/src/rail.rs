@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! Server rail interaction: a reversible ID-order preview, critically damped
 //! slot movement, and one atomic catalog commit at drop. Connections never move.
-use crate::{layout, state::Desktop, theme::*, voice::RAIL_DECORATION_OUTSET};
+use crate::{state::Desktop, theme::*, voice::RAIL_DECORATION_OUTSET};
 use gpui_kit::{prelude::*, *};
 use std::{
     collections::BTreeMap,
@@ -28,26 +28,26 @@ pub struct Ghost {
 }
 impl Render for Ghost {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        layout::decorated_slot(px(RAIL_DECORATION_OUTSET))
-            .size(px(slot_height()))
-            .child(
-                div()
-                    .size(px(TILE))
-                    .rounded(px(self.radius))
-                    .bg(self.background)
-                    .shadow_lg()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .text_color(color(WHITE))
-                    .font_weight(FontWeight::BOLD)
-                    .map(|tile| match &self.image {
-                        Some(image) => {
-                            tile.child(img(image.clone()).size(px(TILE)).rounded(px(self.radius)))
-                        }
-                        None => tile.child(crate::theme::initials(&self.name)),
-                    }),
-            )
+        // The free overlay is outside the rail's clip; match the source
+        // hitbox exactly so GPUI's captured cursor offset stays aligned.
+        div().size(px(TILE)).child(
+            div()
+                .size(px(TILE))
+                .rounded(px(self.radius))
+                .bg(self.background)
+                .shadow_lg()
+                .flex()
+                .items_center()
+                .justify_center()
+                .text_color(color(WHITE))
+                .font_weight(FontWeight::BOLD)
+                .map(|tile| match &self.image {
+                    Some(image) => {
+                        tile.child(img(image.clone()).size(px(TILE)).rounded(px(self.radius)))
+                    }
+                    None => tile.child(crate::theme::initials(&self.name)),
+                }),
+        )
     }
 }
 

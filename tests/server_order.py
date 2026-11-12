@@ -91,6 +91,17 @@ def run(args, root, shell, registry, bots, profile, port, pin, shot, app):
     assert saved()==expected,{'expected':expected,'actual':saved()}
     invariant()
     records.append({'edge_drop':expected});report.write_text(json.dumps(records,indent=2))
+    # Observe the existing native timing log after spring/edge work settles.
+    # Periodic connection status may redraw; a continuing animation must not.
+    frames=args.output/'frames.log'
+    if frames.exists():
+        import frame_timing
+        time.sleep(.4)
+        begin_idle=int(shell.eval("imports.gi.GLib.get_monotonic_time()"));time.sleep(3)
+        end_idle=int(shell.eval("imports.gi.GLib.get_monotonic_time()"))
+        measured=frame_timing.summarize(frame_timing.read_log(frames),begin_idle,end_idle)
+        assert measured['draw']['n']<=5,{'unexpected_idle_redraws':measured}
+        records.append({'settled_idle':measured})
     # GPUI-kit inputs currently do not expose AT-SPI Text values. Independently
     # prove the original draft survived every action by sending it ONCE now.
     eventually(lambda:named('push button','Send'),'Send absent').press()

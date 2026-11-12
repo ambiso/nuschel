@@ -62,8 +62,9 @@ async function open(username,width=1200,height=800) {
     const Worker=window.Worker;
     window.Worker=class extends Worker {
       constructor(url,options){super(url,options);if(String(url).includes("sdk.worker")){
+        proof.sdk=this;
         this.addEventListener("message",({data})=>{
-          if(data.kind==="state"){proof.voice=data.voice;proof.timeline=data.timeline;proof.states++;}
+          if(data.kind==="state"){proof.voice=data.voice;proof.timeline=data.timeline;proof.servers=data.servers;proof.states++;}
           if(data.kind==="voice_packet")proof.packets++;
         });
       }}
@@ -102,6 +103,24 @@ try {
   await sender.waitForFunction(()=>__voiceProof.voice?.can_transmit,null,{timeout:20000});
   await receiver.waitForFunction(()=>__voiceProof.packets>=25&&__voiceProof.measure()?.rms>0.001,null,{timeout:20000});
   const audible=await receiver.evaluate(()=>__voiceProof.measure());assert.ok(audible.finite);assert.equal(audible.sink.type,"none");
+  // Add an offline bookmark through the public SDK command without opening a
+  // second connection. Real ordering must preserve the live synthetic call,
+  // draft, and selected conversation while changing display ordinals.
+  const orderBefore=await sender.evaluate(()=>({voice:structuredClone(__voiceProof.voice),microphoneCalls:__voiceProof.microphoneCalls,name:__voiceProof.servers.find(server=>server.id===__voiceProof.voice.server_id).name}));
+  await editor.fill("Draft survives ordering during a live call");
+  await sender.evaluate(port=>__voiceProof.sdk.postMessage({id:900001,method:"add_server",args:["Order extra","127.0.0.1",Number(port),"offline-order",undefined]}),port);
+  const extra=sender.getByRole("button",{name:"Browse Order extra",exact:true});await extra.waitFor();
+  const beforeOutside=await sender.evaluate(()=>__voiceProof.commands.filter(method=>method==="set_server_order").length);
+  await extra.dragTo(editor);await sender.waitForTimeout(100);
+  assert.equal(await editor.inputValue(),"Draft survives ordering during a live call","outside drop changed draft");
+  assert.equal(await sender.evaluate(()=>__voiceProof.commands.filter(method=>method==="set_server_order").length),beforeOutside,"outside drop persisted order");
+  await extra.dragTo(sender.getByRole("button",{name:`Browse ${orderBefore.name}`,exact:true}));
+  await sender.waitForFunction(()=>__voiceProof.servers?.[0]?.name==="Order extra");
+  await sender.waitForTimeout(350);
+  const orderAfter=await sender.evaluate(()=>({voice:__voiceProof.voice,microphoneCalls:__voiceProof.microphoneCalls,timeline:__voiceProof.timeline,indices:__voiceProof.servers.map(server=>server.runtime_index)}));
+  for(const key of ["server_id","connection_generation","voice_generation","channel_id"])assert.equal(orderAfter.voice[key],orderBefore.voice[key],`ordering changed ${key}`);
+  assert.equal(orderAfter.timeline.server,orderBefore.voice.server_id);assert.equal(orderAfter.microphoneCalls,orderBefore.microphoneCalls);assert.deepEqual(orderAfter.indices,[1,0]);
+  assert.equal(await editor.inputValue(),"Draft survives ordering during a live call");await editor.fill("");
   const trafficBefore=await receiver.evaluate(()=>({packets:__voiceProof.packets,states:__voiceProof.states}));
   await new Promise(resolve=>setTimeout(resolve,400));
   const trafficAfter=await receiver.evaluate(()=>({packets:__voiceProof.packets,states:__voiceProof.states}));
@@ -149,7 +168,7 @@ try {
   await sender.screenshot({path:resolve(out,"sender.png")});await receiver.screenshot({path:resolve(out,"receiver-phone.png")});
   for(const context of contexts)for(const page of context.pages())assert.deepEqual(await page.evaluate(()=>__voiceProof.violations),[]);
   assert.deepEqual(errors,[]);assert.deepEqual(remote,[]);
-  const report={passed:true,site,csp,audio_only_packets:trafficAfter.packets-trafficBefore.packets,audio_only_state_snapshots:trafficAfter.states-trafficBefore.states,audible_rms:audible.rms,deaf_rms:deaf.rms,checks:["real packaged App/SDK/codec/worklet","startup no microphone","join ack","gesture unmute","synthetic Opus interchange","finite worklet PCM to null sink","deafen flush","undeafen without microphone","rapid stale-snapshot audio controls","SDK Sent composer clear","multiline text","mute stops packets","stop audio keeps chat","same-origin production CSP"]};
+  const report={passed:true,site,csp,audio_only_packets:trafficAfter.packets-trafficBefore.packets,audio_only_state_snapshots:trafficAfter.states-trafficBefore.states,audible_rms:audible.rms,deaf_rms:deaf.rms,checks:["real packaged App/SDK/codec/worklet","live-call server reorder preserves generation/draft/microphone; later mute uses runtime index","startup no microphone","join ack","gesture unmute","synthetic Opus interchange","finite worklet PCM to null sink","deafen flush","undeafen without microphone","rapid stale-snapshot audio controls","SDK Sent composer clear","multiline text","mute stops packets","stop audio keeps chat","same-origin production CSP"]};
   await writeFile(resolve(out,"proof.json"),JSON.stringify(report,null,2));console.log(JSON.stringify(report));
 } catch(error){
   await writeFile(resolve(out,"failure.json"),JSON.stringify({error:String(error),errors,remote,states:await Promise.all(contexts.map(async c=>c.pages()[0]?.evaluate(()=>({voice:__voiceProof.voice,timeline:__voiceProof.timeline,lastSentText:__voiceProof.lastSentText,composer:__voiceProof.composer,packets:__voiceProof.packets,commands:__voiceProof.commands,microphoneCalls:__voiceProof.microphoneCalls,violations:__voiceProof.violations,text:document.body.textContent})).catch(()=>null)))},null,2));throw error;

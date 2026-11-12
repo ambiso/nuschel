@@ -463,7 +463,7 @@ def main():
             env.pop("NO_AT_BRIDGE", None)
             if wormhole:
                 env |= wormhole.environment()
-            if resizing or layout_scene:
+            if resizing or layout_scene or rail_scene:
                 # Read by a build with --features frame-timing; others ignore it.
                 env["NUSCHL_FRAME_TIMING"] = str(args.output / "frames.log")
             log = (args.output / "desktop.log").open("w")

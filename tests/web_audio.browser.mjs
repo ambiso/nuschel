@@ -15,7 +15,7 @@ const csp="default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; worker-src 
 let origin;
 const routes={"/audio.js":join(source,"web/app/src/audio.js"),"/audio-protocol.js":join(source,"web/app/src/audio-protocol.js"),
   "/audio-codec.worker.js":join(source,"web/app/src/audio-codec.worker.js"),"/audio-worklet.js":join(source,"web/app/src/audio-worklet.js"),
-  "/fixture.mjs":join(source,"tests/web_audio.fixture.mjs"),"/sdk.worker.js":join(sdkSource,"sdk.worker.js"),"/history.js":join(sdkSource,"history.js")};
+  "/fixture.mjs":join(source,"tests/web_audio.fixture.mjs"),"/sdk.worker.js":join(sdkSource,"sdk.worker.js"),"/history.js":join(sdkSource,"history.js"),"/server-order.js":join(sdkSource,"server-order.js")};
 const server=createServer(async(req,res)=>{
   const path=new URL(req.url,"http://127.0.0.1").pathname;
   const headers={"Content-Security-Policy":csp,"Permissions-Policy":"microphone=(self), camera=()","X-Content-Type-Options":"nosniff"};

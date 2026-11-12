@@ -1,6 +1,8 @@
 <!-- SPDX-License-Identifier: EUPL-1.2 -->
 <script>
   import { onMount, tick } from "svelte";
+  import { flip } from "svelte/animate";
+  import { serverIndices, moveServer, sameOrder, edgeSpeed } from "./server-order.js";
   import { inviteFragment } from "./invite.js";
   import { channelRows, initials, avatarColor, conversationKey, filterMessages, appearance } from "./presentation.js";
   import Message from "./Message.svelte";
@@ -14,14 +16,21 @@
   let messagesElement = $state(), composerElement = $state(), navigationButton = $state(), searchElement = $state();
   let settings = $state(appearance(null)), voice = $state(null), audioState = $state(null), audioActionPending = $state(null), capabilities = $state([]);
   let serverScroll = $state(), channelScroll = $state(), serverUnread = $state({above:false,below:false}), channelUnread = $state({above:false,below:false});
-  let membersOpen = $state(false);
+  let membersOpen = $state(false), selectedFallback = $state(null);
+  let arrangeServers = $state(false), orderPending = $state(false), previewIds = $state(null), draggingId = $state(null), pointerGhost = $state(null), orderStatus = $state(""), reducedOrderMotion = $state(false);
+  let orderDrag = null, orderFrame = 0, orderTime = 0, suppressBrowseUntil = 0;
+  const railServers = $derived.by(() => {
+    if (!previewIds) return servers;
+    const byId = new Map(servers.map(server => [server.id, server]));
+    return previewIds.map(id => byId.get(id)).filter(Boolean);
+  });
   let lastChannelPointer = "";
   let initialState = true, follow = true, worker, audio, requestId = 0, activateAudio = () => {}, disposeAudio = () => {};
   const requests = new Map(), drafts = new Map();
-  const selected = $derived(servers.find((server) => server.id === timeline?.server) || servers[0]);
-  const selectedIndex = $derived(servers.findIndex((server) => server.id === selected?.id));
+  const selected = $derived(servers.find((server) => server.id === timeline?.server) || servers.find(server => server.id === selectedFallback) || servers[0]);
+  const selectedIndex = $derived(selected?.runtime_index ?? -1);
   const voiceServer = $derived(servers.find(server => server.id === voice?.server_id));
-  const voiceIndex = $derived(servers.findIndex(server => server.id === voice?.server_id));
+  const voiceIndex = $derived(voiceServer?.runtime_index ?? -1);
   const voiceChannel = $derived(voiceServer?.channels.find(channel => channel.id === voice?.channel_id));
   const microphoneMuted = $derived(voiceServer?.muted !== false || voiceServer?.deafened === true);
   const playbackDeafened = $derived(voiceServer?.deafened !== false);
@@ -52,7 +61,7 @@
     return new Promise((resolve, reject) => {
       if (!worker) { reject("The client is still starting."); return; }
       if (requests.size >= 128) { reject("The client is busy. Try again shortly."); return; }
-      if (["connect","connect_with_password","disconnect","remove_server","edit_server"].includes(method) && servers[args[0]]?.id === voice?.server_id) {
+      if (["connect","connect_with_password","disconnect","remove_server","edit_server"].includes(method) && servers.find(server => server.runtime_index === args[0])?.id === voice?.server_id) {
         audio?.syncVoice(null); voice = null; audioActionPending = null;
       }
       const id = ++requestId;
@@ -84,8 +93,18 @@
     const media = matchMedia("(max-width: 760px)");
     const updateMobile = () => { mobile = media.matches; if (!mobile) drawer = false; };
     updateMobile(); media.addEventListener("change", updateMobile);
+    const motion = matchMedia("(prefers-reduced-motion: reduce)");
+    const updateMotion = () => { reducedOrderMotion = motion.matches; };
+    updateMotion(); motion.addEventListener("change", updateMotion);
+    const escapeOrder = event => {
+      if (event.key === "Escape" && (orderDrag || arrangeServers)) {
+        cancelOrder(); arrangeServers = false; event.preventDefault(); event.stopPropagation();
+      }
+    };
+    window.addEventListener("keydown", escapeOrder, true);
+    window.addEventListener("resize", cancelOrder);
     const viewport = window.visualViewport;
-    const resizeViewport = () => { document.documentElement.style.setProperty("--app-height", `${viewport?.height || window.innerHeight}px`); };
+    const resizeViewport = () => { if (orderDrag) cancelOrder(); document.documentElement.style.setProperty("--app-height", `${viewport?.height || window.innerHeight}px`); };
     resizeViewport(); viewport?.addEventListener("resize", resizeViewport);
     worker = new Worker(new URL("./sdk.worker.js", import.meta.url), { type:"module" });
     audio = new BrowserAudio({
@@ -111,7 +130,11 @@
       } else if (data.kind === "state") {
         const prior = timeline, priorKey = conversationKey(timeline, selected);
         rememberDraft();
-        servers = data.servers; timeline = data.timeline;
+        selectedFallback = selected?.id || null;
+        try { servers = serverIndices(data.servers, capabilities.includes("server_order")); }
+        catch (reason) { audio.setLocalPolicy({muted:true,deafened:true}); audio.syncVoice(null); voice = null; loaded = false; error = "The server list could not be read safely. Reload to reconnect."; return; }
+        if (orderDrag && !sameOrder(orderDrag.baseline, servers.map(server => server.id))) cancelOrder();
+        timeline = data.timeline;
         voice = data.voice || null;
         audio.syncVoice(voice);
         if (audioActionPending) {
@@ -144,7 +167,7 @@
     };
     worker.onerror = () => { audio.syncVoice(null); voice = null; error = "The browser worker stopped. Reload to reconnect."; loaded = false; for (const pending of requests.values()) pending.reject(error); requests.clear(); };
     worker.postMessage({ method:"init", relay });
-    return () => { media.removeEventListener("change", updateMobile); viewport?.removeEventListener("resize", resizeViewport); disposeAudio(); worker.terminate(); for (const pending of requests.values()) pending.reject("Client closed."); requests.clear(); };
+    return () => { cancelOrder(); window.removeEventListener("keydown", escapeOrder, true); window.removeEventListener("resize", cancelOrder); motion.removeEventListener("change", updateMotion); media.removeEventListener("change", updateMobile); viewport?.removeEventListener("resize", resizeViewport); disposeAudio(); worker.terminate(); for (const pending of requests.values()) pending.reject("Client closed."); requests.clear(); };
   });
   async function connect(event) {
     event?.preventDefault();
@@ -215,20 +238,112 @@
     (direction === "above" ? candidates.at(-1) : candidates[0])?.scrollIntoView({block:"nearest"});
   }
   function observeScroll(node) { const observer = new ResizeObserver(updateUnread); observer.observe(node); node.addEventListener("scroll", updateUnread, {passive:true}); return {destroy() { observer.disconnect(); node.removeEventListener("scroll", updateUnread); }}; }
+  function cancelOrder() {
+    if (orderFrame) cancelAnimationFrame(orderFrame);
+    orderFrame = 0; orderTime = 0; orderDrag = null; previewIds = null; draggingId = null; pointerGhost = null;
+  }
+  function beginOrder(event, id, pointer = false) {
+    if (orderPending || !capabilities.includes("server_order") || !serverScroll) { event.preventDefault(); return; }
+    if (pointer && event.button !== 0) return;
+    const baseline = servers.map(server => server.id), slot = serverScroll.querySelector(".server-order-slot");
+    if (!baseline.includes(id) || !slot) return;
+    cancelOrder();
+    const style = getComputedStyle(serverScroll);
+    orderDrag = {id, baseline, rect:serverScroll.getBoundingClientRect(), pitch:slot.offsetHeight + (parseFloat(style.rowGap) || 0), padding:parseFloat(style.paddingTop) || 0, pointer, pointerId:event.pointerId, point:{x:event.clientX,y:event.clientY}};
+    previewIds = baseline.slice(); draggingId = id;
+    if (pointer) {
+      event.preventDefault(); event.stopPropagation(); serverScroll.setPointerCapture(event.pointerId);
+      pointerGhost = {...orderDrag.point};
+    } else { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("application/x-nuschl-server-order", "1"); }
+    orderStatus = "Move the server, then release to save. Escape cancels.";
+  }
+  function orderPosition() {
+    if (!orderDrag) return;
+    const {rect,point,pitch,padding,id} = orderDrag;
+    if (point.x < rect.left || point.x > rect.right || point.y < rect.top || point.y > rect.bottom) return;
+    const target = Math.floor((point.y - rect.top + serverScroll.scrollTop - padding) / pitch);
+    const next = moveServer(previewIds,id,target);
+    if (next !== previewIds) previewIds = next;
+  }
+  function scheduleOrderScroll() {
+    if (orderFrame || !orderDrag) return;
+    const step = now => {
+      orderFrame = 0;
+      if (!orderDrag || !serverScroll) return;
+      const {rect,point} = orderDrag;
+      const speed = edgeSpeed(point.y - rect.top,rect.height,point.x >= rect.left && point.x <= rect.right);
+      const before = serverScroll.scrollTop;
+      serverScroll.scrollTop += speed * Math.min(.05,orderTime ? (now-orderTime)/1000 : .016);
+      orderTime = now;
+      orderPosition();
+      if (speed && serverScroll.scrollTop !== before) orderFrame = requestAnimationFrame(step);
+    };
+    orderFrame = requestAnimationFrame(step);
+  }
+  function moveOrder(event, pointer = false) {
+    if (!orderDrag || orderDrag.pointer !== pointer || (pointer && event.pointerId !== orderDrag.pointerId)) return;
+    event.preventDefault();
+    if (!pointer && event.dataTransfer) event.dataTransfer.dropEffect = "move";
+    orderDrag.point = {x:event.clientX,y:event.clientY};
+    if (pointer) pointerGhost = {...orderDrag.point};
+    orderPosition(); scheduleOrderScroll();
+  }
+  function cancelPointerOrder(event) {
+    // Native HTML dragging cancels its mouse pointer stream. Only our captured
+    // touch/handle gesture owns these cancellation/capture-loss events.
+    if (!orderDrag?.pointer || event.pointerId !== orderDrag.pointerId) return;
+    if (event.type === "lostpointercapture" && event.target !== serverScroll) return;
+    cancelOrder();
+  }
+  async function saveOrder(ids) {
+    if (orderPending || !capabilities.includes("server_order") || sameOrder(ids,servers.map(server => server.id))) return;
+    orderPending = true; orderStatus = "Saving server order…";
+    try { await command("set_server_order",ids); orderStatus = "Server order saved in this browser."; }
+    catch (reason) { error = String(reason); orderStatus = "Server order was not saved."; }
+    finally { orderPending = false; await tick(); updateUnread(); }
+  }
+  function dropOrder(event, pointer = false) {
+    if (!orderDrag || orderDrag.pointer !== pointer || (pointer && event.pointerId !== orderDrag.pointerId)) return;
+    event.preventDefault(); event.stopPropagation();
+    const {point,rect,baseline} = orderDrag, ids = previewIds.slice();
+    const valid = point.x >= rect.left && point.x <= rect.right && point.y >= rect.top && point.y <= rect.bottom && sameOrder(baseline,servers.map(server=>server.id));
+    cancelOrder(); suppressBrowseUntil = performance.now() + 250;
+    if (pointer && serverScroll?.hasPointerCapture(event.pointerId)) serverScroll.releasePointerCapture(event.pointerId);
+    if (valid) void saveOrder(ids);
+  }
+  async function moveOrderKey(id, delta) {
+    const current = servers.map(server => server.id), from = current.indexOf(id);
+    if (from < 0) return;
+    cancelOrder(); await saveOrder(moveServer(current,id,from+delta));
+    await tick();
+    const slot = [...(serverScroll?.querySelectorAll(".server-order-slot") || [])].find(node=>node.dataset.serverId===id);
+    slot?.scrollIntoView({block:"nearest",behavior:reducedOrderMotion ? "instant" : "smooth"});
+  }
+  function orderKey(event,id,handle = false) {
+    if ((handle || event.ctrlKey && event.shiftKey) && (event.key === "ArrowUp" || event.key === "ArrowDown")) {
+      event.preventDefault(); event.stopPropagation(); void moveOrderKey(id,event.key === "ArrowUp" ? -1 : 1);
+    }
+  }
   async function searchMessages() { showSearch = !showSearch; if (!showSearch) search = ""; else { await tick(); searchElement?.focus(); } }
 </script>
 
 {#snippet icon(name)}<svg class="icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d={icons[name] || icons.hash}/></svg>{/snippet}
 {#snippet navigation()}
-  <nav class="servers" aria-label="Servers">
+  {#if pointerGhost && draggingId}<div class="server-order-ghost" aria-hidden="true" style:left={`${pointerGhost.x - 23}px`} style:top={`${pointerGhost.y - 23}px`}>{initials(servers.find(server=>server.id===draggingId)?.name || "")}</div>{/if}
+  <nav class="servers" class:server-order-enabled={capabilities.includes("server_order")} aria-label="Servers">
     <a class="brand" href="/" aria-label="Nuschl home"><img src="/nuschl.svg" alt="" width="38" height="38"></a>
-    <div class="server-scroll" bind:this={serverScroll} use:observeScroll>
-      {#each servers as server, index (server.id)}
-        <button class:active={selected?.id === server.id} class="server-icon" data-unread={unreadCount(server) > 0} title={server.name} aria-label={`Browse ${server.name}`} aria-current={selected?.id === server.id ? "true" : undefined} onclick={() => act("browse_server", index)}><span>{initials(server.name)}</span>{#if unreadCount(server)}<span class="badge">{Math.min(99, unreadCount(server))}</span>{/if}<i class:connected={server.status === "connected"} class="connection-dot" aria-label={labels[server.status]}></i></button>
+    <div class="server-scroll" role="presentation" bind:this={serverScroll} use:observeScroll ondragover={event => moveOrder(event)} ondrop={event => dropOrder(event)} onpointermove={event=>moveOrder(event,true)} onpointerup={event=>dropOrder(event,true)} onpointercancel={cancelPointerOrder} onlostpointercapture={cancelPointerOrder}>
+      {#each railServers as server (server.id)}
+        <div class="server-order-slot" data-server-id={server.id} class:server-order-source={draggingId === server.id} animate:flip={{duration:reducedOrderMotion ? 0 : 180}}>
+          <button class:active={selected?.id === server.id} class="server-icon" data-unread={unreadCount(server) > 0} title={server.name} aria-label={`Browse ${server.name}`} aria-current={selected?.id === server.id ? "true" : undefined} draggable={capabilities.includes("server_order") && !arrangeServers && !orderPending} ondragstart={event => beginOrder(event,server.id)} ondragend={cancelOrder} onkeydown={event=>orderKey(event,server.id)} onclick={() => { if (performance.now() >= suppressBrowseUntil && !orderDrag) void act("browse_server",server.runtime_index); }}><span>{initials(server.name)}</span>{#if unreadCount(server)}<span class="badge">{Math.min(99, unreadCount(server))}</span>{/if}<i class:connected={server.status === "connected"} class="connection-dot" aria-label={labels[server.status]}></i></button>
+          {#if arrangeServers}<button class="server-order-handle" aria-label={`Move ${server.name}; use arrow keys or drag`} title="Drag to move; arrow keys also work" disabled={orderPending} onpointerdown={event=>beginOrder(event,server.id,true)} onkeydown={event=>orderKey(event,server.id,true)} onclick={()=>orderStatus="Use Up and Down to move this server, or drag its handle."}>⋮</button>{/if}
+        </div>
       {/each}
     </div>
     {#if serverUnread.above}<button class="unread-jump rail-jump rail-up" aria-label="Unread servers above" onclick={() => scrollUnread(serverScroll,"above")}>↑</button>{/if}
     {#if serverUnread.below}<button class="unread-jump rail-jump" aria-label="Unread servers below" onclick={() => scrollUnread(serverScroll,"below")}>↓</button>{/if}
+    {#if capabilities.includes("server_order")}<button class="icon-button server-order-toggle" aria-label={arrangeServers ? "Finish arranging servers" : "Reorder servers"} aria-pressed={arrangeServers} title="Reorder servers" disabled={orderPending} onclick={() => { cancelOrder(); arrangeServers = !arrangeServers; orderStatus = arrangeServers ? "Drag a handle, or focus it and use arrow keys." : ""; }}>↕</button>{/if}
+    <span class="sr-only" role="status" aria-live="polite">{orderStatus}</span>
     <button class="add server-icon" aria-label="Add server" title="Add server" onclick={addServer}>{@render icon("plus")}</button>
     <button class="icon-button settings-rail" aria-label="Settings" title="Settings" onclick={() => { showSettings = true; drawer = false; }}>{@render icon("settings")}</button>
   </nav>
@@ -258,7 +373,7 @@
 {/snippet}
 
 <main>
-  {#if !mobile}<div class="navigation">{@render navigation()}</div>{/if}
+  {#if !mobile}<div class="navigation" class:server-order-layout={capabilities.includes("server_order")}>{@render navigation()}</div>{/if}
   <section class="chat" aria-label="Chat">
     <header class="chat-header">
       {#if mobile}<button class="icon-button menu-button" bind:this={navigationButton} aria-label="Open navigation" aria-expanded={drawer} onclick={() => drawer = true}>{@render icon("menu")}</button>{/if}
@@ -300,6 +415,6 @@
   </section>
 </main>
 
-{#if mobile && drawer}<dialog class="navigation-drawer" use:modal onclose={closeDrawer} oncancel={closeDrawer} aria-label="Server navigation" onpointerdown={(event) => { if (event.target === event.currentTarget) closeDrawer(); }}><div class="navigation">{@render navigation()}</div></dialog>{/if}
+{#if mobile && drawer}<dialog class="navigation-drawer" use:modal onclose={closeDrawer} oncancel={closeDrawer} aria-label="Server navigation" onpointerdown={(event) => { if (event.target === event.currentTarget) closeDrawer(); }}><div class="navigation" class:server-order-layout={capabilities.includes("server_order")}>{@render navigation()}</div></dialog>{/if}
 {#if showAdd}<dialog class="modal server-modal" use:modal onclose={() => showAdd = false} oncancel={() => showAdd = false} aria-labelledby="server-form-title"><header class="modal-header"><div><p class="eyebrow">MAKE YOURSELF AT HOME</p><h2 id="server-form-title">{editingIndex === null ? "Add a server" : "Edit server"}</h2></div><button class="icon-button" aria-label="Close server form" onclick={() => showAdd = false}>{@render icon("close")}</button></header><form class="connection" onsubmit={connect}><p class="muted">Connect to your Mumble server. Your bookmarks and observed chat history are saved in this browser.</p><label>Display name <input bind:value={serverName} maxlength="128" autocomplete="off" placeholder="Friday night"></label><div class="form-row"><label>Server <input bind:value={host} required autocomplete="off" placeholder="voice.example.org"></label><label class="port-field">Port <input bind:value={port} type="number" min="1" max="65535" required></label></div><label>Your name <input bind:value={username} required maxlength="128" autocomplete="nickname" placeholder="How your friends know you"></label><label for="server-password">Server password (optional)</label><input id="server-password" type="password" bind:value={password} maxlength="1024" autocomplete="current-password"><details><summary>Certificate and connection</summary><label>Certificate SHA-256 (optional)<input bind:value={pin} autocomplete="off" spellcheck="false" placeholder="64 hexadecimal characters"></label><small class="relay">Relay: {relay}. TLS runs in this browser.</small></details><div class="modal-actions"><button type="button" onclick={() => showAdd = false}>Cancel</button><button class="primary" type="submit" disabled={!loaded || !!link.error}>Connect</button></div></form></dialog>{/if}
-{#if showSettings}<dialog class="modal settings-modal" use:modal onclose={() => showSettings = false} oncancel={() => showSettings = false} aria-labelledby="settings-title"><header class="modal-header"><div><p class="eyebrow">MAKE IT YOURS</p><h2 id="settings-title">Settings</h2></div><button class="icon-button" aria-label="Close settings" onclick={() => showSettings = false}>{@render icon("close")}</button></header><section class="settings-section"><h3>Appearance</h3><label for="theme-choice">Theme</label><select id="theme-choice" bind:value={settings.theme} onchange={persistSettings}><option value="system">Match device</option><option value="dark">Dark</option><option value="light">Light</option></select><label for="density-choice">Message spacing</label><select id="density-choice" bind:value={settings.density} onchange={persistSettings}><option value="comfortable">Comfortable</option><option value="compact">Compact</option></select><label for="size-choice">Text size</label><select id="size-choice" bind:value={settings.fontSize} onchange={persistSettings}><option value={14}>Small · 14px</option><option value={16}>Default · 16px</option><option value={18}>Large · 18px</option><option value={20}>Larger · 20px</option></select></section><section class="settings-section"><h3>Privacy & storage</h3><p>Bookmarks, trusted certificates and observed chat history are stored locally in this browser. Legacy servers can read chat; the relay only forwards encrypted traffic.</p><p>Links and received images never cause automatic requests to another site.</p></section>{#if selected}<section class="settings-section"><h3>{selected.name}</h3><p class="muted">{selected.host}:{selected.port} · {selected.username}</p><button onclick={() => { showSettings = false; editServer(); }}>Edit server bookmark</button>{#if capabilities.includes("remove_server")}<button class="danger" onclick={async () => { await act("remove_server",selectedIndex); showSettings = false; }}>Remove server</button>{/if}</section>{/if}<footer class="settings-footer"><span class="brand-word">nuschl<span>web</span></span><small>Built for conversations.</small></footer></dialog>{/if}
+{#if showSettings}<dialog class="modal settings-modal" use:modal onclose={() => showSettings = false} oncancel={() => showSettings = false} aria-labelledby="settings-title"><header class="modal-header"><div><p class="eyebrow">MAKE IT YOURS</p><h2 id="settings-title">Settings</h2></div><button class="icon-button" aria-label="Close settings" onclick={() => showSettings = false}>{@render icon("close")}</button></header><section class="settings-section"><h3>Appearance</h3><label for="theme-choice">Theme</label><select id="theme-choice" bind:value={settings.theme} onchange={persistSettings}><option value="system">Match device</option><option value="dark">Dark</option><option value="light">Light</option></select><label for="density-choice">Message spacing</label><select id="density-choice" bind:value={settings.density} onchange={persistSettings}><option value="comfortable">Comfortable</option><option value="compact">Compact</option></select><label for="size-choice">Text size</label><select id="size-choice" bind:value={settings.fontSize} onchange={persistSettings}><option value={14}>Small · 14px</option><option value={16}>Default · 16px</option><option value={18}>Large · 18px</option><option value={20}>Larger · 20px</option></select></section><section class="settings-section"><h3>Privacy & storage</h3><p>Bookmarks, trusted certificates and observed chat history are stored locally in this browser. Legacy servers can read chat; the relay only forwards encrypted traffic.</p><p>Links and received images never cause automatic requests to another site.</p></section>{#if selected}<section class="settings-section"><h3>{selected.name}</h3><p class="muted">{selected.host}:{selected.port} · {selected.username}</p><button onclick={() => { showSettings = false; editServer(); }}>Edit server bookmark</button>{#if capabilities.includes("server_order")}<div class="server-order-actions"><button disabled={orderPending || servers[0]?.id === selected.id} onclick={()=>moveOrderKey(selected.id,-1)}>Move server earlier</button><button disabled={orderPending || servers.at(-1)?.id === selected.id} onclick={()=>moveOrderKey(selected.id,1)}>Move server later</button></div>{/if}{#if capabilities.includes("remove_server")}<button class="danger" onclick={async () => { await act("remove_server",selectedIndex); showSettings = false; }}>Remove server</button>{/if}</section>{/if}<footer class="settings-footer"><span class="brand-word">nuschl<span>web</span></span><small>Built for conversations.</small></footer></dialog>{/if}

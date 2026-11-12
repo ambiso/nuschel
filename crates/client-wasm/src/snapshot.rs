@@ -12,6 +12,8 @@ use serde::Serialize;
 
 #[derive(Serialize)]
 pub struct ServerView {
+    /// Stable command index, independent of this snapshot's display position.
+    pub runtime_index: usize,
     pub id: String,
     pub name: String,
     pub host: String,
@@ -78,9 +80,17 @@ pub enum UpdateView {
 }
 
 pub fn servers(servers: &[ServerState]) -> Vec<ServerView> {
+    server_views(servers.iter().enumerate())
+}
+
+pub fn ordered_servers(client: &nuschl_client::Client) -> Vec<ServerView> {
+    server_views(client.ordered_servers())
+}
+
+fn server_views<'a>(servers: impl Iterator<Item = (usize, &'a ServerState)>) -> Vec<ServerView> {
     servers
-        .iter()
-        .map(|server| ServerView {
+        .map(|(runtime_index, server)| ServerView {
+            runtime_index,
             id: server.id.clone(),
             name: server.name.clone(),
             host: server.bookmark.host.clone(),
