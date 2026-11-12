@@ -35,6 +35,7 @@ let
         enter_sends = false;
         push_to_talk_key = "f13";
         audio.transmit = "push_to_talk";
+        voice_bitrate = 96000;
       };
       initialServers = [
         {
@@ -54,6 +55,7 @@ let
       settings = {
         enter_sends = false;
         audio.transmit = "push_to_talk";
+        voice_bitrate = 192000;
       };
       servers = [
         # Takes over the initial bookmark for the same endpoint and user.
@@ -224,6 +226,10 @@ assert lib.assertMsg (accepts {
         managed=$home/home-files/.config/nuschl/managed.json
         test -L "$managed"
         jq -e '.settings == {enter_sends: false, audio: {transmit: "push_to_talk"}}' "$managed"
+        # The voice bitrate stays out of managed.json, which an earlier
+        # Nuschl would otherwise ignore as a whole (docs: config.rs).
+        test -L $home/home-files/.config/nuschl/managed-voice-quality.json
+        jq -e '. == {version: 1, voice_bitrate: 192000}' $home/home-files/.config/nuschl/managed-voice-quality.json
         jq -e '.servers | length == 2 and .[0].id != .[1].id' "$managed"
         jq -e '.servers[1] == {id: .servers[1].id, name: "Managed.Example.org", host: "managed.example.org",
           port: 1234, username: "bob", tokens: [], certificate_sha256: "${pin}", auto_connect: false}' "$managed"
@@ -249,6 +255,9 @@ assert lib.assertMsg (accepts {
         "$seed" "$dir" > first.log
         grep -qFx "Nuschl: wrote $dir/settings.json" first.log
         grep -qFx "Nuschl: wrote $dir/servers.json" first.log
+        grep -qFx "Nuschl: wrote $dir/voice-quality.json" first.log
+        test "$(stat -c %a "$dir/voice-quality.json")" = 600
+        jq -e '. == {version: 1, voice_bitrate: 96000}' "$dir/voice-quality.json"
         test "$(stat -c %a "$dir")" = 700
         test "$(stat -c %a "$dir/settings.json")" = 600
         test "$(stat -c %a "$dir/servers.json")" = 600

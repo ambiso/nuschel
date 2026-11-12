@@ -15,6 +15,10 @@ pub const SAMPLE_RATE: u32 = 48_000;
 pub const FRAME_SAMPLES: usize = 960;
 pub const DEFAULT_BITRATE: u32 = 128_000;
 pub const MIN_BITRATE: u32 = 6_000;
+/// The highest requested target (nuschl_core::bitrate::MAX_VOICE_BITRATE):
+/// Opus lowers a mono encoder to 300 kb/s, and 640 bytes per 20 ms frame
+/// stays well inside Mumble's voice datagram.
+pub const MAX_BITRATE: u32 = 256_000;
 /// Leaves space for Mumble's header inside its 1024-byte tunneled voice bound.
 pub const MAX_ENCODED_BYTES: usize = 960;
 pub const OUTPUT_CHANNELS: usize = 2;
@@ -44,10 +48,11 @@ impl VoiceEncoder {
         self.encoder.lookahead() as u32
     }
 
-    /// A target selected by the authenticated session's current server budget.
-    /// Invalid controls fail before mutating the running codec.
+    /// The effective target the SDK chose from the requested one and the
+    /// authenticated session's current server budget. Invalid controls fail
+    /// before mutating the running codec.
     pub fn set_bitrate(&mut self, bitrate: u32) -> Result<(), String> {
-        if !(MIN_BITRATE..=DEFAULT_BITRATE).contains(&bitrate) {
+        if !(MIN_BITRATE..=MAX_BITRATE).contains(&bitrate) {
             return Err("invalid voice bitrate".into());
         }
         self.encoder.bitrate_bps = bitrate as i32;
@@ -216,7 +221,15 @@ mod tests {
         let mut encoder = VoiceEncoder::new().unwrap();
         assert_eq!(encoder.encoder.bitrate_bps, 128_000);
         let mut decoder = VoiceDecoder::new().unwrap();
-        for bitrate in [128_000, 24_000, 6_000, 48_000, 128_000] {
+        for bitrate in [
+            128_000,
+            24_000,
+            6_000,
+            48_000,
+            MAX_BITRATE,
+            192_000,
+            128_000,
+        ] {
             encoder.set_bitrate(bitrate).unwrap();
             for frame in 0..8 {
                 let pcm: Vec<_> = (0..FRAME_SAMPLES)
@@ -235,9 +248,57 @@ mod tests {
                 );
             }
         }
-        for invalid in [0, 5999, 128_001, u32::MAX] {
+        for invalid in [0, 5999, MAX_BITRATE + 1, 384_000, 510_000, u32::MAX] {
             assert!(encoder.set_bitrate(invalid).is_err());
             assert_eq!(encoder.encoder.bitrate_bps, 128_000);
+        }
+    }
+
+    /// Constrained VBR at the browser's complexity on varied content: every
+    /// packet fits the 20 ms allowance the SDK admits (bitrate / 400 bytes).
+    #[test]
+    fn constrained_vbr_packets_fit_the_frame_allowance_at_every_choice() {
+        let mut seed = 0x6e75_7363_u64;
+        let mut noise = move || {
+            seed = seed
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            ((seed >> 40) as f32 / (1u64 << 23) as f32) - 1.
+        };
+        for bitrate in [
+            16_000,
+            40_000,
+            48_000,
+            64_000,
+            96_000,
+            128_000,
+            192_000,
+            MAX_BITRATE,
+        ] {
+            let mut encoder = VoiceEncoder::new().unwrap();
+            encoder.set_bitrate(bitrate).unwrap();
+            let mut decoder = VoiceDecoder::new().unwrap();
+            for frame in 0..150 {
+                let pcm: Vec<_> = (0..FRAME_SAMPLES)
+                    .map(|i| {
+                        let t = (frame * FRAME_SAMPLES + i) as f32 / SAMPLE_RATE as f32;
+                        let syllable = (std::f32::consts::TAU * 4. * t).sin().max(0.);
+                        (0.3 * syllable * (std::f32::consts::TAU * 180. * t).sin() + 0.2 * noise())
+                            .clamp(-1., 1.)
+                    })
+                    .collect();
+                let encoded = encoder.encode(&pcm).unwrap();
+                assert!(
+                    encoded.len() <= (bitrate / 400) as usize,
+                    "{} bytes at {bitrate}",
+                    encoded.len()
+                );
+                assert!(encoded.len() <= MAX_ENCODED_BYTES);
+                assert_eq!(
+                    decoder.decode(&encoded).unwrap().len(),
+                    FRAME_SAMPLES * OUTPUT_CHANNELS
+                );
+            }
         }
     }
 

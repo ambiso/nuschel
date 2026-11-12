@@ -418,17 +418,24 @@ impl Session {
         )
     }
 
-    /// Effective mono target for this authenticated connection, including the
-    /// conservative server-accounting overhead reserve.
+    /// Effective mono target for the default request on this authenticated
+    /// connection, including the conservative server-accounting reserve.
     pub fn voice_bitrate(&self) -> u32 {
         nuschl_core::audio::voice_bitrate(self.limits.bandwidth())
     }
 
+    /// What `requested` becomes against this connection's budget, and why.
+    pub fn voice_target(&self, requested: u32) -> nuschl_core::bitrate::VoiceBitrate {
+        nuschl_core::bitrate::VoiceBitrate::resolve(requested, self.limits.bandwidth())
+    }
+
     pub fn send_voice(&mut self, sequence: u64, opus: Vec<u8>, end: bool) -> Result<(), String> {
-        if self.voice_policy().0
-            || self.voice_bitrate() == 0
-            || opus.len() > (self.voice_bitrate() / 400) as usize
-        {
+        // The route admits against the requested target; this is the
+        // server's own cap (the highest request it allows), never exceeded.
+        let cap = self
+            .voice_target(nuschl_core::bitrate::MAX_VOICE_BITRATE)
+            .effective;
+        if self.voice_policy().0 || !nuschl_core::bitrate::voice_frame_fits(cap, opus.len()) {
             return Err(
                 "Voice exceeds its bandwidth budget, is muted or not acknowledged by the server."
                     .into(),

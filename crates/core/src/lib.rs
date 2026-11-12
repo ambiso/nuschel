@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 pub mod admin;
 pub mod audio;
+pub mod bitrate;
 pub mod bookmark;
 pub mod model;
 pub mod network;

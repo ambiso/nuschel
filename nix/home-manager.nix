@@ -157,6 +157,7 @@ let
     "e2ee_direct_messages"
     "key_transparency"
     "share_web_host"
+    "voice_bitrate"
   ];
   unknownSettings = lib.subtractLists settingNames (lib.attrNames cfg.settings);
   # `programs.nuschl.keyTransparency`, in the format of `key_transparency`.
@@ -173,7 +174,19 @@ let
       inherit (cfg.keyTransparency) required;
     };
   };
-  managedSettings = cfg.settings // keyTransparency;
+  # The voice bitrate has files of its own (crates/session/src/config.rs,
+  # `ClientSettings::voice_bitrate`): earlier versions ignore a managed.json
+  # with a key they do not know as a whole, privacy settings included, and
+  # set aside such a settings.json.
+  voiceQuality =
+    settings:
+    lib.optionalAttrs (settings ? voice_bitrate) {
+      version = 1;
+      inherit (settings) voice_bitrate;
+    };
+  managedVoice = voiceQuality cfg.settings;
+  managedVoiceFile = json.generate "nuschl-managed-voice-quality.json" managedVoice;
+  managedSettings = removeAttrs cfg.settings [ "voice_bitrate" ] // keyTransparency;
   managedFile = json.generate "nuschl-managed.json" {
     settings = managedSettings;
     servers = map bookmark cfg.servers;
@@ -202,8 +215,15 @@ let
     ];
 
   initialFiles =
-    lib.optionalAttrs (cfg.initialSettings != { }) {
-      "settings.json" = json.generate "nuschl-settings.json" cfg.initialSettings;
+    lib.optionalAttrs (removeAttrs cfg.initialSettings [ "voice_bitrate" ] != { }) {
+      "settings.json" = json.generate "nuschl-settings.json" (
+        removeAttrs cfg.initialSettings [ "voice_bitrate" ]
+      );
+    }
+    // lib.optionalAttrs (cfg.initialSettings ? voice_bitrate) {
+      "voice-quality.json" = json.generate "nuschl-voice-quality.json" (
+        voiceQuality cfg.initialSettings
+      );
     }
     // lib.optionalAttrs (cfg.initialServers != [ ]) {
       "servers.json" = json.generate "nuschl-servers.json" (map bookmark cfg.initialServers);
@@ -448,6 +468,13 @@ in
       })
       (lib.mkIf (managed && isDarwin) {
         home.file."Library/Application Support/org.Nuschl.Nuschl/managed.json".source = managedFile;
+      })
+      (lib.mkIf (managedVoice != { } && !isDarwin) {
+        xdg.configFile."nuschl/managed-voice-quality.json".source = managedVoiceFile;
+      })
+      (lib.mkIf (managedVoice != { } && isDarwin) {
+        home.file."Library/Application Support/org.Nuschl.Nuschl/managed-voice-quality.json".source =
+          managedVoiceFile;
       })
       (lib.mkIf (initialFiles != { }) {
         home.activation.nuschlInitialFiles = lib.hm.dag.entryAfter [ "writeBoundary" ] ''

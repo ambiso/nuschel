@@ -8,6 +8,7 @@ mod appearance;
 mod assets;
 mod attachments;
 mod autostart;
+mod bitrate;
 mod chrome;
 mod dialogs;
 mod document;

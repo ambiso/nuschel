@@ -22,7 +22,7 @@ function ready() {
 }
 function configure(data) {
   if(!validEpoch(data.epoch)||!validEpoch(data.receive_epoch)||typeof data.capture!=="boolean"||typeof data.playback!=="boolean"||
-      data.capture&&(!Number.isInteger(data.bitrate)||data.bitrate<6000||data.bitrate>128000))throw new Error("Invalid media configuration");
+      data.capture&&(!Number.isInteger(data.bitrate)||data.bitrate<6000||data.bitrate>256000))throw new Error("Invalid media configuration");
   if(!loaded){pendingConfigure=data;return;}
   // TX policy changes never destroy an independently authorized receive decoder.
   if(data.epoch!==epoch||data.capture!==enabled||enabled&&data.bitrate!==encoderBitrate) {

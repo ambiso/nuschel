@@ -372,13 +372,15 @@ pub(crate) struct Place {
     name: String,
     state: State,
     issue: Option<String>,
+    /// The effective voice bitrate here, and why it is lower (connected only).
+    bitrate: Option<nuschl_core::bitrate::VoiceBitrate>,
 }
 
 pub(crate) fn places(this: &Desktop) -> Vec<Place> {
     let mut places = Vec::new();
     // Destination rows first, preserving stable IDs without moving live state.
     for destination in [true, false] {
-        for server in &this.client.servers {
+        for (index, server) in this.client.servers.iter().enumerate() {
             if server.status == Status::Disconnected
                 || this.client.voice.is_talk(&server.id) != destination
             {
@@ -418,6 +420,12 @@ pub(crate) fn places(this: &Desktop) -> Vec<Place> {
                     .issues()
                     .first()
                     .map(|issue| issue.0.to_owned()),
+                bitrate: connected
+                    .then(|| {
+                        this.client
+                            .voice_bitrate(index, this.settings.voice_bitrate)
+                    })
+                    .flatten(),
             });
         }
     }
@@ -545,7 +553,15 @@ pub fn card(
                                     TEXT_MUTED
                                 }))
                                 .child(layout::text((id.clone(), "status"), status)),
-                        ),
+                        )
+                        .when_some(place.bitrate.as_ref(), |column, bitrate| {
+                            column.child(div().text_xs().text_color(color(TEXT_MUTED)).child(
+                                layout::label(
+                                    (id.clone(), "bitrate"),
+                                    crate::bitrate::place_line(bitrate),
+                                ),
+                            ))
+                        }),
                 )
                 .child(layout::fixed().child(action))
                 .when_some(place.issue.as_ref(), |row, issue| {
@@ -850,6 +866,7 @@ mod tests {
                 label: "Alpha #Lobby".into(),
                 state: State::MicrophoneEnabled,
                 issue: None,
+                bitrate: None,
             },
             Place {
                 target: Target {
@@ -863,6 +880,7 @@ mod tests {
                 label: "Beta #Root".into(),
                 state: State::Deafened,
                 issue: None,
+                bitrate: None,
             },
         ];
         assert_eq!(
