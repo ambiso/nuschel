@@ -1226,6 +1226,32 @@ listed below. Plugin data remains the explicit gap.
 
 ### 6. Desktop UI for these features
 
+- [ ] Rework the multi-server voice status model and presentation (user,
+      2026-11-12): entries such as "Deafened on" followed by a server name appear
+      stale. Reproduce transitions and define clear states for mic destination,
+      actual speaking/PTT/VAD, listening, muted, deafened and reconnecting.
+      Use stable server IDs for rows/actions, accurate per-server updates and
+      unambiguous disconnect targets; bounded long-name layout must preserve
+      useful status. Preserve explicit multi-server transmit consent and capture
+      epochs. Assigned to the web owner after the spacing proof.
+- [ ] Replace per-user/per-server volume +/- controls with real continuous
+      sliders (user, 2026-11-12), and remove existing settings sliders' 5% pointer
+      quantization. Current menu buttons add/subtract 0.1 amplitude gain; saved
+      user/server gains range 0–4, sound-effect gain 0–1. Provide a perceptual/dB
+      taper with finer low-end control, exact mute/unity/endpoints and precise
+      keyboard adjustment, retaining existing saved gain values and limits.
+      Percent/readouts and accessible values must describe the actual gain;
+      dragging must not cause synchronous disk/IPC work on every pointer event.
+      Keep VAD sensitivity on its own appropriate scale. Queue after current
+      native spacing/status work; not yet implemented.
+- [ ] Add a live input/activity meter directly above VAD sensitivity (user,
+      2026-11-12). Show whether speech opens the actual voice gate; distinguish
+      microphone level from a probability-based VAD threshold rather than drawing
+      a misleading volume threshold. Reuse authorized capture or the explicit
+      microphone-test flow, reset stale readings on mute/disconnect/device change,
+      and never open the microphone solely by visiting Settings. Bound meter
+      update work and verify with private synthetic input, not host capture.
+      Queue alongside the slider work; not yet implemented.
 - [ ] Restore desktop rail/footer spacing (user, 2026-11-12): Add-a-server's
       bottom edge currently touches the window, and Settings/mute/deafen have no
       gaps. The rail now has matching top/bottom padding and the compact control
@@ -1576,6 +1602,17 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
    - [x] Persist channel listeners for registered users (2026-11-11): stored with
          their volume, restored after `ServerSync` with Listen and the limits checked
          again (Murmur does not check), removed with the user or channel.
+   - [ ] Add opt-in nginx HTTP-01 support for a separate voice hostname (user,
+         2026-11-12): proposed `services.nuschl.tls.nginxHTTP01`, requiring
+         `tls.enableACME` and `hostName`. Serve only the ACME challenge on HTTP 80,
+         return 404 otherwise, and create no HTTPS voice vhost. Issue a distinct
+         voice certificate/key without adding the web hostname; preserve selected
+         credential publication and isolate voice keys from nginx and broad groups.
+         Other ACME methods must work without nginx. Include conditional IPv6,
+         meaningful owned NixOS issuance/renewal/isolation tests and setup examples.
+         User explicitly excludes migration/state/bookmark/pin-reset work and
+         handles state removal/deployment separately; do not deploy or inspect
+         real secrets. Assigned to the operator/module owner.
    - [ ] Review the supplied combined NixOS deployment and provide a server
          operator guide (user, 2026-11-12). Cover imports, ACME/DNS/80+443,
          interface-scoped TCP+UDP 64738, selected fullchain/renewal, browser relay
