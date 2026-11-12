@@ -251,6 +251,8 @@ pub struct Desktop {
     pub appearance: crate::appearance::Appearance,
     /// The local audio check, alive while Settings is open.
     pub preview: Option<crate::preview::PreviewView>,
+    /// Slider edits heard but not yet saved (see `preview_setting`).
+    pub slider_edits: crate::slider::Edits,
     /// Whether Nuschl starts at login, read from the system when Settings opens.
     pub autostart: Option<bool>,
     pub update: crate::update::UpdateState,
@@ -532,6 +534,7 @@ impl Desktop {
             settings_open: false,
             appearance: crate::appearance::Appearance::new(window, cx),
             preview: None,
+            slider_edits: Default::default(),
             autostart: None,
             update: Default::default(),
             viewer: None,
@@ -1399,6 +1402,7 @@ impl Desktop {
         }
     }
     pub fn close_settings(&mut self) {
+        self.commit_settings();
         self.settings_open = false;
         self.appearance.close_picker();
         self.shortcuts.recording = None;
@@ -1481,6 +1485,80 @@ impl Desktop {
         self.client.preferences = nuschl_client::native::preferences(&settings);
         self.settings = settings;
         self.sync_global_shortcuts();
+    }
+    /// A slider's value, heard but not saved (`commit_settings` saves): memory
+    /// and the driver's settings change, so playback volumes apply from the
+    /// next packet; a sensitivity reaches the media worker at most ten times a
+    /// second (see `slider::Edits`). Only the settings `slider::Setting` names
+    /// come this way. The people preferences, the shortcuts and the relay rule
+    /// read none of them, so nothing else `update_settings` does is needed,
+    /// now or at the commit; managed values stay in place as there.
+    pub fn preview_setting(
+        &mut self,
+        setting: &crate::slider::Setting,
+        value: f32,
+        input: crate::slider::Input,
+        cx: &mut Context<Self>,
+    ) {
+        let mut settings = self.settings.clone();
+        setting.set(&mut settings, value);
+        let settings = self.managed.apply(settings.sanitized());
+        if settings == self.settings {
+            return;
+        }
+        self.settings = settings;
+        let effects = self.slider_edits.changed(
+            setting.reaches_worker(),
+            input,
+            std::time::Instant::now(),
+        );
+        self.apply_slider_effects(effects);
+        self.settle_settings_soon(cx);
+    }
+    /// Save what slider previews changed, once, after the media worker has
+    /// heard the last of it. It writes the settings in memory as they are:
+    /// it names no person or server, so it cannot apply to another one.
+    pub fn commit_settings(&mut self) {
+        let effects = self.slider_edits.commit(std::time::Instant::now());
+        self.apply_slider_effects(effects);
+    }
+    pub(crate) fn apply_slider_effects(&mut self, effects: crate::slider::Effects) {
+        if effects.driver {
+            self.driver.apply_settings(self.settings.clone());
+        }
+        if effects.save
+            && let Err(error) = self.profile.save_settings(&self.settings, &self.managed)
+        {
+            self.error = Some(format!("Could not save settings: {error}"));
+        }
+    }
+    /// While slider edits are pending, look at them ten times a second: a
+    /// held sensitivity reaches the worker, keys are saved once idle, and a
+    /// drag whose menu or Settings closed is saved.
+    fn settle_settings_soon(&mut self, cx: &mut Context<Self>) {
+        if !self.slider_edits.arm() {
+            return;
+        }
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(crate::slider::TICK)
+                    .await;
+                let pending = this.update(cx, |this, _| {
+                    let menu = this.menu.as_ref().map(|menu| menu.invocation);
+                    let open = this.settings_open;
+                    let effects = this
+                        .slider_edits
+                        .tick(std::time::Instant::now(), |owner| owner.alive(menu, open));
+                    this.apply_slider_effects(effects);
+                    this.slider_edits.armed()
+                });
+                if !matches!(pending, Ok(true)) {
+                    break;
+                }
+            }
+        })
+        .detach();
     }
     pub fn set_push_to_talk(&mut self, active: bool) {
         if self.ptt_active != active {

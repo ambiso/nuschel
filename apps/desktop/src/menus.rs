@@ -3,7 +3,7 @@
 //! Entries the server would refuse are hidden using its reported permissions.
 use crate::{
     assets::icon,
-    dialogs::{Tone, modal, named_button, styled_button},
+    dialogs::{Tone, modal, styled_button},
     names::display_name,
     state::{Desktop, Panel, Status},
     theme::*,
@@ -303,20 +303,12 @@ enum Volume {
 }
 
 impl Volume {
-    fn get(&self, settings: &nuschl_session::config::ClientSettings) -> f32 {
+    /// The setting its slider edits.
+    fn setting(&self) -> crate::slider::Setting {
         match self {
-            Volume::User(hash) => settings.volume_for(Some(hash)),
-            Volume::Server(id) => settings.server_volume(id),
+            Volume::User(hash) => crate::slider::Setting::UserVolume(hash.clone()),
+            Volume::Server(id) => crate::slider::Setting::ServerVolume(id.clone()),
         }
-    }
-
-    /// Change it by `step`, within 0 to 4.
-    fn step(&self, settings: &mut nuschl_session::config::ClientSettings, step: f32) {
-        let value = (self.get(settings) + step).clamp(0., 4.);
-        match self {
-            Volume::User(hash) => settings.user_volumes.insert(hash.clone(), value),
-            Volume::Server(id) => settings.server_volumes.insert(id.clone(), value),
-        };
     }
 }
 
@@ -2099,49 +2091,52 @@ pub fn menu(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement> {
                     Volume::User(_) => "Volume",
                     Volume::Server(_) => "Server volume",
                 };
-                let volume_key = format!("volume:{of:?}");
-                let down_key: SharedString = format!("volume-down:{of:?}").into();
-                let up_key: SharedString = format!("volume-up:{of:?}").into();
-                let (down, up) = (of.clone(), of);
+                // The slider acts only while this menu (this invocation) is
+                // open, and only on whom it was opened for.
+                let target = crate::slider::Target {
+                    owner: crate::slider::Owner::Menu(menu.invocation),
+                    setting: of.setting(),
+                };
+                let readout = target.setting.readout(volume);
+                let read_only = this.managed.contains(&target.setting.managed_key());
+                let element_key = format!("{}:{of:?}", menu.invocation);
                 div()
-                    .id(SharedString::from(volume_key))
-                    .role(Role::Slider)
-                    .aria_label(format!("{what} {:.0}%", volume * 100.))
                     .min_w_0()
                     .flex_shrink_0()
                     .px_2()
                     .py_1()
                     .flex()
-                    .items_center()
-                    .gap_2()
+                    .flex_col()
+                    .gap_1()
                     .text_sm()
+                    // A press here, the slider's included, keeps the menu open;
+                    // the slider has seen it first.
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .child(icon("volume", 15., color(TEXT_MUTED)))
                     .child(
-                        crate::layout::flexible().child(
-                            text!(format!("{what} {:.0}%", volume * 100.))
-                                .with_id(("volume-label", index)),
-                        ),
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(icon("volume", 15., color(TEXT_MUTED)))
+                            .child(
+                                crate::layout::flexible()
+                                    .child(text!(what).with_id(("volume-label", index))),
+                            )
+                            .child(
+                                div()
+                                    .flex_shrink_0()
+                                    .text_xs()
+                                    .text_color(color(TEXT_MUTED))
+                                    .child(text!(readout).with_id(("volume-value", index))),
+                            ),
                     )
-                    .child(named_button(
-                        down_key,
-                        "−",
-                        format!("{what} quieter"),
-                        Tone::Secondary,
-                        move |this, _, cx| {
-                            this.update_settings(|settings| down.step(settings, -0.1));
-                            cx.notify();
-                        },
-                        cx,
-                    ))
-                    .child(named_button(
-                        up_key,
-                        "+",
-                        format!("{what} louder"),
-                        Tone::Secondary,
-                        move |this, _, cx| {
-                            this.update_settings(|settings| up.step(settings, 0.1));
-                            cx.notify();
+                    .child(crate::slider::slider(
+                        crate::slider::Spec {
+                            id: format!("volume:{element_key}").into(),
+                            name: what.into(),
+                            target,
+                            value: volume,
+                            read_only,
                         },
                         cx,
                     ))

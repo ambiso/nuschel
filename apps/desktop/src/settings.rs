@@ -194,153 +194,261 @@ pub fn toggle(
     crate::layout::focusable(id, control)
 }
 
-fn meter(preview: &PreviewView) -> AnyElement {
-    let fraction = ((preview.level_db + 70.) / 70.).clamp(0., 1.);
+/// The voice gate's level floor in the media worker (`SILENCE_DB` in
+/// apps/media-worker/src/dsp.rs): quieter input never opens it. Only shown
+/// here; tests/slider_scenes.py checks that the two agree.
+const GATE_FLOOR_DB: f32 = -60.;
+/// The level bar's range, dBFS.
+const METER_MIN_DB: f32 = -70.;
+
+/// A bar from 0 to 1 with `fill` (none: no reading) and thin `marks`, each
+/// strong or faint, standing out above and below it.
+fn meter_bar(fill: Option<(f32, Token)>, marks: &[(f32, Token)]) -> Div {
+    div()
+        .relative()
+        .h(px(8.))
+        .my(px(3.))
+        .w_full()
+        .child(
+            div()
+                .absolute()
+                .inset_0()
+                .rounded_full()
+                .bg(color(APP))
+                .border_1()
+                .border_color(color(BORDER)),
+        )
+        .when_some(fill, |bar, (fraction, tone)| {
+            bar.child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .left_0()
+                    .w(relative(fraction.clamp(0., 1.)))
+                    .rounded_full()
+                    .bg(color(tone)),
+            )
+        })
+        .children(marks.iter().map(|&(at, tone)| {
+            div()
+                .absolute()
+                .top(px(-3.))
+                .h(px(14.))
+                .left(relative(at.clamp(0., 1.)))
+                .ml(px(-1.))
+                .w(px(2.))
+                .rounded(px(1.))
+                .bg(color(tone))
+        }))
+}
+
+/// One meter: its name and reading above the bar, what the marks mean below.
+fn meter_row(
+    id: &'static str,
+    name: &'static str,
+    reading: String,
+    bar: Div,
+    legend: String,
+    numeric: Option<(f64, f64, f64)>,
+) -> AnyElement {
+    let description = format!("{reading}. {legend}");
     div()
         .flex()
         .flex_col()
         .gap_1()
         .child(
             div()
-                .id("input-meter")
-                .role(Role::ProgressIndicator)
-                .aria_label(format!("Microphone level {:.0} dB", preview.level_db))
-                .h(px(8.))
-                .w_full()
-                .rounded_full()
-                .bg(color(APP))
-                .overflow_hidden()
+                .flex()
+                .justify_between()
+                .gap_3()
+                .text_sm()
+                .child(text!(name).with_id((id, 1_usize)))
                 .child(
                     div()
-                        .h_full()
-                        .w(relative(fraction))
-                        .rounded_full()
-                        .bg(color(if preview.transmitting {
-                            SUCCESS
-                        } else {
-                            TEXT_FAINT
-                        })),
+                        .text_color(color(TEXT_MUTED))
+                        .child(text!(reading).with_id((id, 2_usize))),
                 ),
         )
         .child(
-            div().text_xs().text_color(color(TEXT_FAINT)).child(
-                text!(if preview.transmitting {
-                    format!(
-                        "Would transmit · speech {:.0}% · nothing is sent while testing",
-                        preview.voice * 100.
-                    )
-                } else {
-                    format!(
-                        "Would not transmit · speech {:.0}% · nothing is sent while testing",
-                        preview.voice * 100.
-                    )
-                })
-                .with_id("meter-label"),
-            ),
+            bar.id(id)
+                .role(Role::ProgressIndicator)
+                .aria_label(name)
+                .aria_description(description)
+                .when_some(numeric, |bar, (value, min, max)| {
+                    bar.aria_numeric_value(value)
+                        .aria_min_numeric_value(min)
+                        .aria_max_numeric_value(max)
+                }),
+        )
+        .child(
+            div()
+                .text_xs()
+                .text_color(color(TEXT_FAINT))
+                .child(text!(legend).with_id((id, 3_usize))),
         )
         .into_any_element()
 }
 
-/// The slider being dragged. Every slider hears every drag of this type, so
-/// each one checks that the drag is its own.
-struct SliderDrag(&'static str);
-
-/// A 0-100 % slider in 5 % steps (each step is saved).
-fn slider(
-    id: &'static str,
-    label: &'static str,
-    value: f32,
-    set: fn(&mut Desktop, f32),
-    cx: &mut Context<Desktop>,
-) -> AnyElement {
-    let step =
-        move |this: &mut Desktop, value: f32| set(this, (value.clamp(0., 1.) * 20.).round() / 20.);
-    fn at(bounds: Bounds<Pixels>, position: Point<Pixels>) -> f32 {
-        (position.x - bounds.left()) / bounds.size.width.max(px(1.))
-    }
-    // The track's bounds as last painted, for a click that is not a drag.
-    let track = Rc::new(std::cell::Cell::new(Bounds::default()));
-    let painted = track.clone();
-    let control = div()
-        .id(id)
-        .role(Role::Slider)
-        .aria_label(label)
-        .tab_index(0)
-        .relative()
-        .h(px(20.))
-        .flex()
-        .items_center()
-        .cursor_pointer()
-        .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
-            let value = match event.keystroke.key.as_str() {
-                "left" | "down" => value - 0.05,
-                "right" | "up" => value + 0.05,
-                "home" => 0.,
-                "end" => 1.,
-                _ => return,
-            };
-            step(this, value);
-            cx.notify();
-            cx.stop_propagation();
-        }))
-        .on_mouse_down(
-            MouseButton::Left,
-            cx.listener(move |this, event: &MouseDownEvent, _, cx| {
-                step(this, at(track.get(), event.position));
-                cx.notify();
-            }),
-        )
-        .on_drag(SliderDrag(id), |_, _, _, cx| cx.new(|_| EmptyView))
-        .on_drag_move(
-            cx.listener(move |this, event: &DragMoveEvent<SliderDrag>, _, cx| {
-                if event.drag(cx).0 == id {
-                    step(this, at(event.bounds, event.event.position));
-                    cx.notify();
+/// What the microphone test measures, above Sensitivity: the input level
+/// (dBFS) against the gate's level floor, the speech probability against
+/// the gate's thresholds for `sensitivity`, and whether the gate is open.
+/// "—" when there is no current reading.
+fn meter(preview: &PreviewView, sensitivity: f32, transmit: TransmitMode) -> AnyElement {
+    let reading = preview.reading;
+    let voice_activity = transmit == TransmitMode::VoiceActivity;
+    let thresholds = nuschl_core::audio::gate_thresholds(sensitivity);
+    let level_at = |db: f32| (db - METER_MIN_DB) / -METER_MIN_DB;
+    let level = meter_row(
+        "input-level",
+        "Input level",
+        reading.map_or_else(
+            || "—".into(),
+            |reading| {
+                if reading.level_db < METER_MIN_DB {
+                    format!("below {METER_MIN_DB:.0} dBFS")
+                } else {
+                    format!("{:.0} dBFS", reading.level_db)
                 }
+            },
+        ),
+        meter_bar(
+            reading.map(|reading| {
+                let tone = if reading.level_db > GATE_FLOOR_DB {
+                    ACCENT
+                } else {
+                    TEXT_FAINT
+                };
+                (level_at(reading.level_db), tone)
             }),
-        )
-        .child(
-            canvas(move |bounds, _, _| painted.set(bounds), |_, _, _, _| {})
-                .absolute()
-                .size_full(),
-        )
+            &[(level_at(GATE_FLOOR_DB), TEXT)],
+        ),
+        format!(
+            "Marked: {GATE_FLOOR_DB:.0} dBFS, below which the voice gate stays closed however speech-like it sounds."
+        ),
+        reading.map(|reading| {
+            (
+                f64::from(reading.level_db.clamp(METER_MIN_DB, 0.)),
+                f64::from(METER_MIN_DB),
+                0.,
+            )
+        }),
+    );
+    let probability = meter_row(
+        "speech-probability",
+        "Speech probability",
+        reading.map_or_else(
+            || "—".into(),
+            |reading| format!("{:.0} %", reading.voice * 100.),
+        ),
+        meter_bar(
+            reading.map(|reading| {
+                let tone = if reading.voice >= thresholds.open {
+                    SUCCESS
+                } else {
+                    TEXT_FAINT
+                };
+                (reading.voice, tone)
+            }),
+            &if voice_activity {
+                vec![(thresholds.open, TEXT), (thresholds.close, TEXT_MUTED)]
+            } else {
+                Vec::new()
+            },
+        ),
+        if voice_activity {
+            format!(
+                "Marked: the gate opens above {:.0} % and, once open, stays open down to {:.0} %. Not a loudness.",
+                thresholds.open * 100.,
+                thresholds.close * 100.
+            )
+        } else {
+            "How sure noise suppression is that this is speech. Not a loudness.".into()
+        },
+        reading.map(|reading| (f64::from(reading.voice) * 100., 0., 100.)),
+    );
+    let (state, tone) = match (transmit, reading) {
+        (TransmitMode::PushToTalk, _) => (
+            "Push to talk: you transmit while you hold its key".to_string(),
+            TEXT_FAINT,
+        ),
+        (_, None) => ("—".to_string(), TEXT_FAINT),
+        (_, Some(reading)) if reading.transmitting => ("Transmitting".to_string(), SUCCESS),
+        (_, Some(_)) => ("Not transmitting".to_string(), TEXT_FAINT),
+    };
+    div()
+        .id("microphone-activity")
+        .role(Role::Group)
+        .aria_label("Microphone activity")
+        .flex()
+        .flex_col()
+        .gap_3()
+        .p_3()
+        .rounded(px(8.))
+        .border_1()
+        .border_color(color(BORDER))
+        .child(level)
+        .child(probability)
         .child(
             div()
-                .w_full()
-                .h(px(6.))
-                .rounded_full()
-                .bg(color(BORDER_STRONG))
+                .flex()
+                .items_center()
+                .gap_2()
+                .text_sm()
+                .child(div().size(px(8.)).rounded_full().bg(color(tone)))
                 .child(
                     div()
-                        .h_full()
-                        .w(relative(value))
-                        .rounded_full()
-                        .bg(color(ACCENT)),
+                        .id("gate-state")
+                        .role(Role::Status)
+                        .aria_label(state.clone())
+                        .child(text!(state).with_id("gate-state-text")),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(color(TEXT_FAINT))
+                        .child(
+                            text!("· nothing is sent while testing").with_id("gate-state-note"),
+                        ),
                 ),
         )
-        .child(
-            div()
-                .absolute()
-                .left(relative(value))
-                .ml(px(-8.))
-                .size(px(16.))
-                .rounded_full()
-                .bg(color(WHITE))
-                .border_2()
-                .border_color(color(ACCENT))
-                .shadow_sm(),
-        );
-    crate::layout::focusable(id, control)
+        .into_any_element()
+}
+
+/// A slider in Settings (see crate::slider): heard while it moves, saved
+/// when it is let go or half a second after the last key.
+fn slider(
+    this: &Desktop,
+    id: &'static str,
+    name: &'static str,
+    setting: crate::slider::Setting,
+    cx: &mut Context<Desktop>,
+) -> AnyElement {
+    let read_only = this.managed.contains(&setting.managed_key());
+    crate::slider::slider(
+        crate::slider::Spec {
+            id: id.into(),
+            name: name.into(),
+            value: setting.get(&this.settings),
+            target: crate::slider::Target {
+                owner: crate::slider::Owner::Settings,
+                setting,
+            },
+            read_only,
+        },
+        cx,
+    )
 }
 
 /// A slider under a label that shows its value; `name` is for screen readers.
 fn labelled_slider(
+    this: &Desktop,
     id: &'static str,
     (label, name): (&'static str, &'static str),
-    value: f32,
-    set: fn(&mut Desktop, f32),
+    setting: crate::slider::Setting,
     cx: &mut Context<Desktop>,
 ) -> AnyElement {
+    let readout = setting.readout(setting.get(&this.settings));
     div()
         .flex()
         .flex_col()
@@ -349,15 +457,16 @@ fn labelled_slider(
             div()
                 .flex()
                 .justify_between()
+                .gap_3()
                 .text_sm()
                 .child(text!(label).with_id((id, 1_usize)))
                 .child(
                     div()
                         .text_color(color(TEXT_MUTED))
-                        .child(text!(format!("{:.0}%", value * 100.)).with_id((id, 2_usize))),
+                        .child(text!(readout).with_id((id, 2_usize))),
                 ),
         )
-        .child(slider(id, name, value, set, cx))
+        .child(slider(this, id, name, setting, cx))
         .into_any_element()
 }
 
@@ -377,7 +486,7 @@ fn audio_check(this: &Desktop, cx: &mut Context<Desktop>) -> Vec<AnyElement> {
             .child(
                 div().flex_1().min_w_0().text_sm().child(
                     text!(if capture {
-                        "Speak to see your level and the voice gate."
+                        "Speak, and watch your level and the voice gate under Transmission."
                     } else {
                         "Check your microphone without joining a channel."
                     })
@@ -405,7 +514,6 @@ fn audio_check(this: &Desktop, cx: &mut Context<Desktop>) -> Vec<AnyElement> {
             .into_any_element(),
     ];
     if capture {
-        rows.push(meter(preview));
         rows.push(toggle(
             "hear-yourself",
             "Hear yourself",
@@ -621,12 +729,16 @@ pub fn dialog(
             cx,
         ),
     )];
+    // Only while the microphone test runs: Settings alone opens no microphone.
+    if let Some(preview) = this.preview.as_ref().filter(|preview| preview.capture) {
+        voice.push(meter(preview, audio.vad_sensitivity, transmit));
+    }
     if transmit == TransmitMode::VoiceActivity {
         let slider = labelled_slider(
+            this,
             "sensitivity",
             ("Sensitivity", "Voice activity sensitivity"),
-            audio.vad_sensitivity,
-            |this, value| this.update_settings(|settings| settings.audio.vad_sensitivity = value),
+            crate::slider::Setting::Sensitivity,
             cx,
         );
         voice.push(managed(this, "audio.vad_sensitivity", slider));
@@ -1019,10 +1131,10 @@ pub fn dialog(
     )));
     if sound_effects {
         let slider = labelled_slider(
+            this,
             "sound-volume",
             ("Volume", "Sound effect volume"),
-            settings.sound_volume,
-            |this, value| this.update_settings(|settings| settings.sound_volume = value),
+            crate::slider::Setting::SoundVolume,
             cx,
         );
         general.push(managed(this, "sound_volume", slider));

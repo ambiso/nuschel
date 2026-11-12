@@ -44,6 +44,20 @@ pub enum Event {
     },
     Status(String),
     EchoTest(Result<EchoReport, String>),
+    /// The worker that measured the last reading is gone (a new microphone
+    /// or route, or it stopped): the reading no longer describes anything.
+    Stale,
+}
+
+/// One measurement of the microphone test, about ten a second.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Reading {
+    /// Input level, dBFS.
+    pub level_db: f32,
+    /// Speech probability, 0..=1.
+    pub voice: f32,
+    /// Whether the voice gate is open.
+    pub transmitting: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -67,9 +81,9 @@ pub enum EchoTestState {
 pub struct PreviewView {
     pub capture: bool,
     pub loopback: bool,
-    pub level_db: f32,
-    pub voice: f32,
-    pub transmitting: bool,
+    /// The latest reading of the current microphone, none when there is
+    /// nothing current to show (shown as "—").
+    pub reading: Option<Reading>,
     pub inputs: Vec<AudioDevice>,
     pub outputs: Vec<AudioDevice>,
     pub input: Option<String>,
@@ -89,10 +103,7 @@ impl Default for PreviewView {
         Self {
             capture: false,
             loopback: false,
-            // Silence until the first measurement, not a full meter.
-            level_db: -100.,
-            voice: 0.,
-            transmitting: false,
+            reading: None,
             inputs: Vec::new(),
             outputs: Vec::new(),
             input: None,
@@ -115,10 +126,16 @@ impl PreviewView {
                 voice,
                 transmitting,
             } => {
-                self.level_db = level_db;
-                self.voice = voice;
-                self.transmitting = transmitting;
+                // A reading still on its way when the test stopped is not shown.
+                if self.capture {
+                    self.reading = Some(Reading {
+                        level_db,
+                        voice,
+                        transmitting,
+                    });
+                }
             }
+            Event::Stale => self.reading = None,
             Event::Devices {
                 inputs,
                 outputs,
@@ -128,6 +145,10 @@ impl PreviewView {
                 noise,
                 reference,
             } => {
+                if input != self.input {
+                    // Measured on the previous microphone.
+                    self.reading = None;
+                }
                 self.reference = reference;
                 self.inputs = inputs;
                 self.outputs = outputs;
@@ -152,13 +173,11 @@ impl PreviewView {
         }
     }
 
-    /// The microphone is off: no level, no playback of it.
+    /// The microphone is off: no reading, no playback of it.
     pub fn close_capture(&mut self) {
         self.capture = false;
         self.loopback = false;
-        self.level_db = -100.;
-        self.voice = 0.;
-        self.transmitting = false;
+        self.reading = None;
     }
 }
 
@@ -240,6 +259,7 @@ pub async fn run(
                 if !audio.same_route(&applied) {
                     media.take();
                     retry = Instant::now();
+                    send(Event::Stale);
                 } else if audio != applied && let Some(media) = &media {
                     configure(media, &audio);
                 }
@@ -291,6 +311,7 @@ pub async fn run(
                         }
                     } else {
                         media.take();
+                        send(Event::Stale);
                         retry = Instant::now() + Duration::from_millis(if message.starts_with("Audio reconnecting") { 2000 } else { 200 });
                         if test_deadline.take().is_some() {
                             // No sound system: say so now rather than at the deadline.
@@ -306,6 +327,7 @@ pub async fn run(
                     // The worker exited without a word (it could not start, or crashed).
                     tracing::debug!("settings audio worker exited");
                     media.take();
+                    send(Event::Stale);
                     retry = Instant::now() + Duration::from_secs(1);
                     send(Event::Status("The audio worker stopped; retrying…".into()));
                 }
@@ -314,5 +336,55 @@ pub async fn run(
     }
     if let Some(media) = media {
         let _ = media.commands.try_send(LiveMediaRequest::Shutdown);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn level(level_db: f32) -> Event {
+        Event::Level {
+            level_db,
+            voice: 0.8,
+            transmitting: true,
+        }
+    }
+
+    fn devices(input: Option<&str>) -> Event {
+        Event::Devices {
+            inputs: Vec::new(),
+            outputs: Vec::new(),
+            input: input.map(Into::into),
+            output: None,
+            echo: EchoSource::None,
+            noise: None,
+            reference: None,
+        }
+    }
+
+    #[test]
+    fn readings_clear_when_they_no_longer_describe_the_microphone() {
+        let mut view = PreviewView::default();
+        view.apply(level(-20.));
+        assert_eq!(view.reading, None, "no reading without the test running");
+        view.capture = true;
+        view.apply(devices(Some("mic")));
+        view.apply(level(-20.));
+        assert_eq!(view.reading.map(|reading| reading.level_db), Some(-20.));
+        // The same microphone again (a device list refresh) keeps it.
+        view.apply(devices(Some("mic")));
+        assert!(view.reading.is_some());
+        // Another microphone does not.
+        view.apply(devices(Some("headset")));
+        assert_eq!(view.reading, None);
+        view.apply(level(-30.));
+        view.apply(Event::Stale);
+        assert_eq!(view.reading, None, "a replaced worker's reading");
+        view.apply(level(-30.));
+        view.close_capture();
+        assert_eq!(view.reading, None, "the test stopped");
+        view.apply(level(-10.));
+        assert_eq!(view.reading, None, "a late reading after the stop");
     }
 }
