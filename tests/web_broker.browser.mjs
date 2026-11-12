@@ -143,14 +143,19 @@ try {
  assert.ok(expirySdk);
  // Fault injection changes only the SDK deadline clock after authentication;
  // no source, SDK memory, keys or content-worker timer is read or modified.
+ const expiredWork=await expiry.evaluate(()=>brokerFixture.work.filter(operation=>operation.kind==="render"&&operation.source.startsWith("expiry-source-canary-")));
+ assert.ok(expiredWork.length>=1&&expiredWork.length<=4,"only actually posted jobs consume execution deadlines");
  await expirySdk.evaluate(()=>{const originalNow=performance.now.bind(performance);performance.now=()=>originalNow()+65000;});
  await rpc(expiry,"dismiss_notice",0); // one real refresh observes elapsed SDK deadline
- await expiry.waitForFunction(()=>document.querySelectorAll("article").length===7&&[...document.querySelectorAll("article button")].filter(node=>node.textContent==="Retry message preview").length===7,null,{timeout:10000});
- const beforeRetry=await expiry.evaluate(()=>brokerFixture.work.filter(operation=>operation.kind==="render").length);
+ await expiry.waitForFunction(count=>document.querySelectorAll("article").length===7&&[...document.querySelectorAll("article button")].filter(node=>node.textContent==="Retry message preview").length===count,expiredWork.length,{timeout:10000});
+ // Cursor identities had not acquired source/worker credit. They may now make
+ // their FIRST admission; expired posted sources must never auto-resubmit.
+ await expiry.waitForFunction(()=>brokerFixture.last.timeline.messages.every(message=>message.content_failed||!message.document.blocks.some(block=>block.kind==="text"&&block.text.startsWith("["))),null,{timeout:10000});
+ const expiredSources=expiredWork.map(operation=>operation.source);
  await expiry.waitForTimeout(300);
- assert.equal(await expiry.evaluate(()=>brokerFixture.work.filter(operation=>operation.kind==="render").length),beforeRetry,"expiry does not automatically resubmit work");
- await expiry.locator("article").last().getByRole("button",{name:"Retry message preview",exact:true}).click();
- await expiry.locator("article").last().filter({hasText:"expiry-source-canary-6"}).waitFor({timeout:10000});
+ assert.equal(await expiry.evaluate(sources=>brokerFixture.work.filter(operation=>operation.kind==="render"&&sources.includes(operation.source)).length,expiredSources),expiredWork.length,"expired posted sources never automatically resubmit");
+ await expiry.locator("article").first().getByRole("button",{name:"Retry message preview",exact:true}).click();
+ await expiry.locator("article").first().filter({hasText:"expiry-source-canary-0"}).waitFor({timeout:10000});
  result.expiry=await expiry.evaluate(()=>({articles:document.querySelectorAll("article").length,content_workers:brokerFixture.workers.filter(url=>url.includes("content-worker-")).length,capture_calls:captureCalls}));
  assert.equal(result.expiry.articles,7);assert.equal(result.expiry.content_workers,1);assert.equal(result.expiry.capture_calls,0);
  await expiry.screenshot({path:screenshot.replace(".png","-expiry.png")});
