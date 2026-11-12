@@ -55,7 +55,7 @@ def can_read(unit, path, namespace=True):
     return result.returncode == 0
 
 
-def http(host, path, method="GET"):
+def request_http(host, path, method="GET"):
     connection = http.client.HTTPConnection("127.0.0.1", 80, timeout=5)
     try:
         connection.request(method, path, headers={"Host": host})
@@ -112,11 +112,11 @@ def main():
 
         token = Path("/var/lib/nuschl-acme-challenge/.well-known/acme-challenge/owned-fixture-token")
         token.write_text("owned challenge response\n");token.chmod(0o644)
-        assert http("voice.test", "/.well-known/acme-challenge/owned-fixture-token") == (200, b"owned challenge response\n")
-        assert http("voice.test", "/.well-known/acme-challenge/missing")[0] == 404
-        assert http("voice.test", "/.well-known/acme-challenge/owned-fixture-token", "POST")[0] == 403
+        assert request_http("voice.test", "/.well-known/acme-challenge/owned-fixture-token") == (200, b"owned challenge response\n")
+        assert request_http("voice.test", "/.well-known/acme-challenge/missing")[0] == 404
+        assert request_http("voice.test", "/.well-known/acme-challenge/owned-fixture-token", "POST")[0] == 403
         for path in ("/", "/app/", "/fullchain.pem", "/key.pem", "/any/other/path?x=1"):
-            assert http("voice.test", path)[0] == 404
+            assert request_http("voice.test", path)[0] == 404
         token.unlink()
         records.append("actual challenge GET succeeds; other HTTP paths/missing tokens/POST refused")
 
