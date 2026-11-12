@@ -89,8 +89,10 @@ Every configuration key is optional; names and defaults follow murmur.ini
   addresses are not imported from Murmur either). An account that is offline
   (`since_access` bookkeeping) is never strong; strength belongs to a
   connection. The authorities are read at start.
-- **SuperUser** (user 0) has no password until one is set; without one it cannot
-  log in.
+- **SuperUser** (user 0) has no password in a fresh database until one is set;
+  without one it cannot log in. The stored password persists: removing a startup
+  password-file setting does not disable a password set earlier. See
+  [Bootstrap a named administrator](#bootstrap-a-named-administrator).
 
 - **Key transparency** (`[kt]`, docs/e2ee.md §5): on by default; the server runs a
   verifiable key directory and offers `kt/1`. Its head-signing key (the server
@@ -389,7 +391,7 @@ nuschld --config nuschld.toml admin users list
 nuschld --config nuschld.toml admin users show Alice  # or '#3'
 nuschld --config nuschld.toml admin users rename Alice Alicia
 nuschld --config nuschld.toml admin users remove Alice --yes
-printf %s 'secret' | nuschld --config nuschld.toml admin users set-password '#0'   # SuperUser
+nuschld --config nuschld.toml admin users set-password '#0' --password-file /run/secrets/nuschl-superuser
 nuschld --config nuschld.toml admin channels list
 nuschld --config nuschld.toml admin channels retention Lobby 30 --yes   # forever, none, default, days
 nuschld --config nuschld.toml admin bans list
@@ -431,6 +433,93 @@ nuschld --config nuschld.toml admin import-murmur murmur.sqlite   # see Importin
 - Run admin commands as the user the server runs as (on NixOS the unit uses
   `DynamicUser`): files created as another user (SQLite's `-wal` and `-shm`,
   say) can keep the server from opening the database.
+
+### Bootstrap a named administrator
+
+The server supports this today, but Nuschl's current ACL panel cannot add group
+members. For a server already running in `security = "compatible"` (the default),
+use stock Mumble's group editor for this step. Stock Mumble cannot connect to a
+`security = "e2ee"` server; full Nuschl ACL/group editors and offline group
+administration are still queued. Keep that security policy rather than changing
+it to perform this bootstrap.
+
+1. **Set a SuperUser password.** On NixOS, provision a root-owned, mode `0600`
+   runtime file, preferably through your secret manager. For a manual initial
+   setup, these commands open an editor without putting the password in a shell
+   command or Nix expression:
+
+   ```sh
+   sudo install -d -m 0700 /run/secrets
+   sudo install -m 0600 /dev/null /run/secrets/nuschl-superuser
+   sudoedit /run/secrets/nuschl-superuser
+   ```
+
+   Put the password on one line. `/run` is cleared on boot, so arrange for your
+   secret manager to restore this file before the service starts. Point the
+   module at its runtime path:
+
+   ```nix
+   services.nuschl = {
+     enable = true;
+     superUserPasswordFile = "/run/secrets/nuschl-superuser";
+   };
+   ```
+
+   Apply the NixOS configuration. The module passes the secret with systemd
+   `LoadCredential`; it does not copy it into the Nix store. On later password
+   changes, update the file and restart `nuschl.service`. The file overrides the
+   stored SuperUser password **on every startup**. `passwordFile` is a separate
+   server-access password, not the SuperUser credential.
+
+   For a standalone deployment without that startup override, stop the server
+   and run the following as its service user, with its actual configuration and
+   database paths, then start it again:
+
+   ```sh
+   nuschld --config nuschld.toml admin users set-password '#0' \
+     --password-file /path/to/private-password-file
+   ```
+
+   This stores the password in the database. A configured startup password file
+   will replace it again on the next start. Offline commands must not share a
+   database with a running server; see the locking rules above.
+
+2. **Register the ordinary account.** Connect with the Nuschl client and identity
+   you intend to use normally. Open your user menu and choose **Register this
+   name** (or **Register your name**). Fresh servers permit self-registration;
+   if your ACLs disable it, use SuperUser's registration action instead. Group
+   membership refers to the registered account, not its temporary session ID.
+   Keep this client's identity/certificate: a new Mumble installation normally
+   has a different certificate and does not become the same account just by
+   using the same name.
+
+3. **Connect stock Mumble as SuperUser.** Add or edit a server entry for the same
+   host and port, set **Username** to `SuperUser`, and enter the password from
+   step 1. Mumble exposes its password field when that username is selected.
+   Nuschl can also log in as SuperUser: its **Server password** field carries
+   this account password, but its current group editor is incomplete.
+
+4. **Add the registered account to the root `admin` group.** In stock Mumble,
+   right-click the root channel, choose **Edit…**, open **Groups**, and select
+   `admin`. Under **Members**, enter the registered account name in **Select
+   member to add**, click **Add**, then **OK**. Preserve existing members, group
+   flags, and ACL rules. The default root ACL already grants the `admin` group
+   **Write**, which confers administrative permissions; do not grant Write to
+   `all`/`@all`.
+
+5. **Disconnect SuperUser and use the ordinary account.** Reconnect that original
+   Nuschl identity if necessary. Its root administration permissions now come
+   from the registered account's group membership and survive server restarts.
+   Keep the SuperUser credential private for recovery.
+
+The loopback regression [admin_bootstrap.py](../tests/admin_bootstrap.py) exercises
+real `nuschld` startup and offline password setup, stock-protocol SuperUser login,
+registration, promotion through the root group, exact preservation of the fresh
+root ACL entries and group flags, a benign channel-creation permission check, an
+unpromoted control, and persistence after restart. It also checks password
+rotation and rejection of stock clients in `e2ee` mode. The Mumble UI labels above
+were checked against its source; the automated proof uses protocol messages,
+not an interactive stock Mumble GUI session.
 
 ## Design
 
