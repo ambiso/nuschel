@@ -61,6 +61,8 @@ pub enum Event {
     },
     /// What the SDK models.
     Server(ServerEvent),
+    /// Bounded legacy welcome markup; rendered only in the SDK worker.
+    Welcome(String),
     /// The certificate is neither pinned nor vouched for: the user decides.
     Certificate {
         sha256: String,
@@ -722,6 +724,16 @@ impl Session {
                 self.own = Some(session);
                 self.events
                     .push_back(Event::Server(ServerEvent::Connected { session }));
+                if let Some(mut source) = sync.welcome_text {
+                    if source.len() > MAX_CONTENT_BYTES {
+                        let mut end = MAX_CONTENT_BYTES;
+                        while !source.is_char_boundary(end) {
+                            end -= 1;
+                        }
+                        source.truncate(end);
+                    }
+                    self.events.push_back(Event::Welcome(source));
+                }
             }
             kind::REJECT => {
                 let reject = proto::Reject::decode(payload).unwrap_or_default();
@@ -964,6 +976,65 @@ fn webpki_roots() -> impl Iterator<Item = rustls::pki_types::TrustAnchor<'static
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn welcome_is_ordered_after_connected_and_preserves_markup_and_newlines() {
+        let mut s = session();
+        let source =
+            "<b>something.de</b>\n&lt;em&gt;literal&lt;/em&gt;\n```rust\nfn main() {}\n```";
+        s.control(
+            kind::SERVER_SYNC,
+            proto::ServerSync {
+                session: Some(3),
+                welcome_text: Some(source.into()),
+                ..Default::default()
+            }
+            .encode_to_vec()
+            .into(),
+        );
+        let events = s.take_events();
+        assert!(matches!(
+            events[0],
+            Event::Server(ServerEvent::Connected { session: 3 })
+        ));
+        assert!(matches!(&events[1], Event::Welcome(value) if value == source));
+    }
+
+    #[test]
+    fn welcome_is_utf8_byte_bounded_and_missing_session_cannot_publish_it() {
+        let mut s = session();
+        s.control(
+            kind::SERVER_SYNC,
+            proto::ServerSync {
+                session: Some(3),
+                welcome_text: Some("界".repeat(MAX_CONTENT_BYTES)),
+                ..Default::default()
+            }
+            .encode_to_vec()
+            .into(),
+        );
+        let events = s.take_events();
+        let Event::Welcome(source) = &events[1] else {
+            panic!("welcome missing")
+        };
+        assert!(source.len() <= MAX_CONTENT_BYTES);
+        assert_eq!(source.len() % 3, 0);
+        let mut s = session();
+        s.control(
+            kind::SERVER_SYNC,
+            proto::ServerSync {
+                welcome_text: Some("must not appear".into()),
+                ..Default::default()
+            }
+            .encode_to_vec()
+            .into(),
+        );
+        assert!(
+            !s.take_events()
+                .iter()
+                .any(|e| matches!(e, Event::Welcome(_)))
+        );
+    }
 
     fn session() -> Session {
         Session::new(Login {

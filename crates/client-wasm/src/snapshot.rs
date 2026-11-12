@@ -22,6 +22,8 @@ pub struct ServerView {
     /// `disconnected`, `connecting` or `connected`.
     pub status: &'static str,
     pub notice: Option<String>,
+    /// Opaque current welcome lease; the document arrives once in an update.
+    pub welcome_token: Option<String>,
     /// The certificate waiting for the user's decision.
     pub certificate: Option<String>,
     pub own_session: Option<u32>,
@@ -76,6 +78,11 @@ pub enum UpdateView {
     Error {
         message: String,
     },
+    Welcome {
+        server: String,
+        token: String,
+        document: nuschl_core::MessageDocument,
+    },
     Changed,
 }
 
@@ -102,6 +109,7 @@ fn server_views<'a>(servers: impl Iterator<Item = (usize, &'a ServerState)>) -> 
                 Status::Connected => "connected",
             },
             notice: server.notice.clone(),
+            welcome_token: None,
             certificate: server
                 .certificate
                 .as_ref()

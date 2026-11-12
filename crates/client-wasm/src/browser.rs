@@ -57,6 +57,7 @@ struct Shared {
     talking: RefCell<HashMap<(String, u64, u32), f64>>,
     storage: RefCell<Storage>,
     renderer: ContentRenderer,
+    welcomes: RefCell<crate::welcome::Welcomes>,
     voice: RefCell<Route>,
     voice_packets: RefCell<Vec<voice::Incoming>>,
 }
@@ -137,6 +138,28 @@ impl Shared {
                     generation,
                     event,
                 },
+                Event::Welcome(source) => {
+                    // Old sockets must not replace a newly connected server's cache.
+                    if self
+                        .connections
+                        .borrow()
+                        .get(&server)
+                        .is_none_or(|c| c.generation != generation)
+                    {
+                        continue;
+                    }
+                    let document = self.welcomes.borrow_mut().render(
+                        &server,
+                        generation,
+                        &source,
+                        &self.renderer,
+                    );
+                    Input::Server {
+                        server,
+                        generation,
+                        event: ServerEvent::Welcome { source, document },
+                    }
+                }
                 Event::Certificate { sha256, changed } => Input::Certificate {
                     server,
                     generation,
@@ -337,6 +360,7 @@ impl Platform for BrowserPlatform {
     }
 
     fn disconnect(&self, server: &str) {
+        self.0.welcomes.borrow_mut().remove(server);
         if let Some(connection) = self.0.connections.borrow_mut().remove(server) {
             connection.socket.set_onopen(None);
             connection.socket.set_onmessage(None);
@@ -482,6 +506,7 @@ impl WebClient {
             talking: RefCell::new(HashMap::new()),
             storage: RefCell::new(Storage::default()),
             renderer: ContentRenderer::default(),
+            welcomes: RefCell::new(crate::welcome::Welcomes::default()),
             voice: RefCell::new(Route::default()),
             voice_packets: RefCell::new(Vec::new()),
         });
@@ -725,6 +750,22 @@ impl WebClient {
         }
     }
 
+    /// Dismiss only the displayed welcome from this exact live source/connection.
+    pub fn dismiss_welcome(&mut self, index: usize, token: String) -> Result<(), String> {
+        let server = self.client.servers.get(index).ok_or("Unknown server.")?;
+        if server.status != nuschl_client::server::Status::Connected
+            || !self.shared.welcomes.borrow_mut().dismiss(
+                &server.id,
+                server.generation,
+                server.welcome.as_deref(),
+                &token,
+            )
+        {
+            return Err("This server welcome has changed.".into());
+        }
+        Ok(())
+    }
+
     pub fn connect_with_password(&mut self, index: usize, password: String) -> Result<(), String> {
         if password.len() > 1024 || index >= self.client.servers.len() {
             return Err("Invalid password or server.".into());
@@ -927,15 +968,52 @@ impl WebClient {
             .client
             .take_updates()
             .iter()
-            .filter_map(|update: &Update| snapshot::update(update))
+            .filter_map(|update| {
+                if let Update::Rendered {
+                    server,
+                    key: RenderKey::Welcome,
+                    ..
+                } = update
+                {
+                    let state = self.client.servers.iter().find(|s| &s.id == server)?;
+                    return self
+                        .shared
+                        .welcomes
+                        .borrow_mut()
+                        .take_view(
+                            server,
+                            state.generation,
+                            state.welcome.as_deref(),
+                            state.status == nuschl_client::server::Status::Connected,
+                        )
+                        .map(|view| snapshot::UpdateView::Welcome {
+                            server: server.clone(),
+                            token: view.token,
+                            document: view.document,
+                        });
+                }
+                snapshot::update(update)
+            })
             .collect();
         serde_json::to_string(&updates).unwrap_or_else(|_| "[]".into())
     }
 
     /// Every server with its status, channels and users, as JSON.
     pub fn servers(&self) -> String {
-        serde_json::to_string(&snapshot::ordered_servers(&self.client))
-            .unwrap_or_else(|_| "[]".into())
+        let mut views = snapshot::ordered_servers(&self.client);
+        let welcomes = self.shared.welcomes.borrow();
+        for view in &mut views {
+            let state = &self.client.servers[view.runtime_index];
+            view.welcome_token = welcomes
+                .view(
+                    &state.id,
+                    state.generation,
+                    state.welcome.as_deref(),
+                    state.status == nuschl_client::server::Status::Connected,
+                )
+                .map(|v| v.token.clone());
+        }
+        serde_json::to_string(&views).unwrap_or_else(|_| "[]".into())
     }
 }
 

@@ -6,6 +6,8 @@
   import { inviteFragment } from "./invite.js";
   import { channelRows, initials, avatarColor, conversationKey, filterMessages, appearance } from "./presentation.js";
   import Message from "./Message.svelte";
+  import TypedDocument from "./TypedDocument.svelte";
+  import { welcomeDocuments } from "./welcome.js";
   import { SdkRpc, SdkUnavailableError } from "./sdk-rpc.js";
   import { BrowserAudio } from "./audio.js";
   const link = inviteFragment(location.hash);
@@ -17,6 +19,8 @@
   let messagesElement = $state(), composerElement = $state(), navigationButton = $state(), searchElement = $state();
   let settings = $state(appearance(null)), voice = $state(null), audioState = $state(null), audioActionPending = $state(null), capabilities = $state([]);
   let serverScroll = $state(), channelScroll = $state(), serverUnread = $state({above:false,below:false}), channelUnread = $state({above:false,below:false});
+  let welcomes = $state(new Map());
+  const welcome = $derived(selected?.status === "connected" && selected.welcome_token ? welcomes.get(selected.id) : null);
   let membersOpen = $state(false), selectedFallback = $state(null);
   let arrangeServers = $state(false), orderPending = $state(false), previewIds = $state(null), draggingId = $state(null), pointerGhost = $state(null), orderStatus = $state(""), reducedOrderMotion = $state(false);
   let orderDrag = null, orderFrame = 0, orderTime = 0, suppressBrowseUntil = 0;
@@ -146,6 +150,7 @@
         selectedFallback = selected?.id || null;
         try { servers = serverIndices(data.servers, capabilities.includes("server_order")); }
         catch (reason) { audio.setLocalPolicy({muted:true,deafened:true}); audio.syncVoice(null); voice = null; loaded = false; error = "The server list could not be read safely. Reload to reconnect."; return; }
+        welcomes = welcomeDocuments(welcomes, servers, data.updates);
         if (orderDrag && !sameOrder(orderDrag.baseline, servers.map(server => server.id))) cancelOrder();
         timeline = data.timeline;
         voice = data.voice || null;
@@ -408,6 +413,12 @@
     </header>
     {#if showSearch}<form class="search-bar" onsubmit={(event) => event.preventDefault()}><label for="search-messages">Search this loaded history</label><input id="search-messages" bind:this={searchElement} bind:value={search} type="search" placeholder="Message text or person…" onkeydown={(event) => { if (event.key === "Escape") { showSearch = false; search = ""; } }}><small>{displayedMessages.length} results</small><button class="icon-button" aria-label="Close search" onclick={() => { showSearch = false; search = ""; }}>{@render icon("close")}</button></form>{/if}
     {#if clientUnavailable}<div class="error" role="alert"><span>{error || "The client is unavailable. Reload to reconnect."}</span><button class="text-button" onclick={() => location.reload()}>Reload client</button></div>{:else if error}<div class="error" role="alert"><span>{error}</span><button class="icon-button" aria-label="Dismiss error" onclick={() => error = ""}>{@render icon("close")}</button></div>{/if}
+    {#if welcome}
+      {#key welcome.token}<section class="server-welcome" aria-label="Server welcome">
+        <header><h3>Welcome to {selected.name}</h3><button onclick={() => act("dismiss_welcome", selectedIndex, welcome.token)} aria-label="Dismiss server welcome">Dismiss</button></header>
+        <div class="server-welcome-body" tabindex="0" role="region" aria-label="Welcome message"><TypedDocument document={welcome.document} /></div>
+      </section>{/key}
+    {/if}
     <div class="conversation">
       <div class="messages" bind:this={messagesElement} onscroll={() => { if (messagesElement) follow = messagesElement.scrollHeight - messagesElement.scrollTop - messagesElement.clientHeight < 80; }}>
         {#if timeline?.has_older}<div class="history-start"><button class="text-button" disabled={timeline.loading} onclick={older}>{timeline.loading ? "Loading history…" : "Load older messages"}</button></div>{/if}

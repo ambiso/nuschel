@@ -11,6 +11,8 @@ pub mod session;
 pub mod snapshot;
 pub mod storage;
 pub mod voice;
+#[cfg(any(test, all(target_arch = "wasm32", target_os = "unknown")))]
+mod welcome;
 
 #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
 mod browser;
