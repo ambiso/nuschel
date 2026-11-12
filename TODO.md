@@ -1065,12 +1065,26 @@ listed below. Plugin data remains the explicit gap.
       complete welcome-rendering path, including safe link detection. Earlier
       scoped welcome fixes below do not close this newly reported case; retain
       existing sanitization and explicit safe-link activation.
-- [ ] Web server welcome-document parity: `client-wasm` currently discards
-      `ServerSync.welcome_text` and the snapshot/App has no welcome surface.
-      This omits notices rather than reproducing the native marker symptom.
-      Add bounded SDK-worker rendering, exact generation/source cache and dismiss
-      leases, and the existing safe document presentation. Current native exact
-      domain proof passes (no new native fix claimed); see `docs/welcome-domain.md`.
+- [ ] Integrate the implemented web welcome-document checkpoint: bounded
+      SDK-worker rendering, generation/exact-source dismissal leases, once-only
+      typed document updates and a bounded mobile panel are implemented and
+      scoped tests pass. Actual private stock Murmur + compiled App/CSP checks
+      cover exact bold domains, inert resources, 320/390/900/1280 bounds,
+      keyboard dismissal, reconnect/replacement and stale tokens. Native exact
+      domain proof already passes; no new native fix claimed. Source integration
+      remains pending until parent review; see `docs/welcome-domain.md`.
+- [ ] Live `ServerConfig.welcome_text` parity: source audit finds both native
+      and browser handlers currently discard this optional field, while stock
+      Mumble's `MainWindow::msgServerConfig` logs nonempty welcomes. Initial
+      `ServerSync` delivery is covered separately. Add authenticated bounded
+      updates with source/dismissal guards and private protocol fixtures before
+      claiming live welcome-configuration parity; no public-server test needed.
+- [ ] Integrate the separate central browser text-size correction: Settings
+      previously changed body font size while rem-sized text kept the root's
+      16px. `html` now uses the same preference variable; actual compiled App
+      assertions cover 14/16/20px roots, message text 12.6/14.4/18px, persistence
+      and largest-setting phone/desktop bounds. Keep the pre-fix measurements
+      and distinguish synthetic root-font stress from physical browser zoom.
 - [x] Stock-server welcome document rendering (2026-11-12): the native adapter
       discarded the correct worker document and displayed its internal storage
       markers (`bNuschl/b`, link directives) as plain text. It now keeps the typed

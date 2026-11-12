@@ -71,6 +71,12 @@ async function nav(page,action){
   await action();
   if((await page.viewportSize()).width<=760)await page.keyboard.press("Escape");
 }
+async function viewport(page,width,height){
+  await page.setViewportSize({width,height});
+  await page.waitForFunction(()=>!!document.querySelector(".menu-button")===(innerWidth<=760));
+  await page.waitForFunction(()=>Math.abs(document.querySelector("main").getBoundingClientRect().height-(visualViewport?.height||innerHeight))<=1);
+  await page.evaluate(()=>new Promise(requestAnimationFrame));
+}
 async function fontPreference(){
   const page=await open("font-browser",1280,800);
   await page.getByLabel("Message",{exact:true}).fill("Actual message font preference");
@@ -91,9 +97,7 @@ async function fontPreference(){
   assert.ok(Math.abs(Number(await message.evaluate(e=>parseFloat(getComputedStyle(e).fontSize)))-18)<.02);
   const bounds=[];
   for(const[width,height]of [[320,640],[390,844],[1280,800]]){
-    await page.setViewportSize({width,height});
-    await page.waitForFunction(()=>!!document.querySelector(".menu-button")===(innerWidth<=760));
-    await page.evaluate(()=>new Promise(requestAnimationFrame));
+    await viewport(page,width,height);
     const layout=await page.evaluate(()=>{const box=e=>{const b=e.getBoundingClientRect();return{x:b.x,right:b.right,y:b.y,bottom:b.bottom,height:b.height}};return{width:innerWidth,pageWidth:document.documentElement.scrollWidth,panel:box(document.querySelector(".server-welcome")),dismiss:box(document.querySelector(".server-welcome>header button")),composer:box(document.querySelector(".composer"))};});
     assert.ok(layout.pageWidth<=width);assert.ok(layout.dismiss.x>=0&&layout.dismiss.right<=width&&layout.dismiss.bottom<=layout.panel.bottom,JSON.stringify(layout));assert.ok(layout.composer.bottom<=height+1);bounds.push(layout);
     await page.screenshot({path:resolve(output,`welcome-real-20px-${width}.png`)});
@@ -114,7 +118,7 @@ try{
   assert.ok((await welcome.locator(".typed-document").textContent()).includes("\n\n"));
   const geometries=[];
   for(const [width,height]of [[320,640],[390,844],[1280,800],[900,600]]){
-    await page.setViewportSize({width,height});
+    await viewport(page,width,height);
     const body=welcome.getByRole("region",{name:"Welcome message",exact:true});await body.focus();await page.keyboard.press("End");
     await page.waitForFunction(()=>document.querySelector(".server-welcome-body").scrollTop>0);
     const geometry=await page.evaluate(()=>{
@@ -123,10 +127,10 @@ try{
     });
     assert.ok(geometry.pageWidth<=width+1);assert.ok(geometry.panel.height<=height*.32+2);
     assert.ok(geometry.dismiss.x>=0&&geometry.dismiss.right<=width&&geometry.dismiss.y>=0&&geometry.dismiss.bottom<=height);
-    assert.ok(geometry.composer.bottom<=height+1&&geometry.composer.height>50);geometries.push(geometry);
+    assert.ok(geometry.composer.bottom<=height+1&&geometry.composer.height>50,JSON.stringify(geometry));geometries.push(geometry);
     await page.screenshot({path:resolve(output,`welcome-${width}.png`)});
   }
-  await page.setViewportSize({width:390,height:844});
+  await viewport(page,390,844);
   await nav(page,async()=>{await page.getByRole("button",{name:"Lobby",exact:true}).click();});
   await nav(page,async()=>{await page.getByRole("button",{name:"Root",exact:true}).click();});
   const before=await page.evaluate(()=>__welcomeProof.documents.length);assert.equal(before,1,"ordinary browsing resent welcome document");
@@ -156,7 +160,7 @@ try{
   await page.getByRole("button",{name:"Connect",exact:true}).click();
   await welcome.waitFor();
   await page.waitForFunction(()=>__welcomeProof.documents.length===3);
-  await page.setViewportSize({width:320,height:640});
+  await viewport(page,320,640);
   const longBounds=await welcome.evaluate(e=>{const box=n=>{const b=n.getBoundingClientRect();return{x:b.x,right:b.right,y:b.y,bottom:b.bottom,height:b.height}};return{panel:box(e),dismiss:box(e.querySelector("header button")),body:box(e.querySelector(".server-welcome-body"))};});
   assert.ok(longBounds.dismiss.x>=0&&longBounds.dismiss.right<=320&&longBounds.dismiss.bottom<longBounds.panel.bottom);
   assert.ok(longBounds.panel.height<=640*.32+2);
