@@ -333,7 +333,7 @@ def main():
                              "the shortcuts scene then binds through the real GlobalShortcuts portal")
     parser.add_argument("--zenity", type=Path, help="zenity, for another focused window in the shortcuts scene")
     args = parser.parse_args()
-    if "native-spacing" in args.scenes.split(",") and (not args.pulse_bin or not args.at_spi):
+    if {"native-spacing", "voice-status"} & set(args.scenes.split(",")) and (not args.pulse_bin or not args.at_spi):
         parser.error("native-spacing requires --pulse-bin and --at-spi")
     args.output.mkdir(parents=True, exist_ok=True)
     width, height = map(int, args.size.split("x"))
@@ -350,7 +350,7 @@ def main():
             murmur.ini.write_text(murmur.ini.read_text() + "messagelimit=1000\nmessageburst=1000\n")
             bot_options = ["--message-limit", "1000", "--message-burst", "1000"]
         murmur.seed()
-        rail_scene = bool({"rail-layout", "server-order", "native-spacing"} & set(args.scenes.split(",")))
+        rail_scene = bool({"rail-layout", "server-order", "native-spacing", "voice-status"} & set(args.scenes.split(",")))
         layout_scene = bool({"layout", "layout-controls", "layout-performance"} & set(args.scenes.split(",")))
         if layout_scene:
             murmur.ini.write_text(murmur.ini.read_text() + "suggestPushToTalk=true\n")
@@ -444,10 +444,16 @@ def main():
             if rail_scene:
                 rail_pin = certificate_pin(args.binaries, "127.0.0.1", rail_port, root / "rail-probe")
                 bookmarks = [bookmark] + [dict(second, id=str(uuid.uuid4()), name=f"Rail filler {n:02}") for n in range(18)] + [dict(bookmark, id=str(uuid.uuid4()), name="Rail last", username="Rail Last", port=rail_port, certificate_sha256=rail_pin)]
+            if "voice-status" in args.scenes.split(","):
+                bookmarks = [dict(second, name="Offline earlier"), dict(bookmark, name="Voice Alpha"), dict(bookmark, id=str(uuid.uuid4()), name="Voice Beta", username="Voice Beta client", port=rail_port, certificate_sha256=rail_pin)]
             (profile / "config/servers.json").write_text(json.dumps(bookmarks))
             # The web host share links point at (docs/web.md); nothing is fetched from it.
             (profile / "config/settings.json").write_text(json.dumps({"appearance": {"theme": args.theme, "zoom": args.zoom},
                                                                       "share_web_host": "web.example.org"}))
+            if "voice-status" in args.scenes.split(","):
+                saved = json.loads((profile / "config/settings.json").read_text())
+                saved["audio"] = {"transmit":"push_to_talk"}
+                (profile / "config/settings.json").write_text(json.dumps(saved))
             if "managed" in args.scenes.split(","):
                 # What Home Manager's programs.nuschl.settings and .servers write
                 # (only on request: managed controls move the other scenes' targets).
@@ -463,7 +469,7 @@ def main():
             env = shell.app_environment() | {"RUST_LOG": os.environ.get("NUSCHL_SCREENSHOT_LOG", "nuschl=info")}
             # AccessKit honours NO_AT_BRIDGE (NixOS sets it where at-spi2-core is off).
             env.pop("NO_AT_BRIDGE", None)
-            if "native-spacing" in args.scenes.split(","):
+            if {"native-spacing", "voice-status"} & set(args.scenes.split(",")):
                 env["NUSCHL_AUDIO_BACKEND"] = "pulse"
                 env["PULSE_SERVER"] = "unix:" + str(socket_dir / "native")
             if wormhole:
@@ -551,6 +557,9 @@ def main():
             if {"layout", "layout-controls"} & scenes:
                 from layout_regression import run as run_layout
                 run_layout(args, root, shell, registry, bots, profile, port, pin, shot)
+            if "voice-status" in scenes:
+                from voice_status import run as run_status
+                run_status(args, root, shell, registry, bots, profile, rail_port, rail_pin, shot)
             if "native-spacing" in scenes:
                 from native_spacing import run as run_spacing
                 run_spacing(args, shell, registry, bots, profile, shot)
