@@ -13,6 +13,7 @@ import welcome_html
 from accessibility import items
 from admin_bootstrap import Operator, encode, scalar
 from hash_document_wire import fields
+from layout_regression import inside
 from local_murmur import Murmur, eventually
 from local_nuschld import Nuschld
 from mumble_client import Client
@@ -281,6 +282,183 @@ def actions(args, root, shell, application, bot, murmur):
             lambda: text_contains("Permissions saved and confirmed"),
             "ACL save was not verified",
         )
+
+    if args.pending_input:
+        open_acl()
+        field = type_field("New group name", "pending-input-original")
+        before = field.call("Accessible", "GetState")
+        wait("Save permissions", "push button").press()
+        assert field.focused, "Save action unexpectedly stole the input focus"
+        shell.type("injected-during-save")
+        during = field.call("Accessible", "GetState")
+        assert not text_contains("Permissions saved and confirmed"), (
+            "typing probe missed the pending transaction"
+        )
+        eventually(
+            lambda: text_contains("Permissions saved and confirmed"),
+            "pending save never completed",
+        )
+        activate("Create group")
+        save()
+        admin = operator(root, pin)
+        try:
+            groups = [fields(raw)[1][0].decode() for raw in admin.acl()[3]]
+            assert "pending-input-original" in groups, groups
+            assert all("injected-during-save" not in name for name in groups), groups
+        finally:
+            admin.close()
+        shell.screenshot(args.output / "pending-input.png")
+        mark("focused_input_rejects_typing_during_pending_save_and_unlocks_after_reply")
+        return {
+            "pending_input_readonly": True,
+            "before_state": before,
+            "during_state": during,
+            "groups": groups,
+        }
+
+    if args.geometry:
+        admin = operator(root, pin)
+        try:
+            acl = admin.acl()
+            entries = [raw for raw in acl.get(4, []) if not fields(raw).get(3, [1])[0]]
+            for index in range(len(entries), 512):
+                entries.append(
+                    encode(
+                        {
+                            1: [1],
+                            2: [1],
+                            3: [0],
+                            5: [
+                                (
+                                    f"geometry-rule-{index:04}-" + "longunbroken" * 12
+                                ).encode()
+                            ],
+                            6: [0],
+                            7: [0],
+                        }
+                    )
+                )
+            groups = []
+            for raw in acl.get(3, []):
+                group = fields(raw)
+                group.pop(7, None)
+                groups.append(encode(group))
+            for index in range(len(groups), 512):
+                groups.append(
+                    encode(
+                        {
+                            1: [
+                                (
+                                    f"geometry-group-{index:04}-" + "longunbroken" * 12
+                                ).encode()
+                            ],
+                            2: [0],
+                            3: [1],
+                            4: [1],
+                        }
+                    )
+                )
+            acl[3], acl[4], acl[5] = groups, entries, [0]
+            admin.send(13, encode(acl))
+            checked = admin.acl()
+            assert len(checked[3]) == len(checked[4]) == 512
+            first_rule = fields(checked[4][0])[5][0].decode()
+            last_rule = fields(checked[4][-1])[5][0].decode()
+            first_group = fields(checked[3][0])[1][0].decode()
+            last_group = fields(checked[3][-1])[1][0].decode()
+        finally:
+            admin.close()
+        open_acl()
+        assert text_contains("Rules · 512") and text_contains("Groups · 512")
+        records = []
+        for width, height, zoom in [(1280, 800, 100), (900, 600, 100), (900, 800, 200)]:
+            shell.chord("Control_L", "0")
+            shell.place("Nuschl", 40, 40, width, height)
+            for _ in range(5 if zoom == 200 else 0):
+                shell.chord("Control_L", "equal")
+                time.sleep(0.1)
+            time.sleep(0.3)
+            dialog = wait("Details", "dialog")
+            record = {"width": width, "height": height, "zoom": zoom, "lists": []}
+            for label, first, last in [
+                ("ACL rules", "@" + first_rule, "@" + last_rule),
+                ("ACL groups", "@" + first_group, "@" + last_group),
+            ]:
+                owner = wait(label, "list box")
+                assert owner.call("Component", "GrabFocus")[0]
+                eventually(
+                    lambda owner=owner, dialog=dialog: inside(
+                        owner.extents(), dialog.extents()
+                    ),
+                    f"{label} focus not revealed",
+                )
+                shell.key("Home")
+                eventually(
+                    lambda first=first: named(first, "push button"),
+                    f"first {label} row absent",
+                )
+                shell.key("End")
+                final = eventually(
+                    lambda last=last: named(last, "push button"),
+                    f"last {label} row absent",
+                )
+                assert owner.focused, f"{label} lost its retained navigation focus"
+                assert inside(final.extents(), dialog.extents()), (
+                    f"last {label} row outside modal"
+                )
+                # Both endpoints are real pointer actions, not synthetic state writes.
+                shell.click(*point(final))
+                owner = wait(label, "list box")
+                assert owner.call("Component", "GrabFocus")[0]
+                shell.key("Home")
+                initial = eventually(
+                    lambda first=first: named(first, "push button"),
+                    f"first {label} row not restored",
+                )
+                shell.click(*point(initial))
+                assert owner.call("Component", "GrabFocus")[0]
+                shell.key("Page_Down")
+                shell.key("End")
+                eventually(
+                    lambda last=last: named(last, "push button"),
+                    f"Page/End {label} did not restore final row",
+                )
+                rows = [
+                    node
+                    for node, role, name, _ in items(application)
+                    if role == "push button" and name.startswith("@geometry-")
+                ]
+                assert len(rows) < 32, f"512-row models instantiated {len(rows)} rows"
+                record["lists"].append(
+                    {
+                        "name": label,
+                        "owner": owner.extents(),
+                        "final_row": final.extents(),
+                        "visible_geometry_rows": len(rows),
+                    }
+                )
+            # The input retains native editing keys; list/outer scroll handlers
+            # must not steal arrows/Home/End from a focused text field.
+            field = type_field("New group name", "unsubmitted-geometry-name")
+            shell.key("Home")
+            shell.key("End")
+            assert field.focused
+            save_button = wait("Save permissions", "push button")
+            assert save_button.call("Component", "GrabFocus")[0]
+            eventually(
+                lambda save_button=save_button, dialog=dialog: inside(
+                    save_button.extents(), dialog.extents()
+                ),
+                "Save focus not revealed",
+            )
+            shell.screenshot(args.output / f"geometry-{width}-{height}-{zoom}.png")
+            record["dialog"] = dialog.extents()
+            records.append(record)
+            (args.output / "geometry.json").write_text(
+                json.dumps(records, indent=2) + "\n"
+            )
+        mark("512_rule_and_group_lists_pointer_keyboard_focus_zoom")
+        return {"geometry": records, "model_rows": 512, "server": args.server}
 
     open_acl()
     stale_save = wait("Save permissions", "push button")
@@ -592,6 +770,8 @@ def main():
     parser.add_argument("--gnome-shell", type=Path)
     parser.add_argument("--pulse-bin", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--geometry", action="store_true")
+    parser.add_argument("--pending-input", action="store_true")
     parser.add_argument("--server", choices=("stock", "nuschld"), default="stock")
     parser.add_argument(
         "--high-admin-limit",
