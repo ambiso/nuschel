@@ -1,8 +1,9 @@
 # Web echo cancellation diagnosis (C049)
 
 Read-only diagnosis of the report that echo cancellation "seems less reliable"
-on the web client, later narrowed by the user to **iOS web** (WebKit on
-iPhone/iPad; every iOS browser uses WebKit). No product code was changed. No
+on the web client, later narrowed by the user to **iOS web**. This diagnosis
+examines WebKit/Safari; the user's browser and iOS version are unknown. No audio
+processing or routing code was changed. No
 physical microphone, speaker, iOS device or user profile was used, so nothing
 here is a measured acoustic result.
 

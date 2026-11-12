@@ -60,6 +60,18 @@ checkpoints. A background filesystem watcher alone does not advance a session.
 
 Current integration checkpoint (2026-11-12):
 
+- **Web control sizing and processing reports are integrated through
+  `1aa71d69`.** Preserved `595d03c1` and `d3de0fa6` histories add consistent
+  44 px connection/voice/profile hit targets and show the most recent browser
+  microphone-processing reports in Settings. The combined Nix web-client/fmt
+  build passes all 38 bundled JS tests. Actual packaged-App control checks pass
+  desktop, 320/390 px, enlarged text and zoom-equivalent geometry with long names,
+  keyboard focus and no overflow. Actual packaged-App/private-Murmur processing
+  display checks pass real Chromium reports and three simulated report variants;
+  the latter prove rendering only. No host audio, profiles or clipboard are used.
+  These checks are separate from physical acoustic quality; the iOS routing
+  proposal is design only.
+  Evidence: `~/.cache/nuschl-web-controls-integration/`.
 - **Local SQLite history uses a smaller page cache (`9157817a`, merged in
   `d68c065d`).** Each history connection sets `cache_size=-512`; server databases,
   imports, schema and SQLite temporary/mmap defaults are unchanged. The preserved
@@ -654,6 +666,14 @@ Later (reported):
       history reload, mobile interaction and cancellation; keep unsupported
       original-file transfer/quality parity explicit rather than silently losing
       original bytes. Claude's web-UX lane prepares API/file ownership first.
+- [ ] Fix browser TLS control writes above 64 KiB. Actual image markup within
+      the negotiated server limit currently makes `rustls.writer().write_all`
+      hit its bounded send buffer and drops the connection; long text likely
+      shares the defect. The SDK owner is implementing incremental writes with
+      draining, bounded pending output and WebSocket backpressure/error handling.
+      Preserve original admission/destination leases and drafts; partial failure
+      must close that connection rather than reuse a partial control frame.
+      Require large text/image private-relay receipt and pressure/failure controls.
 - [ ] Implement received/own image viewing in the web app and pursue desktop
       parity (user request relayed by the concurrent Claude session, 2026-11-12).
       Use the credential-free content broker for validated thumbnail pixels,
@@ -667,12 +687,14 @@ Later (reported):
       replies at 2 MiB; a full viewer needs a separately validated binary response.
       Claude owns viewer/TypedDocument UX; Codex owns broker/image leases and
       bounded codec APIs. Mocked UI proof is not actual SDK/worker integration.
-- [ ] Enlarge the web reconnect and mute/unmute controls (user, 2026-11-12).
+- [x] Enlarge the web reconnect and mute/unmute controls (user, 2026-11-12).
       Apply consistent control sizing and accessible hit targets, including the
       adjacent deafen action where shared. Verify keyboard focus, long labels,
       320/390 px layouts and browser zoom with no overlap or overflow; preserve
       navigation and microphone-consent behavior. Coordinate composer/button
       hunks with the separate bitrate settings row, without whole-file reformat.
+      The combined packaged source passes the scoped checks above; no physical
+      mobile-browser zoom or iOS audio-quality result is implied.
 - [ ] Investigate weaker web echo cancellation (user, 2026-11-12). Obtain browser/
       version and same-device desktop comparison; the user reports **iOS web**.
       Current capture requests browser
@@ -682,6 +704,10 @@ Later (reported):
       synthetic constraints/route checks are not physical acoustic-quality proof;
       host microphone/speaker tests require explicit current scope. Coordinate
       audio.js changes with the bitrate owner. Read-only diagnosis is delegated.
+      Settings now exposes actual browser reports with honest unknown values;
+      no capture/playback processing or consent behavior changed. The candidate
+      capture-scoped iOS playback route remains off pending physical-device
+      privacy and acoustic proof.
 - [ ] Investigate laggy Windows audio (user, 2026-11-12). Both input and output
       intermittently stutter/drop out. Reported ping is 82 ms versus other
       participants' 7–20 ms, with zero reported late/lost packets toward the
@@ -774,6 +800,14 @@ Later (reported):
       redirects and file-backed ACL access tokens; avoid putting secrets in
       generated Nix-store settings. Regenerate combined crate2nix inputs and
       check native packages, policy/notices and owned fake-Subsonic/Murmur tests.
+      Independent review holds integration for a macOS sandbox call type error,
+      bounded decode/seek progress (the current 35 s first-reply deadline rejects
+      slow large files/far seeks), and recovered duck-worker failures unnecessarily
+      dropping TLS sessions. Prefer a separate minimal codec-worker binary/crate
+      with enforced dependency ownership over a parent codec allowance; its exact
+      graph/layout proposal is under review. Also retain per-field Subsonic text
+      bounds/shared SSE snapshot cost, parent systemd surface, duplicated framing
+      and JSON PCM cost as follow-ups rather than broad unreviewed rewrites.
 - [x] Disclose LLM assistance in the README (user, 2026-11-12), following
       `../nook/README.md`: warning badge and a short AI-assistance section with
       verification limits, committed at `a598b2d8`.
