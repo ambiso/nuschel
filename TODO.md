@@ -1,11 +1,13 @@
 # Nuschl TODO
 
-Current focus (user, 2026-11-12): **fluid persistent server reordering, web
-feature parity, and robust desktop layout**. Active independent owners cover
-server ordering, ACME/PKI and audio follow-ups. The rename/build-cache cleanup is
-complete; publication remains behind signing, notice and packaging gates. Public
-`main` is still the last user-pushed `7f28f8d4`; no new push, tag or release is
-implied by the integrated source checkpoints below.
+Current focus (user, 2026-11-12): **unmute-to-first-speech latency, stereo receive
+and output fidelity, and hybrid update readiness**. Independent owners cover
+startup/capture latency, receive/playback reference fixtures and updater verification.
+Server reordering and the desktop layout foundation have scoped proofs integrated;
+web image attachments, modern identity/archive flows and full parity remain open.
+The rename/build-cache cleanup is complete. Publication remains behind signing,
+notice and packaging gates; public `main` is still the last user-pushed
+`7f28f8d4`. No new push, tag or release is implied below.
 
 Current integration checkpoint (2026-11-12):
 
@@ -590,7 +592,13 @@ The media worker uses per-speaker adaptive jitter buffers and Opus loss concealm
       per-speaker gain, mixing/clamping, resampling, jitter and packet-loss
       concealment separately. Compare high-bitrate mono/stereo, simultaneous
       speakers and deterministic loss/reordering, then the actual output path;
-      codec bitrate alone does not establish playback fidelity.
+      codec bitrate alone does not establish playback fidelity. Active reference
+      audit (`docs/output-quality.md`): actual private native 48 kHz mono is close
+      at unity gain, but stereo collapses to identical LR (0 dB separation); compiled
+      browser WASM and actual Worklet also downmix/duplicate. Worklet clipping
+      before attenuation is independently reproduced. Fix stereo receive across
+      native and web, then filtered resampling and deterministic loss/PLC; baseline
+      failures are recorded, not claimed fixed or perceptually equivalent.
 
 ### Optional local speech (requested 2026-11-11)
 
