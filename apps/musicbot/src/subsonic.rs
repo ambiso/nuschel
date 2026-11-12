@@ -601,7 +601,7 @@ fn client_info(max_bitrate: Option<u32>) -> ClientInfo {
     }
 }
 
-/// The image types browsers show, by MIME type; others are not passed on.
+/// Library artwork MIME hints; bytes still require isolated format admission.
 fn image_type(mime: &str) -> Option<&'static str> {
     [
         "image/jpeg",
