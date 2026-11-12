@@ -20,7 +20,10 @@ PROGRAMS = ["nuschl", "nuschl-content-worker", "nuschl-crypto-worker",
 
 
 def run(args, **kwargs):
-    return subprocess.run(args, check=True, capture_output=True, text=True, **kwargs).stdout
+    result = subprocess.run(args, capture_output=True, text=True, **kwargs)
+    if result.returncode:
+        raise RuntimeError(f"{args[0]} failed: {result.stderr}")
+    return result.stdout
 
 
 def definition(path):
@@ -37,10 +40,11 @@ def main():
     expression = '''let
       f=builtins.getFlake %s; p=f.packages.x86_64-linux;
       pkgs=import f.inputs.nixpkgs {system="x86_64-linux";};
-      inspect=d: {drv=d.drvPath; out=d.outPath;
+      inspect = d: {drv=d.drvPath; out=d.outPath;
         features=d.crateFeatures or [];
-        dependencies=map(x:x.pname or x.name)(d.dependencies or []);};
-    in { products=builtins.mapAttrs(_:inspect) {
+        dependency_drv=if d ? cargoArtifacts then d.cargoArtifacts.drvPath else null;
+        dependencies=map (x: x.pname or x.name) (d.dependencies or []);};
+    in { products=builtins.mapAttrs (_: inspect) {
       windows-ed25519=p.windows-update-ed25519;
       windows-mldsa44=p.windows-update-mldsa44;
       macos-x86_64-ed25519=p.macos-x86_64-update-ed25519;
@@ -70,10 +74,7 @@ def main():
             assert f"nuschl-update-worker/{other}" not in command
             assert "signer" not in command and "runtime-fixture" not in command
             assert env["MACOSX_DEPLOYMENT_TARGET"] == "14.2"
-            product["dependency_drv"] = env["cargoArtifacts"]
-            # Env points to the built artifact output; inspect its derivation.
-            depdrv = run(["nix-store", "--query", "--deriver", env["cargoArtifacts"]]).strip()
-            deps = definition(depdrv)
+            deps = definition(product["dependency_drv"])
             assert not deps.get("postInstall")
             assert f"nuschl-update-worker/{algorithm}" in deps["buildPhase"]
         product["verified_algorithm"] = algorithm
