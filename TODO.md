@@ -936,10 +936,21 @@ listed below. Plugin data remains the explicit gap.
       suppress icons.
 - [x] Context menus: user (direct message, local volume/mute, info, whisper), channel
       (join, create sub-channel, links, description).
-- [ ] Bound generic context-menu height and provide scroll/focus reveal for tall
-      menus, including administrative entries at narrow windows and 200% zoom.
-      Existing max-width constraints and the shorter ordering-menu proof do not
-      establish that every action in a tall menu remains reachable.
+- [ ] Integrate and verify the shared bounded context-menu surface.
+      One finite viewport/decorations budget, wrapped labels, retained scroll
+      handle, visible overflow scrollbar and focus trap cover every native menu.
+      Tab/reverse Tab reveal first/last actions; reading keys scroll the region.
+      A shared occluding hitbox prevents wheel events reaching the underlying
+      channel browser. Real full-admin-menu baseline clipping and the corrected
+      Linux geometry are retained; complete native pointer/keyboard/idle proof
+      and root integration remain the final gates. See `docs/context-menus.md`.
+- [ ] Keep menu focus attached to a semantic action when permissions or server
+      context actions change while the menu is open. Current item/focus keys use
+      vector indexes; inserting/removing entries can reuse an index for a different
+      label/action (source-level finding, not a runtime wrong-action proof).
+      Verify permission changes with a private server and bind retained focus to
+      stable action identity. This is separate from popup geometry and from
+      server/generation/session target-authority guards.
 - [ ] Bind delayed desktop menu actions and administrative prompts to their
       original server identity, connection generation and user presence instance.
       Source review finds `Menu`/`Prompt` retain a server vector index and
