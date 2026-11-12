@@ -20,7 +20,7 @@ try {
       const packet=encoder.encode(samples);
       assert.ok(packet instanceof Uint8Array&&packet.length>0&&packet.length<=Math.floor(bitrate/400));
       const output=decoder.decode(packet);
-      assert.equal(output.length,960);assert.ok(output.every(Number.isFinite));bytes+=packet.length;
+      assert.equal(output.length,1920);assert.ok(output.every(Number.isFinite));bytes+=packet.length;
     }
     results.push({bitrate,frames:8,bytes});
   }

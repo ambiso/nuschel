@@ -29,9 +29,14 @@ processor.mixer.enqueue({epoch:"audit",speaker:7,samples:unity,volume:1});
 const outputs=[[new Float32Array(960),new Float32Array(960)]];
 processor.process([],outputs);processor.process([],outputs);
 const duplicatedMono=outputs[0][0].every((value,i)=>value===outputs[0][1][i]);
+processor.mixer.configure("stereo",true);
+const distinct=Float32Array.from({length:1920},(_,i)=>i%2===0?.2:-.3);
+assert.ok(processor.mixer.enqueue({epoch:"stereo",speaker:7,samples:distinct,channels:2,frames:960}));
+processor.process([],outputs);processor.process([],outputs);
+const stereoPreserved=outputs[0][0].every(v=>Math.abs(v-.2)<1e-6)&&outputs[0][1].every(v=>Math.abs(v+.3)<1e-6);
 const result={worklet_unity_exact:true,gain_before_clipping:gainBeforeClipping,
   diagnostic_overshoot_attenuated:{input:2,volume:.25,expected:.5,observed:attenuated[0]},
-  actual_processor_duplicates_mono:duplicatedMono,codec:null,
+  actual_processor_duplicates_mono:duplicatedMono,actual_processor_stereo_preserved:stereoPreserved,codec:null,
   limits:["Node executes actual worklet code; no hardware/browser resampler proof.","No perceptual quality equivalence claim."]};
 if(option("--codec")&&option("--fixture")){
   const directory=resolve(option("--codec")),fixture=JSON.parse(await readFile(option("--fixture"),"utf8"));
@@ -44,13 +49,15 @@ if(option("--codec")&&option("--fixture")){
   assert.ok(actual.every(Number.isFinite));
   const channels=actual.length/(expected.length/2);
   let energy=0,error=0;
-  if(actual.length===mono.length){for(let i=0;i<mono.length;i++){energy+=mono[i]**2;error+=(mono[i]-actual[i])**2;}}
+  const comparison=channels===2?expected:mono;
+  assert.equal(actual.length,comparison.length);
+  for(let i=0;i<comparison.length;i++){energy+=comparison[i]**2;error+=(comparison[i]-actual[i])**2;}
   result.codec={actual_codec:directory,source_channels:fixture.channels,decoded_channels:channels,
     samples:actual.length,reference_stereo_samples:expected.length,
-    agrees_with_reference_MONO_db:10*Math.log10(Math.max(energy,1e-30)/Math.max(error,1e-30)),
+    reference_channels:channels,agrees_with_reference_fixed_gain_db:10*Math.log10(Math.max(energy,1e-30)/Math.max(error,1e-30)),
     stereo_preserved:channels===2};
 }
-result.parity_gate_passed=gainBeforeClipping&&result.codec?.stereo_preserved===true;
+result.parity_gate_passed=gainBeforeClipping&&stereoPreserved&&result.codec?.stereo_preserved===true&&result.codec.agrees_with_reference_fixed_gain_db>=35;
 if(option("--output"))await writeFile(option("--output"),JSON.stringify(result,null,2)+"\n");
 console.log(JSON.stringify(result));
 if(requireParity&&!result.parity_gate_passed)process.exitCode=1;

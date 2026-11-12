@@ -67,7 +67,7 @@ struct Devices {
     _reference: Option<cpal::Stream>,
     capture: Option<Consumer<f32>>,
     capture_timeline: Timeline,
-    playback: Producer<f32>,
+    playback: Producer<[f32; 2]>,
     /// Output callbacks that found the ring empty; written by the device thread.
     underruns: Arc<AtomicU32>,
     /// What the speakers play, for the canceller (while it is in use).
@@ -179,7 +179,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     // Start-up underruns (the device starts before the ring is filled) are not a signal.
     let mut skip_window = true;
     let mut capture_frame = [0.; FRAME];
-    let mut mix = [0.; FRAME];
+    let mut mix = [[0.; 2]; FRAME];
+    let mut mono_effects = [0.; FRAME];
     // Local test mode (Settings): capture and process, but never encode or send.
     let mut preview = false;
     let mut loopback = false;
@@ -424,21 +425,27 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         while open.playback.slots() >= FRAME
             && RING - open.playback.slots() < controller.playback_samples()
         {
-            mix.fill(0.);
+            mix.fill([0.; 2]);
+            mono_effects.fill(0.);
             mixer.mix(&mut mix);
             if loopback {
-                for (out, sample) in mix.iter_mut().zip(looped.drain(..looped.len().min(FRAME))) {
+                for (out, sample) in mono_effects
+                    .iter_mut()
+                    .zip(looped.drain(..looped.len().min(FRAME)))
+                {
                     *out += sample;
                 }
             }
             if let Some(probe) = probe.as_mut() {
-                probe.render(&mut mix);
+                probe.render(&mut mono_effects);
             }
             // Effects join the output here, so the canceller's reference (a
             // recording of the device, or what this ring hands it) has them.
-            effects.mix(&mut mix, Instant::now());
-            for sample in &mut mix {
-                *sample = sample.clamp(-1., 1.);
+            effects.mix(&mut mono_effects, Instant::now());
+            for (frame, effect) in mix.iter_mut().zip(&mono_effects) {
+                for sample in frame {
+                    *sample = (*sample + effect).clamp(-1., 1.);
+                }
             }
             let (pushed, _) = open.playback.push_partial_slice(&mix);
             if pushed.len() < FRAME {
@@ -447,7 +454,16 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             // With a reference recording, far-end activity is judged from it
             // (all applications) when it reaches the canceller, below.
             if open.reference.is_none() {
-                controller.observe_render(&mix);
+                // Activity detection must not cancel antiphase LR; this is not
+                // the AEC reference, which keeps the actual two channels below.
+                for (mono, frame) in far_mono.iter_mut().zip(&mix) {
+                    *mono = if frame[0].abs() >= frame[1].abs() {
+                        frame[0]
+                    } else {
+                        frame[1]
+                    };
+                }
+                controller.observe_render(&far_mono);
             }
         }
         if last_window.elapsed() >= WINDOW {
@@ -508,7 +524,13 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                                     .iter_mut()
                                     .zip(frame.chunks_exact(reference.channels))
                                 {
-                                    *mono = samples.iter().sum::<f32>() / reference.channels as f32;
+                                    // Activity is not an acoustic downmix: opposite
+                                    // LR phases must not conceal far-end playback.
+                                    *mono = samples
+                                        .iter()
+                                        .copied()
+                                        .max_by(|a, b| a.abs().total_cmp(&b.abs()))
+                                        .unwrap_or(0.);
                                 }
                                 controller.observe_render(&far_mono);
                             }
@@ -984,11 +1006,11 @@ fn open_host(
     let config = output_device
         .default_output_config()
         .map_err(|error| error.to_string())?;
-    let (playback, playback_consumer) = RingBuffer::<f32>::new(RING);
+    let (playback, playback_consumer) = RingBuffer::<[f32; 2]>::new(RING);
     let underruns = Arc::new(AtomicU32::new(0));
     // What the output callback hands to the device: the reference where the
     // output device cannot be recorded.
-    let (played_samples, played_consumer) = RingBuffer::<f32>::new(reference::RING_FRAMES);
+    let (played_samples, played_consumer) = RingBuffer::<f32>::new(2 * reference::RING_FRAMES);
     let (played_stamper, played_timeline) = reference::stamped();
     let played = (
         Played {
@@ -1035,7 +1057,7 @@ fn open_host(
                 Some(Reference {
                     samples: played_consumer,
                     timeline: played_timeline,
-                    channels: 1,
+                    channels: 2,
                     index: 0,
                 })
             }
@@ -1393,7 +1415,7 @@ fn output_stream<T>(
     device: &cpal::Device,
     config: cpal::StreamConfig,
     tx: SyncSender<Event>,
-    (mut ring, underruns): (Consumer<f32>, Arc<AtomicU32>),
+    (mut ring, underruns): (Consumer<[f32; 2]>, Arc<AtomicU32>),
     (mut played, clock): (Played, Clock),
 ) -> Result<cpal::Stream, String>
 where
@@ -1425,14 +1447,14 @@ where
         .map_err(|error| error.to_string())
 }
 
-/// 48 kHz mono playback to the device's rate and channel count. Runs on the
+/// 48 kHz stereo playback to the device's rate and channel count. Runs on the
 /// device thread: it must not lock, allocate or block (see the tests).
 struct PlaybackConverter {
     channels: usize,
     step: f64,
     position: f64,
-    previous: f32,
-    next: f32,
+    previous: [f32; 2],
+    next: [f32; 2],
 }
 
 impl PlaybackConverter {
@@ -1441,8 +1463,8 @@ impl PlaybackConverter {
             channels,
             step: f64::from(RATE) / f64::from(rate),
             position: 0.,
-            previous: 0.,
-            next: 0.,
+            previous: [0.; 2],
+            next: [0.; 2],
         }
     }
 
@@ -1452,7 +1474,7 @@ impl PlaybackConverter {
     fn pull<T>(
         &mut self,
         data: &mut [T],
-        ring: &mut Consumer<f32>,
+        ring: &mut Consumer<[f32; 2]>,
         played: &mut Producer<f32>,
     ) -> (bool, u64)
     where
@@ -1461,17 +1483,35 @@ impl PlaybackConverter {
         let mut dry = false;
         let mut handed = 0;
         for frame in data.chunks_exact_mut(self.channels) {
-            let sample = self.previous + (self.next - self.previous) * self.position as f32;
-            frame.fill(T::from_sample(sample));
+            let sample = std::array::from_fn::<_, 2, _>(|channel| {
+                self.previous[channel]
+                    + (self.next[channel] - self.previous[channel]) * self.position as f32
+            });
+            // CPAL's portable config does not expose a speaker mask. One channel
+            // deliberately folds LR; >=2 maps front-left/right and silences extras.
+            frame.fill(T::from_sample(0.));
+            frame[0] = T::from_sample(if self.channels == 1 {
+                (sample[0] + sample[1]) * 0.5
+            } else {
+                sample[0]
+            });
+            if self.channels >= 2 {
+                frame[1] = T::from_sample(sample[1]);
+            }
             self.position += self.step;
             while self.position >= 1. {
                 self.position -= 1.;
                 self.previous = self.next;
                 self.next = ring.pop().unwrap_or_else(|_| {
                     dry = true;
-                    0.
+                    [0.; 2]
                 });
-                if played.push(self.next).is_ok() {
+                let reference = if self.channels == 1 {
+                    [(self.next[0] + self.next[1]) * 0.5; 2]
+                } else {
+                    self.next
+                };
+                if played.push_entire_slice(&reference).is_ok() {
                     handed += 1;
                 }
             }
@@ -1572,7 +1612,7 @@ mod tests {
         // Typical device shapes: 44.1 kHz stereo i16 capture, 48 kHz 6-channel
         // f32 playback, and 96 kHz u16 to exercise resampling both ways.
         let (mut capture_ring, mut capture_out) = RingBuffer::<f32>::new(RING);
-        let (mut playback_in, mut playback_ring) = RingBuffer::<f32>::new(RING);
+        let (mut playback_in, mut playback_ring) = RingBuffer::<[f32; 2]>::new(RING);
         let mut capture = CaptureConverter::new(2, 44_100);
         let mut playback = PlaybackConverter::new(6, 48_000);
         let mut resampled = PlaybackConverter::new(1, 96_000);
@@ -1580,11 +1620,11 @@ mod tests {
         let mut output = [0_f32; 6 * 480];
         let mut output_u16 = [0_u16; 960];
         for _ in 0..10 {
-            let _ = playback_in.push_entire_slice(&[0.25; FRAME]);
+            let _ = playback_in.push_entire_slice(&[[0.25; 2]; FRAME]);
         }
         // The reference paths: what the output callback played, and a stereo
         // recording of the output device, both stamped on the shared clock.
-        let (mut played, mut played_out) = RingBuffer::<f32>::new(reference::RING_FRAMES);
+        let (mut played, mut played_out) = RingBuffer::<f32>::new(2 * reference::RING_FRAMES);
         let (mut recorded, mut recorded_out) = RingBuffer::<f32>::new(2 * reference::RING_FRAMES);
         let mut recording = ReferenceConverter::new(2, 44_100);
         let (mut stamper, _timeline) = reference::stamped();
@@ -1619,6 +1659,36 @@ mod tests {
         );
         assert!(dry > 0, "the test should also cover the underrun path");
         assert!(output.iter().all(|sample| sample.is_finite()));
+    }
+
+    #[test]
+    fn playback_preserves_stereo_mono_mapping_and_the_actual_fallback_reference() {
+        for channels in [1, 2, 6] {
+            let (mut input, mut consumer) = RingBuffer::<[f32; 2]>::new(16);
+            input.push_entire_slice(&[[0.5, -0.25]; 8]).unwrap();
+            let (mut reference, mut samples) = RingBuffer::<f32>::new(32);
+            let mut converter = PlaybackConverter::new(channels, 48_000);
+            let mut output = vec![0_f32; channels * 6];
+            let (dry, handed) = converter.pull(&mut output, &mut consumer, &mut reference);
+            assert!(!dry);
+            assert_eq!(handed, 6, "reference timestamps count frames, not scalars");
+            let last = &output[output.len() - channels..];
+            if channels == 1 {
+                assert_eq!(last, [0.125]);
+            } else {
+                assert_eq!(&last[..2], [0.5, -0.25]);
+                assert!(last[2..].iter().all(|value| *value == 0.));
+            }
+            let expected = if channels == 1 {
+                [0.125; 2]
+            } else {
+                [0.5, -0.25]
+            };
+            for _ in 0..handed {
+                assert_eq!([samples.pop().unwrap(), samples.pop().unwrap()], expected);
+            }
+            assert!(samples.pop().is_err());
+        }
     }
 
     #[test]

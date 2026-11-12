@@ -14,40 +14,53 @@ export class PcmMixer {
     this.enabled = Boolean(enabled && this.epoch);
     this.speakers.clear();
   }
-  enqueue({epoch, speaker, samples, volume = 1}) {
+  enqueue({epoch, speaker, samples, volume = 1, channels = 1, frames = samples?.length / channels}) {
     if (!this.enabled || epoch !== this.epoch || !Number.isInteger(speaker) || speaker < 0 || speaker > 0xffffffff ||
-        !(samples instanceof Float32Array) || samples.length < 1 || samples.length > MAX_QUEUED_SAMPLES ||
+        !(samples instanceof Float32Array) || ![1,2].includes(channels) || !Number.isInteger(frames) ||
+        frames < 1 || frames > MAX_QUEUED_SAMPLES || samples.length !== frames * channels ||
         !Number.isFinite(volume) || volume < 0 || volume > 4) return false;
     if (samples.some(value => !Number.isFinite(value))) return false;
     let state = this.speakers.get(speaker);
     if (!state) {
       if (this.speakers.size >= MAX_SPEAKERS) return false;
-      state = {data:new Float32Array(MAX_QUEUED_SAMPLES), read:0, size:0, idle:0, hold:AUDIO_FRAME};
+      // Size/read/hold are FRAMES, storage is interleaved LR. Same 120 ms cap.
+      state = {data:new Float32Array(MAX_QUEUED_SAMPLES * 2), read:0, size:0, idle:0, hold:AUDIO_FRAME};
       this.speakers.set(speaker,state);
     }
-    const overflow = Math.max(0,state.size + samples.length - MAX_QUEUED_SAMPLES);
+    const overflow = Math.max(0,state.size + frames - MAX_QUEUED_SAMPLES);
     state.read = (state.read + overflow) % MAX_QUEUED_SAMPLES;
     state.size -= overflow;
-    for (let i=0;i<samples.length;i++) {
-      state.data[(state.read + state.size + i) % MAX_QUEUED_SAMPLES] = Math.max(-1,Math.min(1,samples[i])) * volume;
+    for (let i=0;i<frames;i++) {
+      const at=((state.read + state.size + i) % MAX_QUEUED_SAMPLES) * 2;
+      for(let channel=0;channel<2;channel++) {
+        // Gain before full-scale protection: finite codec overshoot can safely
+        // become quiet audio. Do not clip it irreversibly before attenuation.
+        state.data[at+channel] = Math.max(-1,Math.min(1,samples[i*channels+(channels===2?channel:0)] * volume));
+      }
     }
-    state.size += samples.length; state.idle = 0;
+    state.size += frames; state.idle = 0;
     return true;
   }
   remove(speaker) { this.speakers.delete(speaker); }
-  render(output) {
-    output.fill(0);
+  render(left,right=null) {
+    left.fill(0);right?.fill(0);
     if (!this.enabled) return;
     for (const [speaker,state] of this.speakers) {
-      // One 20 ms prebuffer per talker absorbs ordinary transport/worker jitter.
-      const offset=Math.min(output.length,state.hold);state.hold-=offset;
-      const length = Math.min(output.length-offset,state.size);
-      for(let i=0;i<length;i++) output[offset+i] += state.data[(state.read+i)%MAX_QUEUED_SAMPLES];
+      const offset=Math.min(left.length,state.hold);state.hold-=offset;
+      const length = Math.min(left.length-offset,state.size);
+      for(let i=0;i<length;i++) {
+        const at=((state.read+i)%MAX_QUEUED_SAMPLES)*2;
+        if(right){left[offset+i]+=state.data[at];right[offset+i]+=state.data[at+1];}
+        else left[offset+i]+=(state.data[at]+state.data[at+1])*.5;
+      }
       state.read=(state.read+length)%MAX_QUEUED_SAMPLES;state.size-=length;
-      state.idle=state.size===0?state.idle+output.length:0;
+      state.idle=state.size===0?state.idle+left.length:0;
       if(state.idle>AUDIO_RATE) this.speakers.delete(speaker);
     }
-    for(let i=0;i<output.length;i++) output[i]=Math.max(-1,Math.min(1,output[i]));
+    for(let i=0;i<left.length;i++) {
+      left[i]=Math.max(-1,Math.min(1,left[i]));
+      if(right)right[i]=Math.max(-1,Math.min(1,right[i]));
+    }
   }
 }
 
@@ -109,9 +122,9 @@ if(typeof registerProcessor==="function") {
       };
     }
     process(_inputs,outputs) {
-      const mono=outputs[0]?.[0];
-      if(mono)this.mixer.render(mono);
-      for(let channel=1;channel<(outputs[0]?.length||0);channel++)outputs[0][channel].set(mono);
+      const bus=outputs[0];
+      if(bus?.[0])this.mixer.render(bus[0],bus[1]||null);
+      for(let channel=2;channel<(bus?.length||0);channel++)bus[channel].fill(0);
       return true;
     }
   }

@@ -29,7 +29,7 @@ const MAX_OPUS_BYTES: usize = 1024;
 struct Speaker {
     decoder: OpusDecoder,
     jitter: JitterBuffer,
-    pcm: VecDeque<f32>,
+    pcm: VecDeque<[f32; 2]>,
     volume: f32,
     last_packet: Instant,
 }
@@ -37,7 +37,7 @@ struct Speaker {
 impl Speaker {
     fn new(now: Instant) -> Result<Self, opus_pure::Error> {
         Ok(Self {
-            decoder: OpusDecoder::new(48_000, 1)?,
+            decoder: OpusDecoder::new(48_000, 2)?,
             jitter: JitterBuffer::default(),
             pcm: VecDeque::with_capacity(MAX_DECODED),
             volume: 1.,
@@ -52,7 +52,7 @@ impl Speaker {
                 Pull::Packet { opus, end } => {
                     if let Ok(count) = self.decoder.decode(&opus, MAX_PACKET_SAMPLES, scratch) {
                         self.jitter.observe_frames((count / FRAME) as u64);
-                        self.extend(&scratch[..count]);
+                        self.extend(&scratch[..2 * count]);
                     }
                     if end {
                         let _ = self.decoder.reset_state();
@@ -65,7 +65,7 @@ impl Speaker {
                         None => self.decoder.decode(&[], size, scratch),
                     };
                     if let Ok(count) = decoded {
-                        self.extend(&scratch[..count]);
+                        self.extend(&scratch[..2 * count]);
                     } else {
                         break;
                     }
@@ -79,13 +79,16 @@ impl Speaker {
         let volume = self.volume;
         // Malformed packets can decode far outside full scale (libopus does the
         // same); clamp per speaker so one bad stream cannot swamp the mix.
-        self.pcm.extend(samples.iter().map(|sample| {
-            let value = sample * volume;
-            if value.is_finite() {
-                value.clamp(-1., 1.)
-            } else {
-                0.
-            }
+        self.pcm.extend(samples.chunks_exact(2).map(|frame| {
+            let scaled = |sample: f32| {
+                let value = sample * volume;
+                if value.is_finite() {
+                    value.clamp(-1., 1.)
+                } else {
+                    0.
+                }
+            };
+            [scaled(frame[0]), scaled(frame[1])]
         }));
         // Never accumulate more than 200 ms of decoded audio per speaker.
         let excess = self.pcm.len().saturating_sub(MAX_DECODED);
@@ -113,7 +116,7 @@ impl Default for Mixer {
     fn default() -> Self {
         Self {
             speakers: BTreeMap::new(),
-            scratch: vec![0.; MAX_PACKET_SAMPLES],
+            scratch: vec![0.; 2 * MAX_PACKET_SAMPLES],
         }
     }
 }
@@ -174,14 +177,15 @@ impl Mixer {
     }
 
     /// Add one frame of every speaker's audio to `mix`.
-    pub fn mix(&mut self, mix: &mut [f32; FRAME]) {
+    pub fn mix(&mut self, mix: &mut [[f32; 2]; FRAME]) {
         for speaker in self.speakers.values_mut() {
             speaker.fill(&mut self.scratch);
             for (out, sample) in mix
                 .iter_mut()
                 .zip(speaker.pcm.drain(..speaker.pcm.len().min(FRAME)))
             {
-                *out += sample;
+                out[0] += sample[0];
+                out[1] += sample[1];
             }
         }
     }
@@ -247,10 +251,11 @@ mod tests {
     fn peak(mixer: &mut Mixer, frames: usize) -> f32 {
         let mut loudest = 0_f32;
         for _ in 0..frames {
-            let mut frame = [0.; FRAME];
+            let mut frame = [[0.; 2]; FRAME];
             mixer.mix(&mut frame);
             loudest = frame
                 .iter()
+                .flatten()
                 .fold(loudest, |peak, sample| peak.max(sample.abs()));
         }
         loudest

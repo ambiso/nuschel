@@ -88,11 +88,11 @@ test("late decoder replies are discarded while a current realtime frame reaches 
   audio.playbackNode={port:{postMessage:message=>output.push(message)},disconnect:()=>{}};
   const packet={...voice(),speaker:7,sequence:"0",opus:new Uint8Array([0xf8,0xff,0xfe]),end:false,volume:1};
   assert.equal(audio.receive(packet),true);const current=sent.at(-1);
-  audio.workerMessage({kind:"decoded",epoch:audio.epoch,job:current.job,speaker:7,samples:new Float32Array(AUDIO_FRAME),volume:1});
+  audio.workerMessage({kind:"decoded",epoch:audio.epoch,job:current.job,speaker:7,samples:new Float32Array(AUDIO_FRAME*2),channels:2,frames:AUDIO_FRAME,volume:1});
   assert.equal(output.length,1);
   assert.equal(audio.receive({...packet,sequence:"2"}),true);const late=sent.at(-1);
   await new Promise(resolve=>setTimeout(resolve,150));
-  audio.workerMessage({kind:"decoded",epoch:audio.epoch,job:late.job,speaker:7,samples:new Float32Array(AUDIO_FRAME),volume:1});
+  audio.workerMessage({kind:"decoded",epoch:audio.epoch,job:late.job,speaker:7,samples:new Float32Array(AUDIO_FRAME*2),channels:2,frames:AUDIO_FRAME,volume:1});
   assert.equal(output.length,1);assert.equal(audio.decodeJobs.size,0);
   audio.ctx=null;await audio.dispose();
 });
@@ -151,4 +151,20 @@ test("missing and malformed encoder targets cannot open capture",async()=>{
     audio.syncVoice({...voice(),bitrate});assert.equal(audio.voice.bitrate,0);assert.equal(audio.captureEnabled(),false);
   }
   await audio.dispose();
+});
+
+
+test("stereo worklet retains LR, mono sinks fold deliberately, and gain precedes clipping",()=>{
+  const stereo=Float32Array.from({length:1920},(_,i)=>i%2===0?.2:-.3);
+  const make=()=>{const mixer=new PcmMixer();mixer.configure("stereo",true);
+    assert.ok(mixer.enqueue({epoch:"stereo",speaker:1,samples:stereo,channels:2,frames:960,volume:1}));
+    mixer.render(new Float32Array(960),new Float32Array(960));return mixer;};
+  const l=new Float32Array(128),r=new Float32Array(128);make().render(l,r);
+  assert.ok(l.every(v=>Math.abs(v-.2)<1e-6));assert.ok(r.every(v=>Math.abs(v+.3)<1e-6));
+  const mono=new Float32Array(128);make().render(mono);assert.ok(mono.every(v=>Math.abs(v+.05)<1e-6));
+  const attenuated=new PcmMixer();attenuated.configure("gain",true);
+  attenuated.enqueue({epoch:"gain",speaker:1,samples:new Float32Array(128).fill(2),volume:.25});
+  attenuated.render(new Float32Array(960));attenuated.render(mono);assert.ok(mono.every(v=>v===.5));
+  assert.equal(attenuated.enqueue({epoch:"gain",speaker:1,samples:new Float32Array(3),channels:2,frames:2}),false);
+  assert.equal(attenuated.enqueue({epoch:"gain",speaker:1,samples:new Float32Array(11522),channels:2,frames:5761}),false);
 });

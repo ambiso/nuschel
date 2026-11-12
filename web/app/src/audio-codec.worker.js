@@ -2,7 +2,7 @@
 // No session object, credentials, network endpoints or storage API is accepted.
 // This is a separate JS/WASM realm, not a promise of a separate OS process.
 import init,{VoiceEncoder,VoiceDecoder} from "./audio-codec/nuschl_audio_wasm.js";
-import {FRAME,MAX_PACKET,MAX_PCM,MAX_STREAMS,decimal} from "./audio-protocol.js";
+import {FRAME,MAX_PACKET,MAX_PCM,OUTPUT_CHANNELS,MAX_STREAMS,decimal} from "./audio-protocol.js";
 let encoder=null,epoch="",enabled=false;
 const speakers=new Map();
 let burst=0,windowStart=performance.now();
@@ -55,9 +55,9 @@ onmessage=({data})=>{
       let samples;
       try {samples=state.decoder.decode(data.opus);}
       catch(error){state.decoder.free();speakers.delete(data.speaker);throw error;}
-      if(!(samples instanceof Float32Array)||samples.length<1||samples.length>MAX_PCM)throw new Error("Invalid decoded duration");
+      if(!(samples instanceof Float32Array)||samples.length<1||samples.length>MAX_PCM*OUTPUT_CHANNELS||samples.length%OUTPUT_CHANNELS!==0)throw new Error("Invalid decoded duration");
       state.sequence=sequence;state.ended=Boolean(data.end);state.last=now;
-      postMessage({kind:"decoded",epoch,job:data.job,speaker:data.speaker,samples,volume:data.volume},[samples.buffer]);
+      postMessage({kind:"decoded",epoch,job:data.job,speaker:data.speaker,samples,channels:OUTPUT_CHANNELS,frames:samples.length/OUTPUT_CHANNELS,volume:data.volume},[samples.buffer]);
     }
   } catch(error) {
     postMessage({kind:"media-error",operation:data.kind,epoch,job:data.job,message:String(error?.message||error).slice(0,200)});

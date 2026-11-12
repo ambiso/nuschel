@@ -593,12 +593,14 @@ The media worker uses per-speaker adaptive jitter buffers and Opus loss concealm
       concealment separately. Compare high-bitrate mono/stereo, simultaneous
       speakers and deterministic loss/reordering, then the actual output path;
       codec bitrate alone does not establish playback fidelity. Active reference
-      audit (`docs/output-quality.md`): actual private native 48 kHz mono is close
-      at unity gain, but stereo collapses to identical LR (0 dB separation); compiled
-      browser WASM and actual Worklet also downmix/duplicate. Worklet clipping
-      before attenuation is independently reproduced. Fix stereo receive across
-      native and web, then filtered resampling and deterministic loss/PLC; baseline
-      failures are recorded, not claimed fixed or perceptually equivalent.
+      audit (`docs/output-quality.md`): baseline actual native/browser stereo
+      collapsed to identical LR, and Worklet clipping preceded attenuation. The
+      source correction preserves stereo native/WASM/Worklet and requested gain;
+      independent private 48 kHz native mono/stereo/overshoot fixtures now pass,
+      along with actual browser voice/privacy and existing native DSP regressions.
+      Filtered non-48 kHz conversion, browser jitter/PLC, actual browser stereo
+      destination capture and matched complete reference-Mumble output remain open.
+      These scoped results do not establish absolute perceptual equivalence.
 
 ### Optional local speech (requested 2026-11-11)
 
@@ -649,6 +651,11 @@ listed below. Plugin data remains the explicit gap.
 - [x] Channel descriptions, user comments and avatars through `RequestBlob` (23);
       parse in the content worker; decode images with a memory-safe decoder in a worker.
 - [x] Inline images in legacy HTML messages through the content worker.
+- [ ] Investigate stock-server welcome HTML rendering (2026-11-12): the private
+      screenshot fixture sends `Welcome to the <b>Nuschl</b> screenshot server.`,
+      but the real chat displays `Welcome to the bNuschl/b screenshot server.`
+      Reproduce the welcome-specific path before attributing it to HTML parsing,
+      preparation or fixture encoding; other HTML paths are not diagnosed here.
 - [x] `UserStats` (22) for the connection-info dialog.
       Profile bandwidth units corrected (2026-11-12, `d8f5999d`): the protocol
       statistic is bytes/second, so divide by 125 for kbit/s. Server bandwidth

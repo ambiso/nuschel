@@ -204,7 +204,7 @@ impl ReferenceConverter {
     }
 }
 
-/// Mono reference of what the output callback handed to the device, for
+/// Interleaved stereo reference of what the output callback handed to the device, for
 /// systems without an output recording (raw ALSA).
 pub struct Played {
     pub samples: Producer<f32>,

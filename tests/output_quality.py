@@ -92,6 +92,15 @@ def fixture(channels, seconds=2):
     return data
 
 
+def overshoot_fixture(seconds=2):
+    """Full-scale legal source whose lossy decoding has finite >1 headroom."""
+    data = []
+    for index in range(int(seconds * RATE)):
+        for frequency in (997, 2003):
+            data.append(0. if index < RATE // 5 else .99 * (1 if math.sin(2 * math.pi * frequency * index / RATE) > 0 else -1))
+    return data
+
+
 class Reference:
     def __init__(self, library):
         self.lib = ReferenceOpus(library).lib
@@ -165,7 +174,7 @@ class PrivatePulse:
             self.process.wait(timeout=5)
 
 
-def playback(binary, pulse, packets, path):
+def playback(binary, pulse, packets, path, volume=1.):
     """Actual worker receive→jitter→mix→device→private monitor, muted microphone."""
     worker = start(binary, pulse, muted=True, settings={"echo_cancellation": "off"})
     recorder = None
@@ -184,7 +193,7 @@ def playback(binary, pulse, packets, path):
             for index, packet in enumerate(packets):
                 time.sleep(max(0, at + index * .02 - time.monotonic()))
                 worker.send({"kind": "playback", "sender": 7, "sequence": index * 2,
-                             "opus": list(packet), "end": index == len(packets) - 1, "volume": 1.0})
+                             "opus": list(packet), "end": index == len(packets) - 1, "volume": volume})
             time.sleep(.5)
     finally:
         if recorder and recorder.poll() is None:
@@ -213,16 +222,20 @@ def main():
     with tempfile.TemporaryDirectory(prefix="private-pulse-", dir=args.output) as temporary:
         pulse = PrivatePulse(args.pulse_bin, Path(temporary), RATE)
         try:
-            for channels in (1, 2):
-                packets = reference.encode(fixture(channels), channels)
-                expected = reference.decode(packets, 2)
-                (args.output / f"fixture-{channels}.json").write_text(json.dumps({
+            for name, channels, volume, source in [
+                ("mono", 1, 1., fixture(1)), ("stereo", 2, 1., fixture(2)),
+                ("overshoot-attenuated", 2, .25, overshoot_fixture()),
+            ]:
+                packets = reference.encode(source, channels)
+                decoded = reference.decode(packets, 2)
+                expected = [value * volume for value in decoded]
+                (args.output / f"fixture-{name}.json").write_text(json.dumps({
                     "channels": channels, "rate": RATE, "frames_per_packet": FRAME,
                     "packets": [list(packet) for packet in packets],
-                    "reference_stereo": expected,
+                    "reference_stereo": decoded,
                     "reference_mono": reference.decode(packets, 1),
                 }) + "\n")
-                actual = playback(args.worker, pulse, packets, args.output / f"channels-{channels}.f32le")
+                actual = playback(args.worker, pulse, packets, args.output / f"{name}.f32le", volume)
                 lag = delay_only(expected[::2], actual[::2])
                 length = len(expected) // 2
                 aligned = actual[2 * lag:2 * (lag + length)]
@@ -235,7 +248,8 @@ def main():
                 separation = min(20 * math.log10(max(left997, 1e-20) / max(right997, 1e-20)),
                                  20 * math.log10(max(right2003, 1e-20) / max(left2003, 1e-20)))
                 passed = metrics["fixed_gain_snr_db"] >= 35 and (channels == 1 or separation >= 25)
-                report["cases"].append({"source_channels": channels, "delay_samples": lag,
+                report["cases"].append({"name": name, "source_channels": channels, "requested_volume": volume,
+                    "reference_decoder_peak": max(map(abs, decoded)), "delay_samples": lag,
                     "max_packet_bytes": max(map(len, packets)), "fits_current_1024_byte_receiver": all(len(p) <= 1024 for p in packets),
                     "metrics": metrics, "stereo_separation_db": separation if channels == 2 else None,
                     "parity_gate_passed": passed})

@@ -52,6 +52,62 @@ reference libopus was 1.6.1. Browser WASM was the existing
 retains the same receive behavior. No new production fix is represented by this
 baseline checkpoint.
 
+## Stereo/gain correction checkpoint
+
+The first production change preserves two channels end to end. Native decoded
+queues and playback rings hold LR frames; decoder sample capacity doubles while
+queue duration remains 200 ms per speaker and the playback target stays measured
+in frames. Browser decode replies explicitly carry two channels and their frame
+count; the controller checks the exact interleaved length before forwarding.
+Worklet storage remains 120 ms per speaker (now two scalar samples per frame).
+Mono input Opus is duplicated by the stereo decoder. Mono output deliberately
+averages LR; native outputs with at least two channels map front-left/right and
+silence additional channels because portable CPAL does not supply a speaker mask.
+The browser requests two Worklet channels and lets Web Audio map its destination.
+
+Mono UI sounds/probes enter both native channels. The fallback echo reference
+retains actual LR (or duplicated folded mono for a mono device) and frame-based
+timestamps. System output recording still supplies its original reference path.
+AEC receives full interleaved reference audio; only far-end *activity detection*
+uses the louder channel so antiphase LR cannot look silent. Capture/startup,
+consent, Step/MAX_HOLD and microphone timestamp sequencing are unchanged. The
+non-live codec IPC retains its existing mono `Samples` semantics.
+
+Native and browser per-speaker gain precedes defensive full-scale protection;
+WASM decoding preserves finite codec headroom instead of clipping before user
+attenuation. Malformed/nonfinite audio and final mix clipping remain bounded.
+The independent high-level fixture uses legal full-scale square-wave input whose
+reference decode peaks at 1.6275; at volume 0.25 no output clipping is necessary.
+
+After the change the actual private native monitor passes all three gates:
+mono 77.4 dB, stereo 77.4 dB with 75.6 dB LR separation, and attenuated decoder
+overshoot 82.9 dB with 69.8 dB separation, all at fixed intended gain. The compiled
+browser stereo WASM matches reference stereo by 138.5 dB on the quiet fixture
+and 132.0 dB on the separate overshoot fixture. Actual Worklet code preserves LR,
+folds mono deliberately, and returns 0.5 for 2.0 × 0.25. These values describe the
+specific test paths and are not perceptual scores.
+
+The media-worker suite passed 52 tests with two pre-existing ignored cases,
+including no-allocation device callbacks and stereo fallback-reference mapping.
+Three native WASM-codec tests, twelve browser audio unit tests and the real codec's changing-bitrate checks
+passed. The existing complete private Pulse suite passed jitter/loss/reordering,
+upstream AEC routing, echo probe, double talk, input clipping and sound isolation:
+zero silent 20 ms jitter windows, 45 dB echo reduction, 0.9 dB double-talk level
+change, and effects six dB quieter at half volume. The actual confined Chromium
+fixture also passed real Opus/Worklet sound to a null sink, mute/deafen flush,
+late permission cancellation, rapid controls and reconnect consent revocation.
+It received 26 packets and independently retained the synthetic 997 Hz carrier.
+This browser call regression is mono transmit; end-to-end browser stereo device
+rendering remains a separate fixture beyond the Node Worklet/WASM LR proof.
+
+Final native leaf: `p353gcinf8cn44asqk92vim94bgqlyp1-rust_nuschl-media-worker-0.1.0-linked`.
+Browser codec: `b22x40is12ysqrhi4h29dlm0v7vxdpzk-nuschl-web-audio-codec`.
+Evidence: `native-final-gain/`, `web-stereo.json`, `web-overshoot-stereo.json`,
+`native-dsp-regressions.log`, `browser-stereo-privacy/browser-proof.json` and
+`browser-stereo-privacy/reference-proof.json` in the same owned disk cache.
+Filtered non-48 kHz conversion, browser loss/PLC and matched full reference-Mumble
+playback remain open; the stereo checkpoint does not certify those paths.
+
 ## Source audit
 
 The local clean Mumble checkout was pinned at
@@ -65,7 +121,7 @@ preserves stereo into stereo output; downmixing occurs for mono destinations or
 specific recording/positional cases. This is a source baseline, not a completed
 live reference-Mumble output capture.
 
-Current Nuschl boundaries:
+Baseline Nuschl boundaries (the correction above addresses stereo and gain):
 
 - Native `Mixer` always constructs a mono decoder and returns mono frames.
   `PlaybackConverter` duplicates them to every device channel. Per-speaker volume

@@ -13,7 +13,8 @@ pub const DEFAULT_BITRATE: u32 = 128_000;
 pub const MIN_BITRATE: u32 = 6_000;
 /// Leaves space for Mumble's header inside its 1024-byte tunneled voice bound.
 pub const MAX_ENCODED_BYTES: usize = 960;
-pub const MAX_DECODED_SAMPLES: usize = MAX_PACKET_SAMPLES;
+pub const OUTPUT_CHANNELS: usize = 2;
+pub const MAX_DECODED_SAMPLES: usize = MAX_PACKET_SAMPLES * OUTPUT_CHANNELS;
 
 #[cfg_attr(all(target_arch = "wasm32", target_os = "unknown"), wasm_bindgen)]
 pub struct VoiceEncoder {
@@ -79,37 +80,35 @@ impl VoiceDecoder {
     )]
     pub fn new() -> Result<Self, String> {
         Ok(Self {
-            decoder: OpusDecoder::new(SAMPLE_RATE as i32, 1).map_err(|error| error.to_string())?,
+            decoder: OpusDecoder::new(SAMPLE_RATE as i32, OUTPUT_CHANNELS)
+                .map_err(|error| error.to_string())?,
         })
     }
 
-    /// Accept normal raw Opus packets, including stereo packets downmixed by
-    /// Opus to mono. Reject invalid duration before entering the decoder.
+    /// Interleaved stereo PCM; mono Opus is duplicated without losing stereo
+    /// input. The return length is frame count times OUTPUT_CHANNELS.
     pub fn decode(&mut self, encoded: &[u8]) -> Result<Vec<f32>, String> {
         if encoded.is_empty() || encoded.len() > 1024 {
             return Err("invalid Opus packet size".into());
         }
         let expected = packet::samples_48k(encoded).map_err(|error| error.to_string())?;
-        if expected == 0 || expected > MAX_DECODED_SAMPLES {
+        if expected == 0 || expected > MAX_PACKET_SAMPLES {
             return Err("invalid Opus packet duration".into());
         }
         let mut output = vec![0.; MAX_DECODED_SAMPLES];
         let count = self
             .decoder
-            .decode(encoded, MAX_DECODED_SAMPLES, &mut output)
+            .decode(encoded, MAX_PACKET_SAMPLES, &mut output)
             .map_err(|error| error.to_string())?;
         if count != expected {
             return Err("decoded Opus duration mismatch".into());
         }
-        output.truncate(count);
+        output.truncate(count * OUTPUT_CHANNELS);
         if output.iter().any(|value| !value.is_finite()) {
             return Err("non-finite decoded audio".into());
         }
-        // Clipping is bounded before mixing. No speech DSP or extra AEC here;
-        // microphone echo/noise processing belongs to the browser capture API.
-        for value in &mut output {
-            *value = value.clamp(-1., 1.);
-        }
+        // Preserve finite codec headroom until requested gain is applied by
+        // the bounded mixer. Clipping here distorts even attenuated playback.
         Ok(output)
     }
 }
@@ -135,8 +134,8 @@ mod tests {
             let encoded = encoder.encode(&pcm).unwrap();
             assert!(encoded.len() <= MAX_ENCODED_BYTES);
             let output = decoder.decode(&encoded).unwrap();
-            assert_eq!(output.len(), FRAME_SAMPLES);
-            samples.extend(output);
+            assert_eq!(output.len(), FRAME_SAMPLES * OUTPUT_CHANNELS);
+            samples.extend(output.chunks_exact(OUTPUT_CHANNELS).map(|frame| frame[0]));
         }
         let energy: f32 = samples.iter().map(|v| v * v).sum::<f32>() / samples.len() as f32;
         assert!(
@@ -182,7 +181,10 @@ mod tests {
                     .collect();
                 let encoded = encoder.encode(&pcm).unwrap();
                 assert!(encoded.len() <= (bitrate / 400) as usize);
-                assert_eq!(decoder.decode(&encoded).unwrap().len(), FRAME_SAMPLES);
+                assert_eq!(
+                    decoder.decode(&encoded).unwrap().len(),
+                    FRAME_SAMPLES * OUTPUT_CHANNELS
+                );
             }
         }
         for invalid in [0, 5999, 128_001, u32::MAX] {
@@ -207,6 +209,9 @@ mod tests {
         assert!(decoder.decode(&[]).is_err());
         assert!(decoder.decode(&vec![0; 1025]).is_err());
         assert!(decoder.decode(&[0xff, 0xff]).is_err());
-        assert_eq!(decoder.decode(&packet).unwrap().len(), FRAME_SAMPLES);
+        assert_eq!(
+            decoder.decode(&packet).unwrap().len(),
+            FRAME_SAMPLES * OUTPUT_CHANNELS
+        );
     }
 }

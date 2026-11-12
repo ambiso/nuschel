@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: EUPL-1.2
-import {context,sameContext,sameDestination,validPacket,FRAME,RATE,MAX_PENDING,MAX_PCM} from "./audio-protocol.js";
+import {context,sameContext,sameDestination,validPacket,FRAME,RATE,MAX_PENDING,MAX_PCM,OUTPUT_CHANNELS} from "./audio-protocol.js";
 
 // The UI owns this adapter; the codec worker receives only PCM/Opus, local
 // epochs and speaker numbers. No SDK client, identity, endpoint or key crosses.
@@ -77,7 +77,7 @@ export class BrowserAudio {
     }
     if(this.disposed)return;
     this.captureNode=new AudioWorkletNode(this.ctx,"nuschl-capture",{numberOfInputs:1,numberOfOutputs:1,outputChannelCount:[1],channelCount:1,channelCountMode:"explicit"});
-    this.playbackNode=new AudioWorkletNode(this.ctx,"nuschl-playback",{numberOfInputs:0,numberOfOutputs:1,outputChannelCount:[1]});
+    this.playbackNode=new AudioWorkletNode(this.ctx,"nuschl-playback",{numberOfInputs:0,numberOfOutputs:1,outputChannelCount:[OUTPUT_CHANNELS]});
     this.output=this.ctx.createGain();this.output.gain.value=0;
     this.captureNode.connect(this.ctx.destination); // processor emits zeros only
     this.playbackNode.connect(this.output).connect(this.ctx.destination);
@@ -241,11 +241,11 @@ export class BrowserAudio {
       const pending=this.decodeJobs.get(data.job);this.decodeJobs.delete(data.job);
       if(pending&&performance.now()-pending.started<=120&&sameContext(pending.context,this.voice)&&
           data.kind==="decoded"&&this.playbackEnabled()&&this.playbackJobs.size<MAX_PENDING&&
-          data.samples instanceof Float32Array&&data.samples.length>0&&data.samples.length<=MAX_PCM&&
+          data.samples instanceof Float32Array&&data.channels===OUTPUT_CHANNELS&&Number.isInteger(data.frames)&&data.frames>0&&data.frames<=MAX_PCM&&data.samples.length===data.frames*OUTPUT_CHANNELS&&
           Number.isInteger(data.speaker)&&data.speaker>=0&&data.speaker<=0xffffffff&&
           Number.isFinite(data.volume)&&data.volume>=0&&data.volume<=4) {
         this.playbackJobs.add(data.job);
-        this.playbackNode.port.postMessage({kind:"playback",epoch:this.epoch,job:data.job,speaker:data.speaker,samples:data.samples,volume:data.volume},[data.samples.buffer]);
+        this.playbackNode.port.postMessage({kind:"playback",epoch:this.epoch,job:data.job,speaker:data.speaker,samples:data.samples,channels:data.channels,frames:data.frames,volume:data.volume},[data.samples.buffer]);
       }
     }
   }
