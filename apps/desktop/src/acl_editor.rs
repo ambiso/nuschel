@@ -20,7 +20,7 @@ use nuschl_core::{
     model::{AclEntry, permission},
 };
 use nuschl_session::connection::Command;
-use std::{cell::Cell, ops::Range};
+use std::{cell::Cell, ops::Range, rc::Rc};
 
 // Shared buttons occupy 35 logical pixels; keep their full hit/focus box inside
 // every fixed-height virtual row, including the final row at fractional zoom.
@@ -1032,31 +1032,39 @@ fn row_button(
     action: impl Fn(&mut Desktop, &mut Window, &mut Context<Desktop>) + 'static,
     cx: &mut Context<Desktop>,
 ) -> AnyElement {
-    div()
-        .id(SharedString::from(format!("frame-{id}")))
+    let id = SharedString::from(id);
+    let action = Rc::new(action);
+    let click = action.clone();
+    let foreground = if selected { TEXT } else { TEXT_MUTED };
+    let control = div()
+        .id(id.clone())
+        .role(Role::Button)
+        .aria_label(label.clone())
+        .tab_index(0)
         .h(px(ROW_HEIGHT))
         .w_full()
         .min_w_0()
-        .overflow_hidden()
-        .tooltip({
-            let label = label.clone();
-            move |_, cx| {
-                cx.new(|_| crate::dialogs::Tooltip(label.clone().into()))
-                    .into()
+        .flex()
+        .items_center()
+        .px_3()
+        .rounded(px(6.))
+        .cursor_pointer()
+        .bg(color(if selected { ELEVATED } else { MAIN }))
+        .hover(|style| style.bg(color(HOVER)))
+        .text_sm()
+        .text_color(color(foreground))
+        .on_click(cx.listener(move |this, _, window, cx| click(this, window, cx)))
+        .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
+            if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                action(this, window, cx);
+                cx.stop_propagation();
             }
-        })
-        .child(styled_button(
-            SharedString::from(id),
+        }))
+        .child(layout::label(
+            SharedString::from(format!("{id}-label")),
             label,
-            if selected {
-                Tone::Secondary
-            } else {
-                Tone::Ghost
-            },
-            action,
-            cx,
-        ))
-        .into_any_element()
+        ));
+    layout::focusable(id, control)
 }
 
 pub fn render(view: &ServerView, editor: &Editor, cx: &mut Context<Desktop>) -> AnyElement {
