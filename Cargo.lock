@@ -6878,9 +6878,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "nuschl-audio-jitter"
+version = "0.1.0"
+
+[[package]]
 name = "nuschl-audio-wasm"
 version = "0.1.0"
 dependencies = [
+ "nuschl-audio-jitter",
  "opus-pure",
  "wasm-bindgen",
 ]
@@ -7137,6 +7142,7 @@ dependencies = [
  "allocation-counter",
  "cpal",
  "nnnoiseless",
+ "nuschl-audio-jitter",
  "nuschl-core",
  "nuschl-ipc",
  "nuschl-sandbox-windows",

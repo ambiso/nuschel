@@ -1,205 +1,38 @@
 // SPDX-License-Identifier: EUPL-1.2
-//! Per-speaker adaptive jitter buffer for Mumble voice.
-//!
-//! Mumble numbers voice frames in 10 ms units, so a 20 ms Opus packet advances
-//! the sequence by two. Packets are held until a short, adaptive target delay is
-//! buffered, then played in order. Gaps are filled by Opus in-band FEC when the
-//! following packet carries it, otherwise by packet-loss concealment. Late
-//! packets are dropped, and excess buffering is discarded instead of letting
-//! latency grow during a long call.
-use std::collections::BTreeMap;
+//! Native clock adapter for the shared, platform-independent jitter policy.
+pub use nuschl_audio_jitter::Pull;
+#[cfg(test)]
+use nuschl_audio_jitter::{CATCH_UP_MS, MAX_SEQUENCE};
 use std::time::Instant;
 
-pub const FRAME_MS: f32 = 10.;
-const MIN_TARGET_MS: f32 = 40.;
-const MAX_TARGET_MS: f32 = 200.;
-/// Excess above the target that is dropped to catch up.
-const CATCH_UP_MS: f32 = 120.;
-/// Concealment beyond this ends playout until enough audio is buffered again.
-const MAX_CONCEALED_FRAMES: u32 = 10;
-const MAX_PACKETS: usize = 64;
-/// Sequence numbers count 10 ms frames; this many take billions of years. Any
-/// sender (a server relays them unchanged) picks them, and room above them
-/// keeps the arithmetic on them from overflowing.
-const MAX_SEQUENCE: u64 = u64::MAX / 2;
-
-#[derive(Debug, PartialEq, Eq)]
-pub enum Pull {
-    /// Decode this packet; it covers `frames` 10 ms frames.
-    Packet { opus: Vec<u8>, end: bool },
-    /// The packet for the next slot is missing; recover it from `fec` (the
-    /// following packet's in-band copy) when available, else conceal.
-    Lost { fec: Option<Vec<u8>>, frames: u64 },
-    /// Nothing to play: waiting for the initial target or after an underrun.
-    Idle,
-}
-
-struct Packet {
-    opus: Vec<u8>,
-    end: bool,
-}
-
+#[derive(Default)]
 pub struct JitterBuffer {
-    packets: BTreeMap<u64, Packet>,
-    next: Option<u64>,
-    /// Origin of the packet just pulled, until its decoded duration is known.
-    pulled: Option<u64>,
-    playing: bool,
-    concealed: u32,
-    frames_per_packet: u64,
-    jitter_ms: f32,
-    last_arrival: Option<(Instant, u64)>,
-}
-
-impl Default for JitterBuffer {
-    fn default() -> Self {
-        Self {
-            packets: BTreeMap::new(),
-            next: None,
-            pulled: None,
-            playing: false,
-            concealed: 0,
-            frames_per_packet: 2,
-            jitter_ms: 0.,
-            last_arrival: None,
-        }
-    }
+    inner: nuschl_audio_jitter::JitterBuffer,
+    origin: Option<Instant>,
 }
 
 impl JitterBuffer {
-    pub fn target_ms(&self) -> f32 {
-        (self.frames_per_packet as f32 * FRAME_MS + 2.5 * self.jitter_ms + 10.)
-            .clamp(MIN_TARGET_MS, MAX_TARGET_MS)
-    }
-
-    /// Audio buffered ahead of the playout position, in milliseconds.
-    pub fn buffered_ms(&self) -> f32 {
-        let (Some(&first), Some(&last)) =
-            (self.packets.keys().next(), self.packets.keys().next_back())
-        else {
-            return 0.;
-        };
-        let start = self.next.map_or(first, |next| next.min(first));
-        (last + self.frames_per_packet).saturating_sub(start) as f32 * FRAME_MS
-    }
-
-    /// The decoder reports how many 10 ms frames a packet really carried.
-    pub fn observe_frames(&mut self, frames: u64) {
-        if (1..=12).contains(&frames) {
-            self.frames_per_packet = frames;
-            if let Some(origin) = self.pulled.take() {
-                // pull() had to predict the next tick before decoding. Correct
-                // from the packet origin, rather than inserting phantom PLC.
-                self.next = Some(origin + frames);
-            }
-        }
-    }
-
-    pub fn is_playing(&self) -> bool {
-        self.playing
-    }
-
     pub fn push(&mut self, sequence: u64, opus: Vec<u8>, end: bool, now: Instant) {
-        if sequence > MAX_SEQUENCE
-            || self.next.is_some_and(|next| sequence < next)
-            || self.packets.contains_key(&sequence)
-        {
-            return;
-        }
-        // Packet spacing is the smallest gap to a neighbour; the decoder
-        // corrects it from the actual packet duration via `observe_frames`.
-        let before = self
-            .packets
-            .range(..sequence)
-            .next_back()
-            .map(|(previous, _)| sequence - previous);
-        let after = self
-            .packets
-            .range(sequence + 1..)
-            .next()
-            .map(|(next, _)| next - sequence);
-        if let Some(spacing) = before.into_iter().chain(after).min()
-            && (1..=12).contains(&spacing)
-            && spacing < self.frames_per_packet
-        {
-            self.frames_per_packet = spacing;
-        }
-        if let Some((arrived, previous)) = self.last_arrival
-            && sequence > previous
-        {
-            // RFC 3550 interarrival jitter, in milliseconds.
-            let expected = (sequence - previous) as f32 * FRAME_MS;
-            let actual = now.duration_since(arrived).as_secs_f32() * 1000.;
-            let deviation = (actual - expected).abs().min(1000.);
-            self.jitter_ms += (deviation - self.jitter_ms) / 16.;
-        }
-        if self
-            .last_arrival
-            .is_none_or(|(_, previous)| sequence > previous)
-        {
-            self.last_arrival = Some((now, sequence));
-        }
-        self.packets.insert(sequence, Packet { opus, end });
-        while self.packets.len() > MAX_PACKETS {
-            self.packets.pop_first();
-        }
+        let origin = *self.origin.get_or_insert(now);
+        self.inner
+            .push(sequence, opus, end, now.saturating_duration_since(origin));
     }
-
-    /// The next action for the playout clock, which asks whenever this
-    /// speaker's decoded audio runs low.
     pub fn pull(&mut self) -> Pull {
-        self.pulled = None;
-        if !self.playing {
-            let end_seen = self.packets.values().any(|packet| packet.end);
-            if self.packets.is_empty() || (self.buffered_ms() < self.target_ms() && !end_seen) {
-                return Pull::Idle;
-            }
-            self.playing = true;
-            self.concealed = 0;
-            self.next = self
-                .packets
-                .first_key_value()
-                .map(|(sequence, _)| *sequence);
-        }
-        // Drop excess so latency cannot accumulate.
-        while self.buffered_ms() > self.target_ms() + CATCH_UP_MS && self.packets.len() > 1 {
-            if let Some((sequence, _)) = self.packets.pop_first() {
-                self.next = Some(sequence + self.frames_per_packet);
-            }
-        }
-        let Some(next) = self.next else {
-            self.playing = false;
-            return Pull::Idle;
-        };
-        if let Some(packet) = self.packets.remove(&next) {
-            self.concealed = 0;
-            self.next = Some(next + self.frames_per_packet);
-            self.pulled = Some(next);
-            if packet.end {
-                self.playing = false;
-                self.next = None;
-                self.pulled = None;
-            }
-            return Pull::Packet {
-                opus: packet.opus,
-                end: packet.end,
-            };
-        }
-        // Missing slot: conceal briefly, then wait to rebuffer.
-        self.concealed += 1;
-        if self.concealed > MAX_CONCEALED_FRAMES || (self.packets.is_empty() && self.concealed > 2)
-        {
-            self.playing = false;
-            self.next = None;
-            return Pull::Idle;
-        }
-        let frames = self.frames_per_packet;
-        self.next = Some(next + frames);
-        let fec = self
-            .packets
-            .get(&(next + frames))
-            .map(|packet| packet.opus.clone());
-        Pull::Lost { fec, frames }
+        self.inner.pull()
+    }
+    pub fn observe_frames(&mut self, frames: u64) {
+        self.inner.observe_frames(frames);
+    }
+    pub fn is_playing(&self) -> bool {
+        self.inner.is_playing()
+    }
+    #[cfg(test)]
+    pub fn target_ms(&self) -> f32 {
+        self.inner.target_ms()
+    }
+    #[cfg(test)]
+    pub fn buffered_ms(&self) -> f32 {
+        self.inner.buffered_ms()
     }
 }
 

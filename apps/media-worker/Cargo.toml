@@ -8,6 +8,7 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+nuschl-audio-jitter.workspace = true
 cpal = { version = "0.18.2", default-features = false }
 nnnoiseless = { version = "0.5.2", default-features = false }
 nuschl-core.workspace = true

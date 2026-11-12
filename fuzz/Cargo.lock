@@ -3239,6 +3239,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "nuschl-audio-jitter"
+version = "0.1.0"
+
+[[package]]
 name = "nuschl-client"
 version = "0.1.0"
 dependencies = [
@@ -3268,8 +3272,10 @@ dependencies = [
 name = "nuschl-core"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "serde",
  "sha2 0.11.1",
+ "url",
  "uuid",
 ]
 
@@ -3296,6 +3302,7 @@ dependencies = [
  "bytes",
  "image",
  "libfuzzer-sys",
+ "nuschl-audio-jitter",
  "nuschl-client",
  "nuschl-content",
  "nuschl-core",

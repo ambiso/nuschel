@@ -1,0 +1,11 @@
+[package]
+name = "nuschl-audio-jitter"
+description = "Shared bounded Mumble voice jitter policy with an explicit monotonic clock"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true

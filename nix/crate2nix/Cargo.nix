@@ -53,6 +53,16 @@ rec {
       # File a bug if you depend on any for non-debug work!
       debug = internal.debugCrate { inherit packageId; };
     };
+    "nuschl-audio-jitter" = rec {
+      packageId = "nuschl-audio-jitter";
+      build = internal.buildRustCrateWithFeatures {
+        packageId = "nuschl-audio-jitter";
+      };
+
+      # Debug support which might change between releases.
+      # File a bug if you depend on any for non-debug work!
+      debug = internal.debugCrate { inherit packageId; };
+    };
     "nuschl-audio-wasm" = rec {
       packageId = "nuschl-audio-wasm";
       build = internal.buildRustCrateWithFeatures {
@@ -22491,6 +22501,14 @@ rec {
         };
         resolvedDefaultFeatures = [ "frame-timing" ];
       };
+      "nuschl-audio-jitter" = rec {
+        crateName = "nuschl-audio-jitter";
+        version = "0.1.0";
+        edition = "2024";
+        src = lib.cleanSourceWith { filter = sourceFilter;  src = ../../crates/audio-jitter; };
+        libName = "nuschl_audio_jitter";
+
+      };
       "nuschl-audio-wasm" = rec {
         crateName = "nuschl-audio-wasm";
         version = "0.1.0";
@@ -22498,6 +22516,10 @@ rec {
         src = lib.cleanSourceWith { filter = sourceFilter;  src = ../../crates/audio-wasm; };
         libName = "nuschl_audio_wasm";type = [ "cdylib" "rlib" ];
         dependencies = [
+          {
+            name = "nuschl-audio-jitter";
+            packageId = "nuschl-audio-jitter";
+          }
           {
             name = "opus-pure";
             packageId = "opus-pure";
@@ -23424,6 +23446,10 @@ rec {
             name = "nnnoiseless";
             packageId = "nnnoiseless";
             usesDefaultFeatures = false;
+          }
+          {
+            name = "nuschl-audio-jitter";
+            packageId = "nuschl-audio-jitter";
           }
           {
             name = "nuschl-core";
