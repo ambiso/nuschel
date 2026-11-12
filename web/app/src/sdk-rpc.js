@@ -30,7 +30,7 @@ export class SdkRpc {
     this.lastState=id;this.statePending=id;return true;
   }
   ackState(id) {
-    if(this.closed||id!==this.statePending)return false;
+    if(this.closed||this.statePending===null||!Number.isSafeInteger(id)||id!==this.statePending)return false;
     try { this.worker.postMessage({method:"state_applied",args:[id]});this.statePending=null;return true; }
     catch { this.close("The browser worker could not accept its state acknowledgment. Reload to reconnect.");return false; }
   }
