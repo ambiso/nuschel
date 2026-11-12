@@ -1059,7 +1059,8 @@ The media worker uses per-speaker adaptive jitter buffers and Opus loss concealm
       compensating gain or change defaults without a targeted explanation.
 - [ ] Fix VAD becoming increasingly trigger-happy after a long period without
       speech, eventually transmitting background noise (user, 2026-11-12;
-      **highest user priority: extremely annoying**; treat as a regression).
+      **highest user priority: extremely annoying**; regression remains an open
+      question after the user's latest comparison).
       Compare cached
       older/current workers with identical frozen inputs, settings and time
       windows; distinguish changed gate/packet decisions from gain/encoding
@@ -1071,25 +1072,35 @@ The media worker uses per-speaker adaptive jitter buffers and Opus loss concealm
       gain adaptation, noise-estimator drift and stale gate state. Preserve
       immediate first-speech admission, quiet-speaker audibility and explicit
       microphone privacy; do not mask it by raising every user's threshold.
-      User supplies exact known-good baseline:
+      User supplies an older comparison baseline (initially known-good, then
+      retested with the same failure):
       `/nix/store/9na1v3n1j04xxxzp1dvv4h1i8vn375aw-nuschel-0.1.0/bin/nuschel`.
       Packaged media-worker SHA-256:
       `faf3d1edc403eb6b35e8ecca48a22f9a323e17491fac64cef4983d3ce2fa2471`.
       Its retained source is `/nix/store/6csqg71wfk2ks054h8cdppyn20c5ycpd-source`;
       production DSP/gate/AGC code is unchanged apart from the crate rename.
-      Prioritize exact old/new capture/settings/backend/reference/lifetime and
-      dependency comparisons and a minimal regression correction. Earlier 7f/ci7
-      comparisons were too recent to substitute for this known-good baseline.
+      User initially confirmed it still worked, then observed it triggering too:
+      both use default settings; walking-pad noise may be the context, and onset
+      may be slower in the old build. Preserve this correction rather than claim
+      a proven regression or dismiss the user symptom. Sensitivity is inverse to
+      Mumble's threshold convention: 0% is stricter, 100% more sensitive. User
+      tested 0% and still eventually triggers. Clarify the direction in the UI;
+      raising every user's probability threshold is not a sufficient fix.
       Active DSP owner has reproduced adaptive-gain amplification crossing the
       post-gain gate floor for a quiet, high-confidence harmonic surrogate, and
       medium-confidence frames can refresh an already-open gate indefinitely.
-      The exact ci7/xvrd/current workers share that controlled behavior; this is
+      The exact 9na/ci7/xvrd/current workers share that controlled behavior; this is
       not a claim that the synthetic surrogate is labeled room noise or that the
-      user's physical-input mechanism is fully identified. The exact known-good
-      binary must now join the controlled replay. Do not replace its unchanged
-      gate policy speculatively before locating the regression. Validate the
-      correction against frozen genuine speech, silence-to-speech recovery and
-      long-idle controls. Earshot is dropped from active work at user request;
+      user's physical-input mechanism is fully identified. Matched white-noise
+      controls stay closed in old/new builds; non-48k conversion changes marginal
+      quiet speech but has not reproduced this background failure. Test a minimal
+      correction using the existing AGC2 noise estimator: its default output
+      noise ceiling (-50 dBFS) exceeds the postprocessed gate floor (-60 dBFS).
+      Independently review indefinite medium-confidence hangover refresh. Preserve
+      cold/quiet/high-SNR speech, sustained vowels, immediate onset and actual
+      encoded level; no hard speech-duration cutoff or fixed pre-gain -60 floor.
+      Validate periodic mechanical/footfall controls without claiming synthetic
+      noise is the user's room recording. Earshot is dropped at user request;
       playback-lifetime work remains secondary.
       Claude's separate slider/threshold-helper edits must stay disjoint. Existing
       short DSP checks do not establish long-idle stability.
@@ -1098,19 +1109,11 @@ The media worker uses per-speaker adaptive jitter buffers and Opus loss concealm
       `/nix/store/ci7hdskm7ja8mg45xc9ihws7ddq8adiw-nuschl-0.1.0` (worker SHA-256
       `2c11ffc534e4a67c59a57858e0a2ae7c2b528ce3dc287307d0bb87d6e73960eb`).
       Retain this exact baseline even if restarting the current build changes it.
-- [ ] Deferred by user (2026-11-12): compare [earshot](https://github.com/pykeio/earshot) with RNNoise speech
-      probability for VAD (user, 2026-11-12), as part of the long-idle audit.
-      Pin/audit source, licence, dependencies and unsafe use; "pure Rust" alone
-      does not establish memory safety. Benchmark at matched false-positive and
-      missed-speech rates, quiet voices, first-syllable/cold+warm latency, long
-      silence/noise drift, CPU and state memory. Include the complete safe
-      48 kHz/10 ms to 16 kHz/16 ms adaptation cost and detector context, with
-      the same gate policy distinguished from detector-only scoring. Retain
-      RNNoise denoising independently of the selected VAD. No production backend
-      switch before measured evidence and memory-safety review. No further active
-      comparison work: user explicitly says to skip Earshot and fix the VAD
-      regression against the exact known-good Nuschel build instead. Retain
-      existing diagnostic evidence, without integrating a new dependency/backend.
+- [x] Stop active Earshot evaluation at user request (2026-11-12). Retain the
+      isolated comparison and source-safety evidence; no new dependency or VAD
+      backend is integrated. The urgent task is fixing long-idle false triggering
+      with the current detector. Any future adoption needs calibrated missed-
+      speech/false-positive and latency evidence plus a memory-safety review.
 - [ ] Complete receive/output parity against stock Mumble with independent PCM
       and device proofs before claiming 1:1 quality. The stereo/gain source
       checkpoint preserves native/browser LR and volume; independent native
