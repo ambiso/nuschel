@@ -1,0 +1,22 @@
+{
+  "name": "hpke-rs-crypto",
+  "version": "0.7.0",
+  "source_archive_sha256": "d2c461da2e0c9c93d875b597f0c78214fb0d2d5c57834b2ef2a2fa057fa20e24",
+  "files": [
+    {
+      "path": "src/error.rs",
+      "sha256": "7e5553157c9be4d7e6ddc15adf48ece9e562bc2d0147334fb7fd4d3e991b2586",
+      "matching_lines": []
+    },
+    {
+      "path": "src/lib.rs",
+      "sha256": "b58b0f728be5d9b0ca25a2bfd52a8af8e3c6be38bdb258f4a7cef72a54b4fe3d",
+      "matching_lines": []
+    },
+    {
+      "path": "src/types.rs",
+      "sha256": "4783305875456b9810faa739f18d984ab85c43bc5c9256608635242110e29fe3",
+      "matching_lines": []
+    }
+  ]
+}

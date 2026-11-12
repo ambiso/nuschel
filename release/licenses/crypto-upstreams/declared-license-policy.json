@@ -1,0 +1,189 @@
+{
+  "format": 1,
+  "id": "hpke-mpl2-six-pins-v1",
+  "decision": "Explicit reviewed declared-license supplement for these six exact pinned packages only. No generic SPDX fallback, fabricated copyright notice or alternative Apache/MIT grant. Preserve actual source notices and corresponding source availability. This is evidence policy, not a legal-completeness assurance.",
+  "steward": {
+    "revision": "a15178c3c7c976c67b3641af77cae0b66093a175",
+    "url": "https://raw.githubusercontent.com/mozilla/bedrock/a15178c3c7c976c67b3641af77cae0b66093a175/media/MPL/2.0/index.txt",
+    "canonical_url": "https://www.mozilla.org/MPL/2.0/index.txt",
+    "sha256": "3f3d9e0024b1921b067d6f7f88deb4a60cbe7a78e76c64e3f1d7fc3b779b9d04"
+  },
+  "packages": [
+    {
+      "name": "hpke-rs",
+      "version": "0.7.0",
+      "revision": "c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd",
+      "declared_license": "MPL-2.0",
+      "package_declaration": {
+        "local": "hpke-license-evidence/c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd/crates/protocols/hpke/Cargo.toml",
+        "upstream_path": "crates/protocols/hpke/Cargo.toml",
+        "url": "https://raw.githubusercontent.com/celabshq/libcrux/c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd/crates/protocols/hpke/Cargo.toml",
+        "sha256": "0b8bcb1d06c5aa6c86f217d28ded736237ab00d2462a138a9a64db7daef37182",
+        "role": "package-declaration"
+      },
+      "authors": [
+        "Franziskus Kiefer <franziskuskiefer@gmail.com>"
+      ],
+      "repository": "https://github.com/celabshq/libcrux",
+      "path_in_vcs": "crates/protocols/hpke",
+      "source_access": {
+        "published_crate_url": "https://static.crates.io/crates/hpke-rs/hpke-rs-0.7.0.crate",
+        "published_crate_sha256": "812de62ab573b876c6c40d7553bae9402ae3bad95b64af06f964388eecb9b7b1",
+        "repository_tree_url": "https://github.com/celabshq/libcrux/tree/c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd/crates/protocols/hpke"
+      },
+      "steward_file": "declared-hpke-mpl2/Mozilla-MPL-2.0.txt",
+      "steward_sha256": "3f3d9e0024b1921b067d6f7f88deb4a60cbe7a78e76c64e3f1d7fc3b779b9d04",
+      "header_file": "declared-hpke-mpl2/hpke-rs-0.7.0/published-source-headers.json",
+      "instructions_file": "declared-hpke-mpl2/hpke-rs-0.7.0/SOURCE-ACCESS.txt"
+    },
+    {
+      "name": "hpke-rs",
+      "version": "0.8.0",
+      "revision": "42d68bd49b244b09bd02626c6ffa95e54dc64f91",
+      "declared_license": "MPL-2.0",
+      "package_declaration": {
+        "local": "hpke-license-evidence/42d68bd49b244b09bd02626c6ffa95e54dc64f91/crates/protocols/hpke/Cargo.toml",
+        "upstream_path": "crates/protocols/hpke/Cargo.toml",
+        "url": "https://raw.githubusercontent.com/celabshq/libcrux/42d68bd49b244b09bd02626c6ffa95e54dc64f91/crates/protocols/hpke/Cargo.toml",
+        "sha256": "aadbb66358f98bc73dc1a52876d082ee0f4b4282650d9dd06bfae78457b1d382",
+        "role": "package-declaration"
+      },
+      "authors": [
+        "Franziskus Kiefer <franziskuskiefer@gmail.com>"
+      ],
+      "repository": "https://github.com/celabshq/libcrux",
+      "path_in_vcs": "crates/protocols/hpke",
+      "source_access": {
+        "published_crate_url": "https://static.crates.io/crates/hpke-rs/hpke-rs-0.8.0.crate",
+        "published_crate_sha256": "deb74477a6c7f6e8e9c68de06fe928db79b3b8b9e04c900bfb729bf096df7d22",
+        "repository_tree_url": "https://github.com/celabshq/libcrux/tree/42d68bd49b244b09bd02626c6ffa95e54dc64f91/crates/protocols/hpke"
+      },
+      "steward_file": "declared-hpke-mpl2/Mozilla-MPL-2.0.txt",
+      "steward_sha256": "3f3d9e0024b1921b067d6f7f88deb4a60cbe7a78e76c64e3f1d7fc3b779b9d04",
+      "header_file": "declared-hpke-mpl2/hpke-rs-0.8.0/published-source-headers.json",
+      "instructions_file": "declared-hpke-mpl2/hpke-rs-0.8.0/SOURCE-ACCESS.txt"
+    },
+    {
+      "name": "hpke-rs-crypto",
+      "version": "0.7.0",
+      "revision": "c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd",
+      "declared_license": "MPL-2.0",
+      "package_declaration": {
+        "local": "hpke-license-evidence/c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd/crates/protocols/hpke/traits/Cargo.toml",
+        "upstream_path": "crates/protocols/hpke/traits/Cargo.toml",
+        "url": "https://raw.githubusercontent.com/celabshq/libcrux/c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd/crates/protocols/hpke/traits/Cargo.toml",
+        "sha256": "d0a22ee02c05e4cda97659017e42b4b28d350a543592bd83e64a5de1927c139f",
+        "role": "package-declaration"
+      },
+      "authors": [
+        "Franziskus Kiefer <franziskuskiefer@gmail.com>"
+      ],
+      "repository": "https://github.com/celabshq/libcrux",
+      "path_in_vcs": "crates/protocols/hpke/traits",
+      "source_access": {
+        "published_crate_url": "https://static.crates.io/crates/hpke-rs-crypto/hpke-rs-crypto-0.7.0.crate",
+        "published_crate_sha256": "d2c461da2e0c9c93d875b597f0c78214fb0d2d5c57834b2ef2a2fa057fa20e24",
+        "repository_tree_url": "https://github.com/celabshq/libcrux/tree/c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd/crates/protocols/hpke/traits"
+      },
+      "steward_file": "declared-hpke-mpl2/Mozilla-MPL-2.0.txt",
+      "steward_sha256": "3f3d9e0024b1921b067d6f7f88deb4a60cbe7a78e76c64e3f1d7fc3b779b9d04",
+      "header_file": "declared-hpke-mpl2/hpke-rs-crypto-0.7.0/published-source-headers.json",
+      "instructions_file": "declared-hpke-mpl2/hpke-rs-crypto-0.7.0/SOURCE-ACCESS.txt"
+    },
+    {
+      "name": "hpke-rs-crypto",
+      "version": "0.8.0",
+      "revision": "42d68bd49b244b09bd02626c6ffa95e54dc64f91",
+      "declared_license": "MPL-2.0",
+      "package_declaration": {
+        "local": "hpke-license-evidence/42d68bd49b244b09bd02626c6ffa95e54dc64f91/crates/protocols/hpke/traits/Cargo.toml",
+        "upstream_path": "crates/protocols/hpke/traits/Cargo.toml",
+        "url": "https://raw.githubusercontent.com/celabshq/libcrux/42d68bd49b244b09bd02626c6ffa95e54dc64f91/crates/protocols/hpke/traits/Cargo.toml",
+        "sha256": "bb9f75251f4961b2079762ab98cfbe68fc16e5f8f44d3e69c50e63e40883beab",
+        "role": "package-declaration"
+      },
+      "authors": [
+        "Franziskus Kiefer <franziskuskiefer@gmail.com>"
+      ],
+      "repository": "https://github.com/celabshq/libcrux",
+      "path_in_vcs": "crates/protocols/hpke/traits",
+      "source_access": {
+        "published_crate_url": "https://static.crates.io/crates/hpke-rs-crypto/hpke-rs-crypto-0.8.0.crate",
+        "published_crate_sha256": "72ae5655535eadbe2c8091ccc4c1913768b795dc04d1b85c821d5c41fe49d828",
+        "repository_tree_url": "https://github.com/celabshq/libcrux/tree/42d68bd49b244b09bd02626c6ffa95e54dc64f91/crates/protocols/hpke/traits"
+      },
+      "steward_file": "declared-hpke-mpl2/Mozilla-MPL-2.0.txt",
+      "steward_sha256": "3f3d9e0024b1921b067d6f7f88deb4a60cbe7a78e76c64e3f1d7fc3b779b9d04",
+      "header_file": "declared-hpke-mpl2/hpke-rs-crypto-0.8.0/published-source-headers.json",
+      "instructions_file": "declared-hpke-mpl2/hpke-rs-crypto-0.8.0/SOURCE-ACCESS.txt"
+    },
+    {
+      "name": "hpke-rs-libcrux",
+      "version": "0.7.0",
+      "revision": "c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd",
+      "declared_license": "MPL-2.0",
+      "package_declaration": {
+        "local": "hpke-license-evidence/c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd/crates/protocols/hpke/libcrux_provider/Cargo.toml",
+        "upstream_path": "crates/protocols/hpke/libcrux_provider/Cargo.toml",
+        "url": "https://raw.githubusercontent.com/celabshq/libcrux/c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd/crates/protocols/hpke/libcrux_provider/Cargo.toml",
+        "sha256": "20694d71a15bfb79d91f7a2aa59cb6ae837230a6492afe39dcc9f90bb327b0ea",
+        "role": "package-declaration"
+      },
+      "authors": [
+        "Franziskus Kiefer <franziskuskiefer@gmail.com>"
+      ],
+      "repository": "https://github.com/celabshq/libcrux",
+      "path_in_vcs": "crates/protocols/hpke/libcrux_provider",
+      "source_access": {
+        "published_crate_url": "https://static.crates.io/crates/hpke-rs-libcrux/hpke-rs-libcrux-0.7.0.crate",
+        "published_crate_sha256": "4c1ace95ef11fbbd84527eada5fc1304f66720fc4c008db30d888d62d3c52613",
+        "repository_tree_url": "https://github.com/celabshq/libcrux/tree/c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd/crates/protocols/hpke/libcrux_provider",
+        "modified_source": {
+          "project_path": "vendor/hpke-rs-libcrux",
+          "bundled_archive": "hpke-rs-libcrux-0.7.0-source.tar",
+          "patch_notice": "NUSCHEL-PATCH.md",
+          "files": {
+            ".gitignore": "44c92e3a70ad3307b7056871c2bdb096d8bfa9373f5bf06a79bb6324a20ff2fb",
+            "CHANGELOG.md": "c7ffdaecac8207c576be7b2f7450d554a1853053c2c6a691e83b62e7f41e518b",
+            "Cargo.toml": "145d2e9d065d623e94779264d78738fd79f4412a269ef0f2a3a662a500bab633",
+            "Cargo.toml.orig": "20694d71a15bfb79d91f7a2aa59cb6ae837230a6492afe39dcc9f90bb327b0ea",
+            "NUSCHEL-PATCH.md": "77b526fed5ddd63cf717c3155ac02d859ebd4a88f67a50bb704802760003c0d8",
+            "Readme.md": "4b5e286287fd91f4d3924bc404057f29c2253551870284d004dfc1aabb1afe5b",
+            "src/lib.rs": "37813af119458cd7f6d00193b5e3b1b63dda83e920cd8ba6b4d906e31c873694"
+          }
+        }
+      },
+      "steward_file": "declared-hpke-mpl2/Mozilla-MPL-2.0.txt",
+      "steward_sha256": "3f3d9e0024b1921b067d6f7f88deb4a60cbe7a78e76c64e3f1d7fc3b779b9d04",
+      "header_file": "declared-hpke-mpl2/hpke-rs-libcrux-0.7.0/published-source-headers.json",
+      "instructions_file": "declared-hpke-mpl2/hpke-rs-libcrux-0.7.0/SOURCE-ACCESS.txt"
+    },
+    {
+      "name": "hpke-rs-libcrux",
+      "version": "0.8.0",
+      "revision": "42d68bd49b244b09bd02626c6ffa95e54dc64f91",
+      "declared_license": "MPL-2.0",
+      "package_declaration": {
+        "local": "hpke-license-evidence/42d68bd49b244b09bd02626c6ffa95e54dc64f91/crates/protocols/hpke/libcrux_provider/Cargo.toml",
+        "upstream_path": "crates/protocols/hpke/libcrux_provider/Cargo.toml",
+        "url": "https://raw.githubusercontent.com/celabshq/libcrux/42d68bd49b244b09bd02626c6ffa95e54dc64f91/crates/protocols/hpke/libcrux_provider/Cargo.toml",
+        "sha256": "c3e45b44ba632d1816c65d02b7281dff5636021c70f3fc9959cf6edbe062e196",
+        "role": "package-declaration"
+      },
+      "authors": [
+        "Franziskus Kiefer <franziskuskiefer@gmail.com>"
+      ],
+      "repository": "https://github.com/celabshq/libcrux",
+      "path_in_vcs": "crates/protocols/hpke/libcrux_provider",
+      "source_access": {
+        "published_crate_url": "https://static.crates.io/crates/hpke-rs-libcrux/hpke-rs-libcrux-0.8.0.crate",
+        "published_crate_sha256": "651d0e6fce0fc35a53150f163ffff703a54a94b095fd0f67c8eee55bb95172bf",
+        "repository_tree_url": "https://github.com/celabshq/libcrux/tree/42d68bd49b244b09bd02626c6ffa95e54dc64f91/crates/protocols/hpke/libcrux_provider"
+      },
+      "steward_file": "declared-hpke-mpl2/Mozilla-MPL-2.0.txt",
+      "steward_sha256": "3f3d9e0024b1921b067d6f7f88deb4a60cbe7a78e76c64e3f1d7fc3b779b9d04",
+      "header_file": "declared-hpke-mpl2/hpke-rs-libcrux-0.8.0/published-source-headers.json",
+      "instructions_file": "declared-hpke-mpl2/hpke-rs-libcrux-0.8.0/SOURCE-ACCESS.txt"
+    }
+  ]
+}

@@ -1,0 +1,47 @@
+{
+  "name": "hpke-rs",
+  "version": "0.7.0",
+  "source_archive_sha256": "812de62ab573b876c6c40d7553bae9402ae3bad95b64af06f964388eecb9b7b1",
+  "files": [
+    {
+      "path": "src/dh_kem.rs",
+      "sha256": "43accfe7e5345547e747f5647f554f509d8ce751e14db56e49d4e32d992455d5",
+      "matching_lines": []
+    },
+    {
+      "path": "src/kdf.rs",
+      "sha256": "bbeecbbb90935104c3497ad360cf465f40782bbc850732e0f0c2e32a1aa799f2",
+      "matching_lines": []
+    },
+    {
+      "path": "src/kem.rs",
+      "sha256": "8f0276be5f518d5e9a9b8f5aee0377700314b9bf4eefc4b3f2288be922059276",
+      "matching_lines": []
+    },
+    {
+      "path": "src/lib.rs",
+      "sha256": "9254977bd1a8ed4896c826fe7b8b7968e2c25b0a8aca4b3b5bb130323b10ec25",
+      "matching_lines": []
+    },
+    {
+      "path": "src/prelude.rs",
+      "sha256": "42d4230d6d96581e1cee1c11c9c6a22e578ee3da59f6ca86e85314757a92a38e",
+      "matching_lines": []
+    },
+    {
+      "path": "src/test_aead.rs",
+      "sha256": "d5dffd792d70b6dcd26e2d375f111a1648ee7454e2315d0c4dffbf343b892d6b",
+      "matching_lines": []
+    },
+    {
+      "path": "src/test_kdf.rs",
+      "sha256": "e7d698887aa6c1611b1403384b764429faf264b341cf39e38a917596eed62f84",
+      "matching_lines": []
+    },
+    {
+      "path": "src/util.rs",
+      "sha256": "5b9779a50561fa0050c7bc6a29cedabd6010882a27b04048645df0da8f238b30",
+      "matching_lines": []
+    }
+  ]
+}

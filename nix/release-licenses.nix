@@ -29,7 +29,7 @@ let
   roots = pkgs.writeText "nuschl-license-roots.json" (builtins.toJSON rootsByTarget);
   external = pkgs.writeText "nuschl-external-notices.json" (builtins.toJSON externalNotices);
   collect = pkgs.writeText "nuschl-collect-licenses.py" ''
-    import hashlib, json, os, pathlib, re, shutil, subprocess
+    import hashlib, io, json, os, pathlib, re, runpy, shutil, subprocess, tarfile
 
     source = pathlib.Path.cwd().resolve()
     out = pathlib.Path(os.environ.get('LICENSE_OUT', 'license-output')) / 'share/licenses/nuschl'
@@ -105,7 +105,8 @@ let
         return bool(re.match(r'(?i)^(licen[cs]e|copying|notice|copyright|unlicense)([._-].*|$)', path.name)
                     or any(part.upper() == 'LICENSES' for part in relative.parts[:-1]))
 
-    entries = []
+    entries, source_archives, curated_policies = [], [], []
+    declared_validator = runpy.run_path(str(source / 'release/license-evidence.py'))['validate']
     for identity, platforms in sorted(selected.items()):
         package = packages[identity]
         root = pathlib.Path(package['manifest_path']).parent.resolve()
@@ -132,6 +133,7 @@ let
                                    'origin': 'manifest-license-file'})
                 except ValueError as error:
                     issue(identity, str(error))
+        declared_source = None
         for family, supplement in supplements.get(identity, []):
             revision = supplement.get('revision', "")
             if supplement.get('status') != 'resolved' or not re.fullmatch(r'[0-9a-f]{40}', revision):
@@ -144,6 +146,31 @@ let
             if supplement.get('declared_license') != package.get('license'):
                 issue(identity, 'supplement license does not match the locked package')
                 continue
+            if supplement.get('evidence_kind') == 'declared-license-supplement':
+                try:
+                    decision = declared_validator(supplement, family, root, source)
+                    declared_source = decision['source_access']
+                    policy_path = family / 'declared-license-policy.json'
+                    if not curated_policies:
+                        digest = copy_text(policy_path, out / 'EVIDENCE-POLICY-hpke-mpl2.json')
+                        curated_policies.append({'id': 'hpke-mpl2-six-pins-v1', 'path': 'EVIDENCE-POLICY-hpke-mpl2.json', 'sha256': digest})
+                    modified = declared_source.get('modified_source')
+                    if modified:
+                        target = out / modified['bundled_archive']
+                        with tarfile.open(target, 'w', format=tarfile.USTAR_FORMAT) as archive:
+                            for relative, expected in sorted(modified['files'].items()):
+                                data = (source / modified['project_path'] / relative).read_bytes()
+                                if hashlib.sha256(data).hexdigest() != expected:
+                                    raise ValueError('modified source changed during archiving')
+                                member = tarfile.TarInfo(identity[0] + '-' + identity[1] + '/' + relative)
+                                member.size, member.mode, member.mtime = len(data), 0o644, 0
+                                archive.addfile(member, io.BytesIO(data))
+                        source_archives.append({'package': identity[0], 'version': identity[1], 'path': modified['bundled_archive'],
+                                                'size': target.stat().st_size, 'sha256': hashlib.sha256(target.read_bytes()).hexdigest(),
+                                                'files': modified['files'], 'project_path': modified['project_path']})
+                except (ValueError, KeyError, OSError, TypeError) as error:
+                    issue(identity, 'curated declared-license evidence rejected: ' + str(error))
+                    continue
             for file in supplement.get('files', []):
                 relative = pathlib.PurePosixPath(file['local'])
                 if relative.is_absolute() or '..' in relative.parts:
@@ -171,6 +198,7 @@ let
             'authors': package.get('authors', []), 'repository': package.get('repository'),
             'source': package.get('source') or 'project-path', 'targets': sorted(platforms),
             'first_party': first_party, 'files': copied,
+            'corresponding_source': declared_source,
         })
 
     assets = [
@@ -217,6 +245,7 @@ let
         'format': 1, 'scope': 'normal non-proc-macro dependency union of explicit packaged roots/targets',
         'roots_by_target': targets, 'packages': entries, 'unresolved': issues,
         'external_components': external_entries,
+        'curated_evidence_policies': curated_policies, 'source_archives': source_archives,
         'limits': [
             'Inventory is not a legal compatibility or compliance assurance.',
             'Presence of one notice does not establish every upstream embedded asset was reviewed.',

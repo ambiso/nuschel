@@ -11,6 +11,7 @@ import hashlib
 import json
 from pathlib import Path, PurePosixPath
 import re
+import runpy
 import tarfile
 import tomllib
 
@@ -136,6 +137,7 @@ def verify_notices(root, policy):
         check_files(root / "external" / item["name"], item["files"])
     if not references:
         raise ValueError("no actual notice payload")
+    runpy.run_path(str(source / "release/license-evidence.py"))["verify_bundled"](report, root, notice_hash, source)
 
 
 def evidence(directory, platform, *, repository, commit, run_id, attempt, version, filenames):

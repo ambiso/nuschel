@@ -1,0 +1,26 @@
+Corresponding Source Code Form: hpke-rs-libcrux 0.7.0
+
+Declared license: MPL-2.0
+Authors (verbatim pinned package declaration): ["Franziskus Kiefer <franziskuskiefer@gmail.com>"]
+Repository (verbatim pinned package declaration): https://github.com/celabshq/libcrux
+Git revision: c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd
+Path in that repository: crates/protocols/hpke/libcrux_provider
+
+Obtain the exact published source archive at:
+https://static.crates.io/crates/hpke-rs-libcrux/hpke-rs-libcrux-0.7.0.crate
+SHA-256: 4c1ace95ef11fbbd84527eada5fc1304f66720fc4c008db30d888d62d3c52613
+The same upstream source can be inspected at:
+https://github.com/celabshq/libcrux/tree/c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd/crates/protocols/hpke/libcrux_provider
+
+The canonical declared license is the Mozilla Public License 2.0. Its complete
+steward text is included in this notice bundle with URL/hash provenance. This
+is an explicitly reviewed declared-license supplement for this exact package
+and pin. It does not invent an upstream copyright notice, assert Apache/MIT,
+or claim that a full MPL text existed in the pinned upstream repository.
+The exact package declaration and source-header scan are retained alongside it.
+
+This application modifies the upstream Cargo.toml dependency constraints only.
+Our complete corresponding source is also bundled as
+hpke-rs-libcrux-0.7.0-source.tar in this licenses directory. It includes the
+actual patched Cargo.toml, original metadata, all Rust source and NUSCHEL-PATCH.md.
+The application source archive also retains vendor/hpke-rs-libcrux/.

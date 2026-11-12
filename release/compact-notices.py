@@ -31,6 +31,16 @@ def compact(source, destination):
     if report.get("format") != 1:
         raise ValueError("expected original inspectable inventory")
     destination.mkdir(parents=True)
+    archives = report.get("source_archives", [])
+    archive_paths = set()
+    for item in archives:
+        path = source / relative(item["path"])
+        if path.is_symlink() or path.stat().st_size != item["size"] or path.stat().st_size > 4 * 1024**2 or hashlib.sha256(path.read_bytes()).hexdigest() != item["sha256"]:
+            raise ValueError("missing or mismatched corresponding source archive")
+        if item["path"] in archive_paths:
+            raise ValueError("duplicate corresponding source archive")
+        archive_paths.add(item["path"])
+        shutil.copyfile(path, destination / item["path"])
     index, folded = {}, set()
     payload_path = destination / "THIRD-PARTY.txt"
     with payload_path.open("xb") as payload:
@@ -38,7 +48,7 @@ def compact(source, destination):
         for path in sorted(source.rglob("*")):
             if path.is_symlink():
                 raise ValueError("symlink in notice inventory")
-            if not path.is_file() or path.relative_to(source).as_posix() in {"THIRD-PARTY.json", "Cargo.lock", "README.txt"}:
+            if not path.is_file() or path.relative_to(source).as_posix() in {"THIRD-PARTY.json", "Cargo.lock", "README.txt"} | archive_paths:
                 continue
             name = path.relative_to(source).as_posix()
             relative(name)

@@ -4,7 +4,12 @@
 All package inventories here are synthetic; tests grant no release/legal approval.
 """
 import importlib.util
+import copy
+import hashlib
+import io
+import tarfile
 import json
+import os
 from pathlib import Path
 import shutil
 import unittest
@@ -101,6 +106,75 @@ class CompactNotices(unittest.TestCase):
         shutil.rmtree(self.root/"compact")
         (self.notices/"unexpected-link").symlink_to(self.root)
         with self.assertRaises(ValueError): self.output()
+
+
+class DeclaredLicensePolicy(unittest.TestCase):
+    def setUp(self):
+        self.module = load("license_evidence", ROOT / "release/license-evidence.py")
+        self.family = ROOT / "release/licenses/crypto-upstreams"
+        data = json.loads((self.family / "provenance.json").read_bytes())
+        self.entries = [row for row in data["packages"] if row.get("evidence_kind") == "declared-license-supplement"]
+        self.assertEqual(len(self.entries), 6)
+
+    def source(self, row):
+        if (row["name"], row["version"]) == ("hpke-rs-libcrux", "0.7.0"):
+            return ROOT / "vendor/hpke-rs-libcrux"
+        cache = Path(os.environ.get('NUSCHL_LICENSE_CRATE_SOURCES',
+                                    str(Path(os.environ.get('CARGO_HOME', Path.home()/'.cargo'))/'registry/src')))
+        name = row['name']+'-'+row['version']
+        candidates = [cache/name, *cache.glob('*/'+name)]
+        found = next((path for path in candidates if path.is_dir()), None)
+        if found is None:
+            raise RuntimeError('Curated tests require the cached exact published crates; set NUSCHL_LICENSE_CRATE_SOURCES')
+        return found
+
+    def test_all_six_real_pins_keep_exact_declarations_headers_and_source_access(self):
+        for row in self.entries:
+            decision = self.module.validate(row, self.family, self.source(row), ROOT)
+            self.assertEqual(decision["declared_license"], "MPL-2.0")
+
+    def test_other_versions_names_revisions_and_missing_links_are_rejected(self):
+        original = self.entries[0]
+        for mode in ('revision', 'version', 'name', 'missing-source', 'foreign-source', 'steward', 'missing-header'):
+            row = copy.deepcopy(original)
+            if mode == 'revision': row['revision'] = '0'*40
+            if mode == 'version': row['version'] = '0.9.0'
+            if mode == 'name': row['name'] = 'unreviewed-mpl-package'
+            if mode == 'missing-source': row['source_access'].pop('published_crate_url')
+            if mode == 'foreign-source': row['source_access']['repository_tree_url'] = 'https://example.invalid/'
+            if mode == 'steward': next(x for x in row['files'] if x['role']=='license-steward')['sha256'] = '0'*64
+            if mode == 'missing-header': row['files'] = [x for x in row['files'] if x['role']!='source-header-index']
+            with self.assertRaises(ValueError, msg=mode): self.module.validate(row, self.family, self.source(original), ROOT)
+
+    def test_patched_source_is_complete_and_verified_beyond_the_outer_archive_hash(self):
+        import tempfile
+        row = next(x for x in self.entries if (x['name'],x['version'])==('hpke-rs-libcrux','0.7.0'))
+        expected = self.module.validate(row,self.family,self.source(row),ROOT)['source_access']['modified_source']
+        with tempfile.TemporaryDirectory(prefix='curated-source-') as temporary:
+            root = Path(temporary)
+            policy = self.family/'declared-license-policy.json'
+            shutil.copyfile(policy,root/'EVIDENCE-POLICY-hpke-mpl2.json')
+            archive = root/expected['bundled_archive']
+            def pack(tamper=False):
+                with tarfile.open(archive,'w') as stream:
+                    for index,(name,digest) in enumerate(sorted(expected['files'].items())):
+                        raw = (ROOT/expected['project_path']/name).read_bytes()
+                        if tamper and index == 0: raw += b'changed source bytes'
+                        member = tarfile.TarInfo('hpke-rs-libcrux-0.7.0/'+name)
+                        member.size = len(raw)
+                        stream.addfile(member,io.BytesIO(raw))
+                return {'package':'hpke-rs-libcrux','version':'0.7.0','path':archive.name,'size':archive.stat().st_size,
+                        'sha256':self.module.sha(archive),'files':expected['files'],'project_path':expected['project_path']}
+            report = {'packages':[{'name':row['name'],'version':row['version'],'corresponding_source':row['source_access']}],
+                      'curated_evidence_policies':[{'id':self.module.POLICY_ID,'path':'EVIDENCE-POLICY-hpke-mpl2.json','sha256':self.module.sha(policy)}],
+                      'source_archives':[pack()]}
+            self.module.verify_bundled(report,root,self.module.sha,ROOT)
+            report['source_archives'] = [pack(tamper=True)]
+            with self.assertRaisesRegex(ValueError,'source file bytes differ'):
+                self.module.verify_bundled(report,root,self.module.sha,ROOT)
+            report['source_archives'] = []
+            with self.assertRaisesRegex(ValueError,'missing/extra'):
+                self.module.verify_bundled(report,root,self.module.sha,ROOT)
 
 
 if __name__ == "__main__":

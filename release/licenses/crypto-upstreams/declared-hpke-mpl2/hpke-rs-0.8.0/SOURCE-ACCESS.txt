@@ -1,0 +1,20 @@
+Corresponding Source Code Form: hpke-rs 0.8.0
+
+Declared license: MPL-2.0
+Authors (verbatim pinned package declaration): ["Franziskus Kiefer <franziskuskiefer@gmail.com>"]
+Repository (verbatim pinned package declaration): https://github.com/celabshq/libcrux
+Git revision: 42d68bd49b244b09bd02626c6ffa95e54dc64f91
+Path in that repository: crates/protocols/hpke
+
+Obtain the exact published source archive at:
+https://static.crates.io/crates/hpke-rs/hpke-rs-0.8.0.crate
+SHA-256: deb74477a6c7f6e8e9c68de06fe928db79b3b8b9e04c900bfb729bf096df7d22
+The same upstream source can be inspected at:
+https://github.com/celabshq/libcrux/tree/42d68bd49b244b09bd02626c6ffa95e54dc64f91/crates/protocols/hpke
+
+The canonical declared license is the Mozilla Public License 2.0. Its complete
+steward text is included in this notice bundle with URL/hash provenance. This
+is an explicitly reviewed declared-license supplement for this exact package
+and pin. It does not invent an upstream copyright notice, assert Apache/MIT,
+or claim that a full MPL text existed in the pinned upstream repository.
+The exact package declaration and source-header scan are retained alongside it.

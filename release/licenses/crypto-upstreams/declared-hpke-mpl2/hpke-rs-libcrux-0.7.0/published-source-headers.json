@@ -1,0 +1,12 @@
+{
+  "name": "hpke-rs-libcrux",
+  "version": "0.7.0",
+  "source_archive_sha256": "4c1ace95ef11fbbd84527eada5fc1304f66720fc4c008db30d888d62d3c52613",
+  "files": [
+    {
+      "path": "src/lib.rs",
+      "sha256": "37813af119458cd7f6d00193b5e3b1b63dda83e920cd8ba6b4d906e31c873694",
+      "matching_lines": []
+    }
+  ]
+}
