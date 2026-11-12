@@ -1118,6 +1118,16 @@ impl Client {
                 ));
             }
         };
+        if !server.mls {
+            let defaults = nuschl_core::model::ServerLimits::default();
+            let limits = server.limits.as_ref().unwrap_or(&defaults);
+            let wire = nuschl_legacy_html::legacy_body(&body, limits.allow_html);
+            if let Err(reason) = limits.check_text_wire(&wire) {
+                return Err(SendError::Refused(
+                    server.refuse_send(reason.to_string(), self.now_ms),
+                ));
+            }
+        }
         let channel = &server.channels[channel];
         let pending = PendingSend {
             notice_lease: server.send_refusal_lease(),
@@ -2848,6 +2858,59 @@ mod tests {
             _: Option<SearchCursor>,
         ) -> Result<(), String> {
             Ok(())
+        }
+    }
+
+    #[test]
+    fn shared_send_policy_refuses_html_total_and_wire_bytes_but_accepts_utf16_unicode() {
+        for (html, text, image, body, accepted, reason) in [
+            (
+                true,
+                0,
+                128,
+                "x".repeat(129),
+                false,
+                "128-character total HTML limit",
+            ),
+            (true, 0, 128, "x".repeat(128), true, ""),
+            (
+                true,
+                0,
+                0,
+                "&".repeat(60_000),
+                false,
+                "256 KiB client limit",
+            ),
+            (true, 1, 0, "漢".into(), true, ""),
+            (false, 1, 0, "é".into(), true, ""),
+            (true, 1, 0, "🙂".into(), false, "1-character text limit"),
+            (true, 2, 0, "🙂".into(), true, ""),
+            (
+                true,
+                50,
+                0,
+                "see https://example.test/".into(),
+                false,
+                "50-character text limit",
+            ),
+        ] {
+            let (mut client, recorder, _) = connected();
+            client.open(0, 2).unwrap();
+            client.servers[0].limits = Some(nuschl_core::model::ServerLimits {
+                allow_html: html,
+                message_length: text,
+                image_message_length: image,
+                ..Default::default()
+            });
+            recorder.requests.lock().unwrap().clear();
+            let result = client.send_text(body);
+            assert_eq!(result.is_ok(), accepted);
+            if !accepted {
+                assert!(matches!(result,Err(SendError::Refused(value)) if value.contains(reason)));
+                assert!(recorder.requests.lock().unwrap().is_empty());
+                assert!(client.servers[0].has_temporary_notice());
+                assert!(!client.sending());
+            }
         }
     }
 

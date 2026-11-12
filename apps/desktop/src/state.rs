@@ -1778,11 +1778,11 @@ impl Desktop {
         file: Option<(std::path::PathBuf, u64)>,
     ) -> Result<(), String> {
         let server = self.client.servers.iter().find(|server| server.id == key.0);
-        let (allow_html, limit) = server
-            .and_then(|server| server.limits.as_ref())
-            .map_or((true, 131_072), |limits| {
-                (limits.allow_html, limits.image_message_length)
-            });
+        let limits = server
+            .and_then(|server| server.limits.clone())
+            .unwrap_or_default();
+        let allow_html = limits.allow_html;
+        let limit = limits.inline_image_byte_budget();
         let images = self.attachments.get(key).map_or(0, |tray| {
             tray.iter()
                 .filter(|attachment| matches!(attachment, Attachment::Image { .. }))
@@ -1945,32 +1945,26 @@ impl Desktop {
             cx.notify();
             return;
         }
-        let limits = server
-            .limits
-            .as_ref()
-            .map_or((true, 131_072, 5000), |limits| {
-                (
-                    limits.allow_html,
-                    limits.image_message_length,
-                    limits.message_length,
-                )
-            });
+        let limits = server.limits.clone().unwrap_or_default();
         let images = self.attachments.get(&key).is_some_and(|tray| {
             tray.iter()
                 .any(|attachment| matches!(attachment, Attachment::Image { .. }))
         });
-        let text_length = nuschl_session::connection::legacy_body(&text, limits.0).len();
+        let wire = nuschl_session::connection::legacy_body(&text, limits.allow_html);
         let note = if server.status != Status::Connected {
             Some("Connect before sending.".to_owned())
-        } else if images && !limits.0 {
+        } else if images && !limits.allow_html {
             Some("This server does not accept images.".to_owned())
-        } else if text_length > limits.2 || text.len() > MAX_CONTENT_BYTES {
+        } else if text.len() > MAX_CONTENT_BYTES {
             Some(format!(
-                "The text exceeds this server's {}-byte limit.",
-                limits.2
+                "Message exceeds the {} KiB client limit.",
+                MAX_CONTENT_BYTES / 1024
             ))
         } else {
-            None
+            limits
+                .check_text_wire(&wire)
+                .err()
+                .map(|reason| reason.to_string())
         };
         if note.is_some() {
             self.attach_note = note.map(|note| (key, note));
@@ -1994,7 +1988,14 @@ impl Desktop {
             private: server.channels[channel].is_direct(),
             text,
             attachments: self.attachments.remove(&key).unwrap_or_default(),
-            limits: (limits.1.min(MAX_CONTENT_BYTES), limits.2),
+            limits: (
+                limits.inline_image_byte_budget(),
+                if limits.message_length == 0 {
+                    MAX_CONTENT_BYTES
+                } else {
+                    limits.message_length
+                },
+            ),
         });
         self.attach_note = None;
         self.drafts.remove(&key);

@@ -76,9 +76,9 @@ fn image_limit(server: &nuschl_client::server::ServerState) -> Result<usize, &'s
     }
     Ok(server
         .limits
-        .as_ref()
-        .map_or(131_072, |limits| limits.image_message_length)
-        .min(nuschl_core::MAX_CONTENT_BYTES))
+        .clone()
+        .unwrap_or_default()
+        .inline_image_byte_budget())
 }
 
 #[derive(Default)]
@@ -291,12 +291,13 @@ impl App {
         let mut body = String::new();
         if !caption.trim().is_empty() {
             let caption = nuschl_session::connection::legacy_body(caption, true);
-            let message_limit = server
+            if let Err(reason) = server
                 .limits
-                .as_ref()
-                .map_or(5000, |limits| limits.message_length);
-            if caption.len() > message_limit {
-                return self.warn("The caption exceeds the server's text limit.");
+                .clone()
+                .unwrap_or_default()
+                .check_text_wire(&caption)
+            {
+                return self.warn(reason.to_string());
             }
             body.push_str(&caption);
             body.push_str("<br/>");

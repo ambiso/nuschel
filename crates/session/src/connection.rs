@@ -1660,12 +1660,7 @@ struct State {
     /// Exact bounded source last emitted on this connection; duplicates stay dismissed.
     welcome_source: Option<String>,
     version: u64,
-    allow_html: bool,
-    message_limit: usize,
-    image_limit: usize,
-    max_users: Option<u32>,
-    recording_allowed: bool,
-    max_bandwidth: u32,
+    limits: nuschl_core::model::ServerLimits,
     opus: bool,
     local_muted: bool,
     local_deafened: bool,
@@ -1714,12 +1709,7 @@ impl Default for State {
             own_session: None,
             welcome_source: None,
             version: 0,
-            allow_html: true,
-            message_limit: 5000,
-            image_limit: 131_072,
-            max_users: None,
-            recording_allowed: true,
-            max_bandwidth: nuschl_core::audio::DEFAULT_SERVER_BANDWIDTH,
+            limits: nuschl_core::model::ServerLimits::default(),
             opus: true,
             local_muted: true,
             local_deafened: false,
@@ -2611,7 +2601,7 @@ impl State {
                     // text, so what was typed is what others see (as with chat).
                     // Kick and ban reasons stay plain: Mumble escapes those itself.
                     let description = edit.description.map(|text| {
-                        let text = if self.allow_html {
+                        let text = if self.limits.allow_html {
                             text_html(&text)
                         } else {
                             text
@@ -2693,18 +2683,22 @@ impl State {
                 );
             }
             Command::SetComment(comment) => {
-                let comment = if self.allow_html {
+                if comment.len() > MAX_CONTENT_BYTES {
+                    return emit(
+                        events,
+                        SessionEvent::Notice("Comment exceeds the 256 KiB client limit.".into()),
+                    )
+                    .await;
+                }
+                let comment = if self.limits.allow_html {
                     text_html(&comment)
                 } else {
                     comment
                 };
-                if comment.len() > self.message_limit.max(1) {
+                if let Err(reason) = self.limits.check_text_wire(&comment) {
                     return emit(
                         events,
-                        SessionEvent::Notice(format!(
-                            "Comments are limited to {} bytes on this server.",
-                            self.message_limit
-                        )),
+                        SessionEvent::Notice(format!("Comment refused: {reason}")),
                     )
                     .await;
                 }
@@ -2718,15 +2712,22 @@ impl State {
                 );
             }
             Command::SetAvatar(texture) => {
-                if texture.len() > self.image_limit {
-                    return emit(
-                        events,
-                        SessionEvent::Notice(format!(
-                            "Avatars are limited to {} KiB on this server.",
-                            self.image_limit / 1024
-                        )),
-                    )
-                    .await;
+                let server_limit = self.limits.image_message_length;
+                let limit = if server_limit == 0 {
+                    MAX_AVATAR_BYTES
+                } else {
+                    server_limit.min(MAX_AVATAR_BYTES)
+                };
+                if texture.len() > limit {
+                    let reason = if server_limit == 0 || server_limit > MAX_AVATAR_BYTES {
+                        format!(
+                            "Avatar exceeds the {} KiB client limit.",
+                            MAX_AVATAR_BYTES / 1024
+                        )
+                    } else {
+                        format!("Avatar exceeds this server's {server_limit}-byte limit.")
+                    };
+                    return emit(events, SessionEvent::Notice(reason)).await;
                 }
                 self.queue(
                     kind::USER_STATE,
@@ -2742,26 +2743,24 @@ impl State {
                 html,
                 expected_peer,
             } => {
-                if !self.allow_html {
+                if !self.limits.allow_html {
                     return emit(
                         events,
                         SessionEvent::Notice("This server does not accept rich text.".into()),
                     )
                     .await;
                 }
-                let limit = self
-                    .image_limit
-                    .max(self.message_limit)
-                    .min(MAX_CONTENT_BYTES);
-                if html
-                    .iter()
-                    .any(|html| html.is_empty() || html.len() > limit)
-                {
-                    return emit(
-                        events,
-                        SessionEvent::Notice("Message exceeds this server's limit.".into()),
-                    )
-                    .await;
+                if let Some(reason) = html.iter().find_map(|wire| {
+                    if wire.is_empty() {
+                        Some("Message is empty.".to_owned())
+                    } else {
+                        self.limits
+                            .check_html_total(wire)
+                            .err()
+                            .map(|reason| reason.to_string())
+                    }
+                }) {
+                    return emit(events, SessionEvent::Notice(reason)).await;
                 }
                 for html in html {
                     self.outbox.push(Outgoing {
@@ -3086,16 +3085,9 @@ impl State {
                     )
                     .await;
                 }
-                let wire_body = legacy_body(&body, self.allow_html);
-                if wire_body.len() > self.message_limit {
-                    return emit(
-                        events,
-                        SessionEvent::Notice(format!(
-                            "Message exceeds this server's {}-byte limit.",
-                            self.message_limit
-                        )),
-                    )
-                    .await;
+                let wire_body = legacy_body(&body, self.limits.allow_html);
+                if let Err(reason) = self.limits.check_text_wire(&wire_body) {
+                    return emit(events, SessionEvent::Notice(reason.to_string())).await;
                 }
                 let conversation = match target {
                     TextTarget::Channel(channel) if self.history() => {
@@ -3657,9 +3649,10 @@ impl State {
                     .session
                     .ok_or_else(|| Error::Protocol("ServerSync omitted session".into()))?;
                 self.own_session = Some(session);
-                self.max_bandwidth = sync
-                    .max_bandwidth
-                    .unwrap_or(nuschl_core::audio::DEFAULT_SERVER_BANDWIDTH);
+                self.limits.max_bandwidth = Some(
+                    sync.max_bandwidth
+                        .unwrap_or(nuschl_core::audio::DEFAULT_SERVER_BANDWIDTH),
+                );
                 if self.voice_target == 31 {
                     emit(events, SessionEvent::Notice("The previous whisper is suspended after reconnect. Select a new target or normal talking before speaking.".into())).await?;
                 }
@@ -3667,7 +3660,7 @@ impl State {
                     events,
                     SessionEvent::Connected {
                         session,
-                        max_bandwidth: self.max_bandwidth,
+                        max_bandwidth: self.limits.bandwidth(),
                     },
                 )
                 .await?;
@@ -3686,18 +3679,7 @@ impl State {
                 if let Some(welcome) = sync.welcome_text {
                     self.welcome(welcome, events).await?;
                 }
-                emit(
-                    events,
-                    SessionEvent::Limits(ServerLimits {
-                        allow_html: self.allow_html,
-                        message_length: self.message_limit,
-                        image_message_length: self.image_limit,
-                        max_users: self.max_users,
-                        recording_allowed: self.recording_allowed,
-                        max_bandwidth: Some(self.max_bandwidth),
-                    }),
-                )
-                .await?;
+                emit(events, SessionEvent::Limits(self.limits.clone())).await?;
                 if let Some(channel) = self.rejoin.take()
                     && self.channels.contains_key(&channel)
                 {
@@ -3974,7 +3956,7 @@ impl State {
                             author: author.clone(),
                             peer: actor.clone(),
                             body: message.message.clone(),
-                            html: self.allow_html,
+                            html: self.limits.allow_html,
                             outgoing: false,
                             observed_at_ms: now_ms(),
                             seq: None,
@@ -4066,56 +4048,19 @@ impl State {
                 if let Some(source) = config.welcome_text {
                     self.welcome(source, events).await?;
                 }
-                // Omitted limit fields are not an instruction to reset them.
-                // In particular, welcome-only updates must not touch audio policy.
-                if config.max_bandwidth.is_none()
-                    && config.allow_html.is_none()
-                    && config.message_length.is_none()
-                    && config.image_message_length.is_none()
-                    && config.max_users.is_none()
-                    && config.recording_allowed.is_none()
-                {
-                    return Ok(());
+                let supplied = self.limits.apply(nuschl_core::model::LimitsUpdate {
+                    allow_html: config.allow_html,
+                    message_length: config.message_length,
+                    image_message_length: config.image_message_length,
+                    max_users: config.max_users,
+                    recording_allowed: config.recording_allowed,
+                    max_bandwidth: config.max_bandwidth,
+                });
+                if supplied {
+                    emit(events, SessionEvent::Limits(self.limits.clone())).await?;
                 }
-                if let Some(html) = config.allow_html {
-                    self.allow_html = html;
-                }
-                if let Some(limit) = config.message_length {
-                    self.message_limit = if limit == 0 {
-                        MAX_CONTENT_BYTES
-                    } else {
-                        (limit as usize).min(MAX_CONTENT_BYTES)
-                    };
-                }
-                if let Some(limit) = config.image_message_length {
-                    self.image_limit = if limit == 0 {
-                        1024 * 1024
-                    } else {
-                        (limit as usize).min(1024 * 1024)
-                    };
-                }
-                if let Some(value) = config.max_users {
-                    self.max_users = Some(value);
-                }
-                if let Some(value) = config.recording_allowed {
-                    self.recording_allowed = value;
-                }
-                if let Some(value) = config.max_bandwidth {
-                    self.max_bandwidth = value;
-                }
-                emit(
-                    events,
-                    SessionEvent::Limits(ServerLimits {
-                        allow_html: self.allow_html,
-                        message_length: self.message_limit,
-                        image_message_length: self.image_limit,
-                        max_users: self.max_users,
-                        recording_allowed: self.recording_allowed,
-                        max_bandwidth: Some(self.max_bandwidth),
-                    }),
-                )
-                .await?;
             }
+
             kind::PERMISSION_QUERY => {
                 let query: proto::PermissionQuery = decode(&frame)?;
                 let flush = query.flush.unwrap_or(false);
@@ -4893,6 +4838,114 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    async fn text_send_policy_counts_utf16_and_html_total_before_any_wire_or_echo() {
+        for (html, text_limit, image_limit, body, accepted) in [
+            (true, 1, 0, "漢".to_owned(), true),
+            (true, 1, 0, "🙂".to_owned(), false),
+            (true, 2, 0, "🙂".to_owned(), true),
+            (false, 1, 0, "é".to_owned(), true),
+            (true, 17, 0, "<&>\n".to_owned(), false),
+            (true, 18, 0, "<&>\n".to_owned(), true),
+            (true, 0, 128, "x".repeat(129), false),
+            (true, 0, 128, "x".repeat(128), true),
+            (true, 0, 0, "&".repeat(60_000), false),
+        ] {
+            let mut state = State {
+                own_session: Some(7),
+                ..Default::default()
+            };
+            state.limits.apply(nuschl_core::model::LimitsUpdate {
+                allow_html: Some(html),
+                message_length: Some(text_limit),
+                image_message_length: Some(image_limit),
+                ..Default::default()
+            });
+            state.channels.insert(
+                0,
+                Channel {
+                    id: 0,
+                    ..Default::default()
+                },
+            );
+            let (tx, mut rx) = mpsc::channel(64);
+            state
+                .command(
+                    Command::SendText {
+                        target: TextTarget::Channel(0),
+                        body: body.clone(),
+                        expected_peer: None,
+                    },
+                    &tx,
+                )
+                .await
+                .unwrap();
+            let events = drain(&mut rx).await;
+            assert_eq!(
+                state
+                    .outbound
+                    .iter()
+                    .any(|(kind, _)| *kind == kind::TEXT_MESSAGE),
+                accepted,
+                "{html}/{text_limit}/{image_limit}"
+            );
+            assert_eq!(
+                events
+                    .iter()
+                    .any(|event| matches!(event,SessionEvent::Text(text) if text.outgoing)),
+                accepted
+            );
+            if accepted {
+                let (_, bytes) = state
+                    .outbound
+                    .iter()
+                    .find(|(kind, _)| *kind == kind::TEXT_MESSAGE)
+                    .unwrap();
+                assert_eq!(
+                    proto::TextMessage::decode(bytes.as_slice())
+                        .unwrap()
+                        .message,
+                    legacy_body(&body, html)
+                );
+            } else {
+                assert!(
+                    events
+                        .iter()
+                        .any(|event| matches!(event, SessionEvent::Notice(_)))
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn rich_html_total_cap_is_not_bypassed_by_a_larger_text_cap() {
+        let mut state = State {
+            own_session: Some(7),
+            ..Default::default()
+        };
+        state.channels.insert(
+            0,
+            Channel {
+                id: 0,
+                ..Default::default()
+            },
+        );
+        state.limits.image_message_length = 128;
+        let (tx, mut rx) = mpsc::channel(64);
+        let send = |body: String| Command::SendHtml {
+            target: TextTarget::Channel(0),
+            html: vec![body],
+            expected_peer: None,
+        };
+        state.command(send("x".repeat(129)), &tx).await.unwrap();
+        assert!(state.outbound.is_empty());
+        assert!(
+            matches!(rx.try_recv(),Ok(SessionEvent::Notice(reason)) if reason.contains("128-character total HTML limit"))
+        );
+        state.command(send("x".repeat(128)), &tx).await.unwrap();
+        assert_eq!(state.outbound.len(), 1);
+    }
+
+    #[tokio::test]
     async fn sync_publishes_initial_limits_without_inventing_negotiated_codec_support() {
         for bandwidth in [None, Some(0), Some(24_000)] {
             let mut state = State::default();
@@ -5660,7 +5713,7 @@ mod tests {
                     message_length: Some(0),
                     ..Default::default()
                 },
-                (false, MAX_CONTENT_BYTES, 256, Some(12), false, 24_000),
+                (false, 0, 256, Some(12), false, 24_000),
             ),
             (
                 proto::ServerConfig {
@@ -5668,21 +5721,14 @@ mod tests {
                     max_users: Some(0),
                     ..Default::default()
                 },
-                (
-                    false,
-                    MAX_CONTENT_BYTES,
-                    1024 * 1024,
-                    Some(0),
-                    false,
-                    24_000,
-                ),
+                (false, 0, 0, Some(0), false, 24_000),
             ),
             (
                 proto::ServerConfig {
                     recording_allowed: Some(true),
                     ..Default::default()
                 },
-                (false, MAX_CONTENT_BYTES, 1024 * 1024, Some(0), true, 24_000),
+                (false, 0, 0, Some(0), true, 24_000),
             ),
             (
                 proto::ServerConfig {
@@ -5690,7 +5736,7 @@ mod tests {
                     message_length: Some(u32::MAX),
                     ..Default::default()
                 },
-                (true, MAX_CONTENT_BYTES, 1024 * 1024, Some(0), true, 24_000),
+                (true, u32::MAX as usize, 0, Some(0), true, 24_000),
             ),
         ] {
             state
@@ -5798,9 +5844,9 @@ mod tests {
         ));
         assert!(matches!(&events[1], SessionEvent::Welcome(s) if s == "<b>initial.test</b>"));
         let policy = (
-            state.allow_html,
-            state.message_limit,
-            state.image_limit,
+            state.limits.allow_html,
+            state.limits.message_length,
+            state.limits.image_message_length,
             state.local_muted,
             state.local_deafened,
             state.voice_revision,
@@ -5842,9 +5888,9 @@ mod tests {
             }
             assert_eq!(
                 (
-                    state.allow_html,
-                    state.message_limit,
-                    state.image_limit,
+                    state.limits.allow_html,
+                    state.limits.message_length,
+                    state.limits.image_message_length,
                     state.local_muted,
                     state.local_deafened,
                     state.voice_revision,
@@ -5886,7 +5932,7 @@ mod tests {
             assert!(source.len() <= MAX_CONTENT_BYTES);
             assert!(source.ends_with('界'));
             assert!(matches!(events[1], SessionEvent::Limits(_)));
-            assert!(!state.allow_html);
+            assert!(!state.limits.allow_html);
         }
     }
 
@@ -6766,7 +6812,7 @@ mod tests {
         // Above the server's image limit, nothing is sent.
         state.outbound.clear();
         state
-            .command(send("x".repeat(state.image_limit + 1)), &tx)
+            .command(send("x".repeat(state.limits.image_message_length + 1)), &tx)
             .await
             .unwrap();
         assert!(state.outbound.is_empty());

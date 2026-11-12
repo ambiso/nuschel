@@ -201,14 +201,9 @@ pub struct Session {
     welcome_source: Option<String>,
     last_ping: f64,
     certificate_reported: bool,
-    allow_html: bool,
-    message_limit: usize,
-    image_limit: usize,
-    max_users: Option<u32>,
-    recording_allowed: bool,
+    limits: nuschl_core::model::ServerLimits,
     voice_version: u64,
     opus_allowed: bool,
-    max_bandwidth: u32,
     desired_muted: bool,
     desired_deafened: bool,
     self_change_pending: bool,
@@ -282,14 +277,9 @@ impl Session {
             welcome_source: None,
             last_ping: 0.0,
             certificate_reported: false,
-            allow_html: true,
-            message_limit: 5000,
-            image_limit: 131_072,
-            max_users: None,
-            recording_allowed: true,
+            limits: nuschl_core::model::ServerLimits::default(),
             voice_version: 0,
             opus_allowed: true,
-            max_bandwidth: nuschl_core::audio::DEFAULT_SERVER_BANDWIDTH,
             desired_muted: true,
             desired_deafened: true,
             self_change_pending: false,
@@ -431,7 +421,7 @@ impl Session {
     /// Effective mono target for this authenticated connection, including the
     /// conservative server-accounting overhead reserve.
     pub fn voice_bitrate(&self) -> u32 {
-        nuschl_core::audio::voice_bitrate(self.max_bandwidth)
+        nuschl_core::audio::voice_bitrate(self.limits.bandwidth())
     }
 
     pub fn send_voice(&mut self, sequence: u64, opus: Vec<u8>, end: bool) -> Result<(), String> {
@@ -490,21 +480,10 @@ impl Session {
                 );
             }
         }
-        // Escape text for legacy HTML-capable peers, preserving every newline.
-        wire.message = if self.allow_html {
-            body.replace('&', "&amp;")
-                .replace('<', "&lt;")
-                .replace('>', "&gt;")
-                .replace('\n', "<br>")
-        } else {
-            body.clone()
-        };
-        if wire.message.len() > self.message_limit {
-            return Err(format!(
-                "Message exceeds this server's {}-byte limit.",
-                self.message_limit
-            ));
-        }
+        wire.message = nuschl_legacy_html::legacy_body(&body, self.limits.allow_html);
+        self.limits
+            .check_text_wire(&wire.message)
+            .map_err(|reason| reason.to_string())?;
         self.send(kind::TEXT_MESSAGE, &wire);
         if self.is_closed() {
             return Err("TLS failed while sending.".into());
@@ -751,9 +730,10 @@ impl Session {
                 let Some(session) = sync.session else {
                     return self.close("The server omitted our session number.".into());
                 };
-                self.max_bandwidth = sync
-                    .max_bandwidth
-                    .unwrap_or(nuschl_core::audio::DEFAULT_SERVER_BANDWIDTH);
+                self.limits.max_bandwidth = Some(
+                    sync.max_bandwidth
+                        .unwrap_or(nuschl_core::audio::DEFAULT_SERVER_BANDWIDTH),
+                );
                 self.phase = Phase::LoggedIn;
                 self.own = Some(session);
                 self.events
@@ -761,16 +741,8 @@ impl Session {
                 if let Some(source) = sync.welcome_text {
                     self.welcome(source);
                 }
-                self.events.push_back(Event::Server(ServerEvent::Limits(
-                    nuschl_core::model::ServerLimits {
-                        allow_html: self.allow_html,
-                        message_length: self.message_limit,
-                        image_message_length: self.image_limit,
-                        max_users: self.max_users,
-                        recording_allowed: self.recording_allowed,
-                        max_bandwidth: Some(self.max_bandwidth),
-                    },
-                )));
+                self.events
+                    .push_back(Event::Server(ServerEvent::Limits(self.limits.clone())));
             }
             kind::REJECT => {
                 let reject = proto::Reject::decode(payload).unwrap_or_default();
@@ -822,53 +794,21 @@ impl Session {
                     if let Some(source) = config.welcome_text {
                         self.welcome(source);
                     }
-                    if config.max_bandwidth.is_none()
-                        && config.allow_html.is_none()
-                        && config.message_length.is_none()
-                        && config.image_message_length.is_none()
-                        && config.max_users.is_none()
-                        && config.recording_allowed.is_none()
-                    {
-                        return;
+                    let supplied = self.limits.apply(nuschl_core::model::LimitsUpdate {
+                        allow_html: config.allow_html,
+                        message_length: config.message_length,
+                        image_message_length: config.image_message_length,
+                        max_users: config.max_users,
+                        recording_allowed: config.recording_allowed,
+                        max_bandwidth: config.max_bandwidth,
+                    });
+                    if supplied {
+                        self.events
+                            .push_back(Event::Server(ServerEvent::Limits(self.limits.clone())));
                     }
-                    if let Some(html) = config.allow_html {
-                        self.allow_html = html;
-                    }
-                    if let Some(bandwidth) = config.max_bandwidth {
-                        self.max_bandwidth = bandwidth;
-                    }
-                    if let Some(value) = config.message_length {
-                        self.message_limit = if value == 0 {
-                            MAX_CONTENT_BYTES
-                        } else {
-                            (value as usize).min(MAX_CONTENT_BYTES)
-                        };
-                    }
-                    if let Some(value) = config.image_message_length {
-                        self.image_limit = if value == 0 {
-                            1024 * 1024
-                        } else {
-                            (value as usize).min(1024 * 1024)
-                        };
-                    }
-                    if let Some(value) = config.max_users {
-                        self.max_users = Some(value);
-                    }
-                    if let Some(value) = config.recording_allowed {
-                        self.recording_allowed = value;
-                    }
-                    self.events.push_back(Event::Server(ServerEvent::Limits(
-                        nuschl_core::model::ServerLimits {
-                            allow_html: self.allow_html,
-                            message_length: self.message_limit,
-                            image_message_length: self.image_limit,
-                            max_users: self.max_users,
-                            recording_allowed: self.recording_allowed,
-                            max_bandwidth: Some(self.max_bandwidth),
-                        },
-                    )));
                 }
             }
+
             kind::PERMISSION_QUERY => {
                 if let Ok(query) = proto::PermissionQuery::decode(payload) {
                     if let (Some(channel), Some(permissions)) =
@@ -941,7 +881,7 @@ impl Session {
                         peer: peer.clone(),
                         author: author.clone(),
                         body: message.message.clone(),
-                        html: self.allow_html,
+                        html: self.limits.allow_html,
                         outgoing: false,
                     });
                 }
@@ -1085,7 +1025,7 @@ mod tests {
     #[test]
     fn sparse_config_keeps_previous_limits_and_fresh_connections_reset_them() {
         let mut s = voice_session();
-        s.max_bandwidth = 48_000;
+        s.limits.max_bandwidth = Some(48_000);
         for (config, expected) in [
             (
                 proto::ServerConfig {
@@ -1110,7 +1050,7 @@ mod tests {
                     message_length: Some(0),
                     ..Default::default()
                 },
-                (false, MAX_CONTENT_BYTES, 256, Some(12), false, 24_000),
+                (false, 0, 256, Some(12), false, 24_000),
             ),
             (
                 proto::ServerConfig {
@@ -1118,21 +1058,14 @@ mod tests {
                     max_users: Some(0),
                     ..Default::default()
                 },
-                (
-                    false,
-                    MAX_CONTENT_BYTES,
-                    1024 * 1024,
-                    Some(0),
-                    false,
-                    24_000,
-                ),
+                (false, 0, 0, Some(0), false, 24_000),
             ),
             (
                 proto::ServerConfig {
                     recording_allowed: Some(true),
                     ..Default::default()
                 },
-                (false, MAX_CONTENT_BYTES, 1024 * 1024, Some(0), true, 24_000),
+                (false, 0, 0, Some(0), true, 24_000),
             ),
             (
                 proto::ServerConfig {
@@ -1140,7 +1073,7 @@ mod tests {
                     message_length: Some(u32::MAX),
                     ..Default::default()
                 },
-                (true, MAX_CONTENT_BYTES, 1024 * 1024, Some(0), true, 24_000),
+                (true, u32::MAX as usize, 0, Some(0), true, 24_000),
             ),
         ] {
             s.control(kind::SERVER_CONFIG, config.encode_to_vec().into());
@@ -1188,13 +1121,16 @@ mod tests {
     }
 
     #[test]
-    fn send_caps_count_actual_escaped_utf8_and_reject_before_any_output_or_ack() {
+    fn send_caps_count_formatted_utf16_and_reject_before_any_output_or_ack() {
         for (html, body, cap, allowed) in [
             (true, "<&>\n", 16, false),
-            (true, "<&>\n", 17, true),
+            (true, "<&>\n", 18, true),
             (false, "<&>\n", 4, true),
-            (false, "é", 1, false),
+            (false, "é", 1, true),
             (false, "é", 2, true),
+            (true, "漢字", 2, true),
+            (true, "🙂", 1, false),
+            (true, "🙂", 2, true),
         ] {
             let mut s = voice_session();
             s.channels.insert(
@@ -1262,6 +1198,50 @@ mod tests {
     }
 
     #[test]
+    fn unlimited_text_still_has_html_total_and_local_wire_byte_limits() {
+        for (image_limit, body, accepted, reason) in [
+            (
+                128,
+                "x".repeat(129),
+                false,
+                "128-character total HTML limit",
+            ),
+            (128, "x".repeat(128), true, ""),
+            (0, "x".repeat(5001), true, ""),
+            (0, "&".repeat(60_000), false, "256 KiB client limit"),
+        ] {
+            let mut session = voice_session();
+            session.channels.insert(
+                0,
+                Channel {
+                    id: 0,
+                    ..Default::default()
+                },
+            );
+            session.take_outgoing();
+            session.control(
+                kind::SERVER_CONFIG,
+                proto::ServerConfig {
+                    allow_html: Some(true),
+                    message_length: Some(0),
+                    image_message_length: Some(image_limit),
+                    ..Default::default()
+                }
+                .encode_to_vec()
+                .into(),
+            );
+            session.take_events();
+            let result = session.send_text(TextTarget::Channel(0), body, None);
+            assert_eq!(result.is_ok(), accepted);
+            if !accepted {
+                assert!(result.unwrap_err().contains(reason));
+                assert!(session.take_outgoing().is_empty());
+                assert!(session.take_events().is_empty());
+            }
+        }
+    }
+
+    #[test]
     fn live_welcome_changes_and_empty_revocation_never_reset_limits_or_audio() {
         let mut s = session();
         let send = |s: &mut Session, source: Option<&str>| {
@@ -1294,8 +1274,8 @@ mod tests {
         let policy = (
             s.voice_policy(),
             s.voice_bitrate(),
-            s.max_bandwidth,
-            s.allow_html,
+            s.limits.bandwidth(),
+            s.limits.allow_html,
             s.desired_muted,
             s.desired_deafened,
         );
@@ -1323,8 +1303,8 @@ mod tests {
                 (
                     s.voice_policy(),
                     s.voice_bitrate(),
-                    s.max_bandwidth,
-                    s.allow_html,
+                    s.limits.bandwidth(),
+                    s.limits.allow_html,
                     s.desired_muted,
                     s.desired_deafened
                 ),
@@ -1359,7 +1339,7 @@ mod tests {
         assert!(
             matches!(&s.take_events()[0],Event::Welcome(value) if value=="[Server welcome exceeds the display limit]")
         );
-        assert!(!s.allow_html);
+        assert!(!s.limits.allow_html);
     }
 
     #[test]

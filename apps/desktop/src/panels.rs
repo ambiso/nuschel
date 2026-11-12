@@ -453,8 +453,12 @@ pub fn panel(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement> {
                 rows.push(row(
                     "Message limit",
                     format!(
-                        "{} bytes{}",
-                        limits.message_length,
+                        "{}{}",
+                        if limits.message_length == 0 {
+                            "Unlimited".into()
+                        } else {
+                            format!("{} characters", limits.message_length)
+                        },
                         if limits.allow_html {
                             " · HTML allowed"
                         } else {
@@ -465,7 +469,11 @@ pub fn panel(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement> {
                 ));
                 rows.push(row(
                     "Image limit",
-                    format!("{} KiB", limits.image_message_length / 1024),
+                    if limits.image_message_length == 0 {
+                        "Unlimited".into()
+                    } else {
+                        format!("{} characters", limits.image_message_length)
+                    },
                     9,
                 ));
                 if let Some(max) = limits.max_users {
