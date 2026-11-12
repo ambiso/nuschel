@@ -56,15 +56,24 @@ Current integration checkpoint (2026-11-12):
 - **Modern browser identity/archive flows remain open.** Do not advertise MLS,
   authenticated modern archive parity or other desktop-only capabilities until
   end-to-end browser interoperability and capability checks prove them.
-- **ACME/PKI is active.** Trust/certificate handlers and shared history identity
-  checks have a separate exclusive owner; ordering must not alter them.
+- **ACME/PKI lifecycle is verified through `3364664c`.** The private NixOS VM
+  reproduced the removed-target startup blocker, then passed bootstrap rejection,
+  automatic recovery, actual UID/group/read-only credential access, renewal via
+  the real post-run hook, retained TLS sessions, invalid-renewal retention and
+  intentional manual stop. The issuer command is offline; public ACME challenge
+  providers remain outside this proof. Trust and history identity checks remain
+  independent of server ordering.
 - **Audio corrections are integrated through `2e25ef54`.** Receive stereo,
   gain-before-clipping, complete 120 ms packets, filtered playback/reference
   conversion, Pulse capture startup and bounded VAD onset retention are present.
   The combined media-worker checkpoint passed 64 tests (four explicit/baseline
   diagnostics ignored); the unmute client checkpoint passed 91 (one baseline
-  ignored). Full distribution and private DSP checks for this combination remain
-  pending. Physical-device latency and complete Mumble output parity stay open
+  ignored). The exact combined worker passed the original private DSP suite,
+  including 46 dB echo removal and double-talk preservation; a separate private
+  44.1 kHz render/48 kHz capture check passed with 45 dB removal and 0% echo
+  admission in the probe. These are scoped synthetic checks, with earlier failed AEC
+  trials retained. Full distribution checks for this combination remain pending.
+  Physical-device latency and complete Mumble output parity stay open
   below. The requested transmit default is 128 kbit/s subject to server budgets;
   UserStats bandwidth now converts bytes/s to bits/s correctly. Configurable
   bitrate controls remain queued.
