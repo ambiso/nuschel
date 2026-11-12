@@ -976,6 +976,18 @@ The media worker uses per-speaker adaptive jitter buffers and Opus loss concealm
       3–6 seconds for the normal synthetic source. This is not established as a
       new regression; preserve measured onset/steady windows and do not add
       compensating gain or change defaults without a targeted explanation.
+- [ ] Fix VAD becoming increasingly trigger-happy after a long period without
+      speech, eventually transmitting background noise (user, 2026-11-12;
+      mechanism unconfirmed). Reproduce with long quiet periods and constant
+      controlled noise; trace raw/processed level, AGC gain, RNNoise speech
+      probability, gate thresholds/hysteresis and transmitted packets over time.
+      Compare AGC/NS/AEC controls and silence-to-speech recovery to distinguish
+      gain adaptation, noise-estimator drift and stale gate state. Preserve
+      immediate first-speech admission, quiet-speaker audibility and explicit
+      microphone privacy; do not mask it by raising every user's threshold.
+      Assigned to the shared owner after the current send-limit handoff in a new
+      audio workspace; Claude's separate slider/threshold-helper edits must stay
+      disjoint. Existing short DSP checks do not establish long-idle stability.
 - [ ] Complete receive/output parity against stock Mumble with independent PCM
       and device proofs before claiming 1:1 quality. The stereo/gain source
       checkpoint preserves native/browser LR and volume; independent native
