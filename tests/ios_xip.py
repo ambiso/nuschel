@@ -13,9 +13,11 @@ import base64
 import bz2
 import hashlib
 import json
+import lzma
 import os
 from pathlib import Path
 import re
+import resource
 import shutil
 import stat
 import struct
@@ -143,7 +145,7 @@ def openssl_run(openssl, *args):
     return result.stdout
 
 
-def authenticate(openssl, root, certificates, signature, digest, directory):
+def authenticate(openssl, root, certificates, signature, digest, directory, crls=None):
     """Apple SWUpdate profile, not generic Apple-issued Developer ID trust.
 
     SecPolicyCreateAppleSWUpdateSigning requires a three-cert Apple-rooted chain
@@ -182,9 +184,32 @@ def authenticate(openssl, root, certificates, signature, digest, directory):
     openssl_run(openssl, "pkeyutl", "-verify", "-pubin", "-inkey", str(public),
                 "-pkeyopt", "digest:sha1", "-in", str(directory / "digest"),
                 "-sigfile", str(directory / "signature"))
+    revocation = []
+    if crls is not None:
+        combined = bytearray()
+        for name, issuer_index in (("software", 1), ("root", 2)):
+            der = crls[name]
+            require(0 < len(der) <= 65536, "CRL exceeds limit")
+            source, pem = directory / (name + ".crl.der"), directory / (name + ".crl.pem")
+            source.write_bytes(der)
+            openssl_run(openssl, "crl", "-inform", "DER", "-in", str(source), "-out", str(pem))
+            info = openssl_run(openssl, "crl", "-in", str(pem), "-noout", "-issuer",
+                               "-lastupdate", "-nextupdate", "-verify", "-CAfile",
+                               str(directory / f"cert{issuer_index}.pem")).decode()
+            combined.extend(pem.read_bytes())
+            revocation.append({"kind": name, "sha256": hashlib.sha256(der).hexdigest(),
+                               "signed_crl": info})
+        (directory / "crls.pem").write_bytes(combined)
+        # Includes signed CRL issuer/signature, current last/next-update and
+        # certificate serial checks. Expired cached CRLs fail, never soft-pass.
+        openssl_run(openssl, "verify", "-no-CAfile", "-no-CApath", "-no-CAstore",
+                    "-trusted", str(directory / "cert2.pem"), "-untrusted",
+                    str(directory / "cert1.pem"), "-purpose", "any", "-crl_check_all",
+                    "-CRLfile", str(directory / "crls.pem"), str(directory / "cert0.pem"))
     return {"software_update_policy": True, "chain": chain, "certificates": evidence,
             "rsa_pkcs1_sha1_toc_signature": True, "current_certificate_dates": True,
-            "revocation_checked": False, "native_apple_xip_policy": False}
+            "revocation_checked": crls is not None, "crls": revocation,
+            "native_apple_xip_policy": False}
 
 
 def stream_digest(stream, offset, length, algorithm):
@@ -198,7 +223,167 @@ def stream_digest(stream, offset, length, algorithm):
     return digest.hexdigest()
 
 
-def inspect_worker(openssl):
+def pbzx_chunks(stream, entry, expanded_limit, evidence):
+    """Narrow length-framed PBZX profile; at most one 16MiB compressed chunk.
+
+    Read-only format inspection, not an extractor. Each independent XZ stream
+    must reach its own checked end and exact declared expanded length. Framing
+    interpretation is tested against this actual authenticated archive.
+    """
+    start, length = entry["offset"], entry["length"]
+    end = start + length
+    require(read_at(stream, start, 4, end) == b"pbzx", "unsupported Content magic")
+    nominal, = struct.unpack(">Q", read_at(stream, start + 4, 8, end))
+    require(nominal == 16 * 1024**2, "unsupported PBZX chunk size")
+    offset, expanded, count = start + 12, 0, 0
+    while offset < end:
+        uncompressed, compressed = struct.unpack(">QQ", read_at(stream, offset, 16, end))
+        require(0 < uncompressed <= nominal and 0 < compressed <= nominal,
+                "PBZX chunk bounds exceeded")
+        require(expanded + uncompressed <= expanded_limit, "PBZX expanded budget exceeded")
+        # Only the final chunk may be short; all ranges are checked before reads.
+        next_offset = offset + 16 + compressed
+        require(next_offset <= end and (uncompressed == nominal or next_offset == end),
+                "invalid PBZX chunk framing")
+        encoded = read_at(stream, offset + 16, compressed, end, nominal)
+        count += 1
+        require(count <= 2048, "PBZX chunk count exceeded")
+        produced = 0
+        if compressed == uncompressed:
+            for position in range(0, compressed, 65536):
+                piece = encoded[position:position + 65536]
+                produced += len(piece)
+                yield piece
+        else:
+            require(encoded.startswith(b"\xfd7zXZ\0"), "unsupported PBZX compression")
+            decoder = lzma.LZMADecompressor(format=lzma.FORMAT_XZ, memlimit=80 * 1024**2)
+            piece = decoder.decompress(encoded, max_length=65536)
+            while True:
+                produced += len(piece)
+                require(produced <= uncompressed, "PBZX chunk expanded beyond declaration")
+                if piece:
+                    yield piece
+                if decoder.eof:
+                    require(not decoder.unused_data, "PBZX chunk has trailing XZ data")
+                    break
+                require(not decoder.needs_input, "truncated PBZX XZ chunk")
+                piece = decoder.decompress(b"", max_length=65536)
+        require(produced == uncompressed, "PBZX expanded chunk length mismatch")
+        expanded += produced
+        offset = next_offset
+    require(offset == end, "PBZX trailing bytes")
+    evidence.update({"pbzx_chunks": count, "expanded_stream_bytes": expanded,
+                     "all_xz_streams_checked": True})
+
+
+class ChunkReader:
+    def __init__(self, chunks):
+        self.chunks = iter(chunks)
+        self.buffer = b""
+        self.position = 0
+
+    def read(self, size):
+        require(0 <= size <= 1024 * 1024, "stream read exceeds limit")
+        result = bytearray()
+        while len(result) < size:
+            if not self.buffer:
+                self.buffer = next(self.chunks, b"")
+                if not self.buffer:
+                    break
+            taken = min(size - len(result), len(self.buffer))
+            result.extend(self.buffer[:taken])
+            self.buffer = self.buffer[taken:]
+        self.position += len(result)
+        return bytes(result)
+
+    def exact(self, size):
+        result = self.read(size)
+        require(len(result) == size, "truncated CPIO stream")
+        return result
+
+    def skip(self, size):
+        while size:
+            taken = min(size, 65536)
+            self.exact(taken)
+            size -= taken
+
+
+def cpio_inspect(reader):
+    """Inspect odc headers and a few bounded regular plists; never follow paths."""
+    import plistlib
+    selected = {
+        "./Xcode.app/Contents/Info.plist",
+        "./Xcode.app/Contents/version.plist",
+        "./Xcode.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Info.plist",
+    }
+    plists, entries, declared_file_bytes = {}, 0, 0
+    sdk_paths, binaries = [], []
+    while True:
+        header = reader.exact(76)
+        require(header[:6] == b"070707" and re.fullmatch(b"[0-7]{70}", header[6:]),
+                "unsupported CPIO header")
+        mode = int(header[18:24], 8)
+        namesize, size = int(header[59:65], 8), int(header[65:76], 8)
+        require(1 <= namesize <= 4096 and size <= 16 * 1024**3,
+                "CPIO name/file budget exceeded")
+        encoded_name = reader.exact(namesize)
+        require(encoded_name[-1:] == b"\0" and b"\0" not in encoded_name[:-1],
+                "invalid CPIO filename")
+        name = encoded_name[:-1].decode("utf-8")
+        if name == "TRAILER!!!":
+            require(size == 0, "CPIO trailer has data")
+            break
+        require(name in {".", "./Xcode.app"} or (name.startswith("./Xcode.app/") and
+                not any(part == ".." for part in name.split("/"))), "unexpected CPIO root/path")
+        entries += 1
+        require(entries <= 1000000, "CPIO entry count exceeded")
+        declared_file_bytes += size
+        sdk = bool(re.fullmatch(
+            r"\./Xcode\.app/Contents/Developer/Platforms/iPhoneSimulator\.platform/Developer/SDKs/"
+            r"iPhoneSimulator[0-9.]*\.sdk/SDKSettings\.plist", name))
+        if sdk:
+            sdk_paths.append(name)
+            require(len(sdk_paths) <= 16, "too many SDK declarations")
+        if name.endswith(("/usr/bin/xcodebuild", "/usr/bin/simctl")):
+            binaries.append(name)
+            require(len(binaries) <= 16, "too many tool declarations")
+        if name in selected or sdk:
+            require(stat.S_ISREG(mode) and 0 < size <= 1024 * 1024 and name not in plists,
+                    "selected plist is not a unique bounded regular file")
+            data = reader.exact(size)
+            plist = plistlib.loads(data)
+            require(isinstance(plist, dict), "selected plist is not a dictionary")
+            keys = {"CFBundleIdentifier", "CFBundleShortVersionString", "CFBundleVersion",
+                    "ProductBuildVersion", "ProductVersion", "DTXcodeBuild", "Version",
+                    "CanonicalName", "DisplayName", "MinimumSDKVersion", "MaximumDeploymentTarget",
+                    "MinimumDeploymentTarget"}
+            summary = {k: v for k, v in plist.items() if k in keys}
+            require(all(isinstance(v, (str, int)) and len(str(v)) <= 1024
+                        for v in summary.values()), "unsupported plist summary field")
+            plists[name] = {"sha256": hashlib.sha256(data).hexdigest(), "bytes": size,
+                            "fields": summary}
+        else:
+            reader.skip(size)
+    # Complete the PBZX generator too: all XZ checksums/counts are required,
+    # including its last chunk; permit only conventional bounded zero padding.
+    padding = 0
+    while True:
+        tail = reader.read(65536)
+        if not tail:
+            break
+        padding += len(tail)
+        require(padding <= 1024 * 1024 and not any(tail), "unexpected data after CPIO trailer")
+    require(selected <= set(plists), "required Xcode/platform plist absent")
+    info = plists["./Xcode.app/Contents/Info.plist"]["fields"]
+    require(info.get("CFBundleIdentifier") == "com.apple.dt.Xcode", "unexpected Xcode bundle identity")
+    require(bool(sdk_paths), "iPhoneSimulator SDKSettings absent")
+    return {"cpio_entries": entries, "cpio_declared_file_bytes": declared_file_bytes,
+            "cpio_zero_padding_bytes": padding, "selected_plists": plists,
+            "simulator_sdk_settings_paths": sdk_paths, "tool_paths": binaries,
+            "payload_written_or_executed": False, "installed_runtime_proven": False}
+
+
+def inspect_worker(openssl, payload=False, crl_check=False):
     import plistlib
     started = time.monotonic()
     fd = os.open("/input.xip", os.O_RDONLY | os.O_NOFOLLOW)
@@ -207,10 +392,17 @@ def inspect_worker(openssl):
         require(stat.S_ISREG(before.st_mode) and 28 <= before.st_size <= MAX_ARCHIVE,
                 "archive must be a bounded regular file")
         result, certificates, signature, digest = parse_toc(stream, before.st_size)
-        root = Path("/apple-root.der").read_bytes()
+        with Path("/apple-root.der").open("rb") as root_file:
+            root = root_file.read(32769)
         require(len(root) <= 32768, "anchor exceeds limit")
+        crls = None
+        if crl_check:
+            crls = {}
+            for name in ("root", "software"):
+                with Path(f"/{name}.crl").open("rb") as crl_file:
+                    crls[name] = crl_file.read(65537)
         result["authentication"] = authenticate(openssl, root, certificates, signature,
-                                                digest, Path("/tmp"))
+                                                digest, Path("/tmp"), crls)
         for name, entry in result["entries"].items():
             actual = stream_digest(stream, entry["offset"], entry["length"], "sha1")
             require(actual == entry["archived_sha1"], name + " archived checksum mismatch")
@@ -232,13 +424,25 @@ def inspect_worker(openssl):
             "unsupported Metadata profile")
         result["metadata"] = plist
         result["archive_sha256"] = stream_digest(stream, 0, before.st_size, "sha256")
+        if payload:
+            evidence = {}
+            # Metadata's UncompressedSize describes file data, not CPIO framing.
+            # Bound framing overhead separately, rather than pretending the two
+            # byte counts are interchangeable or trusting the filename's version.
+            limit = min(plist["UncompressedSize"] + 512 * 1024**2, 32 * 1024**3)
+            chunks = pbzx_chunks(stream, result["entries"]["Content"], limit, evidence)
+            result["payload_inspection"] = cpio_inspect(ChunkReader(chunks))
+            result["payload_inspection"].update(evidence)
         after = os.fstat(stream.fileno())
         require((before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns,
                  before.st_ctime_ns) == (after.st_dev, after.st_ino, after.st_size,
                                          after.st_mtime_ns, after.st_ctime_ns),
                 "archive changed during inspection")
         result.update({"archive_bytes": before.st_size, "elapsed_seconds": time.monotonic() - started,
-                       "payload_extracted": False, "bundle_version_verified": False,
+                       "payload_extracted": False, "bundle_version_verified": payload,
+                       "worker_peak_rss_kib": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
+                       "worker_cpu_seconds": sum((resource.getrusage(resource.RUSAGE_SELF).ru_utime,
+                                                  resource.getrusage(resource.RUSAGE_SELF).ru_stime)),
                        "sandbox_process_status": {k: v.strip() for k, v in
                            (line.split(":", 1) for line in Path("/proc/self/status").read_text().splitlines()
                             if line.startswith(("CapEff:", "CapBnd:", "NoNewPrivs:")))}})
@@ -249,29 +453,46 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("archive", type=Path, nargs="?")
     parser.add_argument("--apple-root", type=Path)
+    parser.add_argument("--root-crl", type=Path, help="independently retrieved current DER root CRL")
+    parser.add_argument("--software-crl", type=Path, help="current DER Software Update CRL; both CRLs required")
     parser.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--inspect-payload", action="store_true",
+                        help="also stream authenticated PBZX/CPIO plists, without extraction")
     parser.add_argument("--openssl", default=shutil.which("openssl"))
     args = parser.parse_args()
     if args.worker:
-        print(json.dumps(inspect_worker(args.openssl), indent=2))
+        print(json.dumps(inspect_worker(args.openssl, args.inspect_payload, args.root_crl is not None), indent=2))
         return
     require(sys.platform == "linux" and args.archive is not None and args.apple_root is not None,
             "Linux, archive and --apple-root required")
     for path in (args.archive, args.apple_root):
         require(not path.is_symlink() and path.is_file(), "input must be a regular non-symlink file")
+    require((args.root_crl is None) == (args.software_crl is None), "both CRLs must be supplied together")
+    for path in (args.root_crl, args.software_crl):
+        if path is not None:
+            require(not path.is_symlink() and path.is_file() and path.stat().st_size <= 65536,
+                    "CRL must be a bounded regular non-symlink file")
     from ios_vm import bounded_run
     tools = {name: shutil.which(name) for name in ("bwrap", "prlimit")}
     require(all(tools.values()) and args.openssl, "bwrap, prlimit and OpenSSL required")
-    command = [tools["prlimit"], "--as=268435456", "--cpu=30", "--fsize=1048576",
+    command = [tools["prlimit"], "--as=268435456", "--cpu=" + ("180" if args.inspect_payload else "30"),
+               "--fsize=1048576",
                tools["bwrap"], "--unshare-all", "--die-with-parent", "--new-session",
                "--cap-drop", "ALL", "--ro-bind", "/nix/store", "/nix/store",
                "--ro-bind", str(args.archive.resolve()), "/input.xip",
                "--ro-bind", str(args.apple_root.resolve()), "/apple-root.der",
-               "--ro-bind", str(Path(__file__).resolve()), "/worker.py",
-               "--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp", "--clearenv",
+               "--ro-bind", str(Path(__file__).resolve()), "/worker.py"]
+    if args.root_crl is not None:
+        command.extend(["--ro-bind", str(args.root_crl.resolve()), "/root.crl",
+                        "--ro-bind", str(args.software_crl.resolve()), "/software.crl"])
+    command.extend(["--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp", "--clearenv",
                "--", str(Path(sys.executable).resolve()), "-I", "/worker.py", "--worker",
-               "--openssl", str(Path(args.openssl).resolve())]
-    result = bounded_run(command, timeout=45, limit=128 * 1024)
+               "--openssl", str(Path(args.openssl).resolve())])
+    if args.root_crl is not None:
+        command.extend(["--root-crl", "/root.crl", "--software-crl", "/software.crl"])
+    if args.inspect_payload:
+        command.append("--inspect-payload")
+    result = bounded_run(command, timeout=240 if args.inspect_payload else 45, limit=128 * 1024)
     require(result["exit_code"] == 0, result["output"])
     print(result["output"], end="")
 

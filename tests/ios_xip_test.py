@@ -7,6 +7,7 @@ must be disk backed; the original archive is never changed. Copies require CoW.
 """
 import io
 import json
+import lzma
 import os
 from pathlib import Path
 import struct
@@ -59,6 +60,62 @@ class Bounds(unittest.TestCase):
             xip.number(node, "size")
 
 
+class PayloadBounds(unittest.TestCase):
+    @staticmethod
+    def odc(name, data=b"", mode=0o100644):
+        encoded = name.encode() + b"\0"
+        return (b"070707" + ("000000" * 2).encode() + f"{mode:06o}".encode() +
+                b"000000000000000001000000" + b"00000000000" +
+                f"{len(encoded):06o}{len(data):011o}".encode() + encoded + data)
+
+    def pbzx(self, data, *, corrupt=False):
+        encoded = lzma.compress(data)
+        if corrupt:
+            encoded = encoded[:-1] + bytes([encoded[-1] ^ 1])
+        stream = b"pbzx" + struct.pack(">QQQ", 16 * 1024**2, len(data), len(encoded)) + encoded
+        evidence = {}
+        chunks = list(xip.pbzx_chunks(io.BytesIO(stream), {"offset": 0, "length": len(stream)},
+                                     len(data), evidence))
+        return b"".join(chunks), evidence
+
+    def test_checked_xz_and_exact_length(self):
+        data = b"odc bounded stream\n" * 1000
+        result, evidence = self.pbzx(data)
+        self.assertEqual(result, data)
+        self.assertEqual(evidence["expanded_stream_bytes"], len(data))
+        with self.assertRaises((xip.InspectionError, lzma.LZMAError)):
+            self.pbzx(data, corrupt=True)
+
+    def test_no_unbounded_pbzx_allocation_or_expansion(self):
+        for expanded, compressed in ((2**64 - 1, 1), (1, 2**64 - 1), (100, 1)):
+            data = b"pbzx" + struct.pack(">QQQ", 16 * 1024**2, expanded, compressed)
+            with self.subTest(expanded=expanded), self.assertRaises(xip.InspectionError):
+                list(xip.pbzx_chunks(io.BytesIO(data), {"offset": 0, "length": len(data)}, 10, {}))
+
+    def test_actual_odc_layout_preserves_plist_version(self):
+        import plistlib
+        info = {"CFBundleIdentifier": "com.apple.dt.Xcode", "CFBundleShortVersionString": "16.2"}
+        data = b"".join(self.odc(name, plistlib.dumps(value)) for name, value in (
+            ("./Xcode.app/Contents/Info.plist", info),
+            ("./Xcode.app/Contents/version.plist", {"ProductBuildVersion": "fixture"}),
+            ("./Xcode.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Info.plist", {}),
+            ("./Xcode.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/SDKs/"
+             "iPhoneSimulator18.2.sdk/SDKSettings.plist", {"Version": "18.2"})))
+        data += self.odc("TRAILER!!!") + bytes(512)
+        result = xip.cpio_inspect(xip.ChunkReader([data[:31], data[31:]]))
+        self.assertEqual(result["selected_plists"]["./Xcode.app/Contents/Info.plist"]["fields"], info)
+        self.assertEqual(result["cpio_zero_padding_bytes"], 512)
+        self.assertFalse(result["payload_written_or_executed"])
+
+    def test_traversal_similar_prefix_symlink_and_truncated_paths_rejected(self):
+        cases = [self.odc("./Xcode.app/../escape"), self.odc("./Xcode.application/other"),
+                 self.odc("./Xcode.app/Contents/Info.plist", b"target", mode=0o120777),
+                 self.odc("./Xcode.app/Contents/Info.plist", b"data")[:-2]]
+        for data in cases:
+            with self.subTest(data=data), self.assertRaises(xip.InspectionError):
+                xip.cpio_inspect(xip.ChunkReader([data]))
+
+
 @unittest.skipUnless(os.environ.get("NUSCHL_XIP_ARCHIVE") and os.environ.get("NUSCHL_APPLE_ROOT"),
                      "set explicit supplied archive and independent Apple root for real checks")
 class RealArchive(unittest.TestCase):
@@ -79,12 +136,16 @@ class RealArchive(unittest.TestCase):
     def tearDownClass(cls):
         cls.temp.cleanup()
 
-    def invoke(self, archive, root=None):
+    def invoke(self, archive, root=None, payload=False, crls=None):
         # Only the trusted wrapper handles paths on the host; all archive/native
         # XML/compression/crypto processing is inside its no-network sandbox.
-        return subprocess.run([sys.executable, str(Path(xip.__file__)), str(archive),
-                               "--apple-root", str(root or self.root)],
-                              capture_output=True, timeout=50)
+        command = [sys.executable, str(Path(xip.__file__)), str(archive),
+                   "--apple-root", str(root or self.root)]
+        if payload:
+            command.append("--inspect-payload")
+        if crls is not None:
+            command.extend(["--root-crl", str(crls[0]), "--software-crl", str(crls[1])])
+        return subprocess.run(command, capture_output=True, timeout=260 if payload else 50)
 
     def copy_and_flip(self, name, offset):
         target = self.directory / name
@@ -135,6 +196,46 @@ class RealArchive(unittest.TestCase):
         result = self.invoke(self.archive, bad_root)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("root fingerprint mismatch", result.stderr.decode())
+
+    @unittest.skipUnless(os.environ.get("NUSCHL_XIP_PAYLOAD") == "1", "explicit full stream budget required")
+    def test_actual_authenticated_bundle_version_and_sdk(self):
+        result = self.invoke(self.archive, payload=True)
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        proof = json.loads(result.stdout)
+        self.assertTrue(proof["bundle_version_verified"])
+        inspection = proof["payload_inspection"]
+        self.assertTrue(inspection["all_xz_streams_checked"])
+        info = inspection["selected_plists"]["./Xcode.app/Contents/Info.plist"]["fields"]
+        self.assertEqual(info["CFBundleShortVersionString"], "16.2")
+        version = inspection["selected_plists"]["./Xcode.app/Contents/version.plist"]["fields"]
+        self.assertEqual(version["ProductBuildVersion"], "16C5032a")
+        self.assertTrue(any(p["fields"].get("CanonicalName") == "iphonesimulator18.2"
+                            for p in inspection["selected_plists"].values()))
+        self.assertLess(proof["worker_peak_rss_kib"], 256 * 1024)
+        self.assertFalse(inspection["installed_runtime_proven"])
+
+    @unittest.skipUnless(os.environ.get("NUSCHL_ROOT_CRL") and os.environ.get("NUSCHL_SOFTWARE_CRL"),
+                         "explicit independently retrieved current CRLs required")
+    def test_actual_signed_current_crls_and_corruption(self):
+        root, software = (Path(os.environ[k]) for k in ("NUSCHL_ROOT_CRL", "NUSCHL_SOFTWARE_CRL"))
+        result = self.invoke(self.archive, crls=(root, software))
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        self.assertTrue(json.loads(result.stdout)["authentication"]["revocation_checked"])
+        changed = bytearray(software.read_bytes())
+        changed[-1] ^= 1
+        damaged = self.directory / "corrupt.crl"
+        damaged.write_bytes(changed)
+        result = self.invoke(self.archive, crls=(root, damaged))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("OpenSSL verification failed", result.stderr.decode())
+
+    @unittest.skipUnless(os.environ.get("NUSCHL_STALE_ROOT_CRL") and os.environ.get("NUSCHL_SOFTWARE_CRL"),
+                         "explicit stale signed CRL negative fixture required")
+    def test_actual_signed_but_expired_root_crl_is_rejected(self):
+        crls = tuple(Path(os.environ[k]) for k in ("NUSCHL_STALE_ROOT_CRL", "NUSCHL_SOFTWARE_CRL"))
+        result = self.invoke(self.archive, crls=crls)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("CRL has expired", result.stderr.decode())
 
 
 if __name__ == "__main__":
