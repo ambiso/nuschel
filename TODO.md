@@ -593,7 +593,10 @@ Later (reported):
       arbitrary original fits legacy Mumble's inline-image limit. Retain legacy
       file-offer fallback and peer/relay privacy policy. For clipboard inputs,
       preserve the supplied representation without claiming it is an unavailable
-      source file. Assigned to an isolated attachment/transfer lane; native-first
+      source file. Verify staging-quota release on relay-only cancellation and
+      one bounded snapshot/preview per completed download; a retained viewer
+      may independently keep its original alive. Assigned to an isolated
+      attachment/transfer lane; native-first
       scope and safe preview/save authority are being reviewed. Web attachments
       and modern persistent/resumable file delivery remain separately open.
 - [ ] Large file transfers peer to peer, not stored on the server: the server only
