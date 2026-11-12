@@ -335,12 +335,12 @@ fn validated_thumbnail(
     if document.blocks.len() != 1 {
         return Err(Error::InvalidResponse);
     }
-    let nuschl_core::ContentBlock::Image {
+    let Some(nuschl_core::ContentBlock::Image {
         width,
         height,
         rgba,
         source: _,
-    } = document.blocks.pop().unwrap()
+    }) = document.blocks.pop()
     else {
         return Err(Error::InvalidResponse);
     };
