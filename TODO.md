@@ -1856,6 +1856,16 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
           preventing retry/cancel loops from multiplying unresolved owners. Use
           actual stalled-worker evidence and distinguish logical retirement from
           physical exit; this producer is currently unused by the App.
+    - [ ] Apply the same retirement/credit discipline to the active browser
+          formula renderer. `MathRenderService.cancel()` currently terminates
+          and replaces an active worker; routine component cancellation or its
+          two-second deadline can therefore multiply still-retiring owners.
+          A throwing `terminate()` interrupts cleanup here too (source findings,
+          not an observed resource-exhaustion proof). Preserve healthy canceled
+          work's exact reservation until its reply, bounded shared caching and
+          source fallback; make genuine retirement/reload recovery explicit.
+          Reuse reviewed scheduling rules where they fit, without conflating
+          formula/content source validation or their separate worker budgets.
     - [ ] Wire the real async browser content broker: preserve SDK-owned original
           authenticated source/mode; bind render tickets to server/connection,
           conversation/message/revision/digest; reject stale derivatives. The
