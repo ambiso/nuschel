@@ -61,13 +61,15 @@ def archive(path, prefix):
         for member in stream:
             count += 1
             total += member.size
-            if count > MAX_MEMBERS or total > MAX_EXPANDED or member.size > MAX_FILE:
+            if member.size < 0 or count > MAX_MEMBERS or total > MAX_EXPANDED or member.size > MAX_FILE:
                 raise ValueError('expanded source archive exceeds bounds')
             name = PurePosixPath(member.name)
             if name.is_absolute() or '..' in name.parts or not name.parts or name.parts[0] != prefix:
                 raise ValueError('unsafe source archive path')
             if len(name.parts) > 1 and name.parts[1] in {'.git', '.jj', '.cache', '.direnv', 'target', 'node_modules', 'profiles', '__pycache__'}:
                 raise ValueError('source archive contains repository/private/build state')
+            if (member.isfile() or member.isdir()) and member.mode & 0o022:
+                raise ValueError('group/world-writable source archive member')
             if member.mode & 0o6000 or not (member.isfile() or member.isdir() or member.issym() or member.islnk()):
                 raise ValueError('privileged/special source archive member')
             if member.issym() or member.islnk():
@@ -96,8 +98,10 @@ def main():
     orig, delta, dsc, changes = upstream + '.orig.tar.xz', full + '.debian.tar.xz', full + '.dsc', full + '_source.changes'
     required = {orig, delta, dsc, changes, 'SOURCE-NOTICES.json', 'SOURCE-PROVENANCE.json', 'source-notice-summary.json', 'STATUS', 'SHA256SUMS'}
     found = {p.name for p in args.root.iterdir()}
-    if found != required:
+    if not required <= found or found - required - {'validation.json'}:
         raise ValueError('unexpected/missing source outputs: ' + str(found ^ required))
+    if any(path.is_symlink() or not path.is_file() for path in args.root.iterdir()):
+        raise ValueError('source output must contain only regular files')
     source = checksums(args.root, args.root / dsc, {orig, delta})
     upload = checksums(args.root, args.root / changes, {orig, delta, dsc})
     if source['Source'] != 'nuschl' or source['Version'] != args.version + '-' + args.debian_revision or upload['Version'] != source['Version']:
