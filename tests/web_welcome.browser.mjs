@@ -92,8 +92,10 @@ async function fontPreference(){
   const bounds=[];
   for(const[width,height]of [[320,640],[390,844],[1280,800]]){
     await page.setViewportSize({width,height});
+    await page.waitForFunction(()=>!!document.querySelector(".menu-button")===(innerWidth<=760));
+    await page.evaluate(()=>new Promise(requestAnimationFrame));
     const layout=await page.evaluate(()=>{const box=e=>{const b=e.getBoundingClientRect();return{x:b.x,right:b.right,y:b.y,bottom:b.bottom,height:b.height}};return{width:innerWidth,pageWidth:document.documentElement.scrollWidth,panel:box(document.querySelector(".server-welcome")),dismiss:box(document.querySelector(".server-welcome>header button")),composer:box(document.querySelector(".composer"))};});
-    assert.ok(layout.pageWidth<=width);assert.ok(layout.dismiss.x>=0&&layout.dismiss.right<=width&&layout.dismiss.bottom<=layout.panel.bottom);assert.ok(layout.composer.bottom<=height+1);bounds.push(layout);
+    assert.ok(layout.pageWidth<=width);assert.ok(layout.dismiss.x>=0&&layout.dismiss.right<=width&&layout.dismiss.bottom<=layout.panel.bottom,JSON.stringify(layout));assert.ok(layout.composer.bottom<=height+1);bounds.push(layout);
     await page.screenshot({path:resolve(output,`welcome-real-20px-${width}.png`)});
   }
   return{sizes,persisted_after_reload:true,bounds};

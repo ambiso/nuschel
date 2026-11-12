@@ -724,14 +724,13 @@ impl Session {
                 self.own = Some(session);
                 self.events
                     .push_back(Event::Server(ServerEvent::Connected { session }));
-                if let Some(mut source) = sync.welcome_text {
-                    if source.len() > MAX_CONTENT_BYTES {
-                        let mut end = MAX_CONTENT_BYTES;
-                        while !source.is_char_boundary(end) {
-                            end -= 1;
-                        }
-                        source.truncate(end);
-                    }
+                if let Some(source) = sync.welcome_text {
+                    // Do not parse a partial tag/entity or an oversized document.
+                    let source = if source.len() > MAX_CONTENT_BYTES {
+                        "[Server welcome exceeds the display limit]".into()
+                    } else {
+                        source
+                    };
                     self.events.push_back(Event::Welcome(source));
                 }
             }
@@ -1001,7 +1000,7 @@ mod tests {
     }
 
     #[test]
-    fn welcome_is_utf8_byte_bounded_and_missing_session_cannot_publish_it() {
+    fn oversized_welcome_is_plain_fallback_and_missing_session_cannot_publish_it() {
         let mut s = session();
         s.control(
             kind::SERVER_SYNC,
@@ -1017,8 +1016,7 @@ mod tests {
         let Event::Welcome(source) = &events[1] else {
             panic!("welcome missing")
         };
-        assert!(source.len() <= MAX_CONTENT_BYTES);
-        assert_eq!(source.len() % 3, 0);
+        assert_eq!(source, "[Server welcome exceeds the display limit]");
         let mut s = session();
         s.control(
             kind::SERVER_SYNC,
