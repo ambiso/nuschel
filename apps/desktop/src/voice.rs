@@ -351,7 +351,6 @@ pub(crate) struct Place {
     label: String,
     name: String,
     state: State,
-    connected: bool,
     issue: Option<String>,
 }
 
@@ -392,7 +391,6 @@ pub(crate) fn places(this: &Desktop) -> Vec<Place> {
                 label,
                 name: server.name.clone(),
                 state: projected(&this.client, server, this.push_muted),
-                connected,
                 issue: server
                     .audio
                     .health
@@ -474,7 +472,7 @@ pub fn card(
         return None;
     }
     let text = summary(places);
-    let connected = places.iter().any(|place| place.connected);
+    let (heading, connected) = status::connection_heading(places.iter().map(|place| place.state));
     let rows = places
         .iter()
         .map(|place| {
@@ -580,14 +578,7 @@ pub fn card(
                             .flex_basis(px(0.))
                             .font_weight(FontWeight::BOLD)
                             .text_sm()
-                            .child(layout::label(
-                                "voice-connection-status",
-                                if connected {
-                                    "Voice connected"
-                                } else {
-                                    "Connecting voice"
-                                },
-                            )),
+                            .child(layout::label("voice-connection-status", heading)),
                     ),
             )
             .child(
@@ -836,7 +827,6 @@ mod tests {
                 name: "Alpha".into(),
                 label: "Alpha #Lobby".into(),
                 state: State::MicrophoneEnabled,
-                connected: true,
                 issue: None,
             },
             Place {
@@ -849,7 +839,6 @@ mod tests {
                 name: "Beta".into(),
                 label: "Beta #Root".into(),
                 state: State::Deafened,
-                connected: true,
                 issue: None,
             },
         ];

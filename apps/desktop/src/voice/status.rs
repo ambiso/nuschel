@@ -147,6 +147,24 @@ impl State {
     }
 }
 
+/// Supported membership, not microphone activity or audio-device readiness.
+/// A chat/TLS connection alone cannot make the voice heading green.
+pub fn connection_heading(states: impl IntoIterator<Item = State>) -> (&'static str, bool) {
+    let mut pending = false;
+    for state in states {
+        match state {
+            State::Offline | State::Unsupported | State::EndToEnd => {}
+            State::Connecting | State::Reconnecting | State::Negotiating => pending = true,
+            _ => return ("Voice connected", true),
+        }
+    }
+    if pending {
+        ("Connecting voice", false)
+    } else {
+        ("Voice status", false)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -352,6 +370,32 @@ mod tests {
             assert!(!facts.state().microphone_enabled());
             assert!(!facts.state().speaking());
             assert!(facts.state().label().contains("awaiting server"));
+        }
+    }
+    #[test]
+    fn heading_does_not_promote_chat_only_or_unknown_codec_to_voice() {
+        for state in [State::EndToEnd, State::Unsupported, State::Offline] {
+            assert_eq!(connection_heading([state]), ("Voice status", false));
+        }
+        for state in [State::Connecting, State::Reconnecting, State::Negotiating] {
+            assert_eq!(connection_heading([state]), ("Connecting voice", false));
+        }
+        assert_eq!(connection_heading([]), ("Voice status", false));
+        assert_eq!(
+            connection_heading([State::EndToEnd, State::Unsupported]),
+            ("Voice status", false)
+        );
+        for state in [
+            State::Muted,
+            State::Deafened,
+            State::Listening,
+            State::MicrophoneEnabled,
+            State::Speaking,
+        ] {
+            assert_eq!(
+                connection_heading([State::EndToEnd, state]),
+                ("Voice connected", true)
+            );
         }
     }
 }
