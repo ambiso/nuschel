@@ -18,6 +18,7 @@ import selectors
 import shlex
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import time
@@ -306,6 +307,99 @@ def launch_plan(state: Path, engine: str, ssh_port: int, vnc_port: int) -> dict:
             "next": "inspect the pinned image Launch.sh; record and verify Apple media hashes before execution"}
 
 
+CAPABILITY_SETS = {"bounding", "effective", "inheritable", "permitted", "ambient"}
+
+
+def capability_profile(config: dict, oci: dict | None) -> dict:
+    """Normalize inspect intent against compiled OCI configuration, not a fixed
+    runtime-default CapDrop list. A stopped OCI bundle is never live proof.
+    """
+    drops = config.get("CapDrop") or []
+    added = config.get("CapAdd") or []
+    options = config.get("SecurityOpt") or []
+    valid_drop = isinstance(drops, list) and all(isinstance(cap, str) for cap in drops)
+    normalized = sorted({cap.upper() if cap.upper() == "ALL" or cap.upper().startswith("CAP_")
+                         else "CAP_" + cap.upper() for cap in drops}) if valid_drop else []
+    nnp_true = {"no-new-privileges", "no-new-privileges:true"}
+    requested_nnp = (isinstance(options, list) and all(isinstance(option, str) for option in options)
+        and any(option in nnp_true for option in options)
+        and not any(option.startswith("no-new-privileges") and option not in nnp_true for option in options))
+    process = oci.get("process") if isinstance(oci, dict) else None
+    capabilities = process.get("capabilities") if isinstance(process, dict) else None
+    compiled_empty = (isinstance(capabilities, dict) and not (set(capabilities)-CAPABILITY_SETS)
+        and all(isinstance(values, list) and not values for values in capabilities.values()))
+    compiled_nnp = isinstance(process, dict) and process.get("noNewPrivileges") is True
+    problems = []
+    if not isinstance(added, list) or added:
+        problems.append("container has added capabilities")
+    if not valid_drop or not ("ALL" in normalized or compiled_empty):
+        problems.append("all-capability drop is not established by inspect or empty compiled OCI sets")
+    if oci is not None and not compiled_empty:
+        problems.append("compiled OCI capabilities are missing, malformed or nonempty")
+    if not requested_nnp or (oci is not None and not compiled_nnp):
+        problems.append("no-new-privileges is not explicitly configured")
+    return {"inspect_cap_drop": normalized, "oci_observed": oci is not None,
+        "oci_all_sets_empty": compiled_empty, "oci_no_new_privileges": compiled_nnp,
+        "inspect_no_new_privileges": requested_nnp, "configuration_verified": not problems,
+        "live_effective_verified": False, "problems": problems}
+
+
+def oci_configuration(info: dict, engine: str) -> tuple[dict | None, str]:
+    """Read only this local Podman bundle's bounded config under runtime storage.
+    Do not follow an arbitrary inspect-supplied path into the user's filesystem.
+    """
+    if Path(engine).name != "podman" or not info.get("OCIConfigPath"):
+        return None, "compiled OCI path is unavailable for this runtime"
+    identity = info.get("Id", "")
+    if not re.fullmatch(r"[a-f0-9]{64}", identity):
+        return None, "invalid container identity for OCI path"
+    try:
+        storage = Path(engine_info(engine)["storage"]).resolve()
+        expected = storage / "overlay-containers" / identity / "userdata" / "config.json"
+        supplied = Path(info["OCIConfigPath"])
+        if supplied != expected or supplied.resolve() != expected:
+            return None, "OCI path is outside this container's supported storage layout"
+        fd = os.open(supplied, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        with os.fdopen(fd, "rb") as file:
+            metadata = os.fstat(file.fileno())
+            if not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.getuid() or metadata.st_size > 1024*1024:
+                return None, "OCI config ownership/type/size differs from the bounded rootless profile"
+            data = file.read(1024*1024+1)
+        if len(data) > 1024*1024:
+            return None, "OCI config exceeded 1MiB"
+        parsed = json.loads(data)
+        if not isinstance(parsed, dict):
+            return None, "OCI config is not an object"
+        return parsed, "local retained OCI config sha256:" + hashlib.sha256(data).hexdigest()
+    except (OSError, ValueError, CheckError) as error:
+        return None, "compiled OCI inspection unavailable: " + str(error)
+
+
+def process_capabilities(pid: int) -> dict:
+    """Observe only the running container init's kernel fields; no exec/start.
+    PID stability is checked both here and by a second runtime inspection.
+    """
+    if not isinstance(pid, int) or not 0 < pid < 2**31:
+        return {"verified": False, "detail": "running container has no valid host PID"}
+    try:
+        folder = Path("/proc") / str(pid)
+        before = (folder / "stat").read_text().rsplit(")", 1)[1].split()[19]
+        fields = {}
+        for line in (folder / "status").read_text().splitlines():
+            key, _, value = line.partition(":")
+            if key in {"CapEff", "CapBnd", "CapPrm", "CapInh", "CapAmb", "NoNewPrivs"}:
+                if key in fields:
+                    raise ValueError("duplicate kernel capability field")
+                fields[key] = value.strip()
+        after = (folder / "stat").read_text().rsplit(")", 1)[1].split()[19]
+        masks = {name: int(fields[name], 16) for name in ["CapEff", "CapBnd", "CapPrm", "CapInh", "CapAmb"]}
+        verified = before == after and fields["NoNewPrivs"] == "1" and not any(masks.values())
+        return {"verified": verified, "pid": pid, "start_ticks": before,
+            "capability_masks": masks, "no_new_privileges": fields["NoNewPrivs"] == "1"}
+    except (OSError, ValueError, KeyError, IndexError) as error:
+        return {"verified": False, "pid": pid, "detail": "kernel fields unavailable: " + str(error)}
+
+
 def status(state: Path, engine: str) -> dict:
     result = bounded_run(engine_command(engine, "container", "inspect", NAME))
     if result["exit_code"]:
@@ -329,10 +423,28 @@ def status(state: Path, engine: str) -> dict:
     if info.get("HostConfig", {}).get("Privileged") or info.get("HostConfig", {}).get("NetworkMode") == "host":
         problems.append("privileged/host-network containers are outside this profile")
     config = info.get("HostConfig", {})
-    if config.get("CapAdd") or "all" not in [str(cap).lower() for cap in config.get("CapDrop") or []]:
-        problems.append("container capabilities differ from the dropped-capability profile")
+    oci, oci_detail = oci_configuration(info, engine)
+    capabilities = capability_profile(config, oci)
+    problems.extend(capabilities.pop("problems"))
+    capabilities["oci_detail"] = oci_detail
+    state_info = info.get("State", {})
+    live = {"verified": False, "detail": "container is stopped; effective kernel capabilities were not observed"}
+    if state_info.get("Running") is True:
+        live = process_capabilities(state_info.get("Pid"))
+        second = bounded_run(engine_command(engine, "container", "inspect", NAME))
+        stable = False
+        if second["exit_code"] == 0:
+            again = json.loads(second["output"])[0]
+            stable = (bool(re.fullmatch(r"[a-f0-9]{64}", info.get("Id", "")))
+                and bool(state_info.get("StartedAt")) and again.get("Id") == info.get("Id") and again.get("State", {}).get("Running") is True
+                and all(again.get("State", {}).get(key) == state_info.get(key) for key in ["Pid", "StartedAt"]))
+        live["runtime_identity_stable"] = stable
+        capabilities["live_effective_verified"] = bool(live["verified"] and stable)
+        if not capabilities["live_effective_verified"]:
+            problems.append("running container's dropped capabilities/no-new-privileges could not be verified")
     return {"container": NAME, "state": info.get("State", {}).get("Status"),
             "image_id": info.get("Image"), "port_bindings": bindings,
+            "capability_profile": capabilities, "live_init_process": live,
             "boundary_problems": problems, "guest_proven": False}
 
 

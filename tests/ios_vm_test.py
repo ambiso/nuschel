@@ -92,7 +92,62 @@ class Boundaries(unittest.TestCase):
         with patch.object(vm, "bounded_run", return_value={"exit_code": 0, "output": json.dumps(info)}):
             status = vm.status(Path("/some/vm"), "podman")
         self.assertFalse(status["guest_proven"])
-        self.assertEqual(len(status["boundary_problems"]), 5)
+        self.assertTrue(any("added capabilities" in problem for problem in status["boundary_problems"]))
+        self.assertTrue(any("no-new-privileges" in problem for problem in status["boundary_problems"]))
+        self.assertFalse(status["capability_profile"]["configuration_verified"])
+
+    def test_expanded_drop_list_needs_compiled_empty_capabilities_not_a_default_allowlist(self):
+        config = {"CapAdd": [], "CapDrop": ["CAP_CHOWN", "setuid"], "SecurityOpt": ["no-new-privileges"]}
+        self.assertFalse(vm.capability_profile(config, None)["configuration_verified"])
+        oci = {"process": {"capabilities": {}, "noNewPrivileges": True}}
+        actual = vm.capability_profile(config, oci)
+        self.assertTrue(actual["configuration_verified"])
+        self.assertEqual(actual["inspect_cap_drop"], ["CAP_CHOWN", "CAP_SETUID"])
+        self.assertFalse(actual["live_effective_verified"])
+        for name in vm.CAPABILITY_SETS:
+            changed = {"process": {"capabilities": {name:["CAP_SYS_ADMIN"]}, "noNewPrivileges":True}}
+            self.assertFalse(vm.capability_profile(config, changed)["configuration_verified"])
+        for malformed in (None, [], {"unknown": []}, {"effective": None}):
+            changed = {"process": {"capabilities": malformed, "noNewPrivileges":True}}
+            self.assertFalse(vm.capability_profile(config, changed)["configuration_verified"])
+
+    def test_no_new_privileges_must_be_explicit_and_not_conflicting(self):
+        for options in ([], ["no-new-privileges:false"], ["no-new-privileges", "no-new-privileges:false"]):
+            profile = vm.capability_profile({"CapDrop":["ALL"],"SecurityOpt":options}, None)
+            self.assertFalse(profile["configuration_verified"])
+        config = {"CapDrop":["ALL"],"SecurityOpt":["no-new-privileges:true"]}
+        self.assertTrue(vm.capability_profile(config,None)["configuration_verified"])
+        self.assertFalse(vm.capability_profile(config,{"process":{"capabilities":{},"noNewPrivileges":False}})["configuration_verified"])
+        self.assertFalse(vm.capability_profile(config|{"CapAdd":["SYS_ADMIN"]},None)["configuration_verified"])
+
+    def test_stopped_status_never_claims_effective_kernel_proof(self):
+        info = {"Id":"a"*64,"State":{"Status":"exited","Running":False,"Pid":0},
+            "HostConfig":{"CapDrop":["CAP_CHOWN"],"SecurityOpt":["no-new-privileges"]}}
+        oci = {"process":{"capabilities":{},"noNewPrivileges":True}}
+        with patch.object(vm,"bounded_run",return_value={"exit_code":0,"output":json.dumps([info])}), patch.object(vm,"oci_configuration",return_value=(oci,"fixture")), patch.object(vm,"process_capabilities") as proc:
+            result = vm.status(Path("/some/vm"),"podman")
+        self.assertFalse(result["boundary_problems"])
+        self.assertTrue(result["capability_profile"]["configuration_verified"])
+        self.assertFalse(result["capability_profile"]["live_effective_verified"])
+        proc.assert_not_called()
+
+    def test_running_process_evidence_is_rejected_on_runtime_pid_change(self):
+        info = {"Id":"a"*64,"State":{"Status":"running","Running":True,"Pid":123,"StartedAt":"fixed"},
+            "HostConfig":{"CapDrop":["ALL"],"SecurityOpt":["no-new-privileges"]}}
+        changed = info|{"State":info["State"]|{"Pid":456}}
+        with patch.object(vm,"bounded_run",side_effect=[{"exit_code":0,"output":json.dumps([value])} for value in [info,changed]]), patch.object(vm,"oci_configuration",return_value=(None,"not available")), patch.object(vm,"process_capabilities",return_value={"verified":True}):
+            result = vm.status(Path("/some/vm"),"podman")
+        self.assertFalse(result["capability_profile"]["live_effective_verified"])
+        self.assertTrue(result["boundary_problems"])
+
+    def test_oci_inspection_never_opens_an_arbitrary_inspect_path(self):
+        info={"Id":"a"*64,"OCIConfigPath":"/etc/shadow"}
+        with patch.object(vm,"engine_info",return_value={"storage":"/some/runtime"}), patch.object(vm.os,"open") as opened:
+            result,detail = vm.oci_configuration(info,"podman")
+        self.assertIsNone(result)
+        opened.assert_not_called()
+        self.assertIn("outside",detail)
+
 
     def test_guest_ssh_uses_dedicated_identity_and_strict_local_host(self):
         with tempfile.TemporaryDirectory() as temporary:
