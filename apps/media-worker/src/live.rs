@@ -71,6 +71,8 @@ struct Devices {
     capture: Option<Consumer<f32>>,
     capture_timeline: Timeline,
     playback: Producer<[f32; 2]>,
+    /// Actual negotiated device layout, fixed for this output stream.
+    output_channels: usize,
     /// Output callbacks that found the ring empty; written by the device thread.
     underruns: Arc<AtomicU32>,
     /// What the speakers play, for the canceller (while it is in use).
@@ -479,7 +481,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             // Effects join the output here, so the canceller's reference (a
             // recording of the device, or what this ring hands it) has them.
             effects.mix(&mut mono_effects, Instant::now());
-            crate::mixer::finish(&wide_mix, &mono_effects, &mut mix);
+            crate::mixer::finish(open.output_channels, &wide_mix, &mono_effects, &mut mix);
             let (pushed, _) = open.playback.push_partial_slice(&mix);
             if pushed.len() < FRAME {
                 break;
@@ -1065,6 +1067,7 @@ fn open_host(
     let config = output_device
         .default_output_config()
         .map_err(|error| error.to_string())?;
+    let output_channels = usize::from(config.channels());
     let (playback, playback_consumer) = RingBuffer::<[f32; 2]>::new(RING);
     let underruns = Arc::new(AtomicU32::new(0));
     // What the output callback hands to the device: the reference where the
@@ -1137,6 +1140,7 @@ fn open_host(
             capture: capture_consumer,
             capture_timeline,
             playback,
+            output_channels,
             underruns,
             reference,
         },

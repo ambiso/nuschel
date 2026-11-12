@@ -56,7 +56,7 @@ fn dump() {
         let mut wide = [[0.; 2]; FRAME];
         let mut out = [[0.; 2]; FRAME];
         mixer.mix(&mut wide);
-        finish(&wide, &[0.; FRAME], &mut out);
+        finish(2, &wide, &[0.; FRAME], &mut out);
         raw.extend(out.iter().flatten().flat_map(|value| value.to_le_bytes()));
     }
     std::fs::write(output, raw).unwrap();

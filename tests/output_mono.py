@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: EUPL-1.2
 """Actual negotiated mono-sink clip/fold check, independent reference libopus.
 
-Stock Mumble35dce9e: AudioOutput.cpp430 sets mono weights0.5/0.5;
-827 maps/sums un-clipped stereo and856 clips the final device output.
+Stock Mumble revision 35dce9e: AudioOutput.cpp:430 sets mono weights 0.5/0.5;
+827 maps/sums un-clipped stereo and 856 clips the final device output.
 Only private Pulse/null sinks; explicit forced backend/muted microphone.
 """
 import argparse
@@ -78,7 +78,7 @@ def main():
         'stock_order':'LR0.5/0.5 mapping and summation, then output clip',
         'sink_channels':1,'sink_rate':RATE,'sink_specifications':[sink['sample_specification'] for sink in sinks],
         'host_devices':False,'fixed_gain':1,'cases':cases,'passed':all(case['passed'] for case in cases),
-        'limits':['Actual private48k mono device path; non48k SRC/clip-order proof remains separate.','No physical hardware or perceptual equivalence guarantee.']}
+        'limits':['Actual private 48 kHz mono device path; non-48 kHz SRC/clip-order proof remains separate.','No physical hardware or perceptual equivalence guarantee.']}
     (args.output/'proof.json').write_text(json.dumps(result,indent=2)+'\n')
     print(json.dumps(result),flush=True)
     if args.expect_mismatch:

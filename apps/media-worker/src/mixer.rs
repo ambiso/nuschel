@@ -219,10 +219,23 @@ impl Mixer {
 
 /// All voice and local-effect contributors reach this boundary before clipping.
 /// The device converter retains a separate guard for filter overshoot.
-pub fn finish(wide: &[[f64; 2]; FRAME], mono: &[f64; FRAME], out: &mut [[f32; 2]; FRAME]) {
+pub fn finish(
+    channels: usize,
+    wide: &[[f64; 2]; FRAME],
+    mono: &[f64; FRAME],
+    out: &mut [[f32; 2]; FRAME],
+) {
     for ((voices, effect), output) in wide.iter().zip(mono).zip(out) {
-        for channel in 0..2 {
-            output[channel] = (voices[channel] + effect).clamp(-1., 1.) as f32;
+        if channels == 1 {
+            // Match mono-device panning before protection: clipping LR first
+            // destroys legitimate opposing-channel headroom. Keep the existing
+            // stereo ring shape, including its actual played-reference mapping.
+            let heard = ((voices[0] + voices[1]) * 0.5 + effect).clamp(-1., 1.) as f32;
+            *output = [heard; 2];
+        } else {
+            for channel in 0..2 {
+                output[channel] = (voices[channel] + effect).clamp(-1., 1.) as f32;
+            }
         }
     }
 }
@@ -308,12 +321,12 @@ mod tests {
         let mut out = [[0.; 2]; FRAME];
         let count = allocation_counter::measure(|| {
             mixer.mix(&mut wide);
-            finish(&wide, &[0.; FRAME], &mut out);
+            finish(2, &wide, &[0.; FRAME], &mut out);
         });
         assert_eq!(count.count_total, 0);
         assert!(out.iter().all(|frame| *frame == [0.25, -0.25]));
         // A voice sum above full scale must still cancel against local effects.
-        finish(&[[1.5, 2.]; FRAME], &[-1.25; FRAME], &mut out);
+        finish(2, &[[1.5, 2.]; FRAME], &[-1.25; FRAME], &mut out);
         assert!(out.iter().all(|frame| *frame == [0.25, 0.75]));
     }
 
@@ -349,7 +362,7 @@ mod tests {
         assert_eq!(wide[2], [0.; 2]);
         assert!(wide.iter().flatten().all(|sample| sample.is_finite()));
         let mut out = [[0.; 2]; FRAME];
-        finish(&wide, &[0.; FRAME], &mut out);
+        finish(2, &wide, &[0.; FRAME], &mut out);
         assert_eq!(out[0], [1., -1.]);
     }
 

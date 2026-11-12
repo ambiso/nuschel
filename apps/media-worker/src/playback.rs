@@ -167,6 +167,50 @@ mod tests {
     use rtrb::RingBuffer;
 
     #[test]
+    fn mono_folds_wide_headroom_before_clipping_and_reference_matches_the_device() {
+        use crate::{dsp::FRAME, mixer};
+        let wide = [[1.5_f64, -1.25]; FRAME];
+        for channels in [1, 2, 6] {
+            let (mut queued, mut input) = RingBuffer::<[f32; 2]>::new(FRAME);
+            let (mut played, mut reference) = RingBuffer::<f32>::new(2 * FRAME);
+            let mut converter = PlaybackConverter::new(channels, RATE);
+            let mut ring_frame = [[0_f32; 2]; FRAME];
+            let mut output = vec![0_f32; channels * FRAME];
+            let count = allocation_counter::measure(|| {
+                mixer::finish(channels, &wide, &[0.; FRAME], &mut ring_frame);
+                queued.push_entire_slice(&ring_frame).unwrap();
+                assert_eq!(
+                    converter.pull(&mut output, &mut input, &mut played),
+                    (false, FRAME as u64)
+                );
+            });
+            assert_eq!(count.count_total, 0);
+            for device in output.chunks_exact(channels) {
+                let expected = if channels == 1 { [0.125; 2] } else { [1., -1.] };
+                assert_eq!(device[0], expected[0]);
+                if channels > 1 {
+                    assert_eq!(device[1], expected[1]);
+                }
+                assert!(device.iter().skip(2).all(|sample| *sample == 0.));
+                assert_eq!(reference.pop().unwrap(), expected[0]);
+                assert_eq!(reference.pop().unwrap(), expected[1]);
+            }
+        }
+        // Fold voices before adding mono effects; retain f64 until protection.
+        let mut ring_frame = [[0.; 2]; FRAME];
+        mixer::finish(1, &wide, &[0.5; FRAME], &mut ring_frame);
+        assert!(ring_frame.iter().all(|frame| *frame == [0.625; 2]));
+        let bound = f64::from(f32::MAX) * 4.;
+        mixer::finish(
+            1,
+            &[[bound, -bound]; FRAME],
+            &[0.25; FRAME],
+            &mut ring_frame,
+        );
+        assert!(ring_frame.iter().all(|frame| *frame == [0.25; 2]));
+    }
+
+    #[test]
     fn digital_delay_matches_the_device_impulse_and_reference_keeps_stereo() {
         for rate in [
             8_000, 11_025, 22_050, 44_100, 48_000, 96_000, 192_000, 384_000,

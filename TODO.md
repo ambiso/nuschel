@@ -663,16 +663,19 @@ The media worker uses per-speaker adaptive jitter buffers and Opus loss concealm
       explicit SILK/Hybrid/CELT+channel transitions and reset retain the control,
       with entropy ranges unchanged. Native 67/audio-WASM 4/Node 14/API 30 tests pass.
       Preserve published-default mismatch evidence; no full perceptual parity claim.
-- [ ] Match native mono-device clipping/mapping order under decoded overshoot.
-      Native currently clips its 48 kHz stereo mix before the eventual mono-device
-      LR average; Worklet mono folds wide LR before its final clip. Stock Mumble
-      maps channels while accumulating, then clips output. Add an independent
-      overshoot/cancellation fixture now proves the discrepancy on negotiated
-      private 1ch 48k output: 14.13 dB agreement vs stock order at unity, and exactly
-      silent steady output at gain 4 despite reference RMS 0.469. Quiet control
-      passes 66.10 dB. Preserve this baseline; next fold the wide mix for actual
-      mono devices before the current 48 kHz clip, with fallback-reference proof.
-      Non-48 kHz SRC/final-clip ordering remains a separate reference/device gap.
+- [x] Correct native mono-device clipping/folding before the 48 kHz mix boundary.
+      Actual one-channel output folds full f64 LR plus local effects before
+      protection, then duplicates heard mono into the existing ring/reference.
+      Negotiated private 1ch 48k fixed-gain proof improves decoded overshoot 14.13→
+      76.51 dB and formerly silent gain 4 opposing LR→88.53 dB; quiet 66.10 dB and stereo
+      regressions pass. 68 native units include allocation-free converter/reference
+      correspondence and unchanged exact clocks. Preserve the failing baseline.
+- [ ] Quantify native non-48 kHz SRC versus full-scale clipping placement against
+      stock Mumble. Nuschl retains its existing 48 kHz mix clip before SRC plus a
+      device overshoot guard; stock maps/filters before its final output clip.
+      Compare overload/overshoot/filter ringing with fixed gain at actual device
+      rates, and design fallback-reference correspondence before broadening the
+      clipping boundary. The mono correction does not close this separate gap.
 
 - [x] Preserve legitimate per-speaker decoded headroom until the final mix.
       Native and browser queues now store raw finite PCM with per-frame gain,

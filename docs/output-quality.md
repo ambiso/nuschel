@@ -507,7 +507,7 @@ Startup/unmute latency has another owner. Playback-only changes must preserve it
 timing/consent gates; no latency shortcut may keep a muted microphone recording.
 
 
-## Native mono-device order baseline
+## Native mono-device order correction
 
 Stock Mumble 35dce9e sets a mono device's LR weights to 0.5/0.5
 (`AudioOutput.cpp430`), maps un-clipped stereo while summing contributors
@@ -526,9 +526,29 @@ window, losing a reference RMS 0.46895 signal. The quiet control passes 66.10 dB
 `~/.cache/nmono-base/proof.json` preserves every case; the earlier exploratory
 no-marker run is retained separately at `~/.cache/nmono-old/proof.json`.
 
-The scoped correction is to fold the full f64 mix for actual one-channel devices
+The scoped correction now folds the full f64 mix for actual one-channel devices
 before the existing 48 kHz mix clip, duplicating that mono into the existing LR
-ring. Stereo and SRC clip placement stay unchanged. The fallback reference then
-contains the same folded/clipped mono handed to playback, with the existing
-frame clocks and filter-delay compensation. This does not establish the broader
-non-48 kHz SRC/final-clip ordering or full stock-device equivalence.
+ring. The negotiated output channel count is fixed with the output stream; there
+is no callback/device re-query. Mono local effects join the wide folded voices
+before protection. Stereo and SRC clip placement stay unchanged. The fallback
+reference contains the same folded/clipped mono handed to playback, with the
+existing frame clocks and filter-delay compensation.
+
+On an actual negotiated `s16le 1ch 48000Hz` client/sink and same-rate mono monitor,
+the unchanged 35 dB gate now passes: quiet control 66.10 dB, decoded overshoot 76.51 dB,
+and gain 4 opposing LR 88.53 dB. There is no gain reduction, normalization or fitted
+amplitude. `~/.cache/nmono-fixed/proof.json` records exact source/decoded peaks,
+negotiated formats, delays and fixed-gain metrics. Stereo regressions also pass
+mono-source 77.41 dB, stereo 77.41 dB, attenuated overshoot 82.89 dB and 120 ms
+stereo 77.51 dB (`~/.cache/nmono-stereo/proof.json`).
+
+All 68 native units pass (five explicit/old diagnostics ignored), including a
+zero-allocation wide fold→ring→actual device converter→fallback-reference check
+at 1/2/6 channels, local effects and maximum-finite opposing headroom. Existing
+exact-rate/chunk/delay/underrun tests remain green. The original private DSP
+suite also passes: echo 46 dB/0% transmitted, double-talk 0.8 dB/100% gate, clipping
+detection and effects isolation/6 dB volume (`mono-dsp-regression.log`).
+This does not establish the broader non-48 kHz SRC/final-clip ordering or full stock-device equivalence:
+Mumble filters before its device-output clip; Nuschl retains its existing 48 kHz
+mix clip before SRC and a separate post-filter device guard. Quantifying that
+staging under overload needs its own reference/fallback design and fixtures.
