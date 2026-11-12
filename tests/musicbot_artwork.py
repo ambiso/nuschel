@@ -21,7 +21,7 @@ import time
 import urllib.parse
 import zlib
 
-from fake_subsonic import ALBUM, COVER, Library
+from fake_subsonic import ALBUM, Library
 from local_murmur import Murmur, free_port
 from mumble_client import Client, certificate_pin
 from musicbot import API_KEY, PASSWORD, BotProcess, api, link_from, session_of, write_config
@@ -61,6 +61,9 @@ class Colors(Library):
             self.wfile.write(body)
             return
         super().handle_request()
+
+    do_GET = handle_request
+    do_POST = handle_request
 
 
 class NoForwardProxy(http.server.BaseHTTPRequestHandler):
@@ -121,8 +124,14 @@ def cancelled_http(link, bot):
             client = http.client.HTTPConnection(url.hostname, url.port, timeout=2)
             client.request('GET', url.path + f'art/0/cover{index}?size=300')
             clients.append(client)
-        pending = wait(lambda: workers(bot.process.pid) if len(workers(bot.process.pid)) == 2 else None,
-                       'two actual stalled artwork children', timeout=4)
+        try:
+            pending = wait(lambda: workers(bot.process.pid) if len(workers(bot.process.pid)) == 2 else None,
+                           'two actual stalled artwork children', timeout=4)
+        except AssertionError:
+            for client in clients:
+                response = client.getresponse()
+                print('unexpected early artwork response', response.status, response.read(4096))
+            raise
         for client in clients:
             client.close()
         check = http.client.HTTPConnection(url.hostname, url.port, timeout=2)
@@ -235,8 +244,10 @@ def main():
             finally:
                 (args.output / 'bot.log').write_text(''.join(bot.log))
         murmur.stop()
-        for server in [library, proxy]:
-            server.shutdown(); server.server_close()
+        for server, thread in zip([library, proxy], threads):
+            if thread.ident:
+                server.shutdown()
+            server.server_close()
         for thread in threads:
             if thread.ident:
                 thread.join(timeout=5)
