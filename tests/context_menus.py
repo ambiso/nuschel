@@ -88,7 +88,21 @@ def actions(args, root, shell, application, bot, murmur):
             "long-named user missing",
         )
         shell.click(*point(row), button=3)
-        current = eventually(menu, "user menu missing")
+        try:
+            current = eventually(menu, "user menu missing", timeout=5)
+        except AssertionError:
+            (args.output / "missing-menu-tree.json").write_text(
+                json.dumps(
+                    [
+                        {"role": role, "name": name, "bounds": node.extents()}
+                        for node, role, name, _ in items(application)
+                    ],
+                    indent=2,
+                )
+                + "\n"
+            )
+            shell.screenshot(args.output / "missing-menu.png")
+            raise
         eventually(
             lambda: named("Ban…", "menu item", current),
             "full administrative menu missing",
