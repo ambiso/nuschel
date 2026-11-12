@@ -150,6 +150,8 @@ pkgs.testers.runNixOSTest {
         node.succeed("systemctl restart nuschl.service")
         node.wait_for_unit("nuschl.service")
         node.wait_for_open_port(64738)
+        # Exercise the standalone package, not the client's incidental copy.
+        node.succeed("readlink -f /proc/$(systemctl show -p MainPID --value nuschl.service)/exe | grep -Fx ${serverPackage}/bin/nuschld")
 
     def as_tester(command):
         client.succeed(f"su - tester -c '{command}'")
