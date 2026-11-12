@@ -517,8 +517,10 @@ Later (reported):
       Markdown grammar, rendered by Typst in the sandboxed math worker (docs/math.md).
       Windows uses a less privileged AppContainer (checked in the Windows VM).
       Remaining: `\text` in other scripts than Latin lacks glyphs (one font).
-- [ ] Add an explicit "Send original file" image option (user, 2026-11-12):
-      transmit/store the selected file bytes without resizing, recompression,
+- [ ] Add image-quality choices **Medium / High / Original** (user, 2026-11-12),
+      like the requested Signal-style quality selector, instead of requiring a
+      separate original-file button. Define the Medium/High size/quality policy;
+      Original must transmit/store selected file bytes without resizing, recompression,
       metadata removal or format conversion. Generate a separate bounded preview
       so receivers can display it like an image; right-click Save as must save
       the exact original attachment, not the preview or a re-encoded decode.
