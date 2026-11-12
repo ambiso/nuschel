@@ -646,6 +646,19 @@ Later (reported):
       history reload, mobile interaction and cancellation; keep unsupported
       original-file transfer/quality parity explicit rather than silently losing
       original bytes. Claude's web-UX lane prepares API/file ownership first.
+- [ ] Implement received/own image viewing in the web app and pursue desktop
+      parity (user request relayed by the concurrent Claude session, 2026-11-12).
+      Use the credential-free content broker for validated thumbnail pixels,
+      a larger bounded viewer and exact-original Save; preserve focus, keyboard,
+      mobile hit targets and image aspect ratio while loading/evicted. Bind every
+      async result to SDK-owned message serial/revision/source and conversation
+      lifetime. No external image fetch or encoded-image decode in the SDK/UI.
+      Reuse the broker's global 16 MiB derivative budget; separately account for
+      at most one 6.4 MiB viewer and a transient bounded original download, rather
+      than introducing another 48 MiB timeline cache. Keep ordinary typed document
+      replies at 2 MiB; a full viewer needs a separately validated binary response.
+      Claude owns viewer/TypedDocument UX; Codex owns broker/image leases and
+      bounded codec APIs. Mocked UI proof is not actual SDK/worker integration.
 - [ ] Enlarge the web reconnect and mute/unmute controls (user, 2026-11-12).
       Apply consistent control sizing and accessible hit targets, including the
       adjacent deafen action where shared. Verify keyboard focus, long labels,
