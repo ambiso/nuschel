@@ -176,8 +176,9 @@ costs, not additional user audio streams. Children have no audio
 socket or device access. The Linux launcher clears the environment, exposes only
 read-only runtime files and private temporary storage, unshares networking and other
 namespaces, and limits address space to 1 GiB per child. It fails closed if required
-sandbox tools are unavailable. Windows launch is unsupported and fails closed;
-macOS uses the existing content Seatbelt policy but runtime validation is pending.
+sandbox tools are unavailable. On Windows and macOS no confinement for these
+persistent roles has been designed or proven, so codec launch fails closed there
+and the bot plays nothing.
 
 After clearing the inherited environment, [bubblewrap 0.12](https://github.com/containers/bubblewrap/blob/v0.12.0/bubblewrap.c#L3195)
 sets only the fixed public `PWD=/tmp` for Rust codec children. No credential or

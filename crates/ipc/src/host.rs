@@ -97,15 +97,10 @@ pub fn musicbot_codec_sandbox_command(
     Ok(Sandbox::new(executable, &[PERSISTENT_MEMORY.into()])?.run(arguments))
 }
 
-#[cfg(target_os = "macos")]
-pub fn musicbot_codec_sandbox_command(
-    executable: &Path,
-    arguments: &[OsString],
-) -> Result<Command, Error> {
-    sandbox_exec(seatbelt::CONTENT, executable, arguments)
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+/// Windows and macOS: no confinement for these persistent roles has been
+/// designed and proven (Seatbelt's content profile has no address-space or
+/// CPU limit), so the music bot refuses to start a codec child there.
+#[cfg(not(target_os = "linux"))]
 pub fn musicbot_codec_sandbox_command(_: &Path, _: &[OsString]) -> Result<Command, Error> {
     // Keep cross compilation working, but never run an unrestricted fallback.
     Err(Error::MissingSandboxHelper(
