@@ -42,6 +42,17 @@ class Packaging(unittest.TestCase):
         self.assertEqual(linker.filter_arguments(['/nix/store/fixture/libstd.rlib'], self.root),
                          ['/nix/store/fixture/libstd.rlib'])
 
+    def test_salted_linker_environment_cannot_restore_nix_paths(self):
+        env = linker.target_environment({'NIX_LDFLAGS': '-L/nix/store/a',
+            'NIX_LDFLAGS_x86_64_unknown_linux_gnu': '-rpath /nix/store/b',
+            'NIX_CFLAGS_LINK_x86_64_unknown_linux_gnu': '-L/nix/store/c',
+            'LIBRARY_PATH': '/nix/store/d', 'LD_LIBRARY_PATH': '/nix/store/e',
+            'OWNED_BUILD_SENTINEL': 'retained'})
+        self.assertFalse(any(name.startswith(('NIX_LDFLAGS','NIX_CFLAGS_LINK')) for name in env))
+        self.assertEqual(env['NIX_DONT_SET_RPATH_x86_64_unknown_linux_gnu'], '1')
+        self.assertNotIn('LIBRARY_PATH', env); self.assertNotIn('LD_LIBRARY_PATH', env)
+        self.assertEqual(env['OWNED_BUILD_SENTINEL'], 'retained')
+
     def test_link_trace_rejects_implicit_nix_shared_or_crt_fallback(self):
         sysroot = '/nix/store/fixture-target-sysroot'
         trace = [sysroot + '/usr/lib/libc.so.6', '/nix/store/fixture-rust/libstd.rlib(std.rcgu.o)']

@@ -78,6 +78,22 @@ def validate_trace(inputs, sysroot):
     return sorted(shared)
 
 
+def target_environment(original):
+    env = dict(original)
+    suffixes = {'', '_x86_64_unknown_linux_gnu'}
+    for name in list(env):
+        for prefix in ('NIX_LDFLAGS', 'NIX_CFLAGS_COMPILE', 'NIX_CFLAGS_LINK'):
+            if name.startswith(prefix):
+                suffixes.add(name[len(prefix):])
+                env.pop(name, None)
+                break
+    for suffix in suffixes:
+        env['NIX_DONT_SET_RPATH' + suffix] = '1'
+    for name in ('LIBRARY_PATH', 'LD_LIBRARY_PATH'):
+        env.pop(name, None)
+    return env
+
+
 def main():
     sysroot, compiler, *arguments = sys.argv[1:]
     root = Path(sysroot)
@@ -94,9 +110,7 @@ def main():
                    '-Wl,-rpath-link,' + str(root / 'usr/lib' / triple),
                    '-Wl,-rpath-link,' + str(root / 'usr/lib' / triple / 'pulseaudio'),
                    *filtered, '-Wl,--dynamic-linker=/lib64/ld-linux-x86-64.so.2', '-Wl,-t']
-        env = dict(os.environ)
-        for name in ('NIX_LDFLAGS', 'NIX_CFLAGS_COMPILE', 'NIX_CFLAGS_LINK', 'LIBRARY_PATH', 'LD_LIBRARY_PATH'):
-            env.pop(name, None)
+        env = target_environment(os.environ)
         with tempfile.TemporaryFile() as trace:
             result = subprocess.run(command, env=env, stdout=trace)
             if not result.returncode:
