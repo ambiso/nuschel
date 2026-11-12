@@ -34,10 +34,20 @@ struct QueuedFrame {
     gain: f32,
 }
 
+/// All gain components have already been sampled by the sender/client path.
+/// Keep that bounded control with its encoded packet through reordering; this
+/// is not a live per-user volume/mute command for previously queued audio.
+#[derive(Clone)]
+struct EncodedPacket {
+    opus: Vec<u8>,
+    gain: f32,
+}
+
 struct Speaker {
     decoder: OpusDecoder,
-    jitter: JitterBuffer,
+    jitter: JitterBuffer<EncodedPacket>,
     pcm: VecDeque<QueuedFrame>,
+    /// Gain of the preceding successfully decoded packet, also used for loss.
     volume: f32,
     last_packet: Instant,
 }
@@ -61,8 +71,10 @@ impl Speaker {
         while self.pcm.len() < FRAME {
             match self.jitter.pull() {
                 Pull::Packet { opus, end } => {
-                    if let Ok(count) = self.decoder.decode(&opus, MAX_PACKET_SAMPLES, scratch) {
+                    if let Ok(count) = self.decoder.decode(&opus.opus, MAX_PACKET_SAMPLES, scratch)
+                    {
                         self.jitter.observe_frames((count / FRAME) as u64);
+                        self.volume = opus.gain;
                         self.extend(&scratch[..2 * count]);
                     }
                     if end {
@@ -72,7 +84,7 @@ impl Speaker {
                 Pull::Lost { fec, frames } => {
                     let size = (frames as usize * FRAME).min(MAX_PACKET_SAMPLES);
                     let decoded = match fec {
-                        Some(next) => self.decoder.decode_fec(&next, size, scratch),
+                        Some(next) => self.decoder.decode_fec(&next.opus, size, scratch),
                         None => self.decoder.decode(&[], size, scratch),
                     };
                     if let Ok(count) = decoded {
@@ -167,9 +179,16 @@ impl Mixer {
             speaker.jitter = JitterBuffer::default();
             let _ = speaker.decoder.reset_state();
         }
-        speaker.volume = volume.clamp(0., 4.);
         speaker.last_packet = now;
-        speaker.jitter.push(sequence, opus, end, now);
+        speaker.jitter.push(
+            sequence,
+            EncodedPacket {
+                opus,
+                gain: volume.clamp(0., 4.),
+            },
+            end,
+            now,
+        );
         Ok(())
     }
 
@@ -270,7 +289,7 @@ mod tests {
             .push(malformed(), now + Duration::from_secs(2))
             .unwrap();
         assert_eq!(injected.speakers[&(1, 1)].last_packet, before);
-        assert_eq!(injected.speakers[&(1, 1)].volume, 0.25);
+        assert_eq!(injected.speakers[&(1, 1)].volume, 1.);
         for _ in 0..12 {
             let mut actual = [[0.; 2]; FRAME];
             let mut expected = [[0.; 2]; FRAME];

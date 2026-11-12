@@ -67,14 +67,26 @@ fn main() {
             _ => panic!("invalid fixture command"),
         }
     }
+    // Linux-only diagnostic of this component process, not a device-worker
+    // memory quota. No foreign process, profile or hardware state is read.
+    let peak_rss_kib = fs::read_to_string("/proc/self/status")
+        .ok()
+        .and_then(|status| {
+            status.lines().find_map(|line| {
+                line.strip_prefix("VmHWM:")
+                    .and_then(|value| value.split_whitespace().next()?.parse::<usize>().ok())
+            })
+        })
+        .unwrap_or(0);
     costs.sort_unstable();
     if !costs.is_empty() {
         println!(
-            "renders={} p50_ns={} p95_ns={} max_ns={}",
+            "renders={} p50_ns={} p95_ns={} max_ns={} peak_rss_kib={}",
             costs.len(),
             costs[costs.len() / 2],
             costs[costs.len() * 95 / 100],
-            costs[costs.len() - 1]
+            costs[costs.len() - 1],
+            peak_rss_kib
         );
     }
 }

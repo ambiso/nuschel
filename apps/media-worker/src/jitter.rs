@@ -5,19 +5,27 @@ pub use nuschl_audio_jitter::Pull;
 use nuschl_audio_jitter::{CATCH_UP_MS, MAX_SEQUENCE};
 use std::time::Instant;
 
-#[derive(Default)]
-pub struct JitterBuffer {
-    inner: nuschl_audio_jitter::JitterBuffer,
+pub struct JitterBuffer<P = Vec<u8>> {
+    inner: nuschl_audio_jitter::JitterBuffer<P>,
     origin: Option<Instant>,
 }
 
-impl JitterBuffer {
-    pub fn push(&mut self, sequence: u64, opus: Vec<u8>, end: bool, now: Instant) {
+impl<P> Default for JitterBuffer<P> {
+    fn default() -> Self {
+        Self {
+            inner: nuschl_audio_jitter::JitterBuffer::default(),
+            origin: None,
+        }
+    }
+}
+
+impl<P: Clone> JitterBuffer<P> {
+    pub fn push(&mut self, sequence: u64, opus: P, end: bool, now: Instant) {
         let origin = *self.origin.get_or_insert(now);
         self.inner
             .push(sequence, opus, end, now.saturating_duration_since(origin));
     }
-    pub fn pull(&mut self) -> Pull {
+    pub fn pull(&mut self) -> Pull<P> {
         self.inner.pull()
     }
     pub fn observe_frames(&mut self, frames: u64) {
@@ -220,8 +228,8 @@ mod tests {
     #[test]
     fn jitter_raises_the_target_and_excess_is_dropped() {
         let start = Instant::now();
-        let mut steady = JitterBuffer::default();
-        let mut jittery = JitterBuffer::default();
+        let mut steady: JitterBuffer = JitterBuffer::default();
+        let mut jittery: JitterBuffer = JitterBuffer::default();
         for index in 0..50_u64 {
             steady.push(
                 index * 2,
@@ -239,7 +247,7 @@ mod tests {
         }
         assert!(jittery.target_ms() > steady.target_ms() + 20.);
         // A burst of 50 packets (1 s) collapses to about target + catch-up window.
-        let mut burst = JitterBuffer::default();
+        let mut burst: JitterBuffer = JitterBuffer::default();
         for index in 0..50_u64 {
             burst.push(index * 2, vec![], false, start);
         }

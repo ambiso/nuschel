@@ -14,6 +14,11 @@ def main():
  gains=[.25,.5,1.,0.,2.,.75,.125,1.,4.,0.]
  duplicate=make_case('stale-duplicate-controls',voice+[voice[0],voice[1]],[(i*2,i*20,i,i==7) for i in range(8)]+[(0,25,8,False),(2,75,9,False)],[(2+i*2,'packet',i,2) for i in range(8)],20,gains)
  cases.append(duplicate)
+ bounds=make_case('finite-clamped-and-nonfinite-controls',voice[:4]+[voice[0],voice[1]],
+  [(i*2,i*20,i,i==3) for i in range(4)]+[(3,25,4,False),(5,45,5,False)],
+  [(2+i*2,'packet',i,2) for i in range(4)],12,[0.,4.,.25,.5,float('nan'),float('inf')])
+ bounds['wire_gains']=[-1.,3.4028234663852886e38,.25,.5,float('nan'),float('inf')]
+ cases.append(bounds)
  control=dict(cases[0]);control['name']='constant-gain-control';control['gains']=[.5]*len(control['gains']);cases.append(control)
  results=[]
  for case in cases:
@@ -22,7 +27,7 @@ def main():
   commands=[];cursor=0;pushes=sorted(case['pushes'],key=lambda row:row[1])
   for tick in range(case['ticks']):
    while cursor<len(pushes) and pushes[cursor][1]<=tick*10:
-    sequence,at,index,end=pushes[cursor];commands.append(f'P {sequence} {at*1000} {case["gains"][index]} {int(end)} {case["packets"][index].hex()}');cursor+=1
+    sequence,at,index,end=pushes[cursor];commands.append(f'P {sequence} {at*1000} {case.get("wire_gains",case["gains"])[index]} {int(end)} {case["packets"][index].hex()}');cursor+=1
    commands.append(f'R {tick}')
   event=args.output/(case['name']+'.events');event.write_text('\n'.join(commands)+'\n')
   output=args.output/(case['name']+'.f32le');write_pcm(args.output/(case['name']+'-reference.f32le'),expected)
