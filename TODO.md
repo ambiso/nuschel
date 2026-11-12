@@ -362,8 +362,10 @@ Current integration checkpoint (2026-11-12):
   enrolled on 2026-11-12; historical fixture proofs retain their original scope.
 - **Release remains gated.** Independent Linux, Windows, universal macOS and web
   artifacts, hybrid update verification, exact notices and final packaging must
-  pass. Production public-key enrollment is complete; matching CI secret
-  provisioning/verification and protected private-key backups remain operator steps. Do not publish unsigned updates.
+  pass. Production public-key enrollment is complete. The user chose local
+  signing and publication; keep the private pair off GitHub runners and retain
+  protected backups. Local publication tooling and actual final archives remain
+  gates. Do not publish unsigned updates.
 - Knocking is integrated through `1f979943` (134 source-branch tests); SDK/UI
   consumers remain. MLS admission is refused. RTC RustCrypto certificates and
   bounded four-track transport are integrated (five signaling and 12 transport
@@ -2547,12 +2549,21 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
       Windows hybrid verifier/LPAC/library-install and desktop update/restart proof
       now pass on reviewed fixture sources. macOS native proof, final integrated
       distribution/archive checks and an actual release remain.
-- [ ] Enroll the production public pair in `crates/update/update-trust.json`, back
-      up the independent private seeds and explicitly provision the matching
-      `UPDATE_HYBRID_SIGNING_KEY` repository secret with the reviewed operator
-      tool. The embedded store deliberately remains empty; no production key or
-      secret is created by tests. This protects updates independently of OS code
-      signing (below).
+- [x] Enroll the production public pair in `crates/update/update-trust.json`
+      (2026-11-12, source `5b8d5f53`). The private pair was generated with the
+      reviewed operator tool outside the repository; only the exact public
+      JSON is committed. Fourteen updater tests and the final native package
+      pass. This protects updates independently of OS code signing below.
+- [ ] Finish local release preparation/signing/publication (user, 2026-11-12).
+      Keep protected backups of the private pair locally; do not provision a
+      GitHub signing secret. Accept exact-tag local Nix outputs with explicit
+      provenance, revalidate actual store products and complete archive/notice
+      hashes before signing and publishing, and require real native Mac proof
+      for the Mac artifact. Key-free CI can build/test or supply that proof.
+      Preserve the immutable `v0.1.0` tag at `ab843f7a`; its automatic publish
+      run was cancelled when the user chose local signing. The separate manual
+      test build continues. Local publisher fixtures/review are in progress;
+      actual signed distribution and public release are not yet completed.
 - [x] Source-scoped runtime notice producer/publisher gates and lossless compact
       packaging for native/cross/web artifacts. Known platform mappings select
       authoritative roots/features; Mac requires both slices, native builds do
