@@ -102,3 +102,53 @@ case. Full baseline, fixed and strict receive records are respectively
 `silk-audit-final/proof.json`, and `silk-regressions-final/proof.json`.
 Existing codec tests also pass: 154 units, 30 API, eight packet-loss, six
 multiframe, two mode-transition and nine robustness tests.
+
+The later CELT PLC failure also concerns a private distinction between complete
+packet length and one TOC frame's duration. A 120 ms packet containing twelve
+10 ms CELT frames followed by a 20 ms gap produced 28.2107 dB agreement with
+libopus. The same discrepancy occurs with fresh and reused output buffers.
+Official `opus_decode_frame` first clamps every concealed piece to
+`st->frame_size`, the accepted TOC-frame duration; `opus_decode_native` loops
+until the gap is filled. Rust previously issued one 20 ms concealment call.
+Explicitly issuing two 10 ms calls against the same C reference reaches
+81.59 dB, identifying the history/chunk boundary error independently of jitter.
+
+The bounded correction adds private `packet_frame_size` state initialized/reset
+to `Fs/400`, updated after validated accepted normal/FEC/DTX packets, and limits
+PLC pieces to the smaller of that TOC duration and 20 ms. It preserves the public
+`last_packet_duration` API and packet-duration admission/jitter policies.
+Malformed packets leave the cap unchanged. No backend, dependency, unsafe code,
+encoder, device-rate conversion or output gain policy changes.
+
+The strict `tests/opus_celt_plc.py` reference matrix passes **332/332 cases**,
+each with both fresh and reused output scratch. It covers 10/20 ms internal CELT
+frames grouped into every packet duration through 120 ms, mono/stereo stream
+and output channels, missing 10/20 ms via ordinary PLC and FEC fallback, DTX,
+reset and SILK/hybrid/CELT transitions, and malformed-input state preservation.
+Return counts and all final ranges match C; all PCM cases exceed the unchanged
+35 dB unity-gain gate (minimum observed 69.13 dB, frozen failure 81.59 dB).
+The same final matrix with the prior framing-only codec passes 218/332;
+114 formerly failing cases pass and no previously passing case regresses.
+The prior strict production 48 kHz suite also remains **241/241 passing**.
+
+The baseline, first fixed and prior-regression artifacts are preserved under
+`~/.cache/nuschl-output-quality/celt-plc/{baseline-matrix,first,prior-regressions}/`;
+the direct fresh/reused/split proof is `celt-plc/baseline-proof.json`. The original
+native admission fixture remains at `admission-frozen/120ms-then-missing20ms.*`.
+The native/browser owners must independently repeat the pipeline oracle before
+closing integration; source codec tests do not establish physical-device or
+complete Mumble output parity. The existing direct 8/12 kHz API resampling and
+public duration-metadata differences remain queued.
+
+To repeat the strict CELT matrix after compiling the vendor rlib as above:
+
+```sh
+rustc --edition=2024 -O tests/opus_celt_plc_probe.rs \
+  --extern "opus_pure=$HOME/.cache/nuschl-output-quality/silk-build/libopus_pure.rlib" \
+  -o "$HOME/.cache/nuschl-output-quality/silk-build/celt-plc-probe"
+python3 tests/opus_celt_plc.py \
+  --opus-library /nix/store/ah26jmgs60s1dzphf0vi4f9pqmlpl9y6-libopus-1.6.1/lib/libopus.so \
+  --probe "$HOME/.cache/nuschl-output-quality/silk-build/celt-plc-probe" \
+  --frozen-events "$HOME/.cache/nuschl-output-quality/admission-frozen/120ms-then-missing20ms.events" \
+  --output "$HOME/.cache/nuschl-output-quality/celt-plc/repeat" --require-parity
+```

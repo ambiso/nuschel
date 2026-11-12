@@ -699,14 +699,15 @@ The media worker uses per-speaker adaptive jitter buffers and Opus loss concealm
       nearest future sequence and verify 10/20 ms gaps, reordering and terminators.
       Preserve the frozen failing trace and explain intentional changes to the
       previously exact native-policy baseline; do not retune adaptive latency.
-- [ ] Correct CELT PLC after aggregated short frames (active codec owner). A
-      120 ms packet made of 10 ms frames followed by a 20 ms loss produces only
-      28.21 dB agreement with independent libopus, despite correct clock/gain.
-      The decoder must retain the accepted TOC's internal-frame duration for
-      concealment chunking separately from aggregate packet duration. A bounded
-      private-field fix is under test; retain the original failure and require
-      prior codec regressions before integration. Public duration API semantics
-      and direct 8/12 kHz resampling remain separate open issues above.
+- [ ] Verify integrated CELT PLC correction through native/browser playout.
+      A 120 ms packet of 10 ms CELT frames followed by a 20 ms loss previously
+      gave only 28.21 dB agreement with independent libopus. The private accepted
+      TOC-frame duration now bounds concealment pieces, improving the unchanged
+      fixture to 81.59 dB. All 332 independent CELT cases (fresh/reused scratch)
+      and the prior strict 241 production-rate cases pass. Native/browser pipeline
+      reruns remain required before closing this row; preserve baseline evidence
+      under `~/.cache/nuschl-output-quality/celt-plc/`. Public duration metadata,
+      jitter policy and direct 8/12 kHz resampling remain separate issues.
 - [ ] Reject complete malformed Opus framing before native/browser jitter or
       speaker-state admission (active browser-audio owner). The frozen `09 00`
       case shortens the predicted concealment span and displaces a subsequent

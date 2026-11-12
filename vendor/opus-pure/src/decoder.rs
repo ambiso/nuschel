@@ -68,6 +68,9 @@ pub struct OpusDecoder {
     // libopus st->mode follows the last accepted packet's TOC. A DTX frame
     // conceals in prev_mode, so that synthesis mode can differ from this one.
     packet_mode: Option<OpusMode>,
+    // libopus st->frame_size is one TOC frame, distinct from the complete
+    // packet duration reported by frame_size below. PLC must not exceed it.
+    packet_frame_size: usize,
     frame_size: usize,
 
     stream_channels: usize,
@@ -197,6 +200,7 @@ impl OpusDecoder {
             channels,
             prev_mode: None,
             packet_mode: None,
+            packet_frame_size: (sampling_rate / 400) as usize,
             frame_size: 0,
             stream_channels: channels,
             silk_resampler: silk::resampler::SilkResampler::default(),
@@ -354,8 +358,8 @@ impl OpusDecoder {
         // opus_decode_frame reports zero entropy range for PLC/DTX.
         self.last_range = 0;
         // "Avoids trying to run the PLC on sizes other than 2.5 (CELT), 5
-        // (CELT), 10, or 20" (opus_decoder.c:344): a request longer than 20 ms
-        // is concealed in 20 ms pieces, because 20 ms is the longest frame CELT
+        // (CELT), 10, or 20" (opus_decoder.c:344): conceal in pieces no longer
+        // than 20 ms, because 20 ms is the longest frame CELT
         // has. Its decode buffer holds exactly one, and the pitch branch of
         // concealment indexes `DECODE_BUFFER_SIZE - MAX_PERIOD - n`, which goes
         // negative past that. Concealing a lost 40 or 60 ms packet is an
@@ -363,7 +367,12 @@ impl OpusDecoder {
         // found by the `decode_stream` fuzz target, pinned in
         // `robustness.rs::concealment_longer_than_a_celt_frame_is_chunked`.
         debug_assert!(output.len() >= frame_size * self.channels);
-        let longest = (self.sampling_rate / 50) as usize;
+        // opus_decode_frame first clamps concealment to st->frame_size: even
+        // a 120 ms packet made from 10 ms frames must conceal in <=10 ms
+        // pieces. opus_decode_native repeats that call until the gap is full.
+        let longest = self
+            .packet_frame_size
+            .min((self.sampling_rate / 50) as usize);
         if frame_size > longest {
             let mut done = 0usize;
             while done < frame_size {
@@ -711,6 +720,7 @@ impl OpusDecoder {
             channels,
             prev_mode,
             packet_mode,
+            packet_frame_size,
             frame_size,
             stream_channels,
             silk_resampler,
@@ -748,6 +758,7 @@ impl OpusDecoder {
         silk_dec.channel_state[0].fs_api_hz = *sampling_rate;
         *prev_mode = None;
         *packet_mode = None;
+        *packet_frame_size = (*sampling_rate / 400) as usize;
         *frame_size = 0;
         *stream_channels = *channels;
         *silk_resampler = silk::resampler::SilkResampler::default();
@@ -961,6 +972,7 @@ impl OpusDecoder {
         }
         let base = lead * self.channels;
         self.packet_mode = Some(mode);
+        self.packet_frame_size = packet_frame_size;
         self.stream_channels = channels_from_toc(toc);
         // opus_decode_frame treats zero- and one-byte coded payloads as DTX,
         // including redundant decoding. The accepted TOC still selects the
@@ -1159,6 +1171,7 @@ impl OpusDecoder {
         // instead stretched a 20 ms packet across whatever buffer it was given.
         let frame_size = frame_count * packet_frame_samples;
         self.packet_mode = Some(mode);
+        self.packet_frame_size = packet_frame_samples;
 
         // RFC 6716 permits empty frames (including inside padded CBR packets).
         // libopus opus_decode_frame also treats a one-byte payload as PLC/DTX.

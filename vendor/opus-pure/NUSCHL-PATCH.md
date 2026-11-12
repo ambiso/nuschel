@@ -55,6 +55,17 @@ the difference from TOC-only duration inspection. An independent libopus 1.6.1
 seeded longer packets, frame-size limits and explicit padded/multiframe cases);
 evidence is at `~/.cache/nuschl-output-quality/framing-api/proof.json`.
 
+A further bounded PLC correction keeps the accepted TOC's per-frame duration
+separate from the public complete packet duration. This mirrors libopus
+`st->frame_size` (initialized/reset to `Fs/400`) and caps each concealment piece
+by the smaller of that duration and 20 ms. A 120 ms packet containing twelve
+10 ms CELT frames therefore conceals a 20 ms gap as two 10 ms calls, preserving
+filter/pitch history. The public duration API and jitter policy are unchanged;
+malformed packets do not update the private cap. The independent CELT matrix in
+`tests/opus_celt_plc.py` compares fresh/reused output buffers, ordinary and FEC
+concealment, 10/20 ms frames grouped through 120 ms, mode/DTX/reset transitions
+and framing-state preservation. See `docs/opus-silk.md` for exact scope/evidence.
+
 The phase setting is unchanged. There are no new dependencies, unsafe code,
 encoder changes or backend replacements. Original provenance bytes above remain
 unchanged. Independent synthetic checks, evidence and known direct 8/12 kHz API
