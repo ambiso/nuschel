@@ -703,6 +703,14 @@ def main():
                 command(link, "attach", player=1, channel=1)
                 eventually(lambda: api(link), lambda state: state["players"][1]["listeners"] == 1,
                            "separate Lobby queue subscription")
+                # The actor queues an explicit end marker when changing its
+                # subscription. The API's listener count is not a network ACK:
+                # observe that boundary before starting the next transmission,
+                # rather than racing it with a best-effort queue drain.
+                boundary = bob.wait(lambda event: event["kind"] == "audio"
+                    and event["sender"] == dj2 and event["end"]
+                    and event["opus"] == SILENT_OPUS, timeout=5)
+                assert boundary["opus"] == SILENT_OPUS
                 drain(alice), drain(bob)
                 command(link, "add", player=1, kind="playlist", library=0, id="p1", index=0)
                 heard = audio_from(bob, dj2, 20)
