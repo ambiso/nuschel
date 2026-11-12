@@ -197,7 +197,9 @@ def run(args, root, shell, registry, bots, profile, second_port, second_pin, sho
         return w > 0 and h > 0 and x >= ox-1 and y >= oy-1 and x+w <= ox+ow+1 and y+h <= oy+oh+1
     select("beta"); edit("beta")
     entry=find("Server name","entry"); entry.call("Component","GrabFocus")
-    assert entry.call("Text", "GetText", "ii", "0", "-1")[0] == names["beta"], "rail context edit targeted another server"
+    before_name_edit=json.loads((profile/"config/servers.json").read_text())
+    alpha_id=next(value["id"] for value in before_name_edit if value["name"] == names["alpha"])
+    beta_id=next(value["id"] for value in before_name_edit if value["name"] == names["beta"])
     shell.chord("Control_L","a")
     names["beta"] = "Voice Beta " + "Überraschung " * 7
     # The private shell's synthetic keyboard does not implement an IME.
@@ -208,6 +210,8 @@ def run(args, root, shell, registry, bots, profile, second_port, second_pin, sho
     (args.output/"long-name-bookmarks.json").write_text((profile/"config/servers.json").read_text())
     shot("status-long-name-save")
     names["beta"] = names["beta"].strip()
+    persisted={value["id"]:value["name"] for value in json.loads((profile/"config/servers.json").read_text())}
+    assert persisted[beta_id] == names["beta"] and persisted[alpha_id] == names["alpha"], "rail context edit targeted another stable server"
     eventually(lambda: named("push button", names["beta"] + ";",True), "long Unicode name absent")
     record("long-unicode-name")
     geometry=[]
