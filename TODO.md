@@ -1069,6 +1069,14 @@ listed below. Plugin data remains the explicit gap.
       private stock-Mumble/nuschld interoperability, permission-denial controls,
       inheritance/order cases and persistence across reconnect/server restart.
       Track offline admin-CLI ACL/group commands in the existing server follow-up.
+- [ ] Preserve native login rejection details when the transport closes.
+      Owned-loopback E2EE nuschld tests of a SuperUser connection without its
+      password produced both the expected password-retry form and a generic
+      `Broken pipe (os error 32)` notice for the same explicit server rejection.
+      The latter loses the reason and does not open the retry form. Investigate
+      rejection-vs-transport-error ordering without weakening authentication or
+      silently retrying credentials. This finding is separate from ACL editing;
+      bootstrap proof enters the password before the first connection.
 - [x] Users listed inside the channel tree with talking indicators and mute/deafen/
       suppress icons.
 - [x] Context menus: user (direct message, local volume/mute, info, whisper), channel
