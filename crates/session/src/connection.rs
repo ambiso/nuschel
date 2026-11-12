@@ -951,6 +951,46 @@ fn outdated(error: Error, below: Option<&Below>) -> Error {
     }
 }
 
+fn rejection_error(frame: &ControlFrame) -> Result<Error, Error> {
+    let rejected: proto::Reject = decode(frame)?;
+    let kind = RejectKind::from_wire(rejected.r#type);
+    Ok(Error::Rejected {
+        kind,
+        reason: rejected
+            .reason
+            .map(|reason| bounded(reason, 1024))
+            .unwrap_or_else(|| kind.describe().into()),
+    })
+}
+
+/// A server may reject Authenticate and close while our initial UserState is
+/// still being written. Keep the SAME verified reader alive briefly on this
+/// error path, so that a real Reject wins over the resulting broken pipe.
+/// Never infer a rejection from EOF or retry any credential. The absolute time
+/// and frame budgets also bound a peer that sends unrelated traffic forever.
+async fn initial_login_error(
+    error: Error,
+    logged_in: bool,
+    frames: &mut mpsc::Receiver<Result<ControlFrame, Error>>,
+) -> Error {
+    if logged_in || !matches!(error, Error::Io(_)) {
+        return error;
+    }
+    let until = Instant::now() + Duration::from_millis(100);
+    for _ in 0..32 {
+        match time::timeout_at(until, frames.recv()).await {
+            Ok(Some(Ok(frame))) if frame.kind == kind::REJECT => {
+                return rejection_error(&frame).unwrap_or(error);
+            }
+            // A completed login is not a failed initial authentication, even
+            // if its queued Sync had not been handled when the writer failed.
+            Ok(Some(Ok(frame))) if frame.kind != kind::SERVER_SYNC => {}
+            _ => break,
+        }
+    }
+    error
+}
+
 /// Murmur's per-user rate limit (murmur.ini `messageburst` and `messagelimit`):
 /// a leaky bucket shared by text, our own user state, channel state, ACL and
 /// version messages. The server drops what exceeds it without telling the
@@ -1105,6 +1145,7 @@ pub async fn run(
     // The server's minimum, until login, if this client is below it (see
     // `outdated`).
     let mut below = None;
+    let mut logged_in = false;
     let result = async {
         let version = proto::Version {
             version_v1: Some(0x0001_0500),
@@ -1148,6 +1189,7 @@ pub async fn run(
                     break frame;
                 }
                 state.handle(frame, &events).await?;
+                logged_in |= state.logged_in();
             };
             let negotiated = negotiate(nuschl, &frame.payload)?;
             options
@@ -1232,6 +1274,8 @@ pub async fn run(
                     let frame = frame.ok_or_else(|| Error::Protocol("connection reader stopped".into()))??;
                     if let Some(frame) = kt_reply(kt.as_mut(), state.extension.is_some(), frame)? {
                         state.handle(frame, &events).await?;
+                        // Record this before any outbound flush can fail.
+                        logged_in |= state.logged_in();
                         if state.voice_target != 0 && state.voice_target != 31 && !state.voice_target_valid(state.voice_target) {
                             state.invalidate_voice_target();
                             emit(&events, SessionEvent::Notice("The whisper target changed or became unavailable. Microphone audio is suspended; select a new target or normal talking.".into())).await?;
@@ -1382,6 +1426,10 @@ pub async fn run(
         Ok(())
     }
     .await;
+    let result = match result {
+        Err(error) => Err(initial_login_error(error, logged_in, &mut frames).await),
+        Ok(()) => Ok(()),
+    };
     read_task.abort();
     let _ = read_task.await;
     result.map_err(|error| outdated(error, below.as_ref()))
@@ -3601,15 +3649,7 @@ impl State {
                 }
             }
             kind::REJECT => {
-                let rejected: proto::Reject = decode(&frame)?;
-                let kind = RejectKind::from_wire(rejected.r#type);
-                return Err(Error::Rejected {
-                    kind,
-                    reason: rejected
-                        .reason
-                        .map(|reason| bounded(reason, 1024))
-                        .unwrap_or_else(|| kind.describe().into()),
-                });
+                return Err(rejection_error(&frame)?);
             }
             kind::SERVER_SYNC => {
                 let sync: proto::ServerSync = decode(&frame)?;
@@ -4905,6 +4945,136 @@ mod tests {
                     SessionEvent::OpusAvailable(value) if *value == opus.unwrap_or(false))));
             }
         }
+    }
+
+    fn broken_pipe() -> Error {
+        std::io::Error::new(std::io::ErrorKind::BrokenPipe, "initial write failed").into()
+    }
+
+    fn assert_broken_pipe(error: Error) {
+        assert!(matches!(error, Error::Io(ref e) if e.kind() == std::io::ErrorKind::BrokenPipe));
+    }
+
+    #[tokio::test]
+    async fn buffered_reject_survives_a_real_initial_write_failure() {
+        // An established transport closes after writing Reject, before our
+        // next write. Its reader has not run yet: this exercises read_control
+        // plus the error drain, not an invented password error from EOF.
+        for _ in 0..32 {
+            let (local, mut server) = tokio::io::duplex(4096);
+            let reject = proto::Reject {
+                r#type: Some(4),
+                reason: Some("private fixture wrong server password".into()),
+            };
+            send(&mut server, kind::REJECT, &reject).await.unwrap();
+            drop(server);
+            let (mut reader, mut writer) = tokio::io::split(local);
+            let original = write_control(&mut writer, kind::USER_STATE, &[])
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(original, Error::Io(ref e) if e.kind() == std::io::ErrorKind::BrokenPipe)
+            );
+            let (tx, mut rx) = mpsc::channel(32);
+            let task = tokio::spawn(async move {
+                tx.send(read_control(&mut reader).await).await.unwrap();
+            });
+            assert!(matches!(
+                initial_login_error(original, false, &mut rx).await,
+                Error::Rejected {
+                    kind: RejectKind::WrongServerPassword,
+                    ..
+                }
+            ));
+            task.await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn login_error_never_invents_a_reject_from_eof_malformed_or_sync() {
+        for first in [
+            Err(Error::Protocol("peer closed".into())),
+            Ok(ControlFrame {
+                kind: kind::REJECT,
+                payload: Bytes::from_static(&[0xff]),
+            }),
+            Ok(frame(kind::SERVER_SYNC, proto::ServerSync::default())),
+        ] {
+            let (tx, mut rx) = mpsc::channel(4);
+            tx.send(first).await.unwrap();
+            tx.send(Ok(frame(
+                kind::REJECT,
+                proto::Reject {
+                    r#type: Some(4),
+                    ..Default::default()
+                },
+            )))
+            .await
+            .unwrap();
+            assert_broken_pipe(initial_login_error(broken_pipe(), false, &mut rx).await);
+            assert_eq!(
+                rx.len(),
+                1,
+                "must stop at the first terminal/boundary frame"
+            );
+        }
+        let (tx, mut rx) = mpsc::channel(1);
+        drop(tx);
+        assert_broken_pipe(initial_login_error(broken_pipe(), false, &mut rx).await);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn login_error_budget_is_absolute_and_post_login_has_no_wait() {
+        let (tx, mut rx) = mpsc::channel(64);
+        let start = Instant::now();
+        assert_broken_pipe(initial_login_error(broken_pipe(), true, &mut rx).await);
+        assert_eq!(Instant::now(), start);
+        assert!(matches!(
+            initial_login_error(Error::Protocol("bad frame".into()), false, &mut rx).await,
+            Error::Protocol(_)
+        ));
+        assert_eq!(Instant::now(), start);
+        let sender = tokio::spawn(async move {
+            for _ in 0..20 {
+                time::sleep(Duration::from_millis(10)).await;
+                if tx
+                    .send(Ok(frame(kind::VERSION, proto::Version::default())))
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        });
+        assert_broken_pipe(initial_login_error(broken_pipe(), false, &mut rx).await);
+        assert_eq!(start.elapsed(), Duration::from_millis(100));
+        sender.abort();
+    }
+
+    #[tokio::test]
+    async fn login_error_frame_cap_and_rejection_bounds_match_normal_handling() {
+        let (tx, mut rx) = mpsc::channel(64);
+        for _ in 0..32 {
+            tx.send(Ok(frame(kind::VERSION, proto::Version::default())))
+                .await
+                .unwrap();
+        }
+        let reject = frame(
+            kind::REJECT,
+            proto::Reject {
+                r#type: Some(3),
+                reason: Some("é".repeat(1000)),
+            },
+        );
+        tx.send(Ok(reject.clone())).await.unwrap();
+        assert_broken_pipe(initial_login_error(broken_pipe(), false, &mut rx).await);
+        assert_eq!(rx.len(), 1);
+        let expected = rejection_error(&reject).unwrap();
+        let error = initial_login_error(broken_pipe(), false, &mut rx).await;
+        assert_eq!(error.to_string(), expected.to_string());
+        assert!(
+            matches!(error, Error::Rejected { kind: RejectKind::WrongUserPassword, ref reason } if reason.len() == 1024)
+        );
     }
 
     #[test]
