@@ -2885,6 +2885,7 @@ fn server_event(event: SessionEvent) -> Result<ServerEvent, Option<Unmodelled>> 
         SessionEvent::User(user) => ServerEvent::User(user),
         SessionEvent::UserRemoved(session) => ServerEvent::UserRemoved(session),
         SessionEvent::Connected { session, .. } => ServerEvent::Connected { session },
+        SessionEvent::OpusAvailable(available) => ServerEvent::OpusAvailable(available),
         // The connection loop prepares welcome HTML in the content worker
         // and delivers its document directly; never print its marker source.
         SessionEvent::Welcome(_) => return Err(None),

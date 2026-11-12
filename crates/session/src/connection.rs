@@ -137,6 +137,8 @@ const MAX_SEND_ATTEMPTS: u32 = 5;
 
 #[derive(Clone, Debug)]
 pub enum SessionEvent {
+    /// Actual CodecVersion knowledge, independent of the private routing default.
+    OpusAvailable(bool),
     PeerCertificate(String),
     /// The extension negotiation succeeded (only for `nuschl/1` servers);
     /// frontends raise the server's sticky record to it.
@@ -3644,6 +3646,18 @@ impl State {
                 if let Some(welcome) = sync.welcome_text {
                     self.welcome(welcome, events).await?;
                 }
+                emit(
+                    events,
+                    SessionEvent::Limits(ServerLimits {
+                        allow_html: self.allow_html,
+                        message_length: self.message_limit,
+                        image_message_length: self.image_limit,
+                        max_users: self.max_users,
+                        recording_allowed: self.recording_allowed,
+                        max_bandwidth: Some(self.max_bandwidth),
+                    }),
+                )
+                .await?;
                 if let Some(channel) = self.rejoin.take()
                     && self.channels.contains_key(&channel)
                 {
@@ -3999,6 +4013,7 @@ impl State {
             kind::CODEC_VERSION => {
                 let version: proto::CodecVersion = decode(&frame)?;
                 self.opus = version.opus.unwrap_or(false);
+                emit(events, SessionEvent::OpusAvailable(self.opus)).await?;
                 if !self.opus {
                     emit(events, SessionEvent::Notice(
                         "This server uses the legacy CELT codec. Nuschl supports Opus only, so voice is unavailable here; text chat still works.".into(),
@@ -4836,6 +4851,61 @@ pub mod fuzzing {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn sync_publishes_initial_limits_without_inventing_negotiated_codec_support() {
+        for bandwidth in [None, Some(0), Some(24_000)] {
+            let mut state = State::default();
+            let (tx, mut rx) = mpsc::channel(16);
+            state
+                .handle(
+                    frame(
+                        kind::SERVER_SYNC,
+                        proto::ServerSync {
+                            session: Some(1),
+                            max_bandwidth: bandwidth,
+                            ..Default::default()
+                        },
+                    ),
+                    &tx,
+                )
+                .await
+                .unwrap();
+            let events = drain(&mut rx).await;
+            assert!(
+                !events
+                    .iter()
+                    .any(|event| matches!(event, SessionEvent::OpusAvailable(_))),
+                "private routing default is not negotiated knowledge"
+            );
+            let limits = events
+                .iter()
+                .find_map(|event| match event {
+                    SessionEvent::Limits(limits) => Some(limits),
+                    _ => None,
+                })
+                .expect("Sync without ServerConfig must publish current limits");
+            assert_eq!(limits.max_bandwidth, Some(bandwidth.unwrap_or(72_000)));
+            assert_eq!(limits.message_length, 5000);
+            for opus in [Some(false), Some(true), None] {
+                state
+                    .handle(
+                        frame(
+                            kind::CODEC_VERSION,
+                            proto::CodecVersion {
+                                opus,
+                                ..Default::default()
+                            },
+                        ),
+                        &tx,
+                    )
+                    .await
+                    .unwrap();
+                assert!(drain(&mut rx).await.iter().any(|event| matches!(event,
+                    SessionEvent::OpusAvailable(value) if *value == opus.unwrap_or(false))));
+            }
+        }
+    }
 
     #[test]
     fn explicit_registered_lookup_refuses_partial_bulk_unrelated_and_unknown_pairs() {

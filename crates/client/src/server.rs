@@ -151,6 +151,8 @@ pub struct ServerState {
     /// Explicit UI requests only: channel lifetime, retry time, attempts.
     pub(crate) permission_queries: BTreeMap<u32, (u64, u64, u8)>,
     pub limits: Option<ServerLimits>,
+    /// None until this connection actually receives CodecVersion.
+    pub opus_available: Option<bool>,
     pub context_actions: Vec<ContextAction>,
     /// A server recommendation the user can act on (e.g. push-to-talk).
     pub suggestion: Option<String>,
@@ -247,6 +249,7 @@ impl ServerState {
             permissions: BTreeMap::new(),
             permission_queries: BTreeMap::new(),
             limits: None,
+            opus_available: None,
             context_actions: Vec::new(),
             suggestion: None,
             stats: BTreeMap::new(),

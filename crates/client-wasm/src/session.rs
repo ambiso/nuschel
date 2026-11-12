@@ -730,6 +730,8 @@ impl Session {
             kind::CODEC_VERSION => {
                 if let Ok(codec) = proto::CodecVersion::decode(payload) {
                     self.opus_allowed = codec.opus.unwrap_or(false);
+                    self.events
+                        .push_back(Event::Server(ServerEvent::OpusAvailable(self.opus_allowed)));
                 }
             }
             kind::UDP_TUNNEL => {
@@ -759,6 +761,16 @@ impl Session {
                 if let Some(source) = sync.welcome_text {
                     self.welcome(source);
                 }
+                self.events.push_back(Event::Server(ServerEvent::Limits(
+                    nuschl_core::model::ServerLimits {
+                        allow_html: self.allow_html,
+                        message_length: self.message_limit,
+                        image_message_length: self.image_limit,
+                        max_users: self.max_users,
+                        recording_allowed: self.recording_allowed,
+                        max_bandwidth: Some(self.max_bandwidth),
+                    },
+                )));
             }
             kind::REJECT => {
                 let reject = proto::Reject::decode(payload).unwrap_or_default();
@@ -1023,6 +1035,52 @@ fn webpki_roots() -> impl Iterator<Item = rustls::pki_types::TrustAnchor<'static
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sync_publishes_limits_but_only_codec_version_publishes_negotiated_support() {
+        for bandwidth in [None, Some(0), Some(24_000)] {
+            let mut session = voice_session();
+            session.take_events();
+            session.control(
+                kind::SERVER_SYNC,
+                proto::ServerSync {
+                    session: Some(1),
+                    max_bandwidth: bandwidth,
+                    ..Default::default()
+                }
+                .encode_to_vec()
+                .into(),
+            );
+            let events = session.take_events();
+            assert!(
+                !events
+                    .iter()
+                    .any(|event| matches!(event, Event::Server(ServerEvent::OpusAvailable(_))))
+            );
+            let limits = events
+                .iter()
+                .find_map(|event| match event {
+                    Event::Server(ServerEvent::Limits(limits)) => Some(limits),
+                    _ => None,
+                })
+                .expect("Sync without ServerConfig must publish current limits");
+            assert_eq!(limits.max_bandwidth, Some(bandwidth.unwrap_or(72_000)));
+            assert_eq!(limits.message_length, 5000);
+            for opus in [Some(false), Some(true), None] {
+                session.control(
+                    kind::CODEC_VERSION,
+                    proto::CodecVersion {
+                        opus,
+                        ..Default::default()
+                    }
+                    .encode_to_vec()
+                    .into(),
+                );
+                assert!(session.take_events().iter().any(|event| matches!(event,
+                    Event::Server(ServerEvent::OpusAvailable(value)) if *value == opus.unwrap_or(false))));
+            }
+        }
+    }
 
     #[test]
     fn sparse_config_keeps_previous_limits_and_fresh_connections_reset_them() {

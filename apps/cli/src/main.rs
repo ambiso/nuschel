@@ -969,6 +969,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 SessionEvent::Connected { session, max_bandwidth } => json!({"kind":"connected", "session":session, "max_bandwidth":max_bandwidth}),
                 SessionEvent::Text(message) => json!({"kind":"text", "target":message.target, "author":message.author, "body":message.body, "html":message.html, "outgoing":message.outgoing, "seq":message.seq}),
                 SessionEvent::Welcome(body) => json!({"kind":"welcome", "body":body}),
+                SessionEvent::OpusAvailable(available) => json!({"kind":"opus_available", "available":available}),
                 SessionEvent::Notice(message) => json!({"kind":"notice", "message":message}),
                 SessionEvent::PermissionDenied(message) => json!({"kind":"permission_denied", "message":message}),
                 SessionEvent::Audio(packet) => json!({"kind":"audio", "sender":packet.sender, "sequence":packet.sequence, "opus":packet.opus, "end":packet.end}),

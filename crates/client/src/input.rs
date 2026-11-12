@@ -200,6 +200,8 @@ pub enum Input {
 /// What a server said (the session's events the client models).
 #[derive(Clone, Debug)]
 pub enum ServerEvent {
+    /// Actual CodecVersion knowledge; private routing defaults are not negotiation.
+    OpusAvailable(bool),
     /// An authenticated encryption failure is an activity gap, never stored text.
     EncryptionGap {
         conversation: [u8; 16],

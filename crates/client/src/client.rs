@@ -505,6 +505,8 @@ impl Client {
                 }
                 clear_welcome(server, &mut self.updates);
                 server.clear_acl_cache();
+                server.limits = None;
+                server.opus_available = None;
                 server.generation = generation;
                 server.muted = true;
                 server.deafened = deafened;
@@ -1634,6 +1636,8 @@ impl Client {
                         self.platform.chime(Sound::Disconnected);
                     }
                     server.clear_acl_cache();
+                    server.limits = None;
+                    server.opus_available = None;
                     server.status = Status::Connecting;
                     clear_welcome(server, &mut self.updates);
                     server.own_session = None;
@@ -2391,6 +2395,7 @@ impl Client {
                 }
             }
             ServerEvent::Limits(limits) => server.limits = Some(limits),
+            ServerEvent::OpusAvailable(available) => server.opus_available = Some(available),
             ServerEvent::Stats(stats) => {
                 server.stats.insert(stats.session, stats);
             }
@@ -2839,6 +2844,65 @@ mod tests {
         ) -> Result<(), String> {
             Ok(())
         }
+    }
+
+    #[test]
+    fn limits_and_negotiated_codec_reset_only_for_the_current_connection_attempt() {
+        let (mut client, _, id) = connected();
+        let limits = || nuschl_core::model::ServerLimits {
+            allow_html: false,
+            message_length: 17,
+            image_message_length: 32,
+            max_users: Some(2),
+            recording_allowed: false,
+            max_bandwidth: Some(24_000),
+        };
+        let input = |generation, event| Input::Server {
+            server: id.clone(),
+            generation,
+            event,
+        };
+        assert_eq!(client.servers[0].opus_available, None);
+        client.handle(input(1, ServerEvent::Limits(limits())));
+        client.handle(input(1, ServerEvent::OpusAvailable(false)));
+        client.handle(input(1, ServerEvent::Connected { session: 1 }));
+        assert_eq!(
+            client.servers[0].opus_available,
+            Some(false),
+            "Sync must retain actual earlier CodecVersion"
+        );
+        client.servers[0].generation = 77;
+        client.connect(0, None, false);
+        assert!(client.servers[0].limits.is_none());
+        assert_eq!(client.servers[0].opus_available, None);
+        client.handle(input(77, ServerEvent::Limits(limits())));
+        client.handle(input(77, ServerEvent::OpusAvailable(true)));
+        assert!(client.servers[0].limits.is_none());
+        assert_eq!(client.servers[0].opus_available, None);
+        client.handle(input(1, ServerEvent::Limits(limits())));
+        client.handle(input(1, ServerEvent::OpusAvailable(false)));
+        let reconnect = |generation| Input::Reconnecting {
+            server: id.clone(),
+            generation,
+            attempt: 1,
+            delay_secs: 1,
+            reason: "owned test".into(),
+        };
+        client.handle(reconnect(77));
+        assert!(client.servers[0].limits.is_some());
+        assert_eq!(client.servers[0].opus_available, Some(false));
+        client.handle(reconnect(1));
+        assert!(client.servers[0].limits.is_none());
+        assert_eq!(client.servers[0].opus_available, None);
+        client.handle(input(77, ServerEvent::OpusAvailable(false)));
+        assert_eq!(client.servers[0].opus_available, None);
+        client.handle(input(1, ServerEvent::Limits(limits())));
+        client.handle(input(1, ServerEvent::OpusAvailable(true)));
+        assert_eq!(
+            client.servers[0].limits.as_ref().unwrap().max_bandwidth,
+            Some(24_000)
+        );
+        assert_eq!(client.servers[0].opus_available, Some(true));
     }
 
     #[test]
