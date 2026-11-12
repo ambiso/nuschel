@@ -21,9 +21,10 @@ Windows profile-preserving updater relaunch and the metadata-refresh procedure
 are integrated with scoped proofs; final browser/device/distribution checks stay open.
 Server reordering and the desktop layout foundation have scoped proofs integrated;
 web image attachments, modern identity/archive flows and full parity remain open.
-The rename/build-cache cleanup is complete. Publication remains behind signing,
-notice and packaging gates; public `main` is still the last user-pushed
-`7f28f8d4`. No new push, tag or release is implied below.
+The rename/build-cache cleanup is complete. Release publication remains behind
+signing, notice and packaging gates. The locally tracked `origin/main` is
+`36eef419` as of this checkout review; this is not a tagged-release claim.
+No push, tag or release is performed by the queue integrations below.
 
 Queue policy (user, 2026-11-12): record every reported or discovered issue here
 when it cannot be fixed immediately. Delegation does not close an issue: retain
@@ -318,8 +319,9 @@ installed macOS guest, Xcode execution and Simulator graphics remain unproven.
          SDK presence is not an installed Simulator runtime.
    - [x] Fix the iOS container capability diagnostic: normalized Podman CapDrop
          requires exact local OCI evidence of empty sets/NNP, rejects added caps
-         and unsafe boundaries; all 19 host tests passed. Actual stopped-container
-         configuration passes; `live_effective_verified=false` remains explicit.
+         and unsafe boundaries; all 19 capability tests passed. The initial
+         stopped-container report correctly kept `live_effective_verified=false`;
+         the separate controlled-resume evidence follows below.
    - [x] Observe live init capabilities/NNP after backed-up controlled resume:
          all five masks zero, NoNewPrivs=1, KVM enabled; existing Recovery booted,
          then stopped cleanly. Both host qcow2 hashes unchanged; target disk1 is
