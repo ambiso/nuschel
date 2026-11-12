@@ -168,6 +168,9 @@ Nix: [docs/server.md](docs/server.md).
 
 ## Development
 
+Contributors and coding agents should read [AGENTS.md](AGENTS.md) for implementation
+boundaries, worker contracts and coordination rules.
+
 Everything comes from the flake's development shell:
 
 ```sh
