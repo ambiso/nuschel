@@ -557,7 +557,18 @@ The media worker uses per-speaker adaptive jitter buffers and Opus loss concealm
 - [x] Keep replacing the media worker on capture-route/privacy changes so blocked
       native teardown cannot keep the microphone open (decided). In the shared
       multi-server worker, not every server mute/deafen change needs replacement.
-- [ ] Measure the audible mute/unmute worker-replacement gap.
+- [ ] Investigate unmute → first-speech latency (user, 2026-11-12; active owner).
+      Measure worker/device startup, first captured PCM, VAD/encoder admission and
+      first transmitted/received audio separately against stock Mumble. Preserve
+      microphone release while muted; do not reduce latency by recording without
+      explicit unmute consent. Include repeated mute/unmute and route changes.
+- [ ] Audit receive/output fidelity against stock Mumble with independent decoded
+      PCM fixtures before claiming 1:1 quality. Native Mixer and browser VoiceDecoder
+      currently downmix to mono; preserve stereo where supported and examine
+      per-speaker gain, mixing/clamping, resampling, jitter and packet-loss
+      concealment separately. Compare high-bitrate mono/stereo, simultaneous
+      speakers and deterministic loss/reordering, then the actual output path;
+      codec bitrate alone does not establish playback fidelity.
 
 ### Optional local speech (requested 2026-11-11)
 
@@ -609,6 +620,9 @@ listed below. Plugin data remains the explicit gap.
       parse in the content worker; decode images with a memory-safe decoder in a worker.
 - [x] Inline images in legacy HTML messages through the content worker.
 - [x] `UserStats` (22) for the connection-info dialog.
+      Profile bandwidth units corrected (2026-11-12, `d8f5999d`): the protocol
+      statistic is bytes/second, so divide by 125 for kbit/s. Server bandwidth
+      limits already use bits/second and retain their separate /1000 conversion.
 - [x] `SuggestConfig` (25): respect the server's suggested PTT/version hints.
 - [x] `ContextActionModify` / `ContextAction` (16/17): server-defined context menu entries.
 - [x] Recording indicator and priority speaker from `UserState`.
@@ -626,6 +640,10 @@ listed below. Plugin data remains the explicit gap.
       suppress icons.
 - [x] Context menus: user (direct message, local volume/mute, info, whisper), channel
       (join, create sub-channel, links, description).
+- [ ] Bound generic context-menu height and provide scroll/focus reveal for tall
+      menus, including administrative entries at narrow windows and 200% zoom.
+      Existing max-width constraints and the shorter ordering-menu proof do not
+      establish that every action in a tall menu remains reachable.
 - [ ] cpal's PipeWire host skips `Audio/Source/Virtual` nodes (e.g. filter-chain or
       EasyEffects outputs), so they can be used only as the system default, not picked
       in Nuschl. Fix upstream in cpal or list them through the PulseAudio API.
@@ -791,6 +809,11 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
          handshakes get the new certificate, a broken one keeps the old one. The
          NixOS module copies certificate credentials at start, so there a renewal
          still needs a restart.
+   - [ ] Prove the integrated ACME certificate lifecycle in an actual NixOS systemd
+         service: DynamicUser/UID access, credential replacement, renewal/recovery,
+         SIGHUP handoff, restart and intentional manual stop. Module evaluation,
+         private helper and server tests passed through `acacf`; they do not prove
+         the installed unit lifecycle or that credentials stay readable after renewal.
    - [x] IP obfuscation in logs (2026-11-11): `obfuscate = true`, HMAC-SHA256 tokens
          under a per-start key (Murmur's 32-bit key is reversible).
    - [x] CA-verified ("strong") certificates (2026-11-11):
