@@ -62,6 +62,7 @@ fn stream() -> StreamConfig {
 }
 
 #[cfg(test)]
+#[allow(dead_code, reason = "Used by the opt-in device-free replay harness.")]
 pub(crate) fn diagnostic_thresholds(
     settings: &AudioSettings,
     open: f32,
@@ -443,15 +444,18 @@ mod tests {
                 });
             }
             let input = speech_like(index);
-            let expected = reference.process(&mut input.clone(), false, false).voice;
-            let actual = changing.process(&mut input.clone(), false, false).voice;
+            let mut reference_frame = input;
+            let expected = reference.process(&mut reference_frame, false, false).voice;
+            let mut changed_frame = input;
+            let actual = changing.process(&mut changed_frame, false, false).voice;
             assert_eq!(
                 actual.to_bits(),
                 expected.to_bits(),
                 "AGC/NS configuration must not reset or change the classifier input"
             );
             if index >= 100 {
-                let cold = fresh.process(&mut input.clone(), false, false).voice;
+                let mut cold_frame = input;
+                let cold = fresh.process(&mut cold_frame, false, false).voice;
                 differs_from_cold |= cold.to_bits() != expected.to_bits();
             }
         }
