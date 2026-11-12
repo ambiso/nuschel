@@ -14,11 +14,17 @@ user's session) against a private loopback server:
   the history comes back from storage (Murmur: local history only; nuschld:
   the server's pages, prepared by format, and the local cache).
 
-It asserts nothing about what Markdown should look like: it records the
-content worker's documents, the accessible text and the screenshots, for a
-person to look at. `--ui-font`/`--mono-font` set concrete families instead of
-the defaults ("sans-serif", "monospace") for control runs: whether bold,
-italic and monospace spans the worker produced are visible depends on them.
+It records the content worker's documents, the accessible text and the
+screenshots, for a person to look at, and checks what Markdown should do
+(docs/desktop.md, "Markdown"): in the accessible text of the typed message and
+of the one received as text, live and restored, no delimiter is left (`**`,
+`*`, a backtick, `[`, `](`, `#`, a list's `-`), the blank lines typed are kept
+(two after the heading, one between the loose list's items, none after the
+fence), and the restored messages read as the live ones. The stock-HTML
+message reads as it did before Markdown. `--ui-font`/`--mono-font` set
+concrete families instead of the defaults ("sans-serif", "monospace") for
+control runs: whether bold, italic and monospace spans the worker produced
+are visible depends on them.
 
     NUSCHL_WL_TMP=... python3 tests/markdown_repro.py --binaries BIN --at-spi AT_SPI \
         --pulse-bin PULSE/bin --gnome-shell SHELL --output DIR (--murmur MURMUR | --nuschld) \
@@ -45,18 +51,43 @@ from workers import exchange  # noqa: E402
 
 DEVELOPMENT = 2
 LINES = [
+    "# Heading",
+    "",
+    "",
     "**bold** *italic* `inline code` [a link](https://example.test/{tag}) $x^2$",
     "- item one",
+    "",
     "- item two",
     "```rust",
     "fn main() {{}}",
     "```",
     "after the fence",
 ]
+# The message as shown and read out: no delimiters, the typed lines.
+SHOWN = ("{tag}:\nHeading\n\n\nbold italic inline code a link $x^2$\n• item one\n\n"
+         "• item two\nfn main() {{}}\nafter the fence, 1 link")
+STOCK_SHOWN = ("stock-html: bold italic inline code a link $x^2$\n• item one\n• item two\n"
+               "fn main() {}\nafter the fence, 1 link")
 
 
 def markdown(tag):
-    return f"{tag}: " + "\n".join(LINES).format(tag=tag)
+    return f"{tag}:\n" + "\n".join(LINES).format(tag=tag)
+
+
+def check_rows(rows, stage):
+    """Verdicts on the accessible names of the three messages."""
+    names = [row["name"] for row in rows]
+    verdicts = {}
+    for author, tag in (("Andi", "typed"), ("Mark Bot", "plain")):
+        name = next((name for name in names if name.startswith(f"{author}: {tag}:")), "")
+        body = name[len(author) + 2:]
+        expected = SHOWN.format(tag=tag)
+        verdicts[f"{stage} {tag}: shown as {expected!r}"] = body.startswith(expected)
+        verdicts[f"{stage} {tag}: no delimiter left"] = bool(body) and not any(
+            mark in body for mark in ("**", "`", "](", "[a link", "# ", "- item", "*italic"))
+    stock = next((name for name in names if name.startswith("Mark Bot: stock-html:")), "")
+    verdicts[f"{stage} stock-html: reads as before"] = stock.startswith(f"Mark Bot: {STOCK_SHOWN}")
+    return verdicts
 
 
 # What a stock Mumble 1.4+ chat bar makes of Markdown is HTML with these tags;
@@ -308,12 +339,14 @@ def run(args):
             notes["typed_exact"] = received["body"]
             rows = wait_rows(
                 nuschl,
-                ["typed: ", "plain: ", "stock-html: "],
+                ["typed:", "plain:", "stock-html: "],
                 "the three messages did not reach the timeline",
             )
             time.sleep(1.5)
             rows = contents(nuschl)
             (args.output / "live-accessible.json").write_text(json.dumps(rows, indent=2, ensure_ascii=False) + "\n")
+            live_rows = rows
+            verdicts = check_rows(rows, "live")
             window_shot("live.png")
 
             # Restored: stop and start again on the same profile.
@@ -336,7 +369,7 @@ def run(args):
             try:
                 wait_rows(
                     nuschl,
-                    ["typed: ", "plain: ", "stock-html: "],
+                    ["typed:", "plain:", "stock-html: "],
                     "history was not restored",
                 )
                 notes["restored_all_three"] = True
@@ -348,9 +381,20 @@ def run(args):
             (args.output / "restored-accessible.json").write_text(
                 json.dumps(rows, indent=2, ensure_ascii=False) + "\n"
             )
+            verdicts |= check_rows(rows, "restored")
+
+            def message_names(found):
+                return sorted(row["name"].rsplit(", Today", 1)[0] for row in found
+                              if any(tag in row["name"] for tag in ("typed:", "plain:", "stock-html:")))
+
+            verdicts["restored messages read as the live ones"] = message_names(live_rows) == message_names(rows)
             window_shot("restored.png")
+            notes["checks"] = verdicts
             (args.output / "notes.json").write_text(json.dumps(notes, indent=2, ensure_ascii=False) + "\n")
-            print(json.dumps({"done": True, "output": str(args.output)}))
+            print(json.dumps({"done": True, "output": str(args.output), "checks": verdicts},
+                             indent=1, ensure_ascii=False))
+            if not all(verdicts.values()):
+                raise SystemExit(1)
         finally:
             for process in ([app] if app else []) + helpers:
                 if process.poll() is None:

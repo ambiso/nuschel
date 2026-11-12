@@ -20,6 +20,15 @@ message is cropped by its accessible bounds and measured:
 - code blocks: the pitch between the six glyphs of "iiiiii" and of "MMMMMM";
 - geometry: each row's ink top, bottom and the pitch between rows.
 
+The desktop user also types Markdown (docs/desktop.md, "Markdown"), and the
+typed messages are checked, live and restored: `**Wordmark Wordmark**` over
+the same words plain has a bold/regular ink ratio of at least 1.3; the code
+spans of `` `iiiiii` `MMMMMM` `` are equally wide; and lines are kept, from
+row positions: `# Heading` with two blank lines before the next line sits two
+message line heights (24 px at the default 15 px text) lower than without
+them, a blank line after a fence or between list items one line height, all
+±1 px, and the restored history measures the same.
+
     NUSCHL_WL_TMP=... python3 tests/font_rendering.py --binaries BIN --murmur MURMUR \\
         --at-spi AT_SPI --pulse-bin PULSE/bin --gnome-shell SHELL --output DIR \\
         [--ui-font "Adwaita Sans" --mono-font "Adwaita Mono"]
@@ -64,6 +73,24 @@ MESSAGES = [
     ),
 ]
 TYPED = "```\niiiiii\nMMMMMM\n```"
+# Typed Markdown: (label, text, the start of its accessible name, rows
+# measured from its last up).
+TYPED_MARKDOWN = [
+    ("typed weights", "**Wordmark Wordmark**\nWordmark Wordmark",
+     "Andi: Wordmark Wordmark\nWordmark Wordmark,", ["bold", "regular"]),
+    ("typed inline code", "`iiiiii` `MMMMMM`", "Andi: iiiiii MMMMMM,", ["code"]),
+    ("heading tight", "# Heading\nafter one", "Andi: Heading\nafter one,", ["first", "second"]),
+    ("heading spaced", "# Heading\n\n\nafter three", "Andi: Heading\n\n\nafter three,", ["first", "second"]),
+    ("fence tight", "```\ncodeA\n```\nafterA", "Andi: codeA\nafterA,", ["first", "second"]),
+    ("fence spaced", "```\ncodeB\n```\n\nafterB", "Andi: codeB\n\nafterB,", ["first", "second"]),
+    ("items tight", "- itemA\n- itemB", "Andi: • itemA\n• itemB,", ["first", "second"]),
+    ("items spaced", "- itemC\n\n- itemD", "Andi: • itemC\n\n• itemD,", ["first", "second"]),
+]
+# One line of message text: GPUI's default line height (1.618) at 15 px.
+LINE = round(15 * 1.618034)
+# (spaced, tight, the extra line heights the spaced one has)
+LINE_PAIRS = [("heading spaced", "heading tight", 2), ("fence spaced", "fence tight", 1),
+              ("items spaced", "items tight", 1)]
 MAGICK = os.environ.get("MAGICK", "magick")
 TESSERACT = os.environ.get("TESSERACT", "tesseract")
 
@@ -228,7 +255,50 @@ def summarize(measured):
     welcome = measured.get("welcome", {})
     if "bold_domain_ink_ratio" in welcome:
         summary["welcome_bold_domain_ink_ratio"] = welcome["bold_domain_ink_ratio"]
+    # Typed Markdown.
+    typed = measured.get("typed weights", {}).get("rows", {})
+    if {"bold", "regular"} <= typed.keys() and typed["regular"]["ink"]:
+        summary["typed_bold_ink_ratio"] = round(typed["bold"]["ink"] / typed["regular"]["ink"], 3)
+    code = measured.get("typed inline code", {}).get("rows", {}).get("code")
+    if code and len(code["code_backgrounds"]) >= 2:
+        summary["typed_inline_code_widths"] = code["code_backgrounds"][:2]
+    pitches = {}
+    for label, _, _, _ in TYPED_MARKDOWN:
+        rows = measured.get(label, {}).get("rows", {})
+        if {"first", "second"} <= rows.keys():
+            pitches[label] = rows["second"]["top"] - rows["first"]["top"]
+    summary["row_pitch"] = summary.get("row_pitch", [])
+    summary["typed_row_pitch"] = pitches
+    summary["line_height"] = LINE
+    summary["extra_lines"] = {
+        spaced: round((pitches[spaced] - pitches[tight]) / LINE, 3)
+        for spaced, tight, _ in LINE_PAIRS if spaced in pitches and tight in pitches}
     return summary
+
+
+def checks(results):
+    """The pass/fail verdicts of the typed Markdown, live and restored."""
+    verdicts = {}
+    for stage, result in results.items():
+        summary = result["summary"]
+        ratio = summary.get("typed_bold_ink_ratio")
+        verdicts[f"{stage}: typed **bold** ink ratio >= 1.3 ({ratio})"] = ratio is not None and ratio >= 1.3
+        widths = summary.get("typed_inline_code_widths")
+        verdicts[f"{stage}: typed code spans equally wide ({widths})"] = (
+            widths is not None and abs(widths[0] - widths[1]) <= 2)
+        pitches = summary.get("typed_row_pitch", {})
+        for spaced, tight, lines in LINE_PAIRS:
+            if spaced in pitches and tight in pitches:
+                extra = pitches[spaced] - pitches[tight]
+                verdicts[f"{stage}: {spaced} is {lines} line(s) of {LINE} px lower ({extra} px)"] = (
+                    abs(extra - lines * LINE) <= 1)
+            else:
+                verdicts[f"{stage}: {spaced} measured"] = False
+    if {"live", "restored"} <= results.keys():
+        live, restored = (results[stage]["summary"].get("typed_row_pitch") for stage in ("live", "restored"))
+        verdicts["restored rows as live ones (±1 px)"] = bool(live) and live.keys() == restored.keys() and all(
+            abs(live[label] - restored[label]) <= 1 for label in live)
+    return verdicts
 
 
 def words(path, crop, scale=3):
@@ -299,12 +369,14 @@ def analyze(directory):
             measured["welcome"] = measure_welcome(shot, framed(layout["welcome"]))
         annotate(shot, layout, directory / f"{stage}-crops.png")
         results[stage] = {"measured": measured, "summary": summarize(measured)}
-    (directory / "measurements.json").write_text(json.dumps(results, indent=2, ensure_ascii=False) + "\n")
+    verdicts = checks(results)
+    (directory / "measurements.json").write_text(
+        json.dumps(results | {"checks": verdicts}, indent=2, ensure_ascii=False) + "\n")
     return results
 
 
 # Interface labels the theme draws bold or semibold, in frame pixels of the
-# 1540 x 1140 window (default and Adwaita fonts): the server name, the open
+# 1540 x 2040 window (1540 x 1140 before the typed Markdown) (default and Adwaita fonts): the server name, the open
 # channel's title and the timeline heading.
 UI_LABELS = {
     "server name": (80, 44, 160, 22),
@@ -364,7 +436,8 @@ def run(args):
         )
         server.seed()
         server.start()
-        shell = GnomeSession(args.gnome_shell, 1600, 1200, log=(args.output / "gnome.log").open("w"))
+        # Tall enough for every message and the welcome card at once.
+        shell = GnomeSession(args.gnome_shell, 1600, 2100, log=(args.output / "gnome.log").open("w"))
         helpers, app, bot = [], None, None
         try:
             shell.start()
@@ -425,7 +498,7 @@ def run(args):
                     env=env, stdout=(args.output / log).open("a"), stderr=subprocess.STDOUT,
                     start_new_session=True)
                 eventually(lambda: shell.window("Nuschl"), "native window missing", timeout=45)
-                shell.place("Nuschl", 20, 20, 1540, 1140)
+                shell.place("Nuschl", 20, 20, 1540, 2040)
                 return process
 
             def application():
@@ -457,10 +530,16 @@ def run(args):
                              and extents and extents[2] > 0 and extents[3] > 0]
                     if match:
                         layout["messages"].append([label, list(match[-1]), labels])
-                typed = [extents for name, extents in found if name.startswith("Andi: iiiiii")
+                typed = [extents for name, extents in found if name.startswith("Andi: iiiiii\n")
                          and extents and extents[2] > 0]
                 if typed:
                     layout["messages"].append(["typed block", list(typed[-1]), ["iiiiii", "MMMMMM"]])
+                for label, _, name, labels in TYPED_MARKDOWN:
+                    match = [extents for found_name, extents in found if found_name.startswith(name)
+                             and extents and extents[2] > 0 and extents[3] > 0]
+                    if match:
+                        layout["messages"].append([label, list(match[-1]), labels])
+                layout["accessible_names"] = [name for name, _ in found]
                 # The welcome card: a label with the welcome text.
                 for node, _, name, _ in items(nuschl):
                     if "something.de" in (name or ""):
@@ -499,6 +578,21 @@ def run(args):
             bot.wait(lambda e: e["kind"] == "text" and not e["outgoing"] and "iiiiii" in e["body"], timeout=20)
             eventually(lambda: any(name.startswith("Andi: iiiiii") for name, _ in list_items(nuschl)),
                        "typed message missing", timeout=30)
+            # Typed Markdown, line by line (Shift+Enter between lines).
+            for label, text, name, _ in TYPED_MARKDOWN:
+                lines = text.split("\n")
+                for index, line in enumerate(lines):
+                    shell.type(line)
+                    time.sleep(0.15)
+                    if index + 1 < len(lines):
+                        shell.press("Shift_L", "Return")
+                        time.sleep(0.15)
+                shell.key("Return")
+                bot.wait(lambda e, text=text: e["kind"] == "text" and not e["outgoing"]
+                         and text.split("\n")[-1].replace("&", "&amp;") in e["body"], timeout=20)
+                eventually(lambda name=name: any(found.startswith(name) for found, _ in list_items(nuschl)),
+                           f"typed {label} missing", timeout=30)
+                time.sleep(0.4)
             capture("live", nuschl)
 
             os.killpg(app.pid, signal.SIGTERM)
@@ -511,6 +605,9 @@ def run(args):
             nuschl = eventually(application, "restarted desktop not registered", timeout=45)
             eventually(lambda: any(name.startswith("Andi: iiiiii") for name, _ in list_items(nuschl)),
                        "history was not restored", timeout=45)
+            eventually(lambda: all(any(found.startswith(name) for found, _ in list_items(nuschl))
+                                   for _, _, name, _ in TYPED_MARKDOWN),
+                       "typed Markdown was not restored", timeout=45)
             capture("restored", nuschl)
             (args.output / "notes.json").write_text(json.dumps(notes, indent=2) + "\n")
         finally:
@@ -532,6 +629,10 @@ def run(args):
     results = analyze(args.output)
     print(json.dumps({stage: value["summary"] for stage, value in results.items()}, indent=1,
                      ensure_ascii=False))
+    verdicts = checks(results)
+    print(json.dumps(verdicts, indent=1, ensure_ascii=False))
+    if not all(verdicts.values()):
+        sys.exit(1)
 
 
 if __name__ == "__main__":
