@@ -8,7 +8,6 @@ use base64::Engine as _;
 #[cfg(feature = "images")]
 use image::{DynamicImage, ExtendedColorType, ImageEncoder as _, ImageFormat, ImageReader, Limits};
 use nuschl_core::{CodeRun, ContentBlock, MAX_CONTENT_BYTES, MessageDocument};
-use pulldown_cmark::{CodeBlockKind, Event, Parser, Tag, TagEnd};
 use syntect::{
     easy::HighlightLines,
     highlighting::{FontStyle, Theme, ThemeSet},
@@ -17,6 +16,7 @@ use syntect::{
 };
 use thiserror::Error;
 
+pub mod markdown;
 mod markup;
 pub mod math;
 pub use markup::{MAX_LINKS, MAX_URL_BYTES, bare_urls};
@@ -362,85 +362,48 @@ impl ContentRenderer {
         }))
     }
 
-    /// Ordinary message text is literal, including all newlines and blank lines.
-    /// Only fenced code blocks and formulas are interpreted, both found by one
-    /// Markdown parse (pulldown-cmark, with math): `$…$` and `$$…$$`, and
-    /// fences with the language `math` (docs/math.md). HTML and embedded
-    /// resources stay inert text.
+    /// Message text is Markdown (docs/markdown-rendering-plan.md), parsed
+    /// once with the formulas of docs/math.md: CommonMark's emphasis, code,
+    /// links to allowed targets, headings, lists, quotes, rules and code
+    /// blocks, and `~~strikethrough~~`, with their syntax hidden. Every line
+    /// break and blank line is kept. Raw HTML, images, reference links and
+    /// entity references stay as typed, and nothing is fetched. Legacy
+    /// marked-up text (`legacy_plain_text`) gets the same on its visible text,
+    /// its directives left as they are. A file offer is shown as typed.
     pub fn render(&self, source: &str) -> Result<MessageDocument, Error> {
         if source.len() > MAX_CONTENT_BYTES {
             return Err(Error::TooLarge);
         }
-        // Leading line breaks carry no content; messages that open with a code
-        // fence are sent with one so stock Mumble starts the fence on its own line.
-        let source = source.trim_start_matches(['\n', '\r']);
-        let mut pieces = Vec::new();
-        let mut consumed = 0;
-        let mut code: Option<(usize, Option<String>, String)> = None;
-        let tokens = math::tokens(source);
+        let marked = markdown::Marked::new(source);
+        if markdown::literal(&marked.visible) {
+            return Ok(MessageDocument {
+                blocks: markup::expand(markup::marked_pieces(source), 0),
+            });
+        }
+        let mut translation = markdown::translate(&marked);
+        let mut made = Vec::with_capacity(translation.blocks.len());
         let mut fences = 0;
-        // A piece of the text, with the formulas in it.
-        let text = |start: usize, end: usize| {
-            let inside = tokens
-                .iter()
-                .filter(|token| token.range.start >= start && token.range.end <= end)
-                .map(|token| token.shifted(start))
-                .collect();
-            markup::Piece::Text(source[start..end].to_owned(), inside)
-        };
-        for (event, range) in Parser::new(source).into_offset_iter() {
-            match event {
-                Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(info))) => {
-                    let language = info
-                        .split_whitespace()
-                        .next()
-                        .map(|value| value.chars().take(64).collect());
-                    code = Some((range.start, language, String::new()));
-                }
-                Event::Text(text) if code.is_some() => {
-                    if let Some((_, _, body)) = code.as_mut() {
-                        body.push_str(&text);
+        for (_, block, _) in &mut translation.blocks {
+            made.push(match block {
+                markdown::Block::Math { source, tex } => {
+                    fences += 1;
+                    ContentBlock::Math {
+                        source: std::mem::take(source),
+                        tex: std::mem::take(tex),
                     }
                 }
-                Event::End(TagEnd::CodeBlock) => {
-                    // Past the block limit, a fence stays in the text around it.
-                    if let Some((start, language, body)) = code.take()
-                        && pieces.len() < markup::MAX_BLOCKS
-                    {
-                        if start > consumed {
-                            pieces.push(text(consumed, start));
-                        }
-                        let written = source[start..range.end].trim_end_matches(['\n', '\r']);
-                        // A math fence is a display formula, as on GitHub.
-                        let formula = language.as_deref() == Some("math")
-                            && fences < math::MAX_FORMULAS
-                            && !body.trim().is_empty()
-                            && body.len() <= math::MAX_FORMULA_BYTES
-                            && !written.contains(nuschl_core::EMBED);
-                        let block = if formula {
-                            fences += 1;
-                            ContentBlock::Math {
-                                source: written.to_owned(),
-                                tex: body,
-                            }
-                        } else {
-                            // Mumble links URLs even inside a fence: code shows text only.
-                            let body = markup::without_markers(&body);
-                            let runs = self.highlight(&body, language.as_deref())?;
-                            ContentBlock::Code { language, runs }
-                        };
-                        pieces.push(markup::Piece::Block(block));
-                        consumed = range.end;
+                markdown::Block::Code { language, body } => {
+                    let runs = self.highlight(body, language.as_deref())?;
+                    ContentBlock::Code {
+                        language: language.take(),
+                        runs,
                     }
                 }
-                _ => {}
-            }
+            });
         }
-        if consumed < source.len() || pieces.is_empty() {
-            pieces.push(text(consumed, source.len()));
-        }
+        let pieces = markdown::pieces(&marked, translation, made);
         Ok(MessageDocument {
-            blocks: markup::expand(pieces, math::MAX_FORMULAS - fences),
+            blocks: markup::expand(pieces, math::MAX_FORMULAS.saturating_sub(fences)),
         })
     }
 
@@ -617,6 +580,7 @@ mod tests {
                 ContentBlock::Code { .. } => "code",
                 ContentBlock::Image { .. } => "image",
                 ContentBlock::Math { .. } => "math",
+                ContentBlock::Break { .. } => "break",
             })
             .collect();
         assert_eq!(kinds, ["text", "image", "text"]);

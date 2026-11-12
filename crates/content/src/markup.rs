@@ -15,6 +15,14 @@
 //! that `/b` … `/link` close; `h1`–`h3` and `item:DEPTH:MARKER` make the line
 //! they start a heading or list item; `quote` … `/quote` quote what is
 //! between; `hr` is a rule; `data:image/…` is an image.
+//!
+//! [`expand`] also takes the Markdown constructs `crate::markdown` found
+//! ([`Piece::Open`] and [`Piece::Close`]): the same styles, and headings and
+//! list items that end where their construct ends rather than at the end of
+//! their first line. Line breaks are kept exactly: those inside a block stay
+//! in its text, and those between blocks (or before the first and after the
+//! last) become [`ContentBlock::Break`]s where they differ from one line
+//! break between blocks and none at the ends.
 
 use crate::math::Token as Formula;
 #[cfg(feature = "images")]
@@ -37,7 +45,7 @@ pub const MAX_URL_BYTES: usize = 2048;
 /// Styled parts and blocks per message; past them text stays plain and in
 /// the block it is in.
 const MAX_SPANS: usize = 2048;
-pub(crate) const MAX_BLOCKS: usize = 512;
+pub(crate) const MAX_BLOCKS: usize = nuschl_core::MAX_BLOCKS;
 /// Styles open at once, list nesting shown, and the longest style attribute read.
 const MAX_OPEN: usize = 16;
 const MAX_LIST_DEPTH: usize = 4;
@@ -509,13 +517,23 @@ fn token_text(source: &str) -> String {
     text.trim_end_matches('\n').to_owned()
 }
 
+/// The stock copy of a message that opens with a code fence carries one
+/// line break before it (`nuschl_legacy_html::legacy_body` adds it so stock
+/// Mumble starts the fence on a line of its own): it is not the sender's.
+fn without_stock_break(mut text: String) -> String {
+    if text.starts_with("\n```") {
+        text.remove(0);
+    }
+    text
+}
+
 /// Legacy HTML to marked-up text; see the module documentation.
 pub fn legacy_text(source: &str) -> Result<String, crate::Error> {
     if source.len() > MAX_CONTENT_BYTES {
         return Err(crate::Error::TooLarge);
     }
     if nesting(source) > MAX_HTML_DEPTH {
-        let text = token_text(source);
+        let text = without_stock_break(token_text(source));
         return if text.len() > MAX_CONTENT_BYTES {
             Err(crate::Error::TooLarge)
         } else {
@@ -569,7 +587,7 @@ pub fn legacy_text(source: &str) -> Result<String, crate::Error> {
         }
     }
     // The last block's line break ends nothing.
-    let mut text = walk.text;
+    let mut text = without_stock_break(walk.text);
     text.truncate(text.trim_end_matches('\n').len());
     // Too much markup for the limit: the text alone, if that fits.
     if text.len() > MAX_CONTENT_BYTES {
@@ -717,12 +735,64 @@ enum Open {
     Strike,
     Code,
     Color(Option<[u8; 3]>),
-    Link(Option<String>),
+    /// A link's target, and whether it is a Markdown link (formulas in its
+    /// text count, as they do not in a legacy `<a>`).
+    Link(Option<String>, bool),
+}
+
+/// A Markdown construct that [`expand`] opens and closes: a style, or a block
+/// that ends where the construct ends (several lines, unlike a legacy heading
+/// or list item, which is one line).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Construct {
+    Emphasis,
+    Strong,
+    Strike,
+    Code,
+    /// A link to an allowed target (`link_target`), counted in [`MAX_LINKS`].
+    Link(String),
+    /// Levels 1 to 3.
+    Heading(u8),
+    Item {
+        depth: u8,
+        marker: String,
+    },
+    Quote,
+}
+
+/// Where the current block's role came from, which decides whether it is
+/// kept without text.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Origin {
+    /// A legacy directive: kept empty, as it always was.
+    Legacy,
+    /// A Markdown heading or list item: kept empty when its line holds
+    /// nothing else (`-` alone), dropped when another block starts on its
+    /// line (`- - a`, `- > q`), which would otherwise add a line.
+    Opened,
+    /// The text around blocks, or what continues a list item after a block
+    /// inside it: a block only when it has text.
+    Continued,
+}
+
+/// What kind of block was pushed last, for the line breaks next to it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Last {
+    Other,
+    Math,
+    Image,
 }
 
 /// Blocks being assembled from marked-up text.
 struct Expand {
     out: Vec<ContentBlock>,
+    /// Blocks other than breaks in `out`, and how many of `out` are accounted
+    /// for (an image is pushed by [`Expand::image`] directly).
+    blocks: usize,
+    seen: usize,
+    last: Last,
+    /// Line breaks since the last block (or the start) not yet in a block.
+    pending: usize,
     text: String,
     spans: Vec<Span>,
     /// Where the current run of one style began.
@@ -730,7 +800,18 @@ struct Expand {
     open: Vec<Open>,
     /// The current block's role: a heading or list item for one line, or a quote.
     role: TextRole,
+    /// The role lasts until its construct closes, across line breaks.
+    explicit: bool,
+    origin: Origin,
+    /// Nothing has been added since a Markdown heading or item opened.
+    fresh: bool,
     quotes: usize,
+    /// Open Markdown containers, innermost last: the role their text has
+    /// (a quote, or a list item's continuation without its marker).
+    containers: Vec<TextRole>,
+    /// Open Markdown constructs, innermost last, and whether each took effect
+    /// (a style past the open limit, a block past the block limit, did not).
+    constructs: Vec<(Construct, bool)>,
     styled: usize,
     links: usize,
     #[cfg(feature = "images")]
@@ -740,13 +821,35 @@ struct Expand {
     formulas: usize,
 }
 
+/// A list item's role for the text that continues it after a block inside it
+/// (a nested list, code): its depth, without a second marker.
+fn continuation(role: TextRole) -> TextRole {
+    match role {
+        TextRole::Item { depth, .. } => TextRole::Item {
+            depth,
+            marker: String::new(),
+        },
+        role => role,
+    }
+}
+
 impl Expand {
     fn base(&self) -> TextRole {
-        if self.quotes > 0 {
+        if let Some(role) = self.containers.last() {
+            role.clone()
+        } else if self.quotes > 0 {
             TextRole::Quote
         } else {
             TextRole::Paragraph
         }
+    }
+
+    /// Back to the role of the text around blocks.
+    fn rebase(&mut self) {
+        self.role = self.base();
+        self.explicit = !self.containers.is_empty();
+        self.origin = Origin::Continued;
+        self.fresh = false;
     }
 
     fn style(&self) -> (Style, Option<String>) {
@@ -760,7 +863,7 @@ impl Expand {
                 Open::Strike => style.strike = true,
                 Open::Code => style.code = true,
                 Open::Color(color) => style.color = color.or(style.color),
-                Open::Link(url) => link = url.clone().or(link),
+                Open::Link(url, _) => link = url.clone().or(link),
             }
         }
         (style, link)
@@ -785,11 +888,13 @@ impl Expand {
         self.run = end;
     }
 
-    fn open(&mut self, open: Open) {
+    fn open(&mut self, open: Open) -> bool {
         self.cut();
-        if self.open.len() < MAX_OPEN {
+        let room = self.open.len() < MAX_OPEN;
+        if room {
             self.open.push(open);
         }
+        room
     }
 
     fn close(&mut self, matches: impl Fn(&Open) -> bool) {
@@ -799,28 +904,109 @@ impl Expand {
         }
     }
 
-    fn end_block(&mut self) {
-        self.cut();
-        let base = self.base();
-        let role = std::mem::replace(&mut self.role, base);
-        self.run = 0;
-        // Line breaks between blocks are spacing the layout gives already.
-        let spacing = self.text.trim_matches(['\n', '\r']).is_empty()
-            && matches!(role, TextRole::Paragraph | TextRole::Quote);
-        if spacing && self.spans.is_empty() {
-            self.text.clear();
-            return;
+    /// A block after the line breaks pending before it: a break where they
+    /// differ from the default (one between blocks, none before the first).
+    /// A display formula may share a line with its neighbours (no line
+    /// break); other blocks never do, and an image is never inline.
+    fn push(&mut self, block: ContentBlock) {
+        self.account();
+        let kind = match block {
+            ContentBlock::Math { .. } => Last::Math,
+            ContentBlock::Image { .. } => Last::Image,
+            _ => Last::Other,
+        };
+        let mut count = self.pending;
+        if self.blocks > 0 && count == 0 {
+            let math = kind == Last::Math || self.last == Last::Math;
+            let image = kind == Last::Image || self.last == Last::Image;
+            if image || !math {
+                count = 1;
+            }
         }
+        if count != usize::from(self.blocks > 0) {
+            self.out.push(ContentBlock::Break {
+                count: u32::try_from(count).unwrap_or(u32::MAX),
+            });
+        }
+        self.out.push(block);
+        self.blocks += 1;
+        self.seen = self.out.len();
+        self.last = kind;
+        self.pending = 0;
+    }
+
+    /// Account for a block pushed directly (an image), with the line breaks
+    /// that were pending before it.
+    fn account(&mut self) {
+        if self.out.len() > self.seen
+            && let Some(block) = self.out.pop()
+        {
+            self.seen = self.out.len();
+            self.push(block);
+        }
+    }
+
+    /// End the current block where another one starts: a Markdown heading
+    /// or item with nothing on its line is dropped, since the next block is
+    /// on that line.
+    fn end_block(&mut self) {
+        self.finish_block(true);
+    }
+
+    /// End the current text block. Its text keeps the line breaks inside it;
+    /// those at its edges are the line breaks between it and its neighbours,
+    /// so they are counted there instead.
+    fn finish_block(&mut self, cut: bool) {
+        self.account();
+        self.cut();
+        let role = std::mem::replace(&mut self.role, TextRole::Paragraph);
+        let origin = self.origin;
+        let fresh = self.fresh;
+        self.rebase();
+        self.run = 0;
         let text = std::mem::take(&mut self.text);
         let spans = std::mem::take(&mut self.spans);
-        let links = bare_links(&text, &spans, &mut self.links);
-        let spans = with_links(spans, links);
-        self.out.push(ContentBlock::Text { text, spans, role });
+        let start = text.len() - text.trim_start_matches(['\n', '\r']).len();
+        let end = text.trim_end_matches(['\n', '\r']).len().max(start);
+        // Without text, the line breaks follow the block (an empty item's).
+        let (start, end) = if end == start { (0, 0) } else { (start, end) };
+        self.pending += text[..start].matches('\n').count();
+        let trailing = text[end..].matches('\n').count();
+        let keep = end > start
+            || match role {
+                TextRole::Rule => true,
+                TextRole::Heading(_) | TextRole::Item { .. } => match origin {
+                    Origin::Legacy => true,
+                    Origin::Opened => !(cut && fresh),
+                    Origin::Continued => false,
+                },
+                TextRole::Paragraph | TextRole::Quote => false,
+            };
+        if keep {
+            let spans: Vec<Span> = spans
+                .into_iter()
+                .filter_map(|mut span| {
+                    span.start = span.start.max(start) - start;
+                    span.end = span.end.min(end).max(start) - start;
+                    (span.start < span.end).then_some(span)
+                })
+                .collect();
+            let text = if start == 0 && end == text.len() {
+                text
+            } else {
+                text[start..end].to_owned()
+            };
+            let links = bare_links(&text, &spans, &mut self.links);
+            let spans = with_links(spans, links);
+            self.push(ContentBlock::Text { text, spans, role });
+        }
+        self.pending += trailing;
     }
 
     /// Start a block of its own, unless there are too many already.
     fn block(&mut self, role: TextRole) -> bool {
-        if self.out.len() >= MAX_BLOCKS {
+        self.account();
+        if self.blocks >= MAX_BLOCKS {
             return false;
         }
         self.end_block();
@@ -829,27 +1015,32 @@ impl Expand {
     }
 
     fn visible(&mut self, mut part: &str) {
-        // A heading or list item is one line.
-        while matches!(self.role, TextRole::Heading(_) | TextRole::Item { .. })
+        // A legacy heading or list item is one line.
+        while !self.explicit
+            && matches!(self.role, TextRole::Heading(_) | TextRole::Item { .. })
             && let Some(newline) = part.find('\n')
         {
             self.text.push_str(&part[..newline]);
-            self.end_block();
+            self.finish_block(false);
+            self.pending += 1;
             part = &part[newline + 1..];
+        }
+        if !part.is_empty() {
+            self.fresh = false;
         }
         self.text.push_str(part);
     }
 
     /// Visible text with the formulas in it: an inline formula is a span
     /// over its text as written, a display formula a block of its own, its
-    /// text as written too. Not in code or links (`<code>`, `<a>` of legacy
-    /// HTML), and not past the limits on formulas, spans and blocks, where
-    /// the text stays as it is.
+    /// text as written too. Not in code or legacy links (`<code>`, `<a>` of
+    /// legacy HTML), and not past the limits on formulas, spans and blocks,
+    /// where the text stays as it is.
     fn text_with_math(&mut self, part: &str, tokens: &[Formula]) {
         let excluded = self
             .open
             .iter()
-            .any(|open| matches!(open, Open::Code | Open::Link(_)));
+            .any(|open| matches!(open, Open::Code | Open::Link(_, false)));
         if excluded || tokens.is_empty() {
             return self.visible(part);
         }
@@ -858,36 +1049,49 @@ impl Expand {
             if self.formulas == 0 || token.range.start < done {
                 break;
             }
-            let source = &part[token.range.clone()];
+            let Some(source) = part.get(token.range.clone()) else {
+                break;
+            };
             let tex = token.tex(part);
             self.visible(&part[done..token.range.start]);
             done = token.range.end;
             if token.display {
-                if self.out.len() + 2 >= MAX_BLOCKS {
+                self.account();
+                if self.blocks + 2 >= MAX_BLOCKS {
                     self.visible(source);
                     continue;
                 }
+                // A heading or list item goes on after a formula in it.
+                let (role, explicit) = (self.role.clone(), self.explicit);
                 self.end_block();
-                self.out.push(ContentBlock::Math {
+                self.push(ContentBlock::Math {
                     source: source.to_owned(),
                     tex: tex.to_owned(),
                 });
+                if explicit && matches!(role, TextRole::Heading(_) | TextRole::Item { .. }) {
+                    self.role = continuation(role);
+                    self.explicit = true;
+                }
             } else {
-                // A heading or list item is one line: a formula with a line
-                // break in it there stays text.
-                let one_line = matches!(self.role, TextRole::Heading(_) | TextRole::Item { .. });
+                // A legacy heading or list item is one line: a formula with
+                // a line break in it there stays text.
+                let one_line = !self.explicit
+                    && matches!(self.role, TextRole::Heading(_) | TextRole::Item { .. });
                 if self.styled >= MAX_SPANS || (one_line && source.contains('\n')) {
                     self.visible(source);
                     continue;
                 }
                 self.cut();
+                self.fresh = false;
                 let start = self.text.len();
                 self.text.push_str(source);
                 self.styled += 1;
+                // Emphasis around a formula keeps it whole: `*$x$*` is an
+                // italic formula.
                 self.spans.push(Span {
                     start,
                     end: self.text.len(),
-                    style: Style::default(),
+                    style: self.style().0,
                     link: None,
                     math: Some(tex.to_owned()),
                 });
@@ -934,104 +1138,209 @@ impl Expand {
         self.out.push(image);
     }
 
-    /// Marked-up text, with the formula tokens the parser found in it: those
-    /// within one visible part (not crossing or inside a marker) count.
-    fn markup(&mut self, text: &str, tokens: &[Formula]) {
-        let mut start = 0;
-        for (index, part) in text.split(EMBED).enumerate() {
-            let end = start + part.len();
-            let part_start = start;
-            start = end + EMBED.len_utf8();
-            if index % 2 == 0 {
-                let inside: Vec<Formula> = tokens
-                    .iter()
-                    .filter(|token| token.range.start >= part_start && token.range.end <= end)
-                    .map(|token| token.shifted(part_start))
-                    .collect();
-                self.text_with_math(part, &inside);
-                continue;
+    /// A directive of marked-up text (between two markers).
+    fn directive(&mut self, part: &str) {
+        let (name, argument) = part.split_once(':').unwrap_or((part, ""));
+        match name {
+            "b" => {
+                self.open(Open::Bold);
             }
-            let (name, argument) = part.split_once(':').unwrap_or((part, ""));
-            match name {
-                "b" => self.open(Open::Bold),
-                "i" => self.open(Open::Italic),
-                "u" => self.open(Open::Underline),
-                "s" => self.open(Open::Strike),
-                "code" => self.open(Open::Code),
-                "color" => {
-                    let hex = |at: usize| u8::from_str_radix(argument.get(at..at + 2)?, 16).ok();
-                    let color = (argument.len() == 6)
-                        .then(|| Some([hex(0)?, hex(2)?, hex(4)?]))
-                        .flatten();
-                    self.open(Open::Color(color));
+            "i" => {
+                self.open(Open::Italic);
+            }
+            "u" => {
+                self.open(Open::Underline);
+            }
+            "s" => {
+                self.open(Open::Strike);
+            }
+            "code" => {
+                self.open(Open::Code);
+            }
+            "color" => {
+                let hex = |at: usize| u8::from_str_radix(argument.get(at..at + 2)?, 16).ok();
+                let color = (argument.len() == 6)
+                    .then(|| Some([hex(0)?, hex(2)?, hex(4)?]))
+                    .flatten();
+                self.open(Open::Color(color));
+            }
+            "link" => {
+                let url = (self.links < MAX_LINKS)
+                    .then(|| link_target(argument))
+                    .flatten();
+                self.links += usize::from(url.is_some());
+                self.open(Open::Link(url, false));
+            }
+            "/b" => self.close(|open| matches!(open, Open::Bold)),
+            "/i" => self.close(|open| matches!(open, Open::Italic)),
+            "/u" => self.close(|open| matches!(open, Open::Underline)),
+            "/s" => self.close(|open| matches!(open, Open::Strike)),
+            "/code" => self.close(|open| matches!(open, Open::Code)),
+            "/color" => self.close(|open| matches!(open, Open::Color(_))),
+            "/link" => self.close(|open| matches!(open, Open::Link(..))),
+            "h1" | "h2" | "h3" => {
+                if self.block(TextRole::Heading(name.as_bytes()[1] - b'0')) {
+                    self.legacy_role();
                 }
-                "link" => {
-                    let url = (self.links < MAX_LINKS)
-                        .then(|| link_target(argument))
-                        .flatten();
-                    self.links += usize::from(url.is_some());
-                    self.open(Open::Link(url));
+            }
+            "item" => {
+                let (depth, marker) = argument.split_once(':').unwrap_or(("1", "•"));
+                let depth = depth
+                    .parse::<u8>()
+                    .unwrap_or(1)
+                    .clamp(1, MAX_LIST_DEPTH as u8);
+                let marker = marker.chars().take(8).collect();
+                if self.block(TextRole::Item { depth, marker }) {
+                    self.legacy_role();
                 }
-                "/b" => self.close(|open| matches!(open, Open::Bold)),
-                "/i" => self.close(|open| matches!(open, Open::Italic)),
-                "/u" => self.close(|open| matches!(open, Open::Underline)),
-                "/s" => self.close(|open| matches!(open, Open::Strike)),
-                "/code" => self.close(|open| matches!(open, Open::Code)),
-                "/color" => self.close(|open| matches!(open, Open::Color(_))),
-                "/link" => self.close(|open| matches!(open, Open::Link(_))),
-                "h1" | "h2" | "h3" => {
-                    self.block(TextRole::Heading(name.as_bytes()[1] - b'0'));
-                }
-                "item" => {
-                    let (depth, marker) = argument.split_once(':').unwrap_or(("1", "•"));
-                    let depth = depth
-                        .parse::<u8>()
-                        .unwrap_or(1)
-                        .clamp(1, MAX_LIST_DEPTH as u8);
-                    let marker = marker.chars().take(8).collect();
-                    self.block(TextRole::Item { depth, marker });
-                }
-                "quote" if self.out.len() < MAX_BLOCKS => {
+            }
+            "quote" => {
+                if self.within_limit() {
                     self.end_block();
                     self.quotes += 1;
-                    self.role = self.base();
+                    self.rebase();
                 }
-                "/quote" if self.out.len() < MAX_BLOCKS => {
+            }
+            "/quote" => {
+                if self.within_limit() {
                     self.end_block();
                     self.quotes = self.quotes.saturating_sub(1);
-                    self.role = self.base();
+                    self.rebase();
                 }
-                "hr" => {
-                    if self.block(TextRole::Rule) {
-                        self.end_block();
-                    }
+            }
+            "hr" => self.rule(),
+            "data" => self.image(part),
+            _ => {}
+        }
+    }
+
+    fn within_limit(&mut self) -> bool {
+        self.account();
+        self.blocks < MAX_BLOCKS
+    }
+
+    /// A legacy heading or list item: one line, kept even when empty.
+    fn legacy_role(&mut self) {
+        self.explicit = false;
+        self.origin = Origin::Legacy;
+    }
+
+    fn rule(&mut self) {
+        if self.block(TextRole::Rule) {
+            self.end_block();
+        }
+    }
+
+    /// A Markdown construct opens.
+    fn open_construct(&mut self, construct: Construct) {
+        let took = match &construct {
+            Construct::Emphasis => self.open(Open::Italic),
+            Construct::Strong => self.open(Open::Bold),
+            Construct::Strike => self.open(Open::Strike),
+            Construct::Code => self.open(Open::Code),
+            Construct::Link(url) => {
+                // Counted when found (`crate::markdown`), so there is room.
+                let room = self.links < MAX_LINKS;
+                self.links += usize::from(room);
+                self.open(Open::Link(room.then(|| url.clone()), true))
+            }
+            Construct::Heading(level) => {
+                let took = self.block(TextRole::Heading((*level).clamp(1, 3)));
+                if took {
+                    self.markdown_role();
                 }
-                "data" => self.image(part),
-                _ => {}
+                took
+            }
+            Construct::Item { depth, marker } => {
+                let depth = (*depth).clamp(1, MAX_LIST_DEPTH as u8);
+                let role = TextRole::Item {
+                    depth,
+                    marker: marker.chars().take(8).collect(),
+                };
+                let took = self.block(role.clone());
+                if took {
+                    self.markdown_role();
+                    self.containers.push(continuation(role));
+                }
+                took
+            }
+            Construct::Quote => {
+                let took = self.within_limit();
+                if took {
+                    self.end_block();
+                    self.containers.push(TextRole::Quote);
+                    self.rebase();
+                }
+                took
+            }
+        };
+        self.constructs.push((construct, took));
+    }
+
+    fn markdown_role(&mut self) {
+        self.explicit = true;
+        self.origin = Origin::Opened;
+        self.fresh = true;
+    }
+
+    /// The innermost open Markdown construct closes.
+    fn close_construct(&mut self) {
+        let Some((construct, took)) = self.constructs.pop() else {
+            return;
+        };
+        if !took {
+            return;
+        }
+        match construct {
+            Construct::Emphasis => self.close(|open| matches!(open, Open::Italic)),
+            Construct::Strong => self.close(|open| matches!(open, Open::Bold)),
+            Construct::Strike => self.close(|open| matches!(open, Open::Strike)),
+            Construct::Code => self.close(|open| matches!(open, Open::Code)),
+            Construct::Link(_) => self.close(|open| matches!(open, Open::Link(_, true))),
+            Construct::Heading(_) => self.finish_block(false),
+            Construct::Item { .. } | Construct::Quote => {
+                self.containers.pop();
+                self.finish_block(false);
             }
         }
     }
 }
 
-/// What `render` found: text, with the formula tokens in it, or a block.
+/// What `render` found: text, with the formula tokens in it, a directive of
+/// legacy marked-up text, a Markdown construct opening or closing (in
+/// nesting order), a rule, or a block.
 pub(crate) enum Piece {
     Text(String, Vec<Formula>),
+    Marker(String),
+    Open(Construct),
+    Close,
+    Rule,
     Block(ContentBlock),
 }
 
-/// The blocks `render` found, with markers expanded: text blocks get spans
-/// and roles (and links for bare URLs), formula tokens become math spans or
-/// blocks (at most `formulas` of them), images and rules become blocks of
-/// their own, code passes through. Unknown markers are dropped.
+/// The blocks `render` found, with markers and constructs expanded: text
+/// blocks get spans and roles (and links for bare URLs), formula tokens
+/// become math spans or blocks (at most `formulas` of them), images and rules
+/// become blocks of their own, code passes through, and the line breaks
+/// between blocks become breaks. Unknown markers are dropped.
 pub(crate) fn expand(pieces: Vec<Piece>, formulas: usize) -> Vec<ContentBlock> {
     let mut expand = Expand {
         out: Vec::with_capacity(pieces.len()),
+        blocks: 0,
+        seen: 0,
+        last: Last::Other,
+        pending: 0,
         text: String::new(),
         spans: Vec::new(),
         run: 0,
         open: Vec::new(),
         role: TextRole::Paragraph,
+        explicit: false,
+        origin: Origin::Continued,
+        fresh: false,
         quotes: 0,
+        containers: Vec::new(),
+        constructs: Vec::new(),
         styled: 0,
         links: 0,
         #[cfg(feature = "images")]
@@ -1042,18 +1351,38 @@ pub(crate) fn expand(pieces: Vec<Piece>, formulas: usize) -> Vec<ContentBlock> {
     };
     for piece in pieces {
         match piece {
-            Piece::Text(text, tokens) => expand.markup(&text, &tokens),
+            Piece::Text(text, tokens) => expand.text_with_math(&text, &tokens),
+            Piece::Marker(directive) => expand.directive(&directive),
+            Piece::Open(construct) => expand.open_construct(construct),
+            Piece::Close => expand.close_construct(),
+            Piece::Rule => expand.rule(),
             Piece::Block(block) => {
                 expand.end_block();
-                expand.out.push(block);
+                expand.push(block);
             }
         }
     }
-    expand.end_block();
-    if expand.out.is_empty() {
-        expand.out.push(ContentBlock::text(""));
+    expand.finish_block(false);
+    if expand.blocks == 0 {
+        expand.push(ContentBlock::text(""));
+    } else if expand.pending > 0 {
+        expand.out.push(ContentBlock::Break {
+            count: u32::try_from(expand.pending).unwrap_or(u32::MAX),
+        });
     }
     expand.out
+}
+
+/// Marked-up text as pieces: its visible parts and its directives.
+pub(crate) fn marked_pieces(text: &str) -> Vec<Piece> {
+    text.split(EMBED)
+        .enumerate()
+        .filter(|(_, part)| !part.is_empty())
+        .map(|(index, part)| match index % 2 {
+            0 => Piece::Text(part.to_owned(), Vec::new()),
+            _ => Piece::Marker(part.to_owned()),
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -1354,6 +1683,7 @@ mod tests {
                 ),
                 ContentBlock::Image { .. } => "image".into(),
                 ContentBlock::Math { source, .. } => source.clone(),
+                ContentBlock::Break { count } => format!("break {count}"),
             })
             .collect();
         assert_eq!(kinds, ["look:", "code: let a = 1;\n```\nb();\n", "done"]);
@@ -1506,14 +1836,15 @@ mod tests {
             formulas(&document),
             [
                 (
-                    "Area $\\pi r^2$, see https://a.example\n".to_owned(),
+                    "Area $\\pi r^2$, see https://a.example".to_owned(),
                     vec![pair("$\\pi r^2$", "\\pi r^2")]
                 ),
                 (
                     "display".to_owned(),
                     vec![pair("$$\\sum_i x_i$$", "\\sum_i x_i")]
                 ),
-                ("\nand `$c$`".to_owned(), Vec::new()),
+                // A code span holds no formula; its backticks are hidden.
+                ("and $c$".to_owned(), Vec::new()),
             ]
         );
         // The link is still found beside the formula.

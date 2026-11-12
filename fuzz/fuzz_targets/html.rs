@@ -62,11 +62,16 @@ fuzz_target!(|data: &[u8]| {
 });
 
 fn run(renderer: &ContentRenderer, source: &str) {
-    // Legacy HTML becomes the text history stores, which renders as a document.
+    // Legacy HTML becomes the text history stores, which renders as a
+    // document with the text's lines (`markdown::check`, its line invariant
+    // included).
     if let Ok(stored) = renderer.legacy_plain_text(source) {
         assert!(stored.len() <= MAX_CONTENT_BYTES);
         if let Ok(document) = renderer.render(&stored) {
             check(&document);
+            if let Err(error) = nuschl_content::markdown::check(&stored, &document) {
+                panic!("{stored:?}: {error}");
+            }
         }
     }
     // Plain messages (and stored text) render directly.

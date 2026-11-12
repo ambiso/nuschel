@@ -98,3 +98,28 @@ fn invalid_or_unbounded_work_does_not_poison_the_next_job() {
     ));
     assert!(codec.render_message("still\nworking", "plain").is_ok());
 }
+
+#[test]
+fn markdown_reaches_the_browser_with_its_line_breaks() {
+    let codec = ContentProcessor::new();
+    let source = "# Title\n\n**bold** and `code`\n\n\n- item";
+    let rendered: serde_json::Value =
+        serde_json::from_str(&codec.render_message(source, "plain").unwrap()).unwrap();
+    // The SDK keeps the source; the document hides the syntax.
+    assert_eq!(rendered["plain_text"], source);
+    assert_eq!(
+        rendered["document"]["blocks"],
+        serde_json::json!([
+            {"kind": "text", "text": "Title", "role": {"heading": 1}},
+            {"kind": "break", "count": 2},
+            {"kind": "text", "text": "bold and code", "spans": [
+                {"start": 0, "end": 4, "style": {"bold": true, "italic": false,
+                    "underline": false, "strike": false, "code": false, "color": null}},
+                {"start": 9, "end": 13, "style": {"bold": false, "italic": false,
+                    "underline": false, "strike": false, "code": true, "color": null}}
+            ]},
+            {"kind": "break", "count": 3},
+            {"kind": "text", "text": "item", "role": {"item": {"depth": 1, "marker": "•"}}}
+        ])
+    );
+}

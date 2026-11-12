@@ -113,7 +113,13 @@ fn image_input(bytes: &[u8]) -> Result<(), String> {
 }
 
 fn constrain_document(document: &mut MessageDocument) -> Result<(), String> {
-    if document.blocks.len() > 512 {
+    // Line breaks between blocks have a budget of their own.
+    let blocks = document
+        .blocks
+        .iter()
+        .filter(|block| !block.is_break())
+        .count();
+    if blocks > nuschl_core::MAX_BLOCKS || !document.breaks_valid() {
         return Err("Document exceeds the block limit.".into());
     }
     let mut pixels = 0;
