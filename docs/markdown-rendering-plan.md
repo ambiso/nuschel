@@ -1,6 +1,7 @@
 # Markdown rendering in messages: plan
 
-Status: plan only, 2026-11-12. Nothing here is implemented. It revises the
+Status: implemented, 2026-11-12 (see *Implementation record* at the end for
+each decision as implemented and where it departs from this plan). It revises the
 narrow "inline subset" sketch from the Markdown diagnosis: messages get
 CommonMark through the parser the content worker already runs, with the
 syntax hidden, newlines kept as typed, and code, math, links and resources
@@ -568,3 +569,82 @@ Steps (each its own commit and review):
   are the escape hatch.
 - **D12 Stock receivers.** Confirm that stock Mumble users keep seeing
   Nuschl Markdown as typed (outbound formatter unchanged by constraint).
+
+## Implementation record
+
+Implemented in the `nuschl-markdown-impl` workspace on top of the font fix:
+`crates/core` (`ContentBlock::Break`, `MAX_BREAKS`, `breaks_valid`), the
+frontends (desktop, TUI, web) drawing breaks, then the worker
+(`crates/content/src/markdown.rs`, `markup.rs` `Expand`, `render`).
+
+| Decision | As implemented |
+| --- | --- |
+| D1 Where Markdown applies | Implemented as recommended: everything `render` sees (typed, `TEXT`, stock HTML's visible text, restored history, welcome, comments, descriptions). File offers are shown as typed. |
+| D2 Existing history | Implemented as recommended: existing `TEXT` history renders as Markdown. |
+| D3 Lines | Implemented as decided, with the block kind (`ContentBlock::Break`). The stock copy's line break before a leading fence is removed in `legacy_text`; stored stock history from before shows it as a blank first line. |
+| D4 Indented code | Implemented as recommended: code. |
+| D5 Setext headings | Implemented as recommended: rendered. |
+| D6 Strikethrough | Implemented as recommended: `~~text~~` only; a single `~` stays as typed. |
+| D7 Reference links | Implemented as recommended: links and definitions as typed. |
+| D8 Entity references | Implemented as recommended: as typed. |
+| D9 Copy and search snippets | Copy and selection copy the rendered text with the message's lines, as recommended. "Copy Markdown" is not added; search snippets still show the source (unchanged). |
+| D10 Model gaps | Implemented as recommended: one quote role, an item in a quote is an item, h4-h6 as h3. |
+| D11 CommonMark edge cases | Implemented as recommended (`__init__` bold, `2*3*4` italicises 3, `1. 1.` numbered 1, 2). |
+| D12 Stock receivers | Confirmed: the outbound formatter is unchanged, stock users see the Markdown as typed. |
+
+Where the implementation departs from or adds to the plan:
+
+- **Legacy line row.** `<pre>x</pre><br/><br/>b` gives a break of 3 (two
+  blank lines), not 2: the marked text has the fence's own line break and the
+  two `<br/>`s, and the line rule (invariant 7) counts all three; stock Mumble
+  also draws two blank lines there.
+- **Display formulas within a line.** The worker emits breaks of 0 and the TUI
+  and web draw the formula in its line. The desktop draws a display formula
+  as before, centred on its own row, with no spacer and no blank line around
+  it; copying keeps it in the line.
+- **Images.** A boundary of 0 next to an image is emitted as the default (one
+  line break, no break block) rather than as `Break { count: 0 }`; it is drawn
+  the same, and the image owner's tests and functions are untouched.
+- **Blocks inside list items.** Text that continues an item after a block
+  inside it (a nested list, code) is an `Item` of the same depth with an empty
+  marker (drawn indented, without a second bullet). An item or heading with
+  nothing on its line but another block (`- - a`, `- > q`) is dropped, so the
+  line is not doubled; its marker is lost (a D10-class gap).
+- **Indentation.** Up to three spaces before a heading, quote, list item,
+  rule or code block are that construct's syntax; leading whitespace of a
+  paragraph's lines (first and continuation) is kept.
+- **Formulas.** A formula in a Markdown link's text is a formula (that part is
+  not linked); a math span carries the style around it (`*$x$*` is an italic
+  formula). A formula the parse found but `Token::new` refuses has its
+  delimiters masked and the text is parsed once more (three parses at most),
+  so a code span inside it renders.
+- **Links.** A destination with backslash escapes or entity references is not
+  linked (shown as typed). A link whose destination holds a legacy `link:`
+  directive is still rendered: stock clients' copy of a Nuschl message links
+  the URL in `[text](URL)`, and the directive stays where it is (hidden with
+  the destination, never Markdown). The link count is checked when the link is found,
+  against an upper bound of what `expand` counts first (legacy `link:`
+  directives and bare URLs before it), so an accepted link always has room.
+- **Hard breaks.** A backslash hard break hides the backslash; trailing spaces
+  of a two-space break stay (they are invisible).
+- **Code blocks.** Frontends drop only the line break before the closing fence;
+  blank last lines inside a fence are drawn. A fence's language is read from
+  the typed info string.
+- **Fuzz invariants.** The invariants are `nuschl_content::markdown::check`
+  (with `markdown::layout`). Invariant 2's "independent parse" is a separate
+  parse of the masked stage-two text (masking can change emphasis against an
+  unmasked parse), plus a check that each hidden range holds only its
+  construct's characters. Invariant 3 allows a link's destination to hide a
+  bare URL, a fence line to hold one, and a container prefix to run through
+  multi-line inline HTML or a code span. The start-of-message check applies
+  when the first block shows text. Legacy marked text may have more lines than
+  its text (an empty `<li>` before a nested list stays a line of its own, as
+  today), never fewer. The libFuzzer targets (`markdown`, `math_tokens`,
+  `html`) call `check` but were not built or run here (no warm fuzz target
+  directory); the same checks run as unit tests over 10,000 generated messages,
+  plain and as legacy text, and the spec table.
+- **Not done:** the optional "Copy Markdown" menu entry, rendered search
+  snippets, and the `tests/tui_loopback.py` and `web_content.browser.mjs`
+  rendered checks (the TUI and web draw breaks under unit tests; the native
+  desktop proof is in `tests/markdown_repro.py` and `tests/font_rendering.py`,
+  the worker's reply in `tests/workers.py`).

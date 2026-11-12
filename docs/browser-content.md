@@ -62,7 +62,9 @@ end-to-end completion is not inferred from codec tests.
 
 Sources are limited to 256 KiB, encoded image input to 8 MiB, each serialized
 reply to 2 MiB, and decoded document pixels to 640 KiB. Documents have at most
-512 blocks and eight images. The existing decoder validates dimensions and
+512 blocks and eight images, and at most 513 `break` blocks (the line breaks
+between blocks, never two in a row, each counting at most the source size) on a
+budget of their own. The existing decoder validates dimensions and
 allocation limits before producing pixels; message images are at most 360×270
 and composer thumbnails at most 128×128. A streaming bounded JSON writer stops
 reply serialization before allocating an oversized JSON string.

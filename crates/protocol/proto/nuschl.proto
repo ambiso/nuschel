@@ -118,7 +118,8 @@ enum Visibility {
 
 enum Format {
   FORMAT_UNSPECIFIED = 0;
-  // Literal text; fenced code blocks are the only markup.
+  // Nuschl Markdown as typed (docs/desktop.md, "Markdown"): receivers render
+  // it with its syntax hidden and every line break kept.
   TEXT = 1;
   // Mumble HTML from a stock client, as received; render as inert text.
   LEGACY_HTML = 2;
