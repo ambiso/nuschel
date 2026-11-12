@@ -989,6 +989,12 @@ The media worker uses per-speaker adaptive jitter buffers and Opus loss concealm
       retention are corrected through `769c479b`; the detailed remaining physical
       device, cold-graph, noise-classifier and playback-continuity work remains
       listed below. Private synthetic timings do not complete this investigation.
+      User confirms about two seconds unable to trigger VAD after unmute on
+      `/nix/store/xvrd2w91l46qaaya8slp3rcsn8ww69jv-nuschl-0.1.0`.
+      Trace worker start/first PCM, detector cold-state probability/gate and
+      permission/ACK-to-send separately on this exact build. The long-idle
+      false-trigger symptom also persists; neither is claimed fixed by the
+      shared send-limit push.
 - [ ] Investigate reported quieter received user audio after recent/yesterday
       updates (user, 2026-11-12). Compare identical encoded packets, saved user
       and server gains, channel layout, device rate and output settings across
