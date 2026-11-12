@@ -424,21 +424,23 @@ jobs:
       - name: Reject unsupported contexts before checkout or artifact download
         run: |
           mkdir -p "$RUNNER_TEMP/macos-native-logs"
+          printf 'Native static verification only; no artifact programs execute.\n' > "$RUNNER_TEMP/macos-native-logs/context.txt"
+          reject_context() {
+            printf '%s\n' "$1" | tee -a "$RUNNER_TEMP/macos-native-logs/context.txt" >&2
+            exit 1
+          }
           # Reusable workflows inherit the caller's event. Only the existing
           # manual build or release tag caller has artifact-verification authority.
           case "$GITHUB_EVENT_NAME:$GITHUB_REF" in
             workflow_dispatch:*|push:refs/tags/v*) ;;
-            *) echo 'Unsupported event: native verification refuses PR/cross-run artifacts.' >&2; exit 1 ;;
+            *) reject_context 'Unsupported event: native verification refuses PR/cross-run artifacts.' ;;
           esac
           if [[ "$EXPECTED_MAC_ARTIFACT" != "nuschl-macos-universal-$GITHUB_SHA" ]]; then
-            echo 'Unexpected same-run macOS producer output.' >&2
-            exit 1
+            reject_context 'Unexpected same-run macOS producer output.'
           fi
           if ! [[ "$REQUESTED_RETENTION" =~ ^([1-9]|[12][0-9]|30)$ ]]; then
-            echo 'Invalid diagnostic retention.' >&2
-            exit 1
+            reject_context 'Invalid diagnostic retention.'
           fi
-          printf 'Native static verification only; no artifact programs execute.\n' > "$RUNNER_TEMP/macos-native-logs/context.txt"
 
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
