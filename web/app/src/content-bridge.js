@@ -111,11 +111,11 @@ export class ContentBridge {
     // Welcome references use the same cache/charge as timeline documents.
     const valid=new Set(servers.filter(server=>server.status==="connected").map(server=>`${server.id}:${server.welcome_token}`));
     for(const [key,entry] of this.welcomes)if(!valid.has(key)){entry.release();this.welcomes.delete(key);}
-    for(const update of updates??[])if(update.kind==="welcome"&&typeof update.content_token==="string") {
+    for(const update of updates??[])if(update.kind==="welcome") {
       const key=`${update.server}:${update.token}`;
       if(valid.has(key)&&this.welcomes.get(key)?.token!==update.content_token) {
-        this.welcomes.get(key)?.release();
-        this.welcomes.set(key,{token:update.content_token,release:retainDocument(update.content_token)});
+        this.welcomes.get(key)?.release();this.welcomes.delete(key);
+        if(typeof update.content_token==="string")this.welcomes.set(key,{token:update.content_token,release:retainDocument(update.content_token)});
       }
     }
   }

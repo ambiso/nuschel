@@ -823,7 +823,11 @@ impl WebClient {
     /// Single-click navigation uses the shared SDK's selected timeline.
     pub fn open(&mut self, index: usize, channel: u32) -> Result<bool, String> {
         self.shared.images.borrow_mut().invalidate();
-        self.client.open(index, channel)
+        let result = self.client.open(index, channel);
+        if matches!(result, Ok(true)) {
+            self.recover_selected_content();
+        }
+        result
     }
 
     pub fn browse_server(&mut self, index: usize) -> Result<bool, String> {
@@ -836,7 +840,11 @@ impl WebClient {
             .navigation
             .remembered_channel(&server.id)
             .unwrap_or(0);
-        self.client.open(index, channel)
+        let result = self.client.open(index, channel);
+        if matches!(result, Ok(true)) {
+            self.recover_selected_content();
+        }
+        result
     }
 
     pub fn open_direct(&mut self, index: usize, session: u32) -> Result<bool, String> {
@@ -847,7 +855,11 @@ impl WebClient {
         let Some(channel) = self.client.open_direct(index, session) else {
             return Ok(false);
         };
-        self.client.open(index, channel)
+        let result = self.client.open(index, channel);
+        if matches!(result, Ok(true)) {
+            self.recover_selected_content();
+        }
+        result
     }
 
     /// Capture original destination and caption; selected file bytes stay in
@@ -977,14 +989,52 @@ impl WebClient {
 
     /// Sources leave this credential-bearing realm only under SDK-owned leases.
     pub fn content_requests(&mut self) -> String {
-        let operations = self
+        let batch = self
             .shared
             .jobs
             .borrow_mut()
-            .take(now_ms(), |origin, source| {
+            .take_with_failures(now_ms(), |origin, source| {
                 content_current(&self.client, &self.shared, origin, Some(source))
             });
-        serde_json::to_string(&operations).unwrap_or_else(|_| "[]".into())
+        let changed = !batch.failures.is_empty();
+        for failure in batch.failures {
+            self.clear_evicted(&failure.evicted);
+            if let Some(message) = content_message_mut(&mut self.client, &failure.origin) {
+                message.document = MessageDocument {
+                    blocks: vec![ContentBlock::text(
+                        "[Content processing exceeded its deadline. Retry this message preview or reload.]",
+                    )],
+                };
+            }
+            if let Origin::Welcome {
+                server,
+                generation,
+                revision,
+            } = &failure.origin
+            {
+                if let Some(source) = content_source(&self.client, &self.shared, &failure.origin)
+                    && self.shared.welcomes.borrow_mut().fail(
+                        server,
+                        *generation,
+                        revision,
+                        &source,
+                    )
+                {
+                    self.shared.inputs.borrow_mut().push_back(Input::Server {
+                        server: server.clone(),
+                        generation: *generation,
+                        event: nuschl_client::input::ServerEvent::Welcome {
+                            source,
+                            document: pending_document(),
+                        },
+                    });
+                }
+            }
+        }
+        if changed {
+            self.shared.wake();
+        }
+        serde_json::to_string(&batch.operations).unwrap_or_else(|_| "[]".into())
     }
 
     /// Acknowledges success, failure or cancellation. Only this exact original
@@ -1245,7 +1295,7 @@ impl WebClient {
         self.shared
             .jobs
             .borrow_mut()
-            .retain(|origin| content_current(&self.client, &self.shared, origin, None));
+            .retain(|origin| content_resident(&self.client, &self.shared, origin));
         self.reconcile_voice();
         if self.client.navigation.selection().is_none() {
             if let Some(index) = self
@@ -1313,19 +1363,40 @@ impl WebClient {
 
 // Non-exported helpers keep browser devices outside the SDK/session boundary.
 impl WebClient {
-    fn clear_evicted(&mut self, origins: &[Origin]) {
-        for origin in origins {
-            if let Some(message) = content_message_mut(&mut self.client, origin) {
-                message.document = MessageDocument {
-                    blocks: vec![ContentBlock::text(
-                        "[Preview evicted; reopen this conversation to reload its history.]",
-                    )],
-                };
+    fn recover_selected_content(&mut self) {
+        let Some((server, channel)) = self.client.selected_indices() else {
+            return;
+        };
+        let server = &self.client.servers[server];
+        let channel = &server.channels[channel];
+        let sources =
+            self.shared
+                .jobs
+                .borrow_mut()
+                .recover_rows(&server.id, server.generation, channel);
+        for (origin, mode) in sources {
+            if let Some(source) = content_source(&self.client, &self.shared, &origin) {
+                self.schedule_source(origin, &source, mode);
             }
         }
     }
 
+    fn clear_evicted(&mut self, origins: &[Origin]) {
+        self.shared
+            .jobs
+            .borrow()
+            .clear_evicted(&mut self.client.servers, origins);
+    }
+
     fn schedule_source(&mut self, origin: Origin, source: &str, mode: SourceMode) {
+        let Some(message) = content_message_mut(&mut self.client, &origin)
+            .filter(|message| message.source == source)
+        else {
+            return;
+        };
+        // Source equality verifies the already identified receipt, never finds a
+        // different row. Existing representation cannot be overwritten by a page.
+        let mode = *message.source_format.get_or_insert(mode);
         if self
             .shared
             .jobs
@@ -1409,7 +1480,18 @@ impl WebClient {
                     if !self.client.navigation.accepts(&ticket) {
                         continue;
                     }
-                    let ids: Vec<i64> = messages.iter().filter_map(|message| message.id).collect();
+                    use sha2::Digest;
+                    let originals: std::collections::BTreeMap<_, _> = messages
+                        .iter()
+                        .filter_map(|message| {
+                            Some((
+                                message.id?,
+                                <[u8; 32]>::from(sha2::Sha256::digest(
+                                    message.message.body.as_bytes(),
+                                )),
+                            ))
+                        })
+                        .collect();
                     let channel_id = ticket.conversation.channel;
                     self.client.handle(Input::History {
                         server: server.clone(),
@@ -1427,7 +1509,17 @@ impl WebClient {
                             .find(|channel| channel.id == channel_id)
                     {
                         for message in &channel.timeline.messages {
-                            if message.id.is_some_and(|id| ids.contains(&id)) {
+                            if message
+                                .id
+                                .and_then(|id| originals.get(&id))
+                                .is_some_and(|digest| {
+                                    message.source_format.is_some()
+                                        || *digest
+                                            == <[u8; 32]>::from(sha2::Sha256::digest(
+                                                message.source.as_bytes(),
+                                            ))
+                                })
+                            {
                                 let mode = message
                                     .id
                                     .and_then(|id| delivery.stored_modes.get(&id))
@@ -1703,4 +1795,11 @@ fn content_message_mut<'a>(
                 .iter_mut()
                 .find(|message| message.serial == *serial && message.revision == *revision)
         })
+}
+
+fn content_resident(client: &Client, shared: &Shared, origin: &Origin) -> bool {
+    match origin {
+        Origin::Message { .. } => origin.resident(&client.servers),
+        _ => content_current(client, shared, origin, None),
+    }
 }

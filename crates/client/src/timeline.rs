@@ -98,6 +98,16 @@ impl MessageStatus {
     }
 }
 
+/// Original source representation retained beside the source itself. Adapters
+/// may set it only after exact row admission; it grants no rendering authority.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SourceFormat {
+    Plain,
+    Legacy,
+    Marked,
+}
+
 /// A message in a timeline.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Message {
@@ -124,6 +134,7 @@ pub struct Message {
     pub author_id: Option<u32>,
     /// What was typed (a composer edits it).
     pub source: String,
+    pub source_format: Option<SourceFormat>,
     /// Nuschl servers: when it was last edited, or that it was deleted.
     pub edited_ms: Option<i64>,
     pub deleted: Option<Deletion>,
@@ -166,6 +177,7 @@ impl From<IncomingMessage> for Message {
             seq: message.seq,
             author_id: message.author_id,
             source: message.message.body,
+            source_format: None,
             edited_ms: message.edited_ms,
             deleted: message.deleted,
         }
@@ -419,6 +431,7 @@ impl Timeline {
                 message.offer = nuschl_core::transfer::parse_offer(&source)
                     .or_else(|| nuschl_core::transfer::offer_in(&document));
                 message.source = source;
+                message.source_format = None;
                 message.document = document;
                 message.edited_ms = Some(edited_ms);
                 message.revision = message.revision.wrapping_add(1);
@@ -428,6 +441,7 @@ impl Timeline {
                 message.deleted = Some(deletion);
                 message.document = MessageDocument { blocks: Vec::new() };
                 message.source.clear();
+                message.source_format = None;
                 message.offer = None;
                 message.status = MessageStatus::Plain;
                 message.revision = message.revision.wrapping_add(1);
@@ -727,6 +741,8 @@ mod tests {
         let mut stored = message(Some(5), 5);
         stored.seq = Some(5);
         timeline.merge(stored);
+        assert_eq!(timeline.messages[0].source_format, None);
+        timeline.messages[0].source_format = Some(SourceFormat::Legacy);
         let shown = |timeline: &Timeline| {
             let message = &timeline.messages[0];
             (
@@ -737,8 +753,14 @@ mod tests {
             )
         };
         assert_eq!(timeline.apply_change(5, edit("newer", 20)), Ok(false));
+        assert_eq!(timeline.messages[0].source_format, None);
+        timeline.messages[0].source_format = Some(SourceFormat::Plain);
         // An older edit that arrives late changes nothing.
         assert_eq!(timeline.apply_change(5, edit("older", 10)), Ok(false));
+        assert_eq!(
+            timeline.messages[0].source_format,
+            Some(SourceFormat::Plain)
+        );
         assert_eq!(shown(&timeline), ("newer".into(), Some(20), false, 1));
         // One for a message not shown is handed back.
         assert_eq!(
@@ -750,6 +772,7 @@ mod tests {
             moderator: true,
         });
         assert_eq!(timeline.apply_change(5, deleted), Ok(true));
+        assert_eq!(timeline.messages[0].source_format, None);
         // A tombstone stays one.
         assert_eq!(timeline.apply_change(5, edit("again", 50)), Ok(false));
         assert_eq!(shown(&timeline), (String::new(), Some(20), true, 2));

@@ -102,6 +102,22 @@ impl Welcomes {
         true
     }
 
+    pub fn fail(&mut self, id: &str, generation: u64, revision: &str, source: &str) -> bool {
+        let Some(entry) = self.entries.iter_mut().find(|entry| {
+            entry.id == id
+                && entry.generation == generation
+                && entry.view.token == revision
+                && entry.source == source
+                && !entry.dismissed
+        }) else {
+            return false;
+        };
+        entry.view.document = fallback("[Server welcome unavailable. Reload to try again.]");
+        entry.view.content_token = None;
+        entry.published = false;
+        true
+    }
+
     pub fn view(
         &self,
         id: &str,

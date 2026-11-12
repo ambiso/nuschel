@@ -13,14 +13,7 @@ pub const MAX_PENDING_JOBS: usize = 128;
 pub const MAX_POSTED_JOBS: usize = 4;
 const INVALID: &str = "Invalid or oversized content worker reply.";
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SourceMode {
-    Plain,
-    Legacy,
-    /// Old browser rows contain normalized marked text, not original HTML.
-    Marked,
-}
+pub use nuschl_client::timeline::SourceFormat as SourceMode;
 
 /// UI RPC contracts. `context` is issued by the SDK snapshot, never an index
 /// inferred by the UI. Raw selected file bytes remain outside this module.
