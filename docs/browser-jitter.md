@@ -140,17 +140,21 @@ The historical 19,881-pull exact trace belongs to the extraction/generic
 checkpoints; current bug-case traces intentionally differ. The first changed
 trace and dependency identity are recorded in `jitter-gap-trace/proof.json`.
 
-The independent clock/gain/next-packet contract now passes both 120→missing 10/20
-cases. With the separately fixed codec candidate, missing 10 ms also passes 87.6 dB
-PCM, but missing 20 ms is still only 28.21 dB despite correct timing. The 35 dB gate
-is unchanged. That separate CELT PLC edge is owned by the codec investigator;
-there is no final codec parity claim here.
+The independent clock/gain/next-packet contract passes both 120→missing 10/20
+cases. At this gap-only checkpoint, missing 10 ms passed 87.6 dB, while missing
+20 ms remained 28.21 dB despite correct timing. The separate accepted-TOC-frame
+PLC correction now brings the 20 ms case to 81.59 dB native / 83.68 dB actual WASM.
+Both engines pass all six strict action fixtures after caller admission validation,
+including exact timing, gains and rejection/error results. The unchanged 35 dB
+gate uses fixed gain and no fitted delay. See `opus-silk.md`; this remains a
+component proof, with production browser worker/Worklet activation still pending.
 
 Full-framing admission has its own preserved failure: malformed 0900 arrives
 after a following valid packet was already queued. The current renderer decodes
 or errors on the malformed payload, shortens the clock span and plays the valid
 packet early. It scores 6.34 dB against independently specified sample-clock
 output. `admission-frozen/proof.json` retains the events, raw/reference PCM and
-rejection/error/timing/gain results. A public stateless framing wrapper has been
-reviewed separately; caller admission is the next separate correction, not a
-hidden decoder reset or PLC-policy redesign.
+rejection/error/timing/gain results. The reviewed stateless framing wrapper now
+runs before native/WASM speaker, gain, arrival-clock and queue mutation. The same
+fixture passes at 71.26 dB native / 70.18 dB actual WASM with exact sizes/gains and
+rejection/error results. This does not add a hidden decoder reset or retune PLC.

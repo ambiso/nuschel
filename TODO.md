@@ -19,16 +19,18 @@ outside the current task's scope.
 
 Current integration checkpoint (2026-11-12):
 
-- **Combined Linux/web distributions passed at `fe7cffd5`.** Actual packages
-  include shared jitter extraction, shared document links, DTX/FEC/framing fixes,
-  receive phase setting, stereo/headroom/mono folding, filtered conversion,
-  both update helpers and compact notices. Formatting, deny, audit and generated
-  graph checks passed; actual Linux/web notice readers verified the bundled bytes.
-  The packaged codec WASM decodes the preserved 24-packet DTX failure bit-exactly
-  against independent libopus (46,080 samples). Later component/Worklet, CELT PLC,
-  metadata refresh and profile-relaunch commits still need combined distribution
-  checks. Earlier helper sandbox/forgery/deadline/install evidence remains scoped
-  to its recorded packages. No push, release or production trust enrollment.
+- **Combined Linux/web distributions passed at `779c686e`.** Actual packages
+  include shared jitter/component/Worklet, corrected lost-span/CELT concealment,
+  DTX/FEC/framing, shared document links, stereo/headroom/mono folding, filtered
+  conversion, profile-preserving relaunch, both update helpers and compact notices.
+  Formatting, deny, audit and generated-graph checks passed; actual Linux/web
+  notice readers verified bundled bytes. Both verifier binaries are byte-identical
+  to the prior runtime-tested package. The packaged signer passed nine refresh and
+  15 release regressions. Five independent actual-WASM playout cases pass, while
+  its malformed-admission failure remains preserved. The subsequent `cafd52fd`
+  caller fix passes all six native/actual-WASM cases but awaits a new distribution;
+  production browser activation and hash-only document work remain in progress.
+  No push, release, production trust enrollment or current-head cross-runtime claim.
 - **Desktop layout foundation is integrated through `12d6695c`.** Shared finite
   text/action lanes, one bounded notice stack, restored connection indicator,
   wrapped headers/footers, keyboard/pointer dismissal and nested focus reveal
@@ -710,7 +712,7 @@ The media worker uses per-speaker adaptive jitter buffers and Opus loss concealm
 - [x] Reject full malformed Opus framing before native/browser jitter or speaker
       admission. Both invoke allocation-free `packet::validate` before time,
       sequence or gain changes. The frozen `09 00` plus subsequent valid packet
-      improves 6.34→71.26 dB against independent libopus; exact frame sizes,
+      improves 6.34→71.26 dB native / 70.18 dB WASM against libopus; frame sizes,
       gains and rejection results now agree in native/actual-WASM components.
       Unit tests also prove rejection cannot create a native speaker or advance
       its arrival clock. This checks packet packing, not entropy authenticity;
