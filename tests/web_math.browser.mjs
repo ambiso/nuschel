@@ -87,7 +87,7 @@ try{
       assert.equal(coldState.workers,1);assert.equal(coldState.terminated,0);assert.ok(coldState.retry>0);assert.ok(coldState.source>0);
       for(const formula of await page.locator(".math-formula").all()){
         const retry=formula.getByRole("button",{name:"Render formula",exact:true});
-        if(await retry.count()){await formula.locator("summary").click();await retry.click();await formula.locator("summary").click();}
+        if(await formula.locator(".math-retry").count()){await formula.locator("summary").click();const before=await page.evaluate(()=>__mathProof.jobs);await retry.click();await page.waitForFunction(count=>__mathProof.jobs>count,before,{timeout:3000});await formula.locator("summary").click();}
       }
       coldApp={passed:true,worker_response_delay_ms:2500,original_job_deadline_ms:2000,source_fallback_retry_same_owner:coldState};
     }
@@ -163,5 +163,5 @@ try{
   const report={passed:true,site,csp,geometries,fractionBounds,formula_jobs:jobs,coldApp,retirement,checks:["real App/SDK/private Murmur text", "actual pinned Temml core Worker", "fraction/root/matrix/scripts", "inline and display", "code grammar stays literal", "original source copy without host clipboard", "macro/malformed recovery", "resource/style canaries inert", "320/390/1280 widths", "keyboard horizontal formula scroll", "font/theme native reflow without parser rerun", "no microphone calls"]};
   await writeFile(resolve(output,"proof.json"),JSON.stringify(report,null,2));console.log(JSON.stringify({passed:true,formula_jobs:jobs,checks:report.checks}));
 }catch(error){
-  await writeFile(resolve(output,"failure.json"),JSON.stringify({error:String(error),errors,canaries,states:await Promise.all(pages.map(page=>page.evaluate(()=>({text:document.body.textContent,proof:__mathProof})).catch(()=>null)))},null,2));throw error;
+  await writeFile(resolve(output,"failure.json"),JSON.stringify({error:String(error),errors,canaries,states:await Promise.all(pages.map(page=>page.evaluate(()=>({text:document.body.textContent,tags:[...document.querySelectorAll("math *")].map(node=>node.localName),proof:__mathProof})).catch(()=>null)))},null,2));throw error;
 }finally{for(const context of contexts)await context.close();await browser.close();for(const socket of tunnels)socket.destroy();await new Promise(done=>server.close(done));}
