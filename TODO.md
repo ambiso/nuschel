@@ -44,6 +44,12 @@ Current integration checkpoint (2026-11-12):
   state snapshots, audible RMS is 0.06777 and deafen RMS is zero. Source/build
   outputs, unchanged authority hashes and runtime limits are recorded in
   `~/.cache/nuschl-integration-20261112/authority-audio/handoff.json`.
+  The exact combined native package also passes private-GNOME/Pulse two-server
+  voice checks: PTT destination, explicit multi-server consent, rapid deafen,
+  independent resume, mute shortcuts and media-worker crash recovery. Its
+  media-worker binary and bundled browser audio WASM match the independently
+  encoder/DSP-tested products byte for byte. These remain synthetic private
+  runtime proofs, with physical-device and complete fidelity gates still open.
 - **Combined Linux/web distributions passed at `39ea7132`.** Actual packages
   include clocked browser playout with both reviewed cross-port fixes, hash-only
   document delivery, loss/CELT/DTX/FEC/framing corrections, stereo/headroom/mono
