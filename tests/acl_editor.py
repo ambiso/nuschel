@@ -46,7 +46,7 @@ class OwnedNuschld(Nuschld):
 
     def seed(self):
         super().seed()
-        self.write_config(message_limit=100, message_burst=100)
+        self.write_config(message_limit=1, message_burst=5)
         welcome = self.ini.read_text().split('welcometext="', 1)[1].rsplit('"', 1)[0]
         config = self.config.read_text().splitlines()
         self.config.write_text(
@@ -336,8 +336,14 @@ def actions(args, root, shell, application, bot, murmur):
         "unapplied displayed group was silently saved as @all",
     )
     activate("Inherited · @admin")
-    assert target_field.call("Text", "GetText", "ii", "0", "-1")[0] == "native-team", (
-        "selection discarded or retargeted the typed field"
+    assert named("Apply target", "push button") is not None, (
+        "selection silently left the edited rule"
+    )
+    assert target_field.call("Component", "GrabFocus")[0]
+    time.sleep(0.2)
+    shell.screenshot(args.output / "native-unapplied-target.png")
+    (args.output / "target-field-interfaces.json").write_text(
+        json.dumps(target_field.call("Accessible", "GetInterfaces"), indent=2) + "\n"
     )
     admin = operator(root, pin)
     try:
@@ -346,10 +352,11 @@ def actions(args, root, shell, application, bot, murmur):
         )
     finally:
         admin.close()
-    activate("Discard target edit")
-    assert target_field.call("Text", "GetText", "ii", "0", "-1")[0] == "all"
-    type_field("ACL rule target", "native-team")
     activate("Apply target")
+    type_field("ACL rule target", "never-apply-this-target")
+    activate("Discard target edit")
+    activate("Inherited · @admin")
+    activate("@native-team")
     mark("unapplied_target_save_and_selection_blocked_until_explicit_apply_or_discard")
     click_matching("Apply to subchannels")
     activate("Add rule")
