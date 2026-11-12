@@ -21,16 +21,25 @@ import subprocess
 import sys
 import time
 import wave
+from xml.sax.saxutils import escape
 
 from local_murmur import Murmur, eventually, free_port
 
 ROOT = Path(__file__).resolve().parent.parent
 
 
-def prepare_browser(root, chromium, bwrap):
+def prepare_browser(root, chromium, bwrap, font_dir=None):
     root.mkdir(parents=True, exist_ok=True, mode=0o700)
-    for name in ("home", "tmp", "runtime"):
+    for name in ("home", "tmp", "runtime", "font-cache"):
         (root / name).mkdir(exist_ok=True, mode=0o700)
+    if font_dir is not None:
+        font_dir = font_dir.resolve(strict=True)
+        if not font_dir.is_dir() or not font_dir.is_relative_to("/nix/store"):
+            raise ValueError("Fixture fonts must be an explicit read-only Nix store directory.")
+        (root / "fonts.conf").write_text(
+            '<?xml version="1.0"?><!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd">'
+            '<fontconfig><dir>' + escape(str(font_dir)) + '</dir>'
+            '<cachedir>/b/font-cache</cachedir></fontconfig>')
     (root / "asound.conf").write_text("pcm.!default { type null }\n")
     (root / "passwd").write_text(f"fixture:x:{os.getuid()}:{os.getgid()}:Browser fixture:/b/home:/bin/sh\n")
     (root / "group").write_text(f"fixture:x:{os.getgid()}:\n")
@@ -61,6 +70,9 @@ def prepare_browser(root, chromium, bwrap):
         "PIPEWIRE_REMOTE": "nuschl-fixture-no-pipewire", "DBUS_SESSION_BUS_ADDRESS": "unix:path=/run/no-session-bus",
     }.items():
         common.extend(["--setenv", name, value])
+    if font_dir is not None:
+        common.extend(["--setenv", "FONTCONFIG_FILE", "/b/fonts.conf",
+                       "--setenv", "FONTCONFIG_PATH", "/b"])
     probe = subprocess.run(common + ["--", bash, "-c",
                            'test ! -e /dev/snd && test ! -e /dev/video0 && test ! -S "$XDG_RUNTIME_DIR/pulse/native" && '
                            'test ! -S "$XDG_RUNTIME_DIR/pipewire-0" && test ! -e /run/user && printf "audio-devices-absent\\n"'],
@@ -75,6 +87,7 @@ def prepare_browser(root, chromium, bwrap):
     version = subprocess.run([str(wrapper), "--version"], capture_output=True, text=True, timeout=15, check=True)
     report = {"wrapper": str(wrapper), "browser_tmpdir": str(root / "tmp"), "chromium": str(chromium),
               "version": version.stdout.strip(), "command": command, "probe": probe.stdout.strip(),
+              "font_dir": str(font_dir) if font_dir is not None else None,
               "synthetic_wav_sha256": hashlib.sha256(wav.read_bytes()).hexdigest(),
               "input": "owned mono 48 kHz 997 Hz WAV; browser fake device only",
               "output": "ALSA null/private nonexistent Pulse+PipeWire sockets; actual test requests AudioContext null sink",
@@ -89,6 +102,7 @@ def main():
     parser.add_argument("--chromium", required=True, type=Path)
     parser.add_argument("--bwrap", type=Path, default=shutil.which("bwrap"))
     parser.add_argument("--prepare-only", action="store_true")
+    parser.add_argument("--font-dir", type=Path, help="Explicit read-only Nix store fonts for realistic browser text layout.")
     parser.add_argument("--murmur", type=Path)
     parser.add_argument("--relay", type=Path)
     parser.add_argument("--sdk", type=Path)
@@ -100,7 +114,7 @@ def main():
     args = parser.parse_args()
     args.output = args.output.resolve()
     args.output.mkdir(parents=True, exist_ok=True)
-    confinement = prepare_browser(args.output / "browser", args.chromium, args.bwrap)
+    confinement = prepare_browser(args.output / "browser", args.chromium, args.bwrap, args.font_dir)
     if args.prepare_only:
         print(json.dumps(confinement))
         return
