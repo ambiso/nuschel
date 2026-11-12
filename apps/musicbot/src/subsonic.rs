@@ -164,7 +164,6 @@ impl AlbumList {
 /// An image from `getCoverArt`, passed on to the browser as it is.
 pub struct Image {
     pub bytes: Vec<u8>,
-    pub mime: &'static str,
 }
 
 /// Cover art larger than this is refused.
@@ -456,13 +455,13 @@ impl Library {
             return Err(Error::Status(response.status().as_u16()));
         }
         let declared = response.body().mime_type().unwrap_or_default().to_owned();
-        let mime = image_type(&declared).ok_or_else(|| Error::NotImage(declared.clone()))?;
+        image_type(&declared).ok_or_else(|| Error::NotImage(declared.clone()))?;
         let bytes = response
             .body_mut()
             .with_config()
             .limit(MAX_IMAGE_BYTES)
             .read_to_vec()?;
-        Ok(Image { bytes, mime })
+        Ok(Image { bytes })
     }
 
     /// The audio of a song. A configured `transcode` format always applies;
