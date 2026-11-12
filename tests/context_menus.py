@@ -214,9 +214,15 @@ def actions(args, root, shell, application, bot, murmur):
         shell.type("X")
         shell.key("Right")
         shell.type("Y")
-        eventually(
+        save = eventually(
             lambda: named("Save", "push button", dialog), "nickname Save missing"
-        ).press()
+        )
+        save.call("Component", "GrabFocus")
+        eventually(
+            lambda: inside(save.extents(), dialog.extents()),
+            "nickname Save was not revealed",
+        )
+        shell.click(*point(save))
         certificate = target.users[target.session]["certificate_hash"]
         settings = root / "profile/config/settings.json"
         time.sleep(0.3)
@@ -279,6 +285,11 @@ def actions(args, root, shell, application, bot, murmur):
     try:
         shell.key("Shift_L")
         if args.only_prompt:
+            shell.place("Nuschl", 40, 40, 900 if args.prompt_zoom == 200 else 1280, 800)
+            if args.prompt_zoom == 200:
+                for _ in range(5):
+                    shell.chord("Control_L", "equal")
+            time.sleep(0.3)
             return {
                 "passed": True,
                 "prompt_editing": check_prompt_editing(),
@@ -507,6 +518,7 @@ def main():
         action="store_true",
         help="diagnose input routing independently of geometry",
     )
+    parser.add_argument("--prompt-zoom", type=int, choices=(100, 200), default=100)
     args = parser.parse_args()
     args.document_links, args.expect_markers = True, False
     fixture.WELCOME_EXTRA = ""
