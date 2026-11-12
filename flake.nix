@@ -749,6 +749,7 @@
               pkgs.cargo-deny
               pkgs.cargo-audit
               pkgs.just
+              pkgs.gh
               pkgs.nixfmt
               pkgs.taplo
               pkgs.jujutsu
