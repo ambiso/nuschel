@@ -41,7 +41,8 @@ strict; anything else closes the tunnel.
   and connects only to an address it checked, so a name cannot change its answer
   in between (no DNS rebinding). `allow_networks` admits a LAN or test network;
   `deny_networks` adds ranges. On NixOS the kernel refuses the same ranges to the
-  relay's unit (`IPAddressDeny`).
+  relay's unit (`IPAddressDeny`), except for configured DNS resolvers needed
+  to look up public destinations.
 - The destination is a Mumble server: it answers the unencrypted 12-byte Mumble
   ping (then datagrams go over UDP), or, failing that, a TLS handshake. Either way
   the client's first bytes must be a TLS ClientHello record and the server's first
@@ -87,6 +88,7 @@ services.nuschl-web = {
   # appLinks.android = [ { package = "org.nuschl.android"; certificateFingerprints = [ "…" ]; } ];
   # appLinks.apple = [ "TEAMID.org.nuschl.Nuschl" ];
   # relay.ports = [ "64738-64799" "10000-20000" ];
+  # relay.resolverAddresses = [ "127.0.0.1" ]; # for a custom DNS setup
 };
 ```
 
@@ -106,6 +108,14 @@ no-referrer`, `nosniff` and a Permissions-Policy allowing only the microphone. T
 relay runs as its own system user (static, so nginx can share the socket's group)
 under the server module's systemd hardening. `installUrl` sets where "Get Nuschl"
 leads.
+
+When systemd-resolved is enabled, the relay unit allows its dedicated
+`127.0.0.53` stub through the kernel IP filter. For Unbound or another private
+resolver, set `relay.resolverAddresses` to the address it listens on; this
+changes only the systemd IP filter, not the relay's destination policy.
+Systemd permits every port on an allowed address, so a dedicated resolver
+address gives a narrower exception than `127.0.0.1`, where other services may
+also listen.
 
 `nix build .#checks.x86_64-linux.vm-web` boots the module (plain HTTP, no ACME in a
 VM), checks the site, the landing page, its headers, the app-link files and that
