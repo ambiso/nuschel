@@ -13,13 +13,16 @@ interfaces and experimental protocols may still change.
 
 ## Downloads
 
-- **Windows x86_64:** unpack the portable ZIP into a writable folder and start
+- **Windows x86_64:** [download the complete portable ZIP](https://github.com/ambiso/nuschl/releases/download/v0.1.0/nuschl-0.1.0-windows-x86_64.zip), unpack it into a writable folder and start
   `nuschl.exe`. Keep the helper executables alongside it.
-- **macOS Intel and Apple silicon:** unpack the universal ZIP and move
+- **macOS Intel and Apple silicon:** [download the complete universal app ZIP](https://github.com/ambiso/nuschl/releases/download/v0.1.0/nuschl-0.1.0-macos-universal.zip), unpack it and move
   `Nuschl.app` to Applications. Requires macOS 14.2 or later. Native macOS runtime
   testing remains outstanding.
 - **Linux:** install through the Nix flake at this release's tag. There is no
   portable Linux binary package yet.
+
+Both ZIPs include all required helper programs and licenses. You do not need to
+download the individual files listed under Assets; those support automatic updates.
 
 Windows downloads do not yet have Authenticode signatures; the macOS app is
 ad-hoc signed and has not been notarised. See the [installation instructions](https://github.com/ambiso/nuschl/blob/v0.1.0/docs/install.md)

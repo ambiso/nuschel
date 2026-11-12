@@ -21,6 +21,18 @@ More about the app: [docs/desktop.md](docs/desktop.md).
 
 ## Install
 
+Downloads for **0.1.0** include the required helper programs and licenses:
+
+| Platform | Download |
+| --- | --- |
+| Windows x86_64 | [Portable ZIP](https://github.com/ambiso/nuschl/releases/download/v0.1.0/nuschl-0.1.0-windows-x86_64.zip) |
+| macOS Intel and Apple silicon | [Universal app ZIP](https://github.com/ambiso/nuschl/releases/download/v0.1.0/nuschl-0.1.0-macos-universal.zip) |
+| Linux | [Nix installation](#nixos-and-nix) |
+
+Download the complete ZIP for your platform; the individual files on the release
+page support automatic updates. Platform requirements and first-start instructions
+are below.
+
 ### NixOS and Nix
 
 Try it without installing anything:

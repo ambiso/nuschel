@@ -611,6 +611,11 @@ Reported while testing (2026-11-10/11):
 
 Later (reported):
 
+- [ ] Fix the server rail's encryption badge stacking (user, 2026-11-12):
+      the E2EE lock/unlocked icon renders behind the server's surrounding circle.
+      Draw it in front, consistently with the mute/deafen badges. Check both
+      encryption states, selected/unselected and hover animations, first/last
+      rail items, scrolling and zoom without clipping or hiding badges.
 - [ ] Eliminate panics from the main client, server and other credential-bearing
       supervisors (user, 2026-11-12). Audit first-party runtime `unwrap()` and
       `expect()`, explicit panic/assert/unreachable paths, unchecked indexing,
@@ -2712,8 +2717,25 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
       launcher has Seatbelt plus a six-second supervisor deadline/reaping, but no
       explicit address-space/CPU cap comparable to Linux limits/Windows Jobs.
       Validate limits on real macOS before claiming the same blast-radius bound.
-- [ ] Windows installer (Start menu entry, uninstall); today the zip is portable and
-      updates itself where it was unpacked.
+- [ ] Simplify release downloads (user, 2026-11-12): one complete download per
+      desktop platform, with all required helpers and licenses bundled inside.
+      The existing Windows/macOS ZIPs already include them, but per-file updater
+      assets clutter the release page. Add prominent direct download links now;
+      design packaged updates and consolidate auxiliary evidence without losing
+      hybrid verification, exact product binding or bounded isolated extraction.
+      Preserve published files referenced by existing signed manifests; design a
+      compatible updater transition before removing loose payloads from future
+      releases. Include tamper/path/size limits, atomic install, rollback and
+      profile-preserving restart checks. Linux currently requires Nix; a JSON
+      product receipt is not an installable Linux download.
+- [ ] Provide simple desktop installers (user, 2026-11-12). Evaluate a per-user
+      Windows installer with Start menu entry, URI associations and uninstall,
+      a macOS DMG, and Linux desktop distribution beyond Nix. Preserve helper
+      discovery/confinement and profiles; define updater ownership and test
+      install/update/uninstall in private platform environments. The current
+      Windows ZIP updates itself where unpacked; an installer must not create
+      conflicting OS-managed and in-place update mechanisms. Keep local hybrid
+      release signing; OS publisher trust/notarisation are separate work.
 - Deferred (user, 2026-11-11: **no Windows or macOS code signing for now**). The
   README and docs/install.md explain the first start without it.
   - [ ] macOS Developer ID signing and notarisation with `rcodesign` (needs an Apple
