@@ -68,7 +68,10 @@ impl Tokens {
     /// The user's link. A user with a certificate keeps theirs until `renew`
     /// replaces it; without a certificate anybody could take the name later,
     /// so every request gets a new link.
-    pub fn issue(&self, owner: Owner, renew: bool) -> io::Result<Uuid> {
+    pub fn issue(&self, mut owner: Owner, renew: bool) -> io::Result<Uuid> {
+        // Mumble's optional hash field may be present but empty. It is not
+        // a stable identity that different anonymous people may share.
+        owner.certificate = owner.certificate.filter(|hash| !hash.is_empty());
         let mut tokens = self.lock();
         if self.needs_sync.load(Ordering::Relaxed) {
             self.save(&tokens)?;
@@ -160,6 +163,19 @@ mod tests {
         let second = tokens.issue(owner(None), false).unwrap();
         assert_ne!(first, second);
         assert!(tokens.owner(&first).is_some() && tokens.owner(&second).is_some());
+    }
+
+    #[test]
+    fn an_empty_certificate_is_anonymous_not_a_shared_identity() {
+        let directory = tempfile::tempdir().unwrap();
+        let tokens = Tokens::load(directory.path().join("tokens.json")).unwrap();
+        let first = tokens.issue(owner(Some("")), false).unwrap();
+        let mut another = owner(Some(""));
+        another.name = "another person".into();
+        let second = tokens.issue(another, false).unwrap();
+        assert_ne!(first, second);
+        assert_eq!(tokens.owner(&first).unwrap().certificate, None);
+        assert_eq!(tokens.owner(&second).unwrap().certificate, None);
     }
 
     #[test]
