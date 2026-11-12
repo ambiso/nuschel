@@ -606,6 +606,16 @@ impl Desktop {
             crate::update::cleanup();
             desktop.services.schedule_update_checks();
         }
+        // A slider edit heard but not yet saved (mid-drag, or within half a
+        // second of a key) is saved when Nuschl quits. Closing the last window
+        // may release this view before the quit observers run, so its release
+        // saves too; a second commit finds nothing pending.
+        cx.on_app_quit(|this, _| {
+            this.commit_settings();
+            async {}
+        })
+        .detach();
+        cx.on_release(|this, _| this.commit_settings()).detach();
         desktop
     }
     /// Check for an update now (Settings) rather than on the schedule.

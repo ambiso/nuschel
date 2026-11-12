@@ -31,6 +31,8 @@ Checks, with a screenshot of each state (look at them):
    menu stays open, one write), a key step and Delete back to 100 %; a drag
    whose menu is closed with Escape mid-drag is saved once and edits nothing
    after.
+6. Quitting within half a second of a key (the compositor closes the window
+   while Settings is open) still saves the key's value, exactly once.
 """
 import argparse
 import array
@@ -284,6 +286,7 @@ class Scenes:
                       and e["user"]["channel"] == 2, timeout=40)
             time.sleep(2.0)
             self.menu(writes, settings_path)
+            self.quit_mid_edit(writes, settings_path)
             writes.stop()
         finally:
             if peer:
@@ -487,6 +490,41 @@ class Scenes:
         self.shot("13-menu-closed-mid-drag")
         print(f"Escape mid-drag: the menu closed, the heard {heard:.1f} was saved once; moving on and releasing "
               "afterwards edited no one.", flush=True)
+
+    def quit_mid_edit(self, writes, settings_path):
+        """A key's value is saved half a second after it; quitting sooner saves it too.
+
+        The window is closed by the compositor (Alt+F4, the overview's close)
+        with Settings still open, so Settings' own close, which also saves, is
+        not what saves here. (A click on the title bar's Close button while
+        Settings is open lands outside the dialog and closes only the dialog.)
+        """
+        self.wait_for("push button", "Settings", "no Settings button").press()
+        self.wait_for("dialog", "Settings", "Settings did not open")
+        time.sleep(1.0)
+        slider = self.wait_for("slider", "Voice activity sensitivity", "no sensitivity slider")
+        before = self.value(slider)
+        slider.call("Component", "GrabFocus")
+        time.sleep(0.4)
+        start = time.monotonic()
+        self.shell.key("Right")
+        eventually(lambda: abs(self.value(slider) - (before + 1)) < 0.01, "Right did not raise the sensitivity",
+                   timeout=3)
+        pressed = time.monotonic()
+        unsaved = writes.since(start)
+        self.shell.eval("global.get_window_actors().map(a => a.meta_window).find(w => (w.get_title() || '')"
+                        ".startsWith('Nuschl')).delete(global.get_current_time()); 'ok'")
+        assert pressed - start < 0.4 and unsaved == 0, (
+            f"inconclusive: the close came {pressed - start:.2f} s after the key, {unsaved} writes before it")
+        eventually(lambda: self.shell.window("Nuschl") is None or None, "the window stayed", timeout=5)
+        code = self.app.wait(timeout=20)
+        time.sleep(0.3)
+        value = saved(settings_path, "audio", "vad_sensitivity")
+        print(f"Quit {pressed - start:.2f} s after a key, Settings still open, by the compositor's close: exit "
+              f"{code}; saved {value}, {writes.since(start)} settings.json writes.", flush=True)
+        assert code == 0, code
+        assert value is not None and abs(value * 100 - (before + 1)) < 1e-4, (value, before)
+        assert writes.since(start) == 1, f"{writes.since(start)} writes when quitting after one key"
 
     def close(self):
         for process in reversed(self.processes):
