@@ -415,7 +415,7 @@
     {#if clientUnavailable}<div class="error" role="alert"><span>{error || "The client is unavailable. Reload to reconnect."}</span><button class="text-button" onclick={() => location.reload()}>Reload client</button></div>{:else if error}<div class="error" role="alert"><span>{error}</span><button class="icon-button" aria-label="Dismiss error" onclick={() => error = ""}>{@render icon("close")}</button></div>{/if}
     {#if welcome}
       {#key welcome.token}<section class="server-welcome" aria-label="Server welcome">
-        <header><h3>Welcome to {selected.name}</h3><button onclick={() => act("dismiss_welcome", selectedIndex, welcome.token)} aria-label="Dismiss server welcome">Dismiss</button></header>
+        <header><h3 title={`Welcome to ${selected.name}`}>Welcome to {selected.name}</h3><button onclick={() => act("dismiss_welcome", selectedIndex, welcome.token)} aria-label="Dismiss server welcome">Dismiss</button></header>
         <div class="server-welcome-body" tabindex="0" role="region" aria-label="Welcome message"><TypedDocument document={welcome.document} /></div>
       </section>{/key}
     {/if}
