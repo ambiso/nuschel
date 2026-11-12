@@ -193,6 +193,9 @@ impl Client {
     }
 
     async fn unexpected<T>(&mut self) -> Result<T, String> {
+        // Quarantine a malformed owner even when termination itself fails.
+        // A subsequent request must retry reaping, never reuse this protocol.
+        self.busy = true;
         self.close().await?;
         Err("codec worker returned an unexpected response".into())
     }
