@@ -72,7 +72,7 @@ struct Devices {
     _reference: Option<cpal::Stream>,
     capture: Option<Consumer<f32>>,
     capture_timeline: Timeline,
-    playback: Producer<[f32; 2]>,
+    playback: Producer<[f64; 2]>,
     /// Actual negotiated device layout, fixed for this output stream.
     output_channels: usize,
     /// Output callbacks that found the ring empty; written by the device thread.
@@ -495,7 +495,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                         frame[0]
                     } else {
                         frame[1]
-                    };
+                    }
+                    .clamp(-1., 1.) as f32;
                 }
                 controller.observe_render(&far_mono);
             }
@@ -1067,7 +1068,7 @@ fn open_host(
         .default_output_config()
         .map_err(|error| error.to_string())?;
     let output_channels = usize::from(config.channels());
-    let (playback, playback_consumer) = RingBuffer::<[f32; 2]>::new(RING);
+    let (playback, playback_consumer) = RingBuffer::<[f64; 2]>::new(RING);
     let underruns = Arc::new(AtomicU32::new(0));
     // What the output callback hands to the device: the reference where the
     // output device cannot be recorded.
@@ -1488,11 +1489,12 @@ fn output_stream<T>(
     device: &cpal::Device,
     config: cpal::StreamConfig,
     tx: SyncSender<Event>,
-    (mut ring, underruns): (Consumer<[f32; 2]>, Arc<AtomicU32>),
+    (mut ring, underruns): (Consumer<[f64; 2]>, Arc<AtomicU32>),
     (mut played, clock): (Played, Clock),
 ) -> Result<cpal::Stream, String>
 where
     T: SizedSample + FromSample<f32>,
+    f32: FromSample<T>,
 {
     let (channels, rate) = convertible(&config)?;
     let mut converter = PlaybackConverter::new(channels, rate);
@@ -1506,7 +1508,7 @@ where
                     .saturating_duration_since(timestamp.callback);
                 played
                     .stamper
-                    .anchor(clock.now_shifted(Duration::ZERO, ahead + converter.delay()));
+                    .anchor(clock.now_shifted(converter.reference_delay(), ahead));
                 let (dry, handed) = converter.pull(data, &mut ring, &mut played.samples);
                 played.stamper.advance(handed);
                 if dry {
@@ -1660,7 +1662,7 @@ mod tests {
         // Typical device shapes: 44.1 kHz stereo i16 capture, 48 kHz 6-channel
         // f32 playback, and 96 kHz u16 to exercise resampling both ways.
         let (mut capture_ring, mut capture_out) = RingBuffer::<f32>::new(RING);
-        let (mut playback_in, mut playback_ring) = RingBuffer::<[f32; 2]>::new(RING);
+        let (mut playback_in, mut playback_ring) = RingBuffer::<[f64; 2]>::new(RING);
         let mut capture = CaptureConverter::new(2, 44_100);
         let mut playback = PlaybackConverter::new(6, 48_000);
         let mut resampled = PlaybackConverter::new(1, 96_000);
@@ -1712,7 +1714,7 @@ mod tests {
     #[test]
     fn playback_preserves_stereo_mono_mapping_and_the_actual_fallback_reference() {
         for channels in [1, 2, 6] {
-            let (mut input, mut consumer) = RingBuffer::<[f32; 2]>::new(16);
+            let (mut input, mut consumer) = RingBuffer::<[f64; 2]>::new(16);
             input.push_entire_slice(&[[0.5, -0.25]; 8]).unwrap();
             let (mut reference, mut samples) = RingBuffer::<f32>::new(32);
             let mut converter = PlaybackConverter::new(channels, 48_000);

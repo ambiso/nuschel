@@ -18,7 +18,8 @@ use std::{
 };
 fn main() {
     let args: Vec<_> = std::env::args_os().collect();
-    assert_eq!(args.len(), 3);
+    let wide_output = args.get(3).is_some_and(|arg| arg == "--wide");
+    assert!(args.len() == 3 || (args.len() == 4 && wide_output));
     assert!(fs::metadata(&args[1]).unwrap().len() <= 4 * 1024 * 1024);
     let events = fs::read_to_string(&args[1]).unwrap();
     let mut file = fs::File::create(&args[2]).unwrap();
@@ -59,7 +60,14 @@ fn main() {
                 costs.push(started.elapsed().as_nanos());
                 for frame in output {
                     for sample in frame {
-                        file.write_all(&sample.to_le_bytes()).unwrap();
+                        if wide_output {
+                            file.write_all(&sample.to_le_bytes()).unwrap();
+                        } else {
+                            // Legacy gain fixture observes a48k float device's
+                            // final output, not the newly wide pre-SRC ring.
+                            file.write_all(&(sample.clamp(-1., 1.) as f32).to_le_bytes())
+                                .unwrap();
+                        }
                     }
                 }
             }

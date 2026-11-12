@@ -237,24 +237,34 @@ impl Mixer {
     }
 }
 
-/// All voice and local-effect contributors reach this boundary before clipping.
-/// The device converter retains a separate guard for filter overshoot.
+/// All voice/local effects and mono mapping are combined at f64 precision.
+/// Device-rate SRC runs before the only unit-amplitude clip in playback.rs.
+/// 128 speakers × gain4 plus local effects fit within this finite safety budget;
+/// it is a representational guard, not full-scale audio clipping.
+pub(crate) const MAX_MIX_SAMPLE: f64 = f32::MAX as f64 * 1024.;
+
+fn finite_mix(sample: f64) -> f64 {
+    if sample.is_finite() {
+        sample.clamp(-MAX_MIX_SAMPLE, MAX_MIX_SAMPLE)
+    } else {
+        0.
+    }
+}
 pub fn finish(
     channels: usize,
     wide: &[[f64; 2]; FRAME],
     mono: &[f64; FRAME],
-    out: &mut [[f32; 2]; FRAME],
+    out: &mut [[f64; 2]; FRAME],
 ) {
     for ((voices, effect), output) in wide.iter().zip(mono).zip(out) {
         if channels == 1 {
-            // Match mono-device panning before protection: clipping LR first
-            // destroys legitimate opposing-channel headroom. Keep the existing
-            // stereo ring shape, including its actual played-reference mapping.
-            let heard = ((voices[0] + voices[1]) * 0.5 + effect).clamp(-1., 1.) as f32;
+            // Fold before any conversion; large opposing LR must cancel before
+            // local effects are added, without overflowing an intermediate f32.
+            let heard = finite_mix((voices[0] + voices[1]) * 0.5 + effect);
             *output = [heard; 2];
         } else {
             for channel in 0..2 {
-                output[channel] = (voices[channel] + effect).clamp(-1., 1.) as f32;
+                output[channel] = finite_mix(voices[channel] + effect);
             }
         }
     }
@@ -417,7 +427,10 @@ mod tests {
         assert!(wide.iter().flatten().all(|sample| sample.is_finite()));
         let mut out = [[0.; 2]; FRAME];
         finish(2, &wide, &[0.; FRAME], &mut out);
-        assert_eq!(out[0], [1., -1.]);
+        assert_eq!(
+            out[0],
+            [f64::from(f32::MAX) * 4., -f64::from(f32::MAX) * 4.]
+        );
     }
 
     #[test]

@@ -173,11 +173,11 @@ def write_wav(path, pcm, rate):
         + struct.pack("<I", len(fmt)) + fmt + b"data" + struct.pack("<I", len(payload)) + payload)
 
 
-def convert(test_binary, source, rate, root, name, chunks):
+def convert(test_binary, source, rate, root, name, chunks, wide=False):
     before, after = root/(name+"-in.f32le"), root/(name+"-out.f32le")
-    np.asarray(source, dtype="<f4").tofile(before)
+    np.asarray(source, dtype="<f8" if wide else "<f4").tofile(before)
     env = os.environ | {"NUSCHL_OUTPUT_INPUT": str(before), "NUSCHL_OUTPUT_OUTPUT": str(after),
-        "NUSCHL_OUTPUT_RATE": str(rate), "NUSCHL_OUTPUT_CHUNKS": chunks}
+        "NUSCHL_OUTPUT_RATE": str(rate), "NUSCHL_OUTPUT_CHUNKS": chunks, "NUSCHL_OUTPUT_FORMAT": "f64le" if wide else "f32le"}
     subprocess.run([str(test_binary), "--ignored", "--exact", "live::output_fixture::dump"],
         env=env, check=True, capture_output=True, timeout=20)
     return np.fromfile(after, dtype="<f4").reshape(-1, 2)
@@ -186,6 +186,8 @@ def convert(test_binary, source, rate, root, name, chunks):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mixer-probe", type=Path, required=True)
+    parser.add_argument("--wide-mixer", action="store_true", help="f64 pre-SRC ring; probe --wide")
+    parser.add_argument("--source-revision", default="caff07859c74cfc2a3601a47e4a133210ce8efca")
     parser.add_argument("--converter-test", type=Path, required=True)
     parser.add_argument("--converter-source", type=Path, required=True, help="Nix test derivation's immutable crate src")
     parser.add_argument("--opus-library", type=Path, required=True)
@@ -218,13 +220,13 @@ def main():
         (root/"packets.events").write_text("\n".join(events)+"\n")
         # Also retain a compact wire-payload corpus independently of the probe grammar.
         (root/"packets.bin").write_bytes(b"".join(struct.pack(">H", len(p))+p for p in packets))
-        subprocess.run([str(args.mixer_probe), str(root/"packets.events"), str(root/"mixer.f32le")],
+        subprocess.run([str(args.mixer_probe), str(root/"packets.events"), str(root/"mixer.pcm"), *(["--wide"] if args.wide_mixer else [])],
             capture_output=True, check=True, timeout=30)
-        actual48 = np.fromfile(root/"mixer.f32le", dtype="<f4").reshape(-1, 2)
+        actual48 = np.fromfile(root/"mixer.pcm", dtype="<f8" if args.wide_mixer else "<f4").reshape(-1, 2)
         wide = np.zeros_like(actual48)
-        wide[FRAME:FRAME+len(decoded)] = decoded*gain
+        wide[FRAME:FRAME+len(decoded)] = decoded.astype(float)*gain
         expected48 = np.clip(wide, -1, 1)
-        rx = metrics(expected48, actual48, RATE)
+        rx = metrics(wide if args.wide_mixer else expected48, actual48, RATE)
         # Source↔codec loss is a DIFFERENT comparison, aligned only by C encoder's
         # queried lookahead. Its distortion is never attributed to RX implementation.
         lossy_source, lossy_decoded = source[:-lookahead], decoded[lookahead:]
@@ -237,8 +239,8 @@ def main():
         write_wav(root/"aligned-c-decoded.wav", lossy_decoded, RATE)
         rate_rows = []
         for rate in (48000, 44100):
-            actual = convert(args.converter_test, actual48, rate, root, f"{rate}-whole", "8192")
-            chunked = convert(args.converter_test, actual48, rate, root, f"{rate}-irregular", "1,127,511,37,960,256")
+            actual = convert(args.converter_test, actual48, rate, root, f"{rate}-whole", "8192", args.wide_mixer)
+            chunked = convert(args.converter_test, actual48, rate, root, f"{rate}-irregular", "1,127,511,37,960,256", args.wide_mixer)
             assert np.array_equal(actual, chunked), (name, rate, "callback-boundary PCM mismatch")
             # Isolate SRC from decoder: give the C SRC exactly the same actual Mixer PCM.
             src_reference, latency = speex.convert(actual48.reshape(-1).tolist(), rate)
@@ -246,7 +248,7 @@ def main():
             src_reference = np.clip(src_reference, -1, 1)
             src_metrics = metrics(src_reference, actual, rate)
             # Source-matched component reference: same mix-before-SRC clip as Nuschl.
-            expected, _ = speex.convert(expected48.reshape(-1).tolist(), rate)
+            expected, _ = speex.convert((wide if args.wide_mixer else expected48).reshape(-1).tolist(), rate)
             expected = np.clip(np.asarray(expected, dtype=np.float32).reshape(-1, 2)[:len(actual)], -1, 1)
             pipeline_metrics = metrics(expected, actual, rate)
             # A separate stock-order diagnostic: resample wide audio BEFORE final clip.
@@ -272,7 +274,7 @@ def main():
         print(name, "mixer SNR", round(rx["fixed_gain_snr_db"], 2) if not rx["exact_float_match"] else "exact", "stock order SNR", [round(r["stock_clip_order_diagnostic"]["fixed_gain_snr_db"], 2) if not r["stock_clip_order_diagnostic"]["exact_float_match"] else "exact" for r in rate_rows], flush=True)
     artifacts = {str(p.relative_to(args.output)): {"sha256": sha(p), "bytes": p.stat().st_size}
         for p in sorted(args.output.rglob("*")) if p.is_file() and p.suffix in (".wav", ".png", ".bin")}
-    report = {"format": 1, "source_base": "caff07859c74cfc2a3601a47e4a133210ce8efca",
+    report = {"format": 1, "source_base": args.source_revision, "wide_pre_src_ring": args.wide_mixer,
         "host_devices": False, "network": False, "profile": False, "gain_fitted": False, "delay_fitted": False,
         "alignment": "Fixed20ms virtual jitter start; both SRCs retain their real filter latency. Input/codec-loss only: independently queried C encoder lookahead. No correlation/warp/gain fitting.",
         "reference_kind": "Independent C libopus1.6.1 and SpeexDSP1.2.1 quality3 components, not an executed stock Mumble client",
