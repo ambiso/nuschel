@@ -76,8 +76,7 @@ Remaining limits are explicit:
   warm-up suppression or threshold change conceals it.
 - Current native VAD requires agreement from Sonora/WebRTC and RNNoise at the
   pre-local-suppression, pre-gain tap; RNNoise remains the suppressor. Earlier
-  RNNoise timings above are
-  historical controls. The new model's default opening threshold is calibrated
+  RNNoise timings above are historical controls. The new model's default opening threshold is calibrated
   to 0.4: reusing RNNoise's 0.6 threshold delayed some quiet inputs beyond the
   existing 80 ms prefix. The detector is causal and persistent, but classification
   still needs input evidence; the prefix does not make it instantaneous. Quiet

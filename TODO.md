@@ -1157,8 +1157,8 @@ The media worker uses per-speaker adaptive jitter buffers and Opus loss concealm
       recordings and derived audio remain private outside the repository and must
       never be committed. The 80-second recording has a vocalization near four
       seconds and normal speech starting at 67 seconds; background measurements
-      exclude the first ten seconds. The already-shipped Sonora/WebRTC RNN is a
-      detector is now integrated as an agreement check with RNNoise, retaining
+      exclude the first ten seconds. The already-shipped Sonora/WebRTC RNN
+      is now integrated as an agreement check with RNNoise, retaining
       broadband-noise rejection that WebRTC alone regressed. Final default 0.4/0.2
       opening/closing thresholds reduce 10–60 s background gate frames 2720→138
       while preserving processed PCM. The final compiled helper emits 92.1% fewer
