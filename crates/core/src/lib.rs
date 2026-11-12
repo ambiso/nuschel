@@ -87,6 +87,28 @@ pub struct MessageDocument {
     pub blocks: Vec<ContentBlock>,
 }
 
+impl MessageDocument {
+    /// Whether the document's [`ContentBlock::Break`]s are within their
+    /// budget: at most [`MAX_BREAKS`], never two in a row, and none counting
+    /// more line breaks than a message can hold.
+    pub fn breaks_valid(&self) -> bool {
+        let mut breaks = 0;
+        let mut previous = false;
+        for block in &self.blocks {
+            let ContentBlock::Break { count } = block else {
+                previous = false;
+                continue;
+            };
+            breaks += 1;
+            if previous || breaks > MAX_BREAKS || *count as usize > MAX_CONTENT_BYTES {
+                return false;
+            }
+            previous = true;
+        }
+        true
+    }
+}
+
 /// Renderers receive text and styles, never executable HTML or instructions to fetch URLs.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -118,9 +140,31 @@ pub enum ContentBlock {
     /// formula as written, for copying, screen readers and when it cannot
     /// be shown.
     Math { source: String, tex: String },
+    /// The line breaks typed between the neighbouring blocks, or before the
+    /// first or after the last: `count - 1` blank lines between two blocks,
+    /// `count` blank lines at the start or end, and 0 keeps a display formula
+    /// on the line of the text beside it (next to an image it is one line
+    /// break: images are never inline). Without one, neighbouring blocks are
+    /// one line break apart and nothing precedes the first or follows the
+    /// last, so documents built without breaks keep their layout. At most one
+    /// stands between two other blocks ([`MAX_BREAKS`]), and `count` is at
+    /// most the source's line breaks.
+    Break { count: u32 },
 }
 
+/// Blocks of every other kind per document (the content worker's limit).
+pub const MAX_BLOCKS: usize = 512;
+/// [`ContentBlock::Break`]s per document: at most one between two other
+/// blocks and one at each end; they have their own budget, so the limit on
+/// other blocks stays as it is.
+pub const MAX_BREAKS: usize = MAX_BLOCKS + 1;
+
 impl ContentBlock {
+    /// Whether this is a [`ContentBlock::Break`], which holds no content.
+    pub fn is_break(&self) -> bool {
+        matches!(self, ContentBlock::Break { .. })
+    }
+
     /// A plain paragraph.
     pub fn text(text: impl Into<String>) -> Self {
         ContentBlock::Text {
@@ -276,6 +320,51 @@ mod tests {
             }
         );
         assert_eq!(policy.preview(body, true).text, body);
+    }
+
+    #[test]
+    fn breaks_have_their_own_shape_and_budget() {
+        let document = MessageDocument {
+            blocks: vec![
+                ContentBlock::Break { count: 2 },
+                ContentBlock::text("a"),
+                ContentBlock::Break { count: 0 },
+                ContentBlock::Math {
+                    source: "$$x$$".into(),
+                    tex: "x".into(),
+                },
+            ],
+        };
+        let json = serde_json::to_string(&document).unwrap();
+        assert!(
+            json.starts_with(r#"{"blocks":[{"kind":"break","count":2},"#),
+            "{json}"
+        );
+        assert_eq!(
+            serde_json::from_str::<MessageDocument>(&json).unwrap(),
+            document
+        );
+        assert!(document.breaks_valid());
+        assert!(
+            serde_json::from_str::<MessageDocument>(
+                r#"{"blocks":[{"kind":"break","count":1,"extra":1}]}"#
+            )
+            .is_err()
+        );
+        // Two in a row, too many, or more line breaks than a message holds.
+        let breaks = |blocks: Vec<ContentBlock>| MessageDocument { blocks }.breaks_valid();
+        let one = || ContentBlock::Break { count: 1 };
+        assert!(!breaks(vec![one(), one()]));
+        assert!(!breaks(vec![ContentBlock::Break {
+            count: MAX_CONTENT_BYTES as u32 + 1
+        }]));
+        let mut many = Vec::new();
+        for _ in 0..=MAX_BREAKS {
+            many.extend([one(), ContentBlock::text("x")]);
+        }
+        assert!(!breaks(many.clone()));
+        many.truncate(2 * MAX_BREAKS);
+        assert!(breaks(many));
     }
 
     #[test]
