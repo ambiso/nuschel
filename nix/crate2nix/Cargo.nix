@@ -24232,6 +24232,10 @@ rec {
             packageId = "nuschl-core";
           }
           {
+            name = "nuschl-ipc";
+            packageId = "nuschl-ipc";
+          }
+          {
             name = "nuschl-legacy-html";
             packageId = "nuschl-legacy-html";
           }

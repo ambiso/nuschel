@@ -7352,6 +7352,7 @@ dependencies = [
  "md-5 0.11.0",
  "nnnoiseless",
  "nuschl-core",
+ "nuschl-ipc",
  "nuschl-legacy-html",
  "nuschl-protocol",
  "nuschl-session",

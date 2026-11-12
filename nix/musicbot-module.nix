@@ -199,7 +199,15 @@ in
         ];
         # The codec children create private user/mount/network/etc namespaces.
         # They retain no service credentials, audio devices or host networking.
-        RestrictNamespaces = [ "user" "mnt" "pid" "net" "ipc" "uts" "cgroup" ];
+        RestrictNamespaces = [
+          "user"
+          "mnt"
+          "pid"
+          "net"
+          "ipc"
+          "uts"
+          "cgroup"
+        ];
         RestrictRealtime = true;
         RestrictSUIDSGID = true;
         LockPersonality = true;

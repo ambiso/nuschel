@@ -298,7 +298,9 @@ mod tests {
             &mut output,
         )
         .unwrap();
-        for (index, reply) in responses(output).into_iter().enumerate() {
+        let replies = responses(output);
+        assert_eq!(replies.len(), 2);
+        for (index, reply) in replies.into_iter().enumerate() {
             assert_eq!(reply.request_id, index as u64 + 1);
             assert!(matches!(reply.payload, Response::Ack));
         }
