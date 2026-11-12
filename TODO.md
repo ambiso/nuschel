@@ -1477,17 +1477,17 @@ listed below. Plugin data remains the explicit gap.
 
 ### 6. Desktop UI for these features
 
-- [ ] Rework the multi-server voice status model and presentation (user,
-      2026-11-12): entries such as "Deafened on" followed by a server name appear
-      stale. Reproduce transitions and define clear states for mic destination,
-      actual speaking/PTT/VAD, listening, muted, deafened and reconnecting.
-      Use stable server IDs for rows/actions, accurate per-server updates and
-      unambiguous disconnect targets; bounded long-name layout must preserve
-      useful status. Preserve explicit multi-server transmit consent and capture
-      epochs. Assigned to the web owner after the spacing proof. Root review
-      caught a missing pending-deafen rail badge and a header that called a
-      TLS/chat connection voice-connected even when voice was unavailable;
-      those corrections need their final verification before integration.
+- [ ] Integrate the verified native multi-server voice status revision (user,
+      2026-11-12). Source distinguishes microphone destination, observed Speaking,
+      listening/deafened, codec/admin/bandwidth restrictions, pending acknowledgements
+      and reconnect. Every relevant connected/pending server is named with a
+      server-scoped disconnect (voice and chat), stable ID/presence/channel bindings
+      and revalidated multi-server consent. Private source proof: 94 desktop units,
+      19 actual two-Murmur state/wire transitions, 16 positive name/action geometry
+      checks at 100–200% in narrow/default windows with a long Unicode name, plus the
+      original complete two-server audio/privacy/crash-recovery suite. Pending root
+      distribution integration; see docs/voice-status.md. The old package reproduced
+      three semantic failures; literal stale text-cache behavior was not established.
 - [ ] Reconcile rapid self mute/deafen intent with server acknowledgements at
       stock Mumble's default control bucket. The private status baseline hit a
       dropped-control case; a test-only larger bucket isolates UI projection but

@@ -315,7 +315,7 @@ def main():
     parser.add_argument("--gnome-shell", type=Path)
     parser.add_argument("--size", default="1280x800")
     parser.add_argument("--settle", type=float, default=4.0)
-    parser.add_argument("--scenes", default="all", help="comma-separated: select,multiline,links,rich,friends,runs,unread,dialog,settings,shortcuts,server,menus,long,search,finder,emoji,toggles,clipping,viewer,notify,scroll,paste,attach,transfer,appearance,maximize; not in all: layout (long migration paths/voice names and zoom matrix, needs --at-spi), layout-controls (dialog/nested-control focus), layout-performance (matched frame timings), native-spacing (rail bottom/footer gaps; requires --pulse-bin and --at-spi), rail-layout (first/last paint gutters and animated contours, needs --at-spi), resize (measures resizing), managed, math (formulas; run it with --theme light and --zoom 1.25 too), devices (wheel over Settings' device lists, checked over AT-SPI; needs --pulse-bin and --at-spi), notice-zoom (real Mumble failures and Dismiss bounds at 100–200%%, needs --at-spi)")
+    parser.add_argument("--scenes", default="all", help="comma-separated: select,multiline,links,rich,friends,runs,unread,dialog,settings,shortcuts,server,menus,long,search,finder,emoji,toggles,clipping,viewer,notify,scroll,paste,attach,transfer,appearance,maximize; not in all: layout (long migration paths/voice names and zoom matrix, needs --at-spi), layout-controls (dialog/nested-control focus), layout-performance (matched frame timings), native-spacing (rail bottom/footer gaps; requires --pulse-bin and --at-spi), voice-status (two-server voice facts, consent/reconnect and visible zoom layout; requires --pulse-bin and --at-spi), rail-layout (first/last paint gutters and animated contours, needs --at-spi), resize (measures resizing), managed, math (formulas; run it with --theme light and --zoom 1.25 too), devices (wheel over Settings' device lists, checked over AT-SPI; needs --pulse-bin and --at-spi), notice-zoom (real Mumble failures and Dismiss bounds at 100–200%%, needs --at-spi)")
     parser.add_argument("--dragon-drop", type=Path, help="dragon-drop, to drop files on the conversation (attach scene)")
     # Dark by default, as the scenes were drawn; the private shell has no
     # settings portal, so "system" means GPUI's fallback (light).
@@ -334,7 +334,7 @@ def main():
     parser.add_argument("--zenity", type=Path, help="zenity, for another focused window in the shortcuts scene")
     args = parser.parse_args()
     if {"native-spacing", "voice-status"} & set(args.scenes.split(",")) and (not args.pulse_bin or not args.at_spi):
-        parser.error("native-spacing requires --pulse-bin and --at-spi")
+        parser.error("native-spacing and voice-status require --pulse-bin and --at-spi")
     args.output.mkdir(parents=True, exist_ok=True)
     width, height = map(int, args.size.split("x"))
     with tempfile.TemporaryDirectory(prefix="nuschl-screens-") as temporary:

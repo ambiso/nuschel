@@ -370,10 +370,13 @@ by default.**
   server rail, servers you listen to a small headphone badge that breathes while
   someone talks there (eased, `motion::Ease`, drawn 25 times a second rather than at
   the display's rate, since GPUI redraws the whole window; lit without motion when
-  motion is reduced). The voice
-  card reads "Talking on Beta #Lobby · listening to Alpha #Lobby", each place a
-  button that takes you there; the user panel says "Listening" for a server that
-  only plays. Rail buttons and the card are named for screen readers.
+  motion is reduced). The voice card names each server/channel first, with a
+  separate microphone destination/listening/deafened status. Speaking reflects
+  observed sending rather than idle push-to-talk eligibility. Every row has its
+  own named disconnect action (voice and chat); text selection does not change its
+  scope. Pending acknowledgements and reconnects are explicit. Rail, card, current
+  channel heading and footer share this projection; see [voice-status.md](voice-status.md)
+  for lifecycle bindings, private proof and remaining authority/rate-limit gaps.
 
 Tested by `voice::tests` and `client::tests` (the policy), `native::media::tests`
 (routing), the media worker's `mixer::tests`, and `tests/voice_servers.py`: the real
