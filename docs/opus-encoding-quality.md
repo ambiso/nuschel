@@ -26,7 +26,7 @@ No host microphone, personal Mumble configuration or public server is sampled.
   library hash and controls must accompany measurements. It is not claimed to
   be the exact dynamically linked codec of every Mumble distribution.
 
-## Encoder settings actually requested
+## Baseline encoder settings (`caff0785`, before the Audio change)
 
 | Setting | Native live TX | Browser WASM TX | Mumble 1.5.939 |
 |---|---|---|---|
@@ -129,7 +129,9 @@ be substituted for the pinned 1.5.939 baseline.
 
 ## Measurement plan and open gates
 
-No production encoder setting is changed by this source checkpoint.
+The initial source audit `bb08f13f` changed no production setting. The later
+Audio activation is described below; the historical matrix keeps its original
+VoIP profiles and all failures.
 
 - Compare identical, owned synthetic formant/fricative speech, harmonic and
   percussive music, impulses/transients, stepped high-frequency tones and
@@ -155,3 +157,118 @@ Existing `tests/opus_eval.py` is insufficient as the final TX gate: it exercises
 the nonlive IPC and a C VoIP comparator, has an outdated 64k assumption, and its
 quality score fits a least-squares gain after delay search. Keep that historical
 evidence but do not present it as current live Mumble-policy or fixed-gain parity.
+
+## Audio activation and measured limits
+
+The user approved Audio as the fidelity choice, with RestrictedLowDelay only if
+quality equivalence is demonstrated. Production checkpoint `a235fe87` (integrated
+as `95a1a27f`) now selects **`Application::Audio` for every production TX
+constructor**: native live capture, native codec IPC and browser `VoiceEncoder`.
+A small shared native factory prevents those two native paths drifting. A search
+of `apps`/`crates` finds remaining VoIP constructors only inside deliberate test
+fixtures. Bitrate changes, including server-forced 32/48k, never switch back to
+VoIP. The requested 128k, server reserve/limits, mono 20 ms framing, complexity,
+CVBR, live FEC/loss hints, microphone consent and epochs are unchanged. Live
+capture/startup and receive conversion were not redesigned here.
+
+The native factory test encodes/validates/decodes real multitone packets across
+128→32→48→64→128k and resets, verifying the actual Audio application and original
+controls. Native tests pass **71/71 with five pre-existing ignored diagnostics**;
+audio-WASM native tests pass 8/8. The actual wasm-bindgen artifact exposes a numeric
+`lookahead_samples()` query; it reports 312 samples, matching independent C
+`OPUS_GET_LOOKAHEAD` for Audio. RestrictedLowDelay reports120 on both Rust and C:
+192samples / **4ms** less algorithmic codec delay. This is not measured
+microphone-to-speaker or end-to-end call latency.
+
+The standalone matrix contains **1,008 rows**: four deterministic signal types,
+24/32/40/48/64/128k, seven policy profiles, Rust/C encoding and no loss / fixed
+isolated loss / fixed two-packet bursts. It records requested controls separately
+from actual TOC modes/bandwidth, size/rate, lookahead and encode time. Every packet
+is decoded by independent C libopus 1.6.1. Synthetic speech-like formants/fricatives
+are not a human speech corpus. Common-scale spectrograms and IEEE-float WAVs keep
+original gain/headroom; no fitted gain, lag or per-file normalization is applied.
+The delay is the queried codec lookahead, not an optimization of the score.
+
+The following no-loss reconstruction scores are **fixed-gain waveform SNR in dB**,
+not perceptual scores or universal quality guarantees. Mumble here means its
+pinned fresh-encoder policy running in test-side C libopus, with s16 input, CBR,
+complexity9 and no requested FEC; it does not include Mumble capture processing.
+
+| Target / synthetic input | Native baseline VoIP | Native Audio | Browser baseline VoIP | Browser Audio | Mumble policy / C |
+|---|---:|---:|---:|---:|---:|
+|64k speech-like|13.55|16.62|7.95|16.88|16.83|
+|64k music|12.30|13.93|6.66|14.12|13.80|
+|64k transients|9.38|13.54|4.77|13.77|14.07|
+|64k stepped highband|15.56|23.31|8.64|24.42|23.54|
+|128k speech-like|25.56|25.56|25.81|25.81|25.97|
+|128k music|19.27|19.27|19.30|19.30|19.31|
+|128k transients|16.91|16.91|16.95|16.95|16.93|
+|128k stepped highband|23.67|23.67|24.88|24.88|23.54|
+
+At 128k these VoIP/Audio profiles already selected CELT and produce identical
+outputs in the tested cases. At 64k the old browser VoIP profile stays hybrid,
+while Audio selects CELT; native VoIP has mixed hybrid/CELT. These observations
+explain a plausible mode-dependent difference at lower effective budgets, but do
+not establish what the user's particular microphone/room/server actually did.
+A128k request must not be mistaken for128k effective codec rate on a 72k server.
+
+![Source and transmitter spectrograms, all independently decoded by C libopus](reviews/2026-11-12-opus-tx/summary.png)
+
+The plot compares64k speech-like input and128k music with the same−100…0dBFS
+scale. Before/after Rust profiles and the actual C Mumble-policy encoder are
+explicitly labeled. It is encoder-only evidence. The full eight high-resolution
+plots, loss cases, raw packet streams and float WAVs remain in the source-bound
+handoff. The committed [scoped report](reviews/2026-11-12-opus-tx/report.json)
+contains controls, source/actual-path scores and open findings.
+
+### Why RestrictedLowDelay is still open
+
+The4ms delay reduction alone does not meet the user's equivalence condition.
+With Rust 64k transient input, Audio→RLD falls13.54→10.01dB (native controls) and
+13.77→10.01dB (browser controls). The matched C browser controls instead give
+13.78→14.05dB. At 128k browser speech-like input Rust drops25.81→23.75dB, while
+matched C gives25.79→25.73dB. Fixed burst loss retains the64k transient difference
+(native−4.10dB, browser−4.27dB relative to Audio). Preserve those failures rather
+than changing gain or declaring identical quality from the CELT TOC alone.
+Sparse-transient rate allocation also differs from matched C; variable rate on
+silence by itself is not proof of a defect. Diagnose timing/window/analysis and
+bit-allocation behavior before an RLD at 64k+ policy is activated.
+
+Requested FEC is not proof that redundant audio was coded. With native FEC5%
+controls, C Audio chooses hybrid for some packets at 64/128k in these fixtures;
+Rust Audio remains CELT. RLD cannot supply SILK/hybrid FEC. This difference needs
+an explicit codec/policy review, including actual loss recovery, before broad
+resilience or equivalence claims. Browser complexity5 versus native9 remains
+unchanged and queued. No vendor or entropy/mode-selection code was patched here.
+
+### Actual production constructors and retained portability diagnostic
+
+`tests/opus_tx_actual.py` validates 20 actual paths: the native codec IPC at 128k,
+and the shipped wasm-bindgen `VoiceEncoder` at 32/48/64/128k, for each of the four
+signals. It checks valid finite independent-C decoded output, 200×20 ms packets,
+WASM budget caps and the actual 312 sample delay query. Example actual WASM scores
+versus matched C controls: 32k speech9.336/9.503dB; 128k speech25.836/25.786dB;
+128k transients16.958/16.936dB. This is separate from a full browser microphone/
+preprocessing/transport test. The native live factory's budget/reset behavior is
+unit-tested; native IPC is not substituted for proof of the live DSP pipeline.
+
+A deliberately stricter new native/WASM encoded-output equality diagnostic failed
+and is retained: the first 32k speech-like case gives39.77dB between the decoded
+outputs instead of 60 dB. Across all sixteen WASM cases that diagnostic spans
+29.53–47.42dB. Valid Audio selection and close independent source metrics do not
+make those encodes bit-identical. The script reports equality separately; an
+explicit `--require-control-snr-db 60` reproduces that optional failing gate.
+No existing quality assertion was relaxed. This is a separate portability/
+floating-encoder investigation, not a demonstrated corruption or a closed gate.
+
+The exact Audio worker also passes the full existing privatePulse DSP suite:
+jitter, upstream AEC routing/overrides, echo 42 dB removal/0%sent, double talk 1.2 dB/
+100% gate, clipping detection and sound isolation / 6 dB volume. The fixture explicitly
+forces the private Pulse backend and synthetic null sinks, with no host capture.
+These regressions do not close physical-device capture quality, the linear
+CaptureConverter, browser processing differences or broad perceptual parity.
+
+Artifacts and commands: `~/.cache/nuschl-opus-tx-quality/handoff.json`.
+The original 672-row baseline, additional 336 server-forced 32/40k rows, failing
+cross-target equality case and all fixed-loss/RLD failures are preserved. Source
+is frozen; filtered receive/SRC/reference work has a separate owner.

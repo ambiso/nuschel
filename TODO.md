@@ -1105,26 +1105,39 @@ listed below. Plugin data remains the explicit gap.
       nuschl servers. Persist the requested target; show the effective encoder
       target and why it is limited. Respect each destination's advertised bandwidth,
       including packet/transport overhead, and recompute on server updates/reconnect.
-      The requested mono VoIP default is now 128 kb/s on native and web; lower
+      The requested mono voice default is now 128 kb/s on native and web; lower
       ServerSync/ServerConfig budgets take precedence, with a 24 kb/s conservative
       Mumble framing/transport reserve. Tiny budgets disable capture, not playback.
       Live changes reject over-budget frames and update isolated encoders;
       browser route epochs also revoke prior queued media.
       Persistent controls/effective-rate UI and the full private-server matrix
       remain open; synthetic codec/budget regressions cover the default slice.
-- [ ] Verify and adopt the input-fidelity encoder profile (user, 2026-11-12).
-      Current production native/browser TX both select VoIP unconditionally;
-      Mumble uses Audio or RestrictedLowDelay at higher rates. The requested
-      direction is Audio, preferring RestrictedLowDelay at 64/128 kbit/s only
-      when measured quality is equivalent and latency improves. Keep 128 kbit/s
-      requested; go below 64 only when the server budget requires it. Compare
-      real native/WASM encodes, lookahead, speech/music/transients/high-band
-      spectra and packet-loss behavior against independent libopus. Existing
-      receive/decoder/SRC tests do not establish input-to-output transparency;
-      add spectrograms, spectral residuals and listening artifacts, separating
-      codec loss, intentional capture processing and playback implementation
-      errors. Browser complexity 5 versus native 9 and differing FEC/loss hints
-      also need measured review. Do not equate lossy Opus with identical PCM.
+- [ ] Complete input-fidelity encoder verification (user, 2026-11-12).
+      Audio activation is integrated as `95a1a27f`: all native/browser production
+      TX factories use Audio, retaining the 128k requested target, server budget
+      and reserve, mono 20 ms packets, complexity, CVBR, FEC and privacy. No silent
+      VoIP fallback when server budgets force 32/48k. Native 71 passed / 5 existing
+      ignored, audio-WASM 8 passed, actual 20 native/WASM encode paths and
+      independent C decode pass; the full private Pulse DSP suite also passes.
+      Queried lookahead is Audio 312 samples versus RLD 120: a 4 ms codec benefit,
+      not full call latency. RestrictedLowDelay at 64/128k remains OPEN: Rust 64k
+      transient scores fall 13.54→10.01 dB native / 13.77→10.01 browser, unlike
+      matched C browser 13.78→14.05; 128k browser speech falls 25.81→23.75 versus
+      C 25.79→25.73. Preserve loss/burst and sparse-transient bitrate/window/
+      analysis findings before adopting RLD. Do not trade fidelity away for 4 ms.
+      Separate portability diagnostic OPEN: native/WASM encoded-output equality
+      gives 29.53–47.42 dB; the first 32k speech case gives 39.77 against a new
+      60 dB probe. Actual WASM source scores stay close to matched C (9.336 versus
+      9.503 there). This establishes neither bit identity, corruption nor
+      perceptual equivalence. Requested native FEC 5% also selects hybrid for
+      parts of matched C Audio cases while Rust stays CELT; verify actual coded
+      FEC/loss behavior. Browser complexity 5 versus native 9 and browser/native
+      capture preprocessing remain separate gaps. All 1,008 standalone synthetic
+      rows, actual encodes, loss controls, fixed-gain spectrograms/float WAVs and
+      the initial failed diagnostic remain in the evidence; see
+      `docs/opus-encoding-quality.md`. Keep real capture, non-48k CaptureConverter,
+      listening and broad input→output transparency open. Receive/SRC tests alone
+      cannot close TX fidelity, and lossy Opus is not identical PCM.
 - [ ] Design an optional music preset alongside the voice default: proposed voice
       128 kb/s mono at 48 kHz; music 128 kb/s stereo at 48 kHz, with 96/160/192 kb/s
       choices subject to the same server budget. Music uses `Application::Audio`,

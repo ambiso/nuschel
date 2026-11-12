@@ -1,0 +1,5638 @@
+{
+  "scope": "TX encoder-only synthetic audit; no capture or perceptual-equivalence claim",
+  "baseline_source": "caff0785 / bb08f13f",
+  "production_source": "a235fe87, integrated95a1a27f",
+  "reference": {
+    "version": "libopus 1.6.1",
+    "library_sha256": "07a8d53a921baae0748ba8cecdcda068872a391b8351f7c442ae38a08bdf1bec",
+    "Mumble_tag": "v1.5.939",
+    "Mumble_revision": "dfbac8d3d9c967003e74b4ffc5610f7d45e8f666",
+    "current_upstream_revision": "8c538851b25a8349e03807df33c159ad4fe1c63a"
+  },
+  "signal_generation": "owned deterministic synthetic signals, seed0x4E555343; no speech corpus/hardware/network",
+  "gain_fitted": false,
+  "delay_fitted": false,
+  "standalone_rows": 1008,
+  "selected_results": [
+    {
+      "fixture": "speech-like",
+      "bitrate": 64000,
+      "profile": "native-voip",
+      "engine": "rust",
+      "settings": {
+        "application": 2048,
+        "complexity": 9,
+        "vbr": 1,
+        "vbr_constraint": 1,
+        "fec": 1,
+        "loss_hint": 5,
+        "precision": 24,
+        "maximum_packet_bytes": 160
+      },
+      "loss": "none",
+      "missing_packets": [],
+      "toc_modes": {
+        "HYBRID": 33,
+        "CELT": 167
+      },
+      "toc_configs": {
+        "15": 33,
+        "31": 167
+      },
+      "actual_payload_bps": 58148.0,
+      "timing": {
+        "application": "Voip",
+        "lookahead_samples": 312,
+        "complexity": 9,
+        "frames": 200,
+        "encode_p50_ns": 65151,
+        "encode_p95_ns": 251894,
+        "encode_max_ns": 336885
+      },
+      "metrics": {
+        "samples": 191688,
+        "alignment": "declared lookahead only; no gain/phase/lag fitting",
+        "fixed_gain_snr_db": 13.55235503723991,
+        "rms_gain_db": -0.016257990437842658,
+        "peak": 0.32580792903900146,
+        "bands": {
+          "80-1000": {
+            "source_energy_db": -34.91356261862582,
+            "level_error_db": -0.011682617205362037
+          },
+          "1000-4000": {
+            "source_energy_db": -46.78249321327776,
+            "level_error_db": -0.037847150383119435
+          },
+          "4000-8000": {
+            "source_energy_db": -55.34869986198902,
+            "level_error_db": -0.03730228755678516
+          },
+          "8000-12000": {
+            "source_energy_db": -54.93586268281515,
+            "level_error_db": -0.013894432306699955
+          },
+          "12000-16000": {
+            "source_energy_db": -56.01058551362375,
+            "level_error_db": 0.0006754449989364484
+          },
+          "16000-20000": {
+            "source_energy_db": -97.13700144599171,
+            "level_error_db": 0.09728568315898073
+          }
+        }
+      }
+    },
+    {
+      "fixture": "speech-like",
+      "bitrate": 64000,
+      "profile": "native-audio",
+      "engine": "rust",
+      "settings": {
+        "application": 2049,
+        "complexity": 9,
+        "vbr": 1,
+        "vbr_constraint": 1,
+        "fec": 1,
+        "loss_hint": 5,
+        "precision": 24,
+        "maximum_packet_bytes": 160
+      },
+      "loss": "none",
+      "missing_packets": [],
+      "toc_modes": {
+        "CELT": 200
+      },
+      "toc_configs": {
+        "31": 200
+      },
+      "actual_payload_bps": 58110.0,
+      "timing": {
+        "application": "Audio",
+        "lookahead_samples": 312,
+        "complexity": 9,
+        "frames": 200,
+        "encode_p50_ns": 62261,
+        "encode_p95_ns": 85681,
+        "encode_max_ns": 160103
+      },
+      "metrics": {
+        "samples": 191688,
+        "alignment": "declared lookahead only; no gain/phase/lag fitting",
+        "fixed_gain_snr_db": 16.623727334716314,
+        "rms_gain_db": 0.0007218744089751688,
+        "peak": 0.33133143186569214,
+        "bands": {
+          "80-1000": {
+            "source_energy_db": -34.91356261862582,
+            "level_error_db": 0.004522581516141007
+          },
+          "1000-4000": {
+            "source_energy_db": -46.78249321327776,
+            "level_error_db": -0.018674418558551627
+          },
+          "4000-8000": {
+            "source_energy_db": -55.34869986198902,
+            "level_error_db": 0.027207927811694833
+          },
+          "8000-12000": {
+            "source_energy_db": -54.93586268281515,
+            "level_error_db": -0.008035735374851926
+          },
+          "12000-16000": {
+            "source_energy_db": -56.01058551362375,
+            "level_error_db": -0.012896811197070993
+          },
+          "16000-20000": {
+            "source_energy_db": -97.13700144599171,
+            "level_error_db": 0.1966997756442787
+          }
+        }
+      }
+    },
+    {
+      "fixture": "speech-like",
+      "bitrate": 64000,
+      "profile": "native-lowdelay",
+      "engine": "rust",
+      "settings": {
+        "application": 2051,
+        "complexity": 9,
+        "vbr": 1,
+        "vbr_constraint": 1,
+        "fec": 1,
+        "loss_hint": 5,
+        "precision": 24,
+        "maximum_packet_bytes": 160
+      },
+      "loss": "none",
+      "missing_packets": [],
+      "toc_modes": {
+        "CELT": 200
+      },
+      "toc_configs": {
+        "31": 200
+      },
+      "actual_payload_bps": 58110.0,
+      "timing": {
+        "application": "RestrictedLowDelay",
+        "lookahead_samples": 120,
+        "complexity": 9,
+        "frames": 200,
+        "encode_p50_ns": 62001,
+        "encode_p95_ns": 87232,
+        "encode_max_ns": 3669057
+      },
+      "metrics": {
+        "samples": 191880,
+        "alignment": "declared lookahead only; no gain/phase/lag fitting",
+        "fixed_gain_snr_db": 16.462209710493656,
+        "rms_gain_db": -0.00810325843450105,
+        "peak": 0.33618417382240295,
+        "bands": {
+          "80-1000": {
+            "source_energy_db": -34.91938816586958,
+            "level_error_db": -0.0060921939871954895
+          },
+          "1000-4000": {
+            "source_energy_db": -46.78831876052151,
+            "level_error_db": -0.023434561401375023
+          },
+          "4000-8000": {
+            "source_energy_db": -55.35452540923278,
+            "level_error_db": 0.0017863789712436102
+          },
+          "8000-12000": {
+            "source_energy_db": -54.9416882300589,
+            "level_error_db": -0.0015945659231514247
+          },
+          "12000-16000": {
+            "source_energy_db": -56.01641106086752,
+            "level_error_db": 0.006252004376420012
+          },
+          "16000-20000": {
+            "source_energy_db": -97.14282699323546,
+            "level_error_db": 0.33862408872272387
+          }
+        }
+      }
+    },
+    {
+      "fixture": "speech-like",
+      "bitrate": 64000,
+      "profile": "browser-voip",
+      "engine": "rust",
+      "settings": {
+        "application": 2048,
+        "complexity": 5,
+        "vbr": 1,
+        "vbr_constraint": 1,
+        "fec": 0,
+        "loss_hint": 0,
+        "precision": 24,
+        "maximum_packet_bytes": 160
+      },
+      "loss": "none",
+      "missing_packets": [],
+      "toc_modes": {
+        "HYBRID": 200
+      },
+      "toc_configs": {
+        "15": 200
+      },
+      "actual_payload_bps": 50964.0,
+      "timing": {
+        "application": "Voip",
+        "lookahead_samples": 312,
+        "complexity": 5,
+        "frames": 200,
+        "encode_p50_ns": 118842,
+        "encode_p95_ns": 167802,
+        "encode_max_ns": 700651
+      },
+      "metrics": {
+        "samples": 191688,
+        "alignment": "declared lookahead only; no gain/phase/lag fitting",
+        "fixed_gain_snr_db": 7.948469867184963,
+        "rms_gain_db": -0.17339916991027782,
+        "peak": 0.3480335772037506,
+        "bands": {
+          "80-1000": {
+            "source_energy_db": -34.91356261862582,
+            "level_error_db": -0.12370408384014306
+          },
+          "1000-4000": {
+            "source_energy_db": -46.78249321327776,
+            "level_error_db": -0.2288720046366613
+          },
+          "4000-8000": {
+            "source_energy_db": -55.34869986198902,
+            "level_error_db": -1.8666784178726674
+          },
+          "8000-12000": {
+            "source_energy_db": -54.93586268281515,
+            "level_error_db": 0.038561345814764655
+          },
+          "12000-16000": {
+            "source_energy_db": -56.01058551362375,
+            "level_error_db": 0.0049354028921348315
+          },
+          "16000-20000": {
+            "source_energy_db": -97.13700144599171,
+            "level_error_db": 0.05735530101475593
+          }
+        }
+      }
+    },
+    {
+      "fixture": "speech-like",
+      "bitrate": 64000,
+      "profile": "browser-audio",
+      "engine": "rust",
+      "settings": {
+        "application": 2049,
+        "complexity": 5,
+        "vbr": 1,
+        "vbr_constraint": 1,
+        "fec": 0,
+        "loss_hint": 0,
+        "precision": 24,
+        "maximum_packet_bytes": 160
+      },
+      "loss": "none",
+      "missing_packets": [],
+      "toc_modes": {
+        "CELT": 200
+      },
+      "toc_configs": {
+        "31": 200
+      },
+      "actual_payload_bps": 58110.0,
+      "timing": {
+        "application": "Audio",
+        "lookahead_samples": 312,
+        "complexity": 5,
+        "frames": 200,
+        "encode_p50_ns": 48040,
+        "encode_p95_ns": 62091,
+        "encode_max_ns": 68911
+      },
+      "metrics": {
+        "samples": 191688,
+        "alignment": "declared lookahead only; no gain/phase/lag fitting",
+        "fixed_gain_snr_db": 16.8774815023424,
+        "rms_gain_db": 0.0019518718063802666,
+        "peak": 0.3309605121612549,
+        "bands": {
+          "80-1000": {
+            "source_energy_db": -34.91356261862582,
+            "level_error_db": 0.00033304940375753774
+          },
+          "1000-4000": {
+            "source_energy_db": -46.78249321327776,
+            "level_error_db": 0.005965350672387464
+          },
+          "4000-8000": {
+            "source_energy_db": -55.34869986198902,
+            "level_error_db": 0.05635055370515261
+          },
+          "8000-12000": {
+            "source_energy_db": -54.93586268281515,
+            "level_error_db": -0.02267545575683888
+          },
+          "12000-16000": {
+            "source_energy_db": -56.01058551362375,
+            "level_error_db": -0.00705288229045008
+          },
+          "16000-20000": {
+            "source_energy_db": -97.13700144599171,
+            "level_error_db": 0.20024025457130365
+          }
+        }
+      }
+    },
+    {
+      "fixture": "speech-like",
+      "bitrate": 64000,
+      "profile": "browser-lowdelay",
+      "engine": "rust",
+      "settings": {
+        "application": 2051,
+        "complexity": 5,
+        "vbr": 1,
+        "vbr_constraint": 1,
+        "fec": 0,
+        "loss_hint": 0,
+        "precision": 24,
+        "maximum_packet_bytes": 160
+      },
+      "loss": "none",
+      "missing_packets": [],
+      "toc_modes": {
+        "CELT": 200
+      },
+      "toc_configs": {
+        "31": 200
+      },
+      "actual_payload_bps": 58110.0,
+      "timing": {
+        "application": "RestrictedLowDelay",
+        "lookahead_samples": 120,
+        "complexity": 5,
+        "frames": 200,
+        "encode_p50_ns": 47501,
+        "encode_p95_ns": 62991,
+        "encode_max_ns": 104732
+      },
+      "metrics": {
+        "samples": 191880,
+        "alignment": "declared lookahead only; no gain/phase/lag fitting",
+        "fixed_gain_snr_db": 16.496764813863088,
+        "rms_gain_db": -0.03477113682964903,
+        "peak": 0.3329346776008606,
+        "bands": {
+          "80-1000": {
+            "source_energy_db": -34.91938816586958,
+            "level_error_db": -0.045466253356979666
+          },
+          "1000-4000": {
+            "source_energy_db": -46.78831876052151,
+            "level_error_db": -0.0060989495213224585
+          },
+          "4000-8000": {
+            "source_energy_db": -55.35452540923278,
+            "level_error_db": 0.02527416909049255
+          },
+          "8000-12000": {
+            "source_energy_db": -54.9416882300589,
+            "level_error_db": -0.015452649635552247
+          },
+          "12000-16000": {
+            "source_energy_db": -56.01641106086752,
+            "level_error_db": 0.010979219929254094
+          },
+          "16000-20000": {
+            "source_energy_db": -97.14282699323546,
+            "level_error_db": 0.5530305090082076
+          }
+        }
+      }
+    },
+    {
+      "fixture": "speech-like",
+      "bitrate": 64000,
+      "profile": "mumble",
+      "engine": "libopus",
+      "settings": {
+        "application": 2051,
+        "complexity": 9,
+        "vbr": 0,
+        "vbr_constraint": 1,
+        "fec": 0,
+        "loss_hint": 0,
+        "precision": 16,
+        "maximum_packet_bytes": 160
+      },
+      "loss": "none",
+      "missing_packets": [],
+      "toc_modes": {
+        "CELT": 200
+      },
+      "toc_configs": {
+        "31": 200
+      },
+      "actual_payload_bps": 64000.0,
+      "timing": {
+        "lookahead_samples": 120,
+        "encode_p50_ns": 67386.0,
+        "encode_p95_ns": 89800.99999999996,
+        "encode_max_ns": 117582
+      },
+      "metrics": {
+        "samples": 191880,
+        "alignment": "declared lookahead only; no gain/phase/lag fitting",
+        "fixed_gain_snr_db": 16.832138062543248,
+        "rms_gain_db": -0.015030405333157602,
+        "peak": 0.3254787027835846,
+        "bands": {
+          "80-1000": {
+            "source_energy_db": -34.91938816586958,
+            "level_error_db": -0.014511452797938355
+          },
+          "1000-4000": {
+            "source_energy_db": -46.78831876052151,
+            "level_error_db": -0.025813389354021072
+          },
+          "4000-8000": {
+            "source_energy_db": -55.35452540923278,
+            "level_error_db": -0.025574170206991195
+          },
+          "8000-12000": {
+            "source_energy_db": -54.9416882300589,
+            "level_error_db": 0.039174445648504
+          },
+          "12000-16000": {
+            "source_energy_db": -56.01641106086752,
+            "level_error_db": -0.021112153166347167
+          },
+          "16000-20000": {
+            "source_energy_db": -97.14282699323546,
+            "level_error_db": 0.5189166183959614
+          }
+        }
+      }
+    },
+    {
+      "fixture": "music",
+      "bitrate": 64000,
+      "profile": "native-voip",
+      "engine": "rust",
+      "settings": {
+        "application": 2048,
+        "complexity": 9,
+        "vbr": 1,
+        "vbr_constraint": 1,
+        "fec": 1,
+        "loss_hint": 5,
+        "precision": 24,
+        "maximum_packet_bytes": 160
+      },
+      "loss": "none",
+      "missing_packets": [],
+      "toc_modes": {
+        "HYBRID": 27,
+        "CELT": 173
+      },
+      "toc_configs": {
+        "15": 27,
+        "31": 173
+      },
+      "actual_payload_bps": 58572.0,
+      "timing": {
+        "application": "Voip",
+        "lookahead_samples": 312,
+        "complexity": 9,
+        "frames": 200,
+        "encode_p50_ns": 58221,
+        "encode_p95_ns": 230674,
+        "encode_max_ns": 330095
+      },
+      "metrics": {
+        "samples": 191688,
+        "alignment": "declared lookahead only; no gain/phase/lag fitting",
+        "fixed_gain_snr_db": 12.29691178970028,
+        "rms_gain_db": -0.05689754008675463,
+        "peak": 0.6363643407821655,
+        "bands": {
+          "80-1000": {
+            "source_energy_db": -29.0565182794252,
+            "level_error_db": -0.017284979065845835
+          },
+          "1000-4000": {
+            "source_energy_db": -42.16960076859201,
+            "level_error_db": -0.03481698687444698
+          },
+          "4000-8000": {
+            "source_energy_db": -50.54571574501629,
+            "level_error_db": -0.19410882993447678
+          },
+          "8000-12000": {
+            "source_energy_db": -55.263900259800636,
+            "level_error_db": 0.03510494519259137
+          },
+          "12000-16000": {
+            "source_energy_db": -55.54322159131033,
+            "level_error_db": 0.16131114359729115
+          },
+          "16000-20000": {
+            "source_energy_db": -54.82768570060445,
+            "level_error_db": 0.2941415533361633
+          }
+        }
+      }
+    },
+    {
+      "fixture": "music",
+      "bitrate": 64000,
+      "profile": "native-audio",
+      "engine": "rust",
+      "settings": {
+        "application": 2049,
+        "complexity": 9,
+        "vbr": 1,
+        "vbr_constraint": 1,
+        "fec": 1,
+        "loss_hint": 5,
+        "precision": 24,
+        "maximum_packet_bytes": 160
+      },
+      "loss": "none",
+      "missing_packets": [],
+      "toc_modes": {
+        "CELT": 200
+      },
+      "toc_configs": {
+        "31": 200
+      },
+      "actual_payload_bps": 58110.0,
+      "timing": {
+        "application": "Audio",
+        "lookahead_samples": 312,
+        "complexity": 9,
+        "frames": 200,
+        "encode_p50_ns": 57771,
+        "encode_p95_ns": 73191,
+        "encode_max_ns": 84352
+      },
+      "metrics": {
+        "samples": 191688,
+        "alignment": "declared lookahead only; no gain/phase/lag fitting",
+        "fixed_gain_snr_db": 13.927367632857656,
+        "rms_gain_db": -0.026733225724546106,
+        "peak": 0.6363643407821655,
+        "bands": {
+          "80-1000": {
+            "source_energy_db": -29.0565182794252,
+            "level_error_db": 0.004605974334308381
+          },
+          "1000-4000": {
+            "source_energy_db": -42.16960076859201,
+            "level_error_db": 0.01490800225161404
+          },
+          "4000-8000": {
+            "source_energy_db": -50.54571574501629,
+            "level_error_db": 0.029426394810735126
+          },
+          "8000-12000": {
+            "source_energy_db": -55.263900259800636,
+            "level_error_db": 0.018648902883915228
+          },
+          "12000-16000": {
+            "source_energy_db": -55.54322159131033,
+            "level_error_db": 0.26795215874689793
+          },
+          "16000-20000": {
+            "source_energy_db": -54.82768570060445,
+            "level_error_db": 0.2492232891064078
+          }
+        }
+      }
+    },
+    {
+      "fixture": "music",
+      "bitrate": 64000,
+      "profile": "native-lowdelay",
+      "engine": "rust",
+      "settings": {
+        "application": 2051,
+        "complexity": 9,
+        "vbr": 1,
+        "vbr_constraint": 1,
+        "fec": 1,
+        "loss_hint": 5,
+        "precision": 24,
+        "maximum_packet_bytes": 160
+      },
+      "loss": "none",
+      "missing_packets": [],
+      "toc_modes": {
+        "CELT": 200
+      },
+      "toc_configs": {
+        "31": 200
+      },
+      "actual_payload_bps": 58110.0,
+      "timing": {
+        "application": "RestrictedLowDelay",
+        "lookahead_samples": 120,
+        "complexity": 9,
+        "frames": 200,
+        "encode_p50_ns": 58071,
+        "encode_p95_ns": 86401,
+        "encode_max_ns": 262174
+      },
+      "metrics": {
+        "samples": 191880,
+        "alignment": "declared lookahead only; no gain/phase/lag fitting",
+        "fixed_gain_snr_db": 13.749134708293887,
+        "rms_gain_db": -0.03924072278189961,
+        "peak": 0.5428464412689209,
+        "bands": {
+          "80-1000": {
+            "source_energy_db": -29.062343826668958,
+            "level_error_db": -0.0028245400034985347
+          },
+          "1000-4000": {
+            "source_energy_db": -42.17542631583577,
+            "level_error_db": 3.318400621168675e-05
+          },
+          "4000-8000": {
+            "source_energy_db": -50.55154129226005,
+            "level_error_db": 0.0039256148390892824
+          },
+          "8000-12000": {
+            "source_energy_db": -55.26972580704439,
+            "level_error_db": 0.006005409205171101
+          },
+          "12000-16000": {
+            "source_energy_db": -55.54904713855408,
+            "level_error_db": 0.11329135026367815
+          },
+          "16000-20000": {
+            "source_energy_db": -54.833511247848215,
+            "level_error_db": -0.014461233205581417
+          }
+        }
+      }
+    },
+    {
+      "fixture": "music",
+      "bitrate": 64000,
+      "profile": "browser-voip",
+      "engine": "rust",
+      "settings": {
+        "application": 2048,
+        "complexity": 5,
+        "vbr": 1,
+        "vbr_constraint": 1,
+        "fec": 0,
+        "loss_hint": 0,
+        "precision": 24,
+        "maximum_packet_bytes": 160
+      },
+      "loss": "none",
+      "missing_packets": [],
+      "toc_modes": {
+        "HYBRID": 200
+      },
+      "toc_configs": {
+        "15": 200
+      },
+      "actual_payload_bps": 57514.0,
+      "timing": {
+        "application": "Voip",
+        "lookahead_samples": 312,
+        "complexity": 5,
+        "frames": 200,
+        "encode_p50_ns": 119022,
+        "encode_p95_ns": 184693,
+        "encode_max_ns": 217844
+      },
+      "metrics": {
+        "samples": 191688,
+        "alignment": "declared lookahead only; no gain/phase/lag fitting",
+        "fixed_gain_snr_db": 6.65904366704315,
+        "rms_gain_db": -0.6093173070787132,
+        "peak": 0.6396881341934204,
+        "bands": {
+          "80-1000": {
+            "source_energy_db": -29.0565182794252,
+            "level_error_db": -0.5452816076714944
+          },
+          "1000-4000": {
+            "source_energy_db": -42.16960076859201,
+            "level_error_db": -0.6661641122815553
+          },
+          "4000-8000": {
+            "source_energy_db": -50.54571574501629,
+            "level_error_db": -2.229789015862603
+          },
+          "8000-12000": {
+            "source_energy_db": -55.263900259800636,
+            "level_error_db": 0.024971598210748777
+          },
+          "12000-16000": {
+            "source_energy_db": -55.54322159131033,
+            "level_error_db": 0.08642352891158307
+          },
+          "16000-20000": {
+            "source_energy_db": -54.82768570060445,
+            "level_error_db": 0.18767462493918852
+          }
+        }
+      }
+    },
+    {
+      "fixture": "music",
+      "bitrate": 64000,
+      "profile": "browser-audio",
+      "engine": "rust",
+      "settings": {
+        "application": 2049,
+        "complexity": 5,
+        "vbr": 1,
+        "vbr_constraint": 1,
+        "fec": 0,
+        "loss_hint": 0,
+        "precision": 24,
+        "maximum_packet_bytes": 160
+      },
+      "loss": "none",
+      "missing_packets": [],
+      "toc_modes": {
+        "CELT": 200
+      },
+      "toc_configs": {
+        "31": 200
+      },
+      "actual_payload_bps": 58110.0,
+      "timing": {
+        "application": "Audio",
+        "lookahead_samples": 312,
+        "complexity": 5,
+        "frames": 200,
+        "encode_p50_ns": 45191,
+        "encode_p95_ns": 58710,
+        "encode_max_ns": 73702
+      },
+      "metrics": {
+        "samples": 191688,
+        "alignment": "declared lookahead only; no gain/phase/lag fitting",
+        "fixed_gain_snr_db": 14.120689869865249,
+        "rms_gain_db": -0.031020325849509294,
+        "peak": 0.6363643407821655,
+        "bands": {
+          "80-1000": {
+            "source_energy_db": -29.0565182794252,
+            "level_error_db": 0.0026883678151005926
+          },
+          "1000-4000": {
+            "source_energy_db": -42.16960076859201,
+            "level_error_db": 0.001364599743243863
+          },
+          "4000-8000": {
+            "source_energy_db": -50.54571574501629,
+            "level_error_db": 0.009955897346305951
+          },
+          "8000-12000": {
+            "source_energy_db": -55.263900259800636,
+            "level_error_db": 0.022032195588583138
+          },
+          "12000-16000": {
+            "source_energy_db": -55.54322159131033,
+            "level_error_db": 0.32816454623101865
+          },
+          "16000-20000": {
+            "source_energy_db": -54.82768570060445,
+            "level_error_db": 0.14645882810875138
+          }
+        }
+      }
+    },
+    {
+      "fixture": "music",
+      "bitrate": 64000,
+      "profile": "browser-lowdelay",
+      "engine": "rust",
+      "settings": {
+        "application": 2051,
+        "complexity": 5,
+        "vbr": 1,
+        "vbr_constraint": 1,
+        "fec": 0,
+        "loss_hint": 0,
+        "precision": 24,
+        "maximum_packet_bytes": 160
+      },
+      "loss": "none",
+      "missing_packets": [],
+      "toc_modes": {
+        "CELT": 200
+      },
+      "toc_configs": {
+        "31": 200
+      },
+      "actual_payload_bps": 58110.0,
+      "timing": {
+        "application": "RestrictedLowDelay",
+        "lookahead_samples": 120,
+        "complexity": 5,
+        "frames": 200,
+        "encode_p50_ns": 44631,
+        "encode_p95_ns": 55251,
+        "encode_max_ns": 117032
+      },
+      "metrics": {
+        "samples": 191880,
+        "alignment": "declared lookahead only; no gain/phase/lag fitting",
+        "fixed_gain_snr_db": 13.79250751322463,
+        "rms_gain_db": -0.04027793240146428,
+        "peak": 0.542471170425415,
+        "bands": {
+          "80-1000": {
+            "source_energy_db": -29.062343826668958,
+            "level_error_db": -0.0036518177325001316
+          },
+          "1000-4000": {
+            "source_energy_db": -42.17542631583577,
+            "level_error_db": -0.002030432630399611
+          },
+          "4000-8000": {
+            "source_energy_db": -50.55154129226005,
+            "level_error_db": -0.0005169690552721228
+          },
+          "8000-12000": {
+            "source_energy_db": -55.26972580704439,
+            "level_error_db": 0.0014991591699316945
+          },
+          "12000-16000": {
+            "source_energy_db": -55.54904713855408,
+            "level_error_db": 0.12363627347977794
+          },
+          "16000-20000": {
+            "source_energy_db": -54.833511247848215,
+            "level_error_db": -0.01872284368965036
+          }
+        }
+      }
+    },
+    {
+      "fixture": "music",
+      "bitrate": 64000,
+      "profile": "mumble",
+      "engine": "libopus",
+      "settings": {
+        "application": 2051,
+        "complexity": 9,
+        "vbr": 0,
+        "vbr_constraint": 1,
+        "fec": 0,
+        "loss_hint": 0,
+        "precision": 16,
+        "maximum_packet_bytes": 160
+      },
+      "loss": "none",
+      "missing_packets": [],
+      "toc_modes": {
+        "CELT": 200
+      },
+      "toc_configs": {
+        "31": 200
+      },
+      "actual_payload_bps": 64000.0,
+      "timing": {
+        "lookahead_samples": 120,
+        "encode_p50_ns": 67066.0,
+        "encode_p95_ns": 81660.49999999999,
+        "encode_max_ns": 104622
+      },
+      "metrics": {
+        "samples": 191880,
+        "alignment": "declared lookahead only; no gain/phase/lag fitting",
+        "fixed_gain_snr_db": 13.795830257369586,
+        "rms_gain_db": -0.040538841392453756,
+        "peak": 0.6086013317108154,
+        "bands": {
+          "80-1000": {
+            "source_energy_db": -29.062343826668958,
+            "level_error_db": -0.008115739521544305
+          },
+          "1000-4000": {
+            "source_energy_db": -42.17542631583577,
+            "level_error_db": -0.0028710011492035117
+          },
+          "4000-8000": {
+            "source_energy_db": -50.55154129226005,
+            "level_error_db": 0.03520329672641803
+          },
+          "8000-12000": {
+            "source_energy_db": -55.26972580704439,
+            "level_error_db": 0.005795892101653216
+          },
+          "12000-16000": {
+            "source_energy_db": -55.54904713855408,
+            "level_error_db": 0.07029289249971542
+          },
+          "16000-20000": {
+            "source_energy_db": -54.833511247848215,
+            "level_error_db": 0.2593803969581587
+          }
+        }
+      }
+    },
+    {
+      "fixture": "transients",
+      "bitrate": 64000,
+      "profile": "native-voip",
+      "engine": "rust",
+      "settings": {
+        "application": 2048,
+        "complexity": 9,
+        "vbr": 1,
+        "vbr_constraint": 1,
+        "fec": 1,
+        "loss_hint": 5,
+        "precision": 24,
+        "maximum_packet_bytes": 160
+      },
+      "loss": "none",
+      "missing_packets": [],
+      "toc_modes": {
+        "HYBRID": 47,
+        "CELT": 153
+      },
+      "toc_configs": {
+        "15": 47,
+        "31": 153
+      },
+      "actual_payload_bps": 15876.0,
+      "timing": {
+        "application": "Voip",
+        "lookahead_samples": 312,
+        "complexity": 9,
+        "frames": 200,
+        "encode_p50_ns": 29311,
+        "encode_p95_ns": 190963,
+        "encode_max_ns": 337685
+      },
+      "metrics": {
+        "samples": 191688,
+        "alignment": "declared lookahead only; no gain/phase/lag fitting",
+        "fixed_gain_snr_db": 9.382075701588247,
+        "rms_gain_db": -0.1180532014754529,
+        "peak": 0.87141352891922,
+        "bands": {
+          "80-1000": {
+            "source_energy_db": -49.76839352990336,
+            "level_error_db": -0.19097196072050987
+          },
+          "1000-4000": {
+            "source_energy_db": -42.93308149387912,
+            "level_error_db": -0.025559792647160788
+          },
+          "4000-8000": {
+            "source_energy_db": -60.8985648186131,
+            "level_error_db": -0.334787219411353
+          },
+          "8000-12000": {
+            "source_energy_db": -61.88051199151144,
+            "level_error_db": 0.011654868847132403
+          },
+          "12000-16000": {
+            "source_energy_db": -61.72890103068084,
+            "level_error_db": -0.03204108254764435
+          },
+          "16000-20000": {
+            "source_energy_db": -61.216283909368954,
+            "level_error_db": 0.11000589814529019
+          }
+        }
+      }
+    },
+    {
+      "fixture": "transients",
+      "bitrate": 64000,
+      "profile": "native-audio",
+      "engine": "rust",
+      "settings": {
+        "application": 2049,
+        "complexity": 9,
+        "vbr": 1,
+        "vbr_constraint": 1,
+        "fec": 1,
+        "loss_hint": 5,
+        "precision": 24,
+        "maximum_packet_bytes": 160
+      },
+      "loss": "none",
+      "missing_packets": [],
+      "toc_modes": {
+        "CELT": 200
+      },
+      "toc_configs": {
+        "31": 200
+      },
+      "actual_payload_bps": 13160.0,
+      "timing": {
+        "application": "Audio",
+        "lookahead_samples": 312,
+        "complexity": 9,
+        "frames": 200,
+        "encode_p50_ns": 29010,
+        "encode_p95_ns": 64681,
+        "encode_max_ns": 85822
+      },
+      "metrics": {
+        "samples": 191688,
+        "alignment": "declared lookahead only; no gain/phase/lag fitting",
+        "fixed_gain_snr_db": 13.53982078851258,
+        "rms_gain_db": -0.04910520347218711,
+        "peak": 0.87141352891922,
+        "bands": {
+          "80-1000": {
+            "source_energy_db": -49.76839352990336,
+            "level_error_db": -0.11552633033646174
+          },
+          "1000-4000": {
+            "source_energy_db": -42.93308149387912,
+            "level_error_db": 0.03925974731772014
+          },
+          "4000-8000": {
+            "source_energy_db": -60.8985648186131,
+            "level_error_db": 0.005233929812514682
+          },
+          "8000-12000": {
+            "source_energy_db": -61.88051199151144,
+            "level_error_db": 0.05822181809255264
+          },
+          "12000-16000": {
+            "source_energy_db": -61.72890103068084,
+            "level_error_db": 0.038745646617434196
+          },
+          "16000-20000": {
+            "source_energy_db": -61.216283909368954,
+            "level_error_db": 0.0010283802889806308
+          }
+        }
+      }
+    },
+    {
+      "fixture": "transients",
+      "bitrate": 64000,
+      "profile": "native-lowdelay",
+      "engine": "rust",
+      "settings": {
+        "application": 2051,
+        "complexity": 9,
+        "vbr": 1,
+        "vbr_constraint": 1,
+        "fec": 1,
+        "loss_hint": 5,
+        "precision": 24,
+        "maximum_packet_bytes": 160
+      },
+      "loss": "none",
+      "missing_packets": [],
+      "toc_modes": {
+        "CELT": 200
+      },
+      "toc_configs": {
+        "31": 200
+      },
+      "actual_payload_bps": 10370.0,
+      "timing": {
+        "application": "RestrictedLowDelay",
+        "lookahead_samples": 120,
+        "complexity": 9,
+        "frames": 200,
+        "encode_p50_ns": 28861,
+        "encode_p95_ns": 63461,
+        "encode_max_ns": 98261
+      },
+      "metrics": {
+        "samples": 191880,
+        "alignment": "declared lookahead only; no gain/phase/lag fitting",
+        "fixed_gain_snr_db": 10.014471744544132,
+        "rms_gain_db": -0.10517540304853232,
+        "peak": 0.9372413158416748,
+        "bands": {
+          "80-1000": {
+            "source_energy_db": -49.77421907714713,
+            "level_error_db": 0.041798087294261155
+          },
+          "1000-4000": {
+            "source_energy_db": -42.938907041122874,
+            "level_error_db": -0.031859195735354895
+          },
+          "4000-8000": {
+            "source_energy_db": -60.90439036585686,
+            "level_error_db": -0.01703440707940616
+          },
+          "8000-12000": {
+            "source_energy_db": -61.88633753875521,
+            "level_error_db": -0.05836837492275586
+          },
+          "12000-16000": {
+            "source_energy_db": -61.7347265779246,
+            "level_error_db": 0.007306982445276681
+          },
+          "16000-20000": {
+            "source_energy_db": -61.22210945661272,
+            "level_error_db": 0.046649481600661354
+          }
+        }
+      }
+    },
+    {
+      "fixture": "transients",
+      "bitrate": 64000,
+      "profile": "browser-voip",
+      "engine": "rust",
+      "settings": {
+        "application": 2048,
+        "complexity": 5,
+        "vbr": 1,
+        "vbr_constraint": 1,
+        "fec": 0,
+        "loss_hint": 0,
+        "precision": 24,
+        "maximum_packet_bytes": 160
+      },
+      "loss": "none",
+      "missing_packets": [],
+      "toc_modes": {
+        "HYBRID": 200
+      },
+      "toc_configs": {
+        "15": 200
+      },
+      "actual_payload_bps": 34698.0,
+      "timing": {
+        "application": "Voip",
+        "lookahead_samples": 312,
+        "complexity": 5,
+        "frames": 200,
+        "encode_p50_ns": 95091,
+        "encode_p95_ns": 122892,
+        "encode_max_ns": 167033
+      },
+      "metrics": {
+        "samples": 191688,
+        "alignment": "declared lookahead only; no gain/phase/lag fitting",
+        "fixed_gain_snr_db": 4.765357216436793,
+        "rms_gain_db": -0.6866420615933513,
+        "peak": 0.8727388978004456,
+        "bands": {
+          "80-1000": {
+            "source_energy_db": -49.76839352990336,
+            "level_error_db": -0.20486955600581833
+          },
+          "1000-4000": {
+            "source_energy_db": -42.93308149387912,
+            "level_error_db": -0.6420529104663463
+          },
+          "4000-8000": {
+            "source_energy_db": -60.8985648186131,
+            "level_error_db": -1.920157752384113
+          },
+          "8000-12000": {
+            "source_energy_db": -61.88051199151144,
+            "level_error_db": -0.007098534319297854
+          },
+          "12000-16000": {
+            "source_energy_db": -61.72890103068084,
+            "level_error_db": 0.07056117766605917
+          },
+          "16000-20000": {
+            "source_energy_db": -61.216283909368954,
+            "level_error_db": -0.025723896407809914
+          }
+        }
+      }
+    },
+    {
+      "fixture": "transients",
+      "bitrate": 64000,
+      "profile": "browser-audio",
+      "engine": "rust",
+      "settings": {
+        "application": 2049,
+        "complexity": 5,
+        "vbr": 1,
+        "vbr_constraint": 1,
+        "fec": 0,
+        "loss_hint": 0,
+        "precision": 24,
+        "maximum_packet_bytes": 160
+      },
+      "loss": "none",
+      "missing_packets": [],
+      "toc_modes": {
+        "CELT": 200
+      },
+      "toc_configs": {
+        "31": 200
+      },
+      "actual_payload_bps": 13160.0,
+      "timing": {
+        "application": "Audio",
+        "lookahead_samples": 312,
+        "complexity": 5,
+        "frames": 200,
+        "encode_p50_ns": 25270,
+        "encode_p95_ns": 52741,
+        "encode_max_ns": 68361
+      },
+      "metrics": {
+        "samples": 191688,
+        "alignment": "declared lookahead only; no gain/phase/lag fitting",
+        "fixed_gain_snr_db": 13.769476564300652,
+        "rms_gain_db": -0.11511006058835069,
+        "peak": 0.8565020561218262,
+        "bands": {
+          "80-1000": {
+            "source_energy_db": -49.76839352990336,
+            "level_error_db": -0.040949872362463544
+          },
+          "1000-4000": {
+            "source_energy_db": -42.93308149387912,
+            "level_error_db": -0.040843263277226566
+          },
+          "4000-8000": {
+            "source_energy_db": -60.8985648186131,
+            "level_error_db": 0.0048789177134113655
+          },
+          "8000-12000": {
+            "source_energy_db": -61.88051199151144,
+            "level_error_db": 0.058184219833774586
+          },
+          "12000-16000": {
+            "source_energy_db": -61.72890103068084,
+            "level_error_db": 0.04763795688393893
+          },
+          "16000-20000": {
+            "source_energy_db": -61.216283909368954,
+            "level_error_db": -0.0017688166744398675
+          }
+        }
+      }
+    },
+    {
+      "fixture": "transients",
+      "bitrate": 64000,
+      "profile": "browser-lowdelay",
+      "engine": "rust",
+      "settings": {
+        "application": 2051,
+        "complexity": 5,
+        "vbr": 1,
+        "vbr_constraint": 1,
+        "fec": 0,
+        "loss_hint": 0,
+        "precision": 24,
+        "maximum_packet_bytes": 160
+      },
+      "loss": "none",
+      "missing_packets": [],
+      "toc_modes": {
+        "CELT": 200
+      },
+      "toc_configs": {
+        "31": 200
+      },
+      "actual_payload_bps": 10370.0,
+      "timing": {
+        "application": "RestrictedLowDelay",
+        "lookahead_samples": 120,
+        "complexity": 5,
+        "frames": 200,
+        "encode_p50_ns": 25080,
+        "encode_p95_ns": 52901,
+        "encode_max_ns": 80411
+      },
+      "metrics": {
+        "samples": 191880,
+        "alignment": "declared lookahead only; no gain/phase/lag fitting",
+        "fixed_gain_snr_db": 10.01447173921818,
+        "rms_gain_db": -0.10517540449035682,
+        "peak": 0.9372413158416748,
+        "bands": {
+          "80-1000": {
+            "source_energy_db": -49.77421907714713,
+            "level_error_db": 0.04179808748858777
+          },
+          "1000-4000": {
+            "source_energy_db": -42.938907041122874,
+            "level_error_db": -0.031859195253777894
+          },
+          "4000-8000": {
+            "source_energy_db": -60.90439036585686,
+            "level_error_db": -0.01703451605505568
+          },
+          "8000-12000": {
+            "source_energy_db": -61.88633753875521,
+            "level_error_db": -0.058368363761452095
+          },
+          "12000-16000": {
+            "source_energy_db": -61.7347265779246,
+            "level_error_db": 0.007306982083244219
+          },
+          "16000-20000": {
+            "source_energy_db": -61.22210945661272,
+            "level_error_db": 0.0466494813265634
+          }
+        }
+      }
+    },
+    {
+      "fixture": "transients",
+      "bitrate": 64000,
+      "profile": "mumble",
+      "engine": "libopus",
+      "settings": {
+        "application": 2051,
+        "complexity": 9,
+        "vbr": 0,
+        "vbr_constraint": 1,
+        "fec": 0,
+        "loss_hint": 0,
+        "precision": 16,
+        "maximum_packet_bytes": 160
+      },
+      "loss": "none",
+      "missing_packets": [],
+      "toc_modes": {
+        "CELT": 200
+      },
+      "toc_configs": {
+        "31": 200
+      },
+      "actual_payload_bps": 64000.0,
+      "timing": {
+        "lookahead_samples": 120,
+        "encode_p50_ns": 55646.0,
+        "encode_p95_ns": 71464.49999999999,
+        "encode_max_ns": 84992
+      },
+      "metrics": {
+        "samples": 191880,
+        "alignment": "declared lookahead only; no gain/phase/lag fitting",
+        "fixed_gain_snr_db": 14.073463785376795,
+        "rms_gain_db": -0.023579436969132582,
+        "peak": 0.9021701812744141,
+        "bands": {
+          "80-1000": {
+            "source_energy_db": -49.77421907714713,
+            "level_error_db": -0.041287198609319856
+          },
+          "1000-4000": {
+            "source_energy_db": -42.938907041122874,
+            "level_error_db": 0.06693167521656895
+          },
+          "4000-8000": {
+            "source_energy_db": -60.90439036585686,
+            "level_error_db": -0.025127765833764627
+          },
+          "8000-12000": {
+            "source_energy_db": -61.88633753875521,
+            "level_error_db": -0.07008118735254275
+          },
+          "12000-16000": {
+            "source_energy_db": -61.7347265779246,
+            "level_error_db": 0.005958808105770863
+          },
+          "16000-20000": {
+            "source_energy_db": -61.22210945661272,
+            "level_error_db": -0.01783765901686846
+          }
+        }
+      }
+    },
+    {
+      "fixture": "highband",
+      "bitrate": 64000,
+      "profile": "native-voip",
+      "engine": "rust",
+      "settings": {
+        "application": 2048,
+        "complexity": 9,
+        "vbr": 1,
+        "vbr_constraint": 1,
+        "fec": 1,
+        "loss_hint": 5,
+        "precision": 24,
+        "maximum_packet_bytes": 160
+      },
+      "loss": "none",
+      "missing_packets": [],
+      "toc_modes": {
+        "HYBRID": 29,
+        "CELT": 171
+      },
+      "toc_configs": {
+        "15": 29,
+        "31": 171
+      },
+      "actual_payload_bps": 44766.0,
+      "timing": {
+        "application": "Voip",
+        "lookahead_samples": 312,
+        "complexity": 9,
+        "frames": 200,
+        "encode_p50_ns": 54501,
+        "encode_p95_ns": 230454,
+        "encode_max_ns": 333315
+      },
+      "metrics": {
+        "samples": 191688,
+        "alignment": "declared lookahead only; no gain/phase/lag fitting",
+        "fixed_gain_snr_db": 15.555152782677368,
+        "rms_gain_db": -0.09836252652616402,
+        "peak": 0.2875242233276367,
+        "bands": {
+          "80-1000": {
+            "source_energy_db": -34.68783185727989,
+            "level_error_db": 0.0064561491759459605
+          },
+          "1000-4000": {
+            "source_energy_db": -42.80076513848595,
+            "level_error_db": -0.03272985725618921
+          },
+          "4000-8000": {
+            "source_energy_db": -39.22778745893822,
+            "level_error_db": 0.06834924329548957
+          },
+          "8000-12000": {
+            "source_energy_db": -39.22778944389174,
+            "level_error_db": 0.016892075429001903
+          },
+          "12000-16000": {
+            "source_energy_db": -39.27858436745952,
+            "level_error_db": -0.10861976140106194
+          },
+          "16000-20000": {
+            "source_energy_db": -36.21748589582708,
+            "level_error_db": -0.2871025408619485
+          }
+        }
+      }
+    },
+    {
+      "fixture": "highband",
+      "bitrate": 64000,
+      "profile": "native-audio",
+      "engine": "rust",
+      "settings": {
+        "application": 2049,
+        "complexity": 9,
+        "vbr": 1,
+        "vbr_constraint": 1,
+        "fec": 1,
+        "loss_hint": 5,
+        "precision": 24,
+        "maximum_packet_bytes": 160
+      },
+      "loss": "none",
+      "missing_packets": [],
+      "toc_modes": {
+        "CELT": 200
+      },
+      "toc_configs": {
+        "31": 200
+      },
+      "actual_payload_bps": 45710.0,
+      "timing": {
+        "application": "Audio",
+        "lookahead_samples": 312,
+        "complexity": 9,
+        "frames": 200,
+        "encode_p50_ns": 53561,
+        "encode_p95_ns": 68261,
+        "encode_max_ns": 131222
+      },
+      "metrics": {
+        "samples": 191688,
+        "alignment": "declared lookahead only; no gain/phase/lag fitting",
+        "fixed_gain_snr_db": 23.313318548256415,
+        "rms_gain_db": -0.09660846319708993,
+        "peak": 0.2875242233276367,
+        "bands": {
+          "80-1000": {
+            "source_energy_db": -34.68783185727989,
+            "level_error_db": 0.0038907722306670937
+          },
+          "1000-4000": {
+            "source_energy_db": -42.80076513848595,
+            "level_error_db": 0.0037347005119769327
+          },
+          "4000-8000": {
+            "source_energy_db": -39.22778745893822,
+            "level_error_db": 0.0683487425140197
+          },
+          "8000-12000": {
+            "source_energy_db": -39.22778944389174,
+            "level_error_db": 0.016892064105355785
+          },
+          "12000-16000": {
+            "source_energy_db": -39.27858436745952,
+            "level_error_db": -0.10861976810393094
+          },
+          "16000-20000": {
+            "source_energy_db": -36.21748589582708,
+            "level_error_db": -0.2871025418909822
+          }
+        }
+      }
+    },
+    {
+      "fixture": "highband",
+      "bitrate": 64000,
+      "profile": "native-lowdelay",
+      "engine": "rust",
+      "settings": {
+        "application": 2051,
+        "complexity": 9,
+        "vbr": 1,
+        "vbr_constraint": 1,
+        "fec": 1,
+        "loss_hint": 5,
+        "precision": 24,
+        "maximum_packet_bytes": 160
+      },
+      "loss": "none",
+      "missing_packets": [],
+      "toc_modes": {
+        "CELT": 200
+      },
+      "toc_configs": {
+        "31": 200
+      },
+      "actual_payload_bps": 45710.0,
+      "timing": {
+        "application": "RestrictedLowDelay",
+        "lookahead_samples": 120,
+        "complexity": 9,
+        "frames": 200,
+        "encode_p50_ns": 54511,
+        "encode_p95_ns": 75892,
+        "encode_max_ns": 94301
+      },
+      "metrics": {
+        "samples": 191880,
+        "alignment": "declared lookahead only; no gain/phase/lag fitting",
+        "fixed_gain_snr_db": 23.253656760076453,
+        "rms_gain_db": -0.06408996028563843,
+        "peak": 0.2982812523841858,
+        "bands": {
+          "80-1000": {
+            "source_energy_db": -34.693657404523655,
+            "level_error_db": 0.009445021630991644
+          },
+          "1000-4000": {
+            "source_energy_db": -42.80659068572972,
+            "level_error_db": 0.00973628998363505
+          },
+          "4000-8000": {
+            "source_energy_db": -39.233613006181976,
+            "level_error_db": 0.06956919338218866
+          },
+          "8000-12000": {
+            "source_energy_db": -39.2336149911355,
+            "level_error_db": 0.024085282077469034
+          },
+          "12000-16000": {
+            "source_energy_db": -39.28440991470328,
+            "level_error_db": -0.03762748444653488
+          },
+          "16000-20000": {
+            "source_energy_db": -36.22331144307084,
+            "level_error_db": -0.23002937977433371
+          }
+        }
+      }
+    },
+    {
+      "fixture": "highband",
+      "bitrate": 64000,
+      "profile": "browser-voip",
+      "engine": "rust",
+      "settings": {
+        "application": 2048,
+        "complexity": 5,
+        "vbr": 1,
+        "vbr_constraint": 1,
+        "fec": 0,
+        "loss_hint": 0,
+        "precision": 24,
+        "maximum_packet_bytes": 160
+      },
+      "loss": "none",
+      "missing_packets": [],
+      "toc_modes": {
+        "HYBRID": 200
+      },
+      "toc_configs": {
+        "15": 200
+      },
+      "actual_payload_bps": 44956.0,
+      "timing": {
+        "application": "Voip",
+        "lookahead_samples": 312,
+        "complexity": 5,
+        "frames": 200,
+        "encode_p50_ns": 106931,
+        "encode_p95_ns": 131982,
+        "encode_max_ns": 239584
+      },
+      "metrics": {
+        "samples": 191688,
+        "alignment": "declared lookahead only; no gain/phase/lag fitting",
+        "fixed_gain_snr_db": 8.6424422815794,
+        "rms_gain_db": -0.09966614102650406,
+        "peak": 0.2873111367225647,
+        "bands": {
+          "80-1000": {
+            "source_energy_db": -34.68783185727989,
+            "level_error_db": -0.009020932364219
+          },
+          "1000-4000": {
+            "source_energy_db": -42.80076513848595,
+            "level_error_db": -0.008357483197260956
+          },
+          "4000-8000": {
+            "source_energy_db": -39.22778745893822,
+            "level_error_db": 0.03148386403952497
+          },
+          "8000-12000": {
+            "source_energy_db": -39.22778944389174,
+            "level_error_db": 0.012828948958823121
+          },
+          "12000-16000": {
+            "source_energy_db": -39.27858436745952,
+            "level_error_db": -0.06938670383128673
+          },
+          "16000-20000": {
+            "source_energy_db": -36.21748589582708,
+            "level_error_db": -0.2884066538810189
+          }
+        }
+      }
+    },
+    {
+      "fixture": "highband",
+      "bitrate": 64000,
+      "profile": "browser-audio",
+      "engine": "rust",
+      "settings": {
+        "application": 2049,
+        "complexity": 5,
+        "vbr": 1,
+        "vbr_constraint": 1,
+        "fec": 0,
+        "loss_hint": 0,
+        "precision": 24,
+        "maximum_packet_bytes": 160
+      },
+      "loss": "none",
+      "missing_packets": [],
+      "toc_modes": {
+        "CELT": 200
+      },
+      "toc_configs": {
+        "31": 200
+      },
+      "actual_payload_bps": 45710.0,
+      "timing": {
+        "application": "Audio",
+        "lookahead_samples": 312,
+        "complexity": 5,
+        "frames": 200,
+        "encode_p50_ns": 42500,
+        "encode_p95_ns": 55931,
+        "encode_max_ns": 80481
+      },
+      "metrics": {
+        "samples": 191688,
+        "alignment": "declared lookahead only; no gain/phase/lag fitting",
+        "fixed_gain_snr_db": 24.42290559105831,
+        "rms_gain_db": -0.07608547451631233,
+        "peak": 0.2984156608581543,
+        "bands": {
+          "80-1000": {
+            "source_energy_db": -34.68783185727989,
+            "level_error_db": 0.006642270535346136
+          },
+          "1000-4000": {
+            "source_energy_db": -42.80076513848595,
+            "level_error_db": 0.007099832896610062
+          },
+          "4000-8000": {
+            "source_energy_db": -39.22778745893822,
+            "level_error_db": 0.13370152169585206
+          },
+          "8000-12000": {
+            "source_energy_db": -39.22778944389174,
+            "level_error_db": -0.01025851292814883
+          },
+          "12000-16000": {
+            "source_energy_db": -39.27858436745952,
+            "level_error_db": -0.10892232850374563
+          },
+          "16000-20000": {
+            "source_energy_db": -36.21748589582708,
+            "level_error_db": -0.24546446049579687
+          }
+        }
+      }
+    },
+    {
+      "fixture": "highband",
+      "bitrate": 64000,
+      "profile": "browser-lowdelay",
+      "engine": "rust",
+      "settings": {
+        "application": 2051,
+        "complexity": 5,
+        "vbr": 1,
+        "vbr_constraint": 1,
+        "fec": 0,
+        "loss_hint": 0,
+        "precision": 24,
+        "maximum_packet_bytes": 160
+      },
+      "loss": "none",
+      "missing_packets": [],
+      "toc_modes": {
+        "CELT": 200
+      },
+      "toc_configs": {
+        "31": 200
+      },
+      "actual_payload_bps": 45710.0,
+      "timing": {
+        "application": "RestrictedLowDelay",
+        "lookahead_samples": 120,
+        "complexity": 5,
+        "frames": 200,
+        "encode_p50_ns": 43691,
+        "encode_p95_ns": 64461,
+        "encode_max_ns": 117322
+      },
+      "metrics": {
+        "samples": 191880,
+        "alignment": "declared lookahead only; no gain/phase/lag fitting",
+        "fixed_gain_snr_db": 24.44005709655068,
+        "rms_gain_db": -0.0761977102703586,
+        "peak": 0.2861921191215515,
+        "bands": {
+          "80-1000": {
+            "source_energy_db": -34.693657404523655,
+            "level_error_db": -0.00013523269448732618
+          },
+          "1000-4000": {
+            "source_energy_db": -42.80659068572972,
+            "level_error_db": -2.3884551835411006e-05
+          },
+          "4000-8000": {
+            "source_energy_db": -39.233613006181976,
+            "level_error_db": 0.12659862451710924
+          },
+          "8000-12000": {
+            "source_energy_db": -39.2336149911355,
+            "level_error_db": 0.0005313582115207281
+          },
+          "12000-16000": {
+            "source_energy_db": -39.28440991470328,
+            "level_error_db": -0.09210148471755764
+          },
+          "16000-20000": {
+            "source_energy_db": -36.22331144307084,
+            "level_error_db": -0.2526968979496353
+          }
+        }
+      }
+    },
+    {
+      "fixture": "highband",
+      "bitrate": 64000,
+      "profile": "mumble",
+      "engine": "libopus",
+      "settings": {
+        "application": 2051,
+        "complexity": 9,
+        "vbr": 0,
+        "vbr_constraint": 1,
+        "fec": 0,
+        "loss_hint": 0,
+        "precision": 16,
+        "maximum_packet_bytes": 160
+      },
+      "loss": "none",
+      "missing_packets": [],
+      "toc_modes": {
+        "CELT": 200
+      },
+      "toc_configs": {
+        "31": 200
+      },
+      "actual_payload_bps": 64000.0,
+      "timing": {
+        "lookahead_samples": 120,
+        "encode_p50_ns": 46655.5,
+        "encode_p95_ns": 67329.04999999999,
+        "encode_max_ns": 102262
+      },
+      "metrics": {
+        "samples": 191880,
+        "alignment": "declared lookahead only; no gain/phase/lag fitting",
+        "fixed_gain_snr_db": 23.543241633470902,
+        "rms_gain_db": -0.007267050197044499,
+        "peak": 0.2979384660720825,
+        "bands": {
+          "80-1000": {
+            "source_energy_db": -34.693657404523655,
+            "level_error_db": -0.0023716254689948664
+          },
+          "1000-4000": {
+            "source_energy_db": -42.80659068572972,
+            "level_error_db": -0.0025054793977718837
+          },
+          "4000-8000": {
+            "source_energy_db": -39.233613006181976,
+            "level_error_db": -0.01761638010546451
+          },
+          "8000-12000": {
+            "source_energy_db": -39.2336149911355,
+            "level_error_db": 0.001869090571368681
+          },
+          "12000-16000": {
+            "source_energy_db": -39.28440991470328,
+            "level_error_db": 0.0012901763402218126
+          },
+          "16000-20000": {
+            "source_energy_db": -36.22331144307084,
+            "level_error_db": -0.01338720131777536
+          }
+        }
+      }
+    },
+    {
+      "fixture": "speech-like",
+      "bitrate": 128000,
+      "profile": "native-voip",
+      "engine": "rust",
+      "settings": {
+        "application": 2048,
+        "complexity": 9,
+        "vbr": 1,
+        "vbr_constraint": 1,
+        "fec": 1,
+        "loss_hint": 5,
+        "precision": 24,
+        "maximum_packet_bytes": 320
+      },
+      "loss": "none",
+      "missing_packets": [],
+      "toc_modes": {
+        "CELT": 200
+      },
+      "toc_configs": {
+        "31": 200
+      },
+      "actual_payload_bps": 116030.0,
+      "timing": {
+        "application": "Voip",
+        "lookahead_samples": 312,
+        "complexity": 9,
+        "frames": 200,
+        "encode_p50_ns": 71631,
+        "encode_p95_ns": 80421,
+        "encode_max_ns": 100142
+      },
+      "metrics": {
+        "samples": 191688,
+        "alignment": "declared lookahead only; no gain/phase/lag fitting",
+        "fixed_gain_snr_db": 25.560686655427276,
+        "rms_gain_db": -0.0012129233239204134,
+        "peak": 0.343557745218277,
+        "bands": {
+          "80-1000": {
+            "source_energy_db": -34.91356261862582,
+            "level_error_db": 0.0022022741818839707
+          },
+          "1000-4000": {
+            "source_energy_db": -46.78249321327776,
+            "level_error_db": -0.014811756825724763
+          },
+          "4000-8000": {
+            "source_energy_db": -55.34869986198902,
+            "level_error_db": -0.009610990216848319
+          },
+          "8000-12000": {
+            "source_energy_db": -54.93586268281515,
+            "level_error_db": -0.015266995274545404
+          },
+          "12000-16000": {
+            "source_energy_db": -56.01058551362375,
+            "level_error_db": 0.008311864284522184
+          },
+          "16000-20000": {
+            "source_energy_db": -97.13700144599171,
+            "level_error_db": -0.23157266351268332
+          }
+        }
+      }
+    },
+    {
+      "fixture": "speech-like",
+      "bitrate": 128000,
+      "profile": "native-audio",
+      "engine": "rust",
+      "settings": {
+        "application": 2049,
+        "complexity": 9,
+        "vbr": 1,
+        "vbr_constraint": 1,
+        "fec": 1,
+        "loss_hint": 5,
+        "precision": 24,
+        "maximum_packet_bytes": 320
+      },
+      "loss": "none",
+      "missing_packets": [],
+      "toc_modes": {
+        "CELT": 200
+      },
+      "toc_configs": {
+        "31": 200
+      },
+      "actual_payload_bps": 116030.0,
+      "timing": {
+        "application": "Audio",
+        "lookahead_samples": 312,
+        "complexity": 9,
+        "frames": 200,
+        "encode_p50_ns": 71861,
+        "encode_p95_ns": 87141,
+        "encode_max_ns": 97821
+      },
+      "metrics": {
+        "samples": 191688,
+        "alignment": "declared lookahead only; no gain/phase/lag fitting",
+        "fixed_gain_snr_db": 25.560686655427276,
+        "rms_gain_db": -0.0012129233239204134,
+        "peak": 0.343557745218277,
+        "bands": {
+          "80-1000": {
+            "source_energy_db": -34.91356261862582,
+            "level_error_db": 0.0022022741818839707
+          },
+          "1000-4000": {
+            "source_energy_db": -46.78249321327776,
+            "level_error_db": -0.014811756825724763
+          },
+          "4000-8000": {
+            "source_energy_db": -55.34869986198902,
+            "level_error_db": -0.009610990216848319
+          },
+          "8000-12000": {
+            "source_energy_db": -54.93586268281515,
+            "level_error_db": -0.015266995274545404
+          },
+          "12000-16000": {
+            "source_energy_db": -56.01058551362375,
+            "level_error_db": 0.008311864284522184
+          },
+          "16000-20000": {
+            "source_energy_db": -97.13700144599171,
+            "level_error_db": -0.23157266351268332
+          }
+        }
+      }
+    },
+    {
+      "fixture": "speech-like",
+      "bitrate": 128000,
+      "profile": "native-lowdelay",
+      "engine": "rust",
+      "settings": {
+        "application": 2051,
+        "complexity": 9,
+        "vbr": 1,
+        "vbr_constraint": 1,
+        "fec": 1,
+        "loss_hint": 5,
+        "precision": 24,
+        "maximum_packet_bytes": 320
+      },
+      "loss": "none",
+      "missing_packets": [],
+      "toc_modes": {
+        "CELT": 200
+      },
+      "toc_configs": {
+        "31": 200
+      },
+      "actual_payload_bps": 116030.0,
+      "timing": {
+        "application": "RestrictedLowDelay",
+        "lookahead_samples": 120,
+        "complexity": 9,
+        "frames": 200,
+        "encode_p50_ns": 72171,
+        "encode_p95_ns": 99752,
+        "encode_max_ns": 122612
+      },
+      "metrics": {
+        "samples": 191880,
+        "alignment": "declared lookahead only; no gain/phase/lag fitting",
+        "fixed_gain_snr_db": 25.373637593289548,
+        "rms_gain_db": 0.0023671457347438697,
+        "peak": 0.3490247130393982,
+        "bands": {
+          "80-1000": {
+            "source_energy_db": -34.91938816586958,
+            "level_error_db": 0.0021934888143579838
+          },
+          "1000-4000": {
+            "source_energy_db": -46.78831876052151,
+            "level_error_db": 0.003330362256563451
+          },
+          "4000-8000": {
+            "source_energy_db": -55.35452540923278,
+            "level_error_db": -0.014786835761544107
+          },
+          "8000-12000": {
+            "source_energy_db": -54.9416882300589,
+            "level_error_db": 0.0025069725223251654
+          },
+          "12000-16000": {
+            "source_energy_db": -56.01641106086752,
+            "level_error_db": 0.020882610468035415
+          },
+          "16000-20000": {
+            "source_energy_db": -97.14282699323546,
+            "level_error_db": 0.028011752952922745
+          }
+        }
+      }
+    },
+    {
+      "fixture": "speech-like",
+      "bitrate": 128000,
+      "profile": "browser-voip",
+      "engine": "rust",
+      "settings": {
+        "application": 2048,
+        "complexity": 5,
+        "vbr": 1,
+        "vbr_constraint": 1,
+        "fec": 0,
+        "loss_hint": 0,
+        "precision": 24,
+        "maximum_packet_bytes": 320
+      },
+      "loss": "none",
+      "missing_packets": [],
+      "toc_modes": {
+        "CELT": 200
+      },
+      "toc_configs": {
+        "31": 200
+      },
+      "actual_payload_bps": 116030.0,
+      "timing": {
+        "application": "Voip",
+        "lookahead_samples": 312,
+        "complexity": 5,
+        "frames": 200,
+        "encode_p50_ns": 58761,
+        "encode_p95_ns": 80381,
+        "encode_max_ns": 146643
+      },
+      "metrics": {
+        "samples": 191688,
+        "alignment": "declared lookahead only; no gain/phase/lag fitting",
+        "fixed_gain_snr_db": 25.813794186938864,
+        "rms_gain_db": 0.0009846319029944966,
+        "peak": 0.3403988480567932,
+        "bands": {
+          "80-1000": {
+            "source_energy_db": -34.91356261862582,
+            "level_error_db": 4.25031344478635e-05
+          },
+          "1000-4000": {
+            "source_energy_db": -46.78249321327776,
+            "level_error_db": 0.004851175948478573
+          },
+          "4000-8000": {
+            "source_energy_db": -55.34869986198902,
+            "level_error_db": 0.019613746695699017
+          },
+          "8000-12000": {
+            "source_energy_db": -54.93586268281515,
+            "level_error_db": -0.012124233276572121
+          },
+          "12000-16000": {
+            "source_energy_db": -56.01058551362375,
+            "level_error_db": 0.00013647118965167272
+          },
+          "16000-20000": {
+            "source_energy_db": -97.13700144599171,
+            "level_error_db": -0.22098342005209254
+          }
+        }
+      }
+    },
+    {
+      "fixture": "speech-like",
+      "bitrate": 128000,
+      "profile": "browser-audio",
+      "engine": "rust",
+      "settings": {
+        "application": 2049,
+        "complexity": 5,
+        "vbr": 1,
+        "vbr_constraint": 1,
+        "fec": 0,
+        "loss_hint": 0,
+        "precision": 24,
+        "maximum_packet_bytes": 320
+      },
+      "loss": "none",
+      "missing_packets": [],
+      "toc_modes": {
+        "CELT": 200
+      },
+      "toc_configs": {
+        "31": 200
+      },
+      "actual_payload_bps": 116030.0,
+      "timing": {
+        "application": "Audio",
+        "lookahead_samples": 312,
+        "complexity": 5,
+        "frames": 200,
+        "encode_p50_ns": 59281,
+        "encode_p95_ns": 81041,
+        "encode_max_ns": 106571
+      },
+      "metrics": {
+        "samples": 191688,
+        "alignment": "declared lookahead only; no gain/phase/lag fitting",
+        "fixed_gain_snr_db": 25.813794186938864,
+        "rms_gain_db": 0.0009846319029944966,
+        "peak": 0.3403988480567932,
+        "bands": {
+          "80-1000": {
+            "source_energy_db": -34.91356261862582,
+            "level_error_db": 4.25031344478635e-05
+          },
+          "1000-4000": {
+            "source_energy_db": -46.78249321327776,
+            "level_error_db": 0.004851175948478573
+          },
+          "4000-8000": {
+            "source_energy_db": -55.34869986198902,
+            "level_error_db": 0.019613746695699017
+          },
+          "8000-12000": {
+            "source_energy_db": -54.93586268281515,
+            "level_error_db": -0.012124233276572121
+          },
+          "12000-16000": {
+            "source_energy_db": -56.01058551362375,
+            "level_error_db": 0.00013647118965167272
+          },
+          "16000-20000": {
+            "source_energy_db": -97.13700144599171,
+            "level_error_db": -0.22098342005209254
+          }
+        }
+      }
+    },
+    {
+      "fixture": "speech-like",
+      "bitrate": 128000,
+      "profile": "browser-lowdelay",
+      "engine": "rust",
+      "settings": {
+        "application": 2051,
+        "complexity": 5,
+        "vbr": 1,
+        "vbr_constraint": 1,
+        "fec": 0,
+        "loss_hint": 0,
+        "precision": 24,
+        "maximum_packet_bytes": 320
+      },
+      "loss": "none",
+      "missing_packets": [],
+      "toc_modes": {
+        "CELT": 200
+      },
+      "toc_configs": {
+        "31": 200
+      },
+      "actual_payload_bps": 116030.0,
+      "timing": {
+        "application": "RestrictedLowDelay",
+        "lookahead_samples": 120,
+        "complexity": 5,
+        "frames": 200,
+        "encode_p50_ns": 58621,
+        "encode_p95_ns": 67831,
+        "encode_max_ns": 92591
+      },
+      "metrics": {
+        "samples": 191880,
+        "alignment": "declared lookahead only; no gain/phase/lag fitting",
+        "fixed_gain_snr_db": 23.74839436486051,
+        "rms_gain_db": -0.03663439957378796,
+        "peak": 0.33594053983688354,
+        "bands": {
+          "80-1000": {
+            "source_energy_db": -34.91938816586958,
+            "level_error_db": -0.05043927719467257
+          },
+          "1000-4000": {
+            "source_energy_db": -46.78831876052151,
+            "level_error_db": 0.003921386606718226
+          },
+          "4000-8000": {
+            "source_energy_db": -55.35452540923278,
+            "level_error_db": 0.01626450361565514
+          },
+          "8000-12000": {
+            "source_energy_db": -54.9416882300589,
+            "level_error_db": -0.010602899307625565
+          },
+          "12000-16000": {
+            "source_energy_db": -56.01641106086752,
+            "level_error_db": 0.027405594339065364
+          },
+          "16000-20000": {
+            "source_energy_db": -97.14282699323546,
+            "level_error_db": 0.0599092436711434
+          }
+        }
+      }
+    },
+    {
+      "fixture": "speech-like",
+      "bitrate": 128000,
+      "profile": "mumble",
+      "engine": "libopus",
+      "settings": {
+        "application": 2051,
+        "complexity": 9,
+        "vbr": 0,
+        "vbr_constraint": 1,
+        "fec": 0,
+        "loss_hint": 0,
+        "precision": 16,
+        "maximum_packet_bytes": 320
+      },
+      "loss": "none",
+      "missing_packets": [],
+      "toc_modes": {
+        "CELT": 200
+      },
+      "toc_configs": {
+        "31": 200
+      },
+      "actual_payload_bps": 128000.0,
+      "timing": {
+        "lookahead_samples": 120,
+        "encode_p50_ns": 75896.5,
+        "encode_p95_ns": 92917.95,
+        "encode_max_ns": 561309
+      },
+      "metrics": {
+        "samples": 191880,
+        "alignment": "declared lookahead only; no gain/phase/lag fitting",
+        "fixed_gain_snr_db": 25.966713713645383,
+        "rms_gain_db": -0.0007134393217122462,
+        "peak": 0.34028083086013794,
+        "bands": {
+          "80-1000": {
+            "source_energy_db": -34.91938816586958,
+            "level_error_db": 9.112340323939503e-05
+          },
+          "1000-4000": {
+            "source_energy_db": -46.78831876052151,
+            "level_error_db": -0.003844120303722542
+          },
+          "4000-8000": {
+            "source_energy_db": -55.35452540923278,
+            "level_error_db": -0.01760489687699145
+          },
+          "8000-12000": {
+            "source_energy_db": -54.9416882300589,
+            "level_error_db": 0.007375975923366871
+          },
+          "12000-16000": {
+            "source_energy_db": -56.01641106086752,
+            "level_error_db": 0.0038628246047207704
+          },
+          "16000-20000": {
+            "source_energy_db": -97.14282699323546,
+            "level_error_db": 0.04795198132082565
+          }
+        }
+      }
+    },
+    {
+      "fixture": "music",
+      "bitrate": 128000,
+      "profile": "native-voip",
+      "engine": "rust",
+      "settings": {
+        "application": 2048,
+        "complexity": 9,
+        "vbr": 1,
+        "vbr_constraint": 1,
+        "fec": 1,
+        "loss_hint": 5,
+        "precision": 24,
+        "maximum_packet_bytes": 320
+      },
+      "loss": "none",
+      "missing_packets": [],
+      "toc_modes": {
+        "CELT": 200
+      },
+      "toc_configs": {
+        "31": 200
+      },
+      "actual_payload_bps": 116030.0,
+      "timing": {
+        "application": "Voip",
+        "lookahead_samples": 312,
+        "complexity": 9,
+        "frames": 200,
+        "encode_p50_ns": 72752,
+        "encode_p95_ns": 99281,
+        "encode_max_ns": 118102
+      },
+      "metrics": {
+        "samples": 191688,
+        "alignment": "declared lookahead only; no gain/phase/lag fitting",
+        "fixed_gain_snr_db": 19.2708657138531,
+        "rms_gain_db": -0.03823062238130195,
+        "peak": 0.5813820958137512,
+        "bands": {
+          "80-1000": {
+            "source_energy_db": -29.0565182794252,
+            "level_error_db": -0.0008300512532256885
+          },
+          "1000-4000": {
+            "source_energy_db": -42.16960076859201,
+            "level_error_db": 0.004470154142721115
+          },
+          "4000-8000": {
+            "source_energy_db": -50.54571574501629,
+            "level_error_db": 0.007961939726682703
+          },
+          "8000-12000": {
+            "source_energy_db": -55.263900259800636,
+            "level_error_db": -0.001373951942927938
+          },
+          "12000-16000": {
+            "source_energy_db": -55.54322159131033,
+            "level_error_db": 0.006579115577537207
+          },
+          "16000-20000": {
+            "source_energy_db": -54.82768570060445,
+            "level_error_db": -0.039258841991749505
+          }
+        }
+      }
+    },
+    {
+      "fixture": "music",
+      "bitrate": 128000,
+      "profile": "native-audio",
+      "engine": "rust",
+      "settings": {
+        "application": 2049,
+        "complexity": 9,
+        "vbr": 1,
+        "vbr_constraint": 1,
+        "fec": 1,
+        "loss_hint": 5,
+        "precision": 24,
+        "maximum_packet_bytes": 320
+      },
+      "loss": "none",
+      "missing_packets": [],
+      "toc_modes": {
+        "CELT": 200
+      },
+      "toc_configs": {
+        "31": 200
+      },
+      "actual_payload_bps": 116030.0,
+      "timing": {
+        "application": "Audio",
+        "lookahead_samples": 312,
+        "complexity": 9,
+        "frames": 200,
+        "encode_p50_ns": 71211,
+        "encode_p95_ns": 86111,
+        "encode_max_ns": 103352
+      },
+      "metrics": {
+        "samples": 191688,
+        "alignment": "declared lookahead only; no gain/phase/lag fitting",
+        "fixed_gain_snr_db": 19.2708657138531,
+        "rms_gain_db": -0.03823062238130195,
+        "peak": 0.5813820958137512,
+        "bands": {
+          "80-1000": {
+            "source_energy_db": -29.0565182794252,
+            "level_error_db": -0.0008300512532256885
+          },
+          "1000-4000": {
+            "source_energy_db": -42.16960076859201,
+            "level_error_db": 0.004470154142721115
+          },
+          "4000-8000": {
+            "source_energy_db": -50.54571574501629,
+            "level_error_db": 0.007961939726682703
+          },
+          "8000-12000": {
+            "source_energy_db": -55.263900259800636,
+            "level_error_db": -0.001373951942927938
+          },
+          "12000-16000": {
+            "source_energy_db": -55.54322159131033,
+            "level_error_db": 0.006579115577537207
+          },
+          "16000-20000": {
+            "source_energy_db": -54.82768570060445,
+            "level_error_db": -0.039258841991749505
+          }
+        }
+      }
+    },
+    {
+      "fixture": "music",
+      "bitrate": 128000,
+      "profile": "native-lowdelay",
+      "engine": "rust",
+      "settings": {
+        "application": 2051,
+        "complexity": 9,
+        "vbr": 1,
+        "vbr_constraint": 1,
+        "fec": 1,
+        "loss_hint": 5,
+        "precision": 24,
+        "maximum_packet_bytes": 320
+      },
+      "loss": "none",
+      "missing_packets": [],
+      "toc_modes": {
+        "CELT": 200
+      },
+      "toc_configs": {
+        "31": 200
+      },
+      "actual_payload_bps": 116030.0,
+      "timing": {
+        "application": "RestrictedLowDelay",
+        "lookahead_samples": 120,
+        "complexity": 9,
+        "frames": 200,
+        "encode_p50_ns": 71181,
+        "encode_p95_ns": 77501,
+        "encode_max_ns": 88531
+      },
+      "metrics": {
+        "samples": 191880,
+        "alignment": "declared lookahead only; no gain/phase/lag fitting",
+        "fixed_gain_snr_db": 19.224128677538854,
+        "rms_gain_db": -0.03780013372569564,
+        "peak": 0.5786198377609253,
+        "bands": {
+          "80-1000": {
+            "source_energy_db": -29.062343826668958,
+            "level_error_db": -0.0003576863864211943
+          },
+          "1000-4000": {
+            "source_energy_db": -42.17542631583577,
+            "level_error_db": 0.001559643123680551
+          },
+          "4000-8000": {
+            "source_energy_db": -50.55154129226005,
+            "level_error_db": -0.0034155835443475395
+          },
+          "8000-12000": {
+            "source_energy_db": -55.26972580704439,
+            "level_error_db": -0.004093177475408221
+          },
+          "12000-16000": {
+            "source_energy_db": -55.54904713855408,
+            "level_error_db": 0.044351666460189614
+          },
+          "16000-20000": {
+            "source_energy_db": -54.833511247848215,
+            "level_error_db": 0.011630936069409658
+          }
+        }
+      }
+    },
+    {
+      "fixture": "music",
+      "bitrate": 128000,
+      "profile": "browser-voip",
+      "engine": "rust",
+      "settings": {
+        "application": 2048,
+        "complexity": 5,
+        "vbr": 1,
+        "vbr_constraint": 1,
+        "fec": 0,
+        "loss_hint": 0,
+        "precision": 24,
+        "maximum_packet_bytes": 320
+      },
+      "loss": "none",
+      "missing_packets": [],
+      "toc_modes": {
+        "CELT": 200
+      },
+      "toc_configs": {
+        "31": 200
+      },
+      "actual_payload_bps": 116030.0,
+      "timing": {
+        "application": "Voip",
+        "lookahead_samples": 312,
+        "complexity": 5,
+        "frames": 200,
+        "encode_p50_ns": 58121,
+        "encode_p95_ns": 74692,
+        "encode_max_ns": 121352
+      },
+      "metrics": {
+        "samples": 191688,
+        "alignment": "declared lookahead only; no gain/phase/lag fitting",
+        "fixed_gain_snr_db": 19.30148565294242,
+        "rms_gain_db": -0.03567803052838211,
+        "peak": 0.5813820958137512,
+        "bands": {
+          "80-1000": {
+            "source_energy_db": -29.0565182794252,
+            "level_error_db": 0.001985481645562815
+          },
+          "1000-4000": {
+            "source_energy_db": -42.16960076859201,
+            "level_error_db": 0.005734858176250017
+          },
+          "4000-8000": {
+            "source_energy_db": -50.54571574501629,
+            "level_error_db": 0.008105190502159826
+          },
+          "8000-12000": {
+            "source_energy_db": -55.263900259800636,
+            "level_error_db": 0.0036695429785879104
+          },
+          "12000-16000": {
+            "source_energy_db": -55.54322159131033,
+            "level_error_db": 0.0025763277203841935
+          },
+          "16000-20000": {
+            "source_energy_db": -54.82768570060445,
+            "level_error_db": -0.034543203755778476
+          }
+        }
+      }
+    },
+    {
+      "fixture": "music",
+      "bitrate": 128000,
+      "profile": "browser-audio",
+      "engine": "rust",
+      "settings": {
+        "application": 2049,
+        "complexity": 5,
+        "vbr": 1,
+        "vbr_constraint": 1,
+        "fec": 0,
+        "loss_hint": 0,
+        "precision": 24,
+        "maximum_packet_bytes": 320
+      },
+      "loss": "none",
+      "missing_packets": [],
+      "toc_modes": {
+        "CELT": 200
+      },
+      "toc_configs": {
+        "31": 200
+      },
+      "actual_payload_bps": 116030.0,
+      "timing": {
+        "application": "Audio",
+        "lookahead_samples": 312,
+        "complexity": 5,
+        "frames": 200,
+        "encode_p50_ns": 58231,
+        "encode_p95_ns": 71711,
+        "encode_max_ns": 113672
+      },
+      "metrics": {
+        "samples": 191688,
+        "alignment": "declared lookahead only; no gain/phase/lag fitting",
+        "fixed_gain_snr_db": 19.30148565294242,
+        "rms_gain_db": -0.03567803052838211,
+        "peak": 0.5813820958137512,
+        "bands": {
+          "80-1000": {
+            "source_energy_db": -29.0565182794252,
+            "level_error_db": 0.001985481645562815
+          },
+          "1000-4000": {
+            "source_energy_db": -42.16960076859201,
+            "level_error_db": 0.005734858176250017
+          },
+          "4000-8000": {
+            "source_energy_db": -50.54571574501629,
+            "level_error_db": 0.008105190502159826
+          },
+          "8000-12000": {
+            "source_energy_db": -55.263900259800636,
+            "level_error_db": 0.0036695429785879104
+          },
+          "12000-16000": {
+            "source_energy_db": -55.54322159131033,
+            "level_error_db": 0.0025763277203841935
+          },
+          "16000-20000": {
+            "source_energy_db": -54.82768570060445,
+            "level_error_db": -0.034543203755778476
+          }
+        }
+      }
+    },
+    {
+      "fixture": "music",
+      "bitrate": 128000,
+      "profile": "browser-lowdelay",
+      "engine": "rust",
+      "settings": {
+        "application": 2051,
+        "complexity": 5,
+        "vbr": 1,
+        "vbr_constraint": 1,
+        "fec": 0,
+        "loss_hint": 0,
+        "precision": 24,
+        "maximum_packet_bytes": 320
+      },
+      "loss": "none",
+      "missing_packets": [],
+      "toc_modes": {
+        "CELT": 200
+      },
+      "toc_configs": {
+        "31": 200
+      },
+      "actual_payload_bps": 116030.0,
+      "timing": {
+        "application": "RestrictedLowDelay",
+        "lookahead_samples": 120,
+        "complexity": 5,
+        "frames": 200,
+        "encode_p50_ns": 58181,
+        "encode_p95_ns": 71001,
+        "encode_max_ns": 186713
+      },
+      "metrics": {
+        "samples": 191880,
+        "alignment": "declared lookahead only; no gain/phase/lag fitting",
+        "fixed_gain_snr_db": 19.264682904679816,
+        "rms_gain_db": -0.04172515722414215,
+        "peak": 0.5786198377609253,
+        "bands": {
+          "80-1000": {
+            "source_energy_db": -29.062343826668958,
+            "level_error_db": -0.004672771518038626
+          },
+          "1000-4000": {
+            "source_energy_db": -42.17542631583577,
+            "level_error_db": -0.001210463098021074
+          },
+          "4000-8000": {
+            "source_energy_db": -50.55154129226005,
+            "level_error_db": -0.0050660095223047374
+          },
+          "8000-12000": {
+            "source_energy_db": -55.26972580704439,
+            "level_error_db": -0.0030544658034662026
+          },
+          "12000-16000": {
+            "source_energy_db": -55.54904713855408,
+            "level_error_db": 0.03469097564132182
+          },
+          "16000-20000": {
+            "source_energy_db": -54.833511247848215,
+            "level_error_db": 0.019176795489854126
+          }
+        }
+      }
+    },
+    {
+      "fixture": "music",
+      "bitrate": 128000,
+      "profile": "mumble",
+      "engine": "libopus",
+      "settings": {
+        "application": 2051,
+        "complexity": 9,
+        "vbr": 0,
+        "vbr_constraint": 1,
+        "fec": 0,
+        "loss_hint": 0,
+        "precision": 16,
+        "maximum_packet_bytes": 320
+      },
+      "loss": "none",
+      "missing_packets": [],
+      "toc_modes": {
+        "CELT": 200
+      },
+      "toc_configs": {
+        "31": 200
+      },
+      "actual_payload_bps": 128000.0,
+      "timing": {
+        "lookahead_samples": 120,
+        "encode_p50_ns": 76731.0,
+        "encode_p95_ns": 97279.94999999995,
+        "encode_max_ns": 166233
+      },
+      "metrics": {
+        "samples": 191880,
+        "alignment": "declared lookahead only; no gain/phase/lag fitting",
+        "fixed_gain_snr_db": 19.313212036425853,
+        "rms_gain_db": -0.03650898593444401,
+        "peak": 0.6196088790893555,
+        "bands": {
+          "80-1000": {
+            "source_energy_db": -29.062343826668958,
+            "level_error_db": -0.00015228182748934667
+          },
+          "1000-4000": {
+            "source_energy_db": -42.17542631583577,
+            "level_error_db": 0.008900213809375675
+          },
+          "4000-8000": {
+            "source_energy_db": -50.55154129226005,
+            "level_error_db": 0.007000162473173697
+          },
+          "8000-12000": {
+            "source_energy_db": -55.26972580704439,
+            "level_error_db": 0.024291495785454354
+          },
+          "12000-16000": {
+            "source_energy_db": -55.54904713855408,
+            "level_error_db": 0.05396984191522777
+          },
+          "16000-20000": {
+            "source_energy_db": -54.833511247848215,
+            "level_error_db": -0.053699358777741124
+          }
+        }
+      }
+    },
+    {
+      "fixture": "transients",
+      "bitrate": 128000,
+      "profile": "native-voip",
+      "engine": "rust",
+      "settings": {
+        "application": 2048,
+        "complexity": 9,
+        "vbr": 1,
+        "vbr_constraint": 1,
+        "fec": 1,
+        "loss_hint": 5,
+        "precision": 24,
+        "maximum_packet_bytes": 320
+      },
+      "loss": "none",
+      "missing_packets": [],
+      "toc_modes": {
+        "CELT": 200
+      },
+      "toc_configs": {
+        "31": 200
+      },
+      "actual_payload_bps": 24680.0,
+      "timing": {
+        "application": "Voip",
+        "lookahead_samples": 312,
+        "complexity": 9,
+        "frames": 200,
+        "encode_p50_ns": 29481,
+        "encode_p95_ns": 72611,
+        "encode_max_ns": 89272
+      },
+      "metrics": {
+        "samples": 191688,
+        "alignment": "declared lookahead only; no gain/phase/lag fitting",
+        "fixed_gain_snr_db": 16.90731228695404,
+        "rms_gain_db": -0.08555450924642005,
+        "peak": 0.9217343330383301,
+        "bands": {
+          "80-1000": {
+            "source_energy_db": -49.76839352990336,
+            "level_error_db": -0.016020504510264367
+          },
+          "1000-4000": {
+            "source_energy_db": -42.93308149387912,
+            "level_error_db": -0.007974204537537293
+          },
+          "4000-8000": {
+            "source_energy_db": -60.8985648186131,
+            "level_error_db": 0.0061565316947813364
+          },
+          "8000-12000": {
+            "source_energy_db": -61.88051199151144,
+            "level_error_db": 0.017825122551157882
+          },
+          "12000-16000": {
+            "source_energy_db": -61.72890103068084,
+            "level_error_db": -0.006174225832960419
+          },
+          "16000-20000": {
+            "source_energy_db": -61.216283909368954,
+            "level_error_db": 0.023162286097698232
+          }
+        }
+      }
+    },
+    {
+      "fixture": "transients",
+      "bitrate": 128000,
+      "profile": "native-audio",
+      "engine": "rust",
+      "settings": {
+        "application": 2049,
+        "complexity": 9,
+        "vbr": 1,
+        "vbr_constraint": 1,
+        "fec": 1,
+        "loss_hint": 5,
+        "precision": 24,
+        "maximum_packet_bytes": 320
+      },
+      "loss": "none",
+      "missing_packets": [],
+      "toc_modes": {
+        "CELT": 200
+      },
+      "toc_configs": {
+        "31": 200
+      },
+      "actual_payload_bps": 24680.0,
+      "timing": {
+        "application": "Audio",
+        "lookahead_samples": 312,
+        "complexity": 9,
+        "frames": 200,
+        "encode_p50_ns": 28370,
+        "encode_p95_ns": 71502,
+        "encode_max_ns": 106232
+      },
+      "metrics": {
+        "samples": 191688,
+        "alignment": "declared lookahead only; no gain/phase/lag fitting",
+        "fixed_gain_snr_db": 16.90731228695404,
+        "rms_gain_db": -0.08555450924642005,
+        "peak": 0.9217343330383301,
+        "bands": {
+          "80-1000": {
+            "source_energy_db": -49.76839352990336,
+            "level_error_db": -0.016020504510264367
+          },
+          "1000-4000": {
+            "source_energy_db": -42.93308149387912,
+            "level_error_db": -0.007974204537537293
+          },
+          "4000-8000": {
+            "source_energy_db": -60.8985648186131,
+            "level_error_db": 0.0061565316947813364
+          },
+          "8000-12000": {
+            "source_energy_db": -61.88051199151144,
+            "level_error_db": 0.017825122551157882
+          },
+          "12000-16000": {
+            "source_energy_db": -61.72890103068084,
+            "level_error_db": -0.006174225832960419
+          },
+          "16000-20000": {
+            "source_energy_db": -61.216283909368954,
+            "level_error_db": 0.023162286097698232
+          }
+        }
+      }
+    },
+    {
+      "fixture": "transients",
+      "bitrate": 128000,
+      "profile": "native-lowdelay",
+      "engine": "rust",
+      "settings": {
+        "application": 2051,
+        "complexity": 9,
+        "vbr": 1,
+        "vbr_constraint": 1,
+        "fec": 1,
+        "loss_hint": 5,
+        "precision": 24,
+        "maximum_packet_bytes": 320
+      },
+      "loss": "none",
+      "missing_packets": [],
+      "toc_modes": {
+        "CELT": 200
+      },
+      "toc_configs": {
+        "31": 200
+      },
+      "actual_payload_bps": 19010.0,
+      "timing": {
+        "application": "RestrictedLowDelay",
+        "lookahead_samples": 120,
+        "complexity": 9,
+        "frames": 200,
+        "encode_p50_ns": 28851,
+        "encode_p95_ns": 69081,
+        "encode_max_ns": 80481
+      },
+      "metrics": {
+        "samples": 191880,
+        "alignment": "declared lookahead only; no gain/phase/lag fitting",
+        "fixed_gain_snr_db": 16.026806107263813,
+        "rms_gain_db": -0.08766803595387368,
+        "peak": 0.9102627038955688,
+        "bands": {
+          "80-1000": {
+            "source_energy_db": -49.77421907714713,
+            "level_error_db": 0.012120163826693332
+          },
+          "1000-4000": {
+            "source_energy_db": -42.938907041122874,
+            "level_error_db": -0.009112768846833057
+          },
+          "4000-8000": {
+            "source_energy_db": -60.90439036585686,
+            "level_error_db": 0.027840001353694653
+          },
+          "8000-12000": {
+            "source_energy_db": -61.88633753875521,
+            "level_error_db": -0.04003747427038541
+          },
+          "12000-16000": {
+            "source_energy_db": -61.7347265779246,
+            "level_error_db": 0.005263868896128158
+          },
+          "16000-20000": {
+            "source_energy_db": -61.22210945661272,
+            "level_error_db": -0.05316875388653769
+          }
+        }
+      }
+    },
+    {
+      "fixture": "transients",
+      "bitrate": 128000,
+      "profile": "browser-voip",
+      "engine": "rust",
+      "settings": {
+        "application": 2048,
+        "complexity": 5,
+        "vbr": 1,
+        "vbr_constraint": 1,
+        "fec": 0,
+        "loss_hint": 0,
+        "precision": 24,
+        "maximum_packet_bytes": 320
+      },
+      "loss": "none",
+      "missing_packets": [],
+      "toc_modes": {
+        "CELT": 200
+      },
+      "toc_configs": {
+        "31": 200
+      },
+      "actual_payload_bps": 24680.0,
+      "timing": {
+        "application": "Voip",
+        "lookahead_samples": 312,
+        "complexity": 5,
+        "frames": 200,
+        "encode_p50_ns": 24921,
+        "encode_p95_ns": 57241,
+        "encode_max_ns": 113311
+      },
+      "metrics": {
+        "samples": 191688,
+        "alignment": "declared lookahead only; no gain/phase/lag fitting",
+        "fixed_gain_snr_db": 16.950205367404436,
+        "rms_gain_db": -0.08389471643363026,
+        "peak": 0.9200307130813599,
+        "bands": {
+          "80-1000": {
+            "source_energy_db": -49.76839352990336,
+            "level_error_db": 0.016274132885370603
+          },
+          "1000-4000": {
+            "source_energy_db": -42.93308149387912,
+            "level_error_db": -0.00831811305971657
+          },
+          "4000-8000": {
+            "source_energy_db": -60.8985648186131,
+            "level_error_db": 0.013423172786668231
+          },
+          "8000-12000": {
+            "source_energy_db": -61.88051199151144,
+            "level_error_db": 0.01766397538038747
+          },
+          "12000-16000": {
+            "source_energy_db": -61.72890103068084,
+            "level_error_db": -0.007341550953534542
+          },
+          "16000-20000": {
+            "source_energy_db": -61.216283909368954,
+            "level_error_db": 0.02439294722251644
+          }
+        }
+      }
+    },
+    {
+      "fixture": "transients",
+      "bitrate": 128000,
+      "profile": "browser-audio",
+      "engine": "rust",
+      "settings": {
+        "application": 2049,
+        "complexity": 5,
+        "vbr": 1,
+        "vbr_constraint": 1,
+        "fec": 0,
+        "loss_hint": 0,
+        "precision": 24,
+        "maximum_packet_bytes": 320
+      },
+      "loss": "none",
+      "missing_packets": [],
+      "toc_modes": {
+        "CELT": 200
+      },
+      "toc_configs": {
+        "31": 200
+      },
+      "actual_payload_bps": 24680.0,
+      "timing": {
+        "application": "Audio",
+        "lookahead_samples": 312,
+        "complexity": 5,
+        "frames": 200,
+        "encode_p50_ns": 27130,
+        "encode_p95_ns": 65911,
+        "encode_max_ns": 75171
+      },
+      "metrics": {
+        "samples": 191688,
+        "alignment": "declared lookahead only; no gain/phase/lag fitting",
+        "fixed_gain_snr_db": 16.950205367404436,
+        "rms_gain_db": -0.08389471643363026,
+        "peak": 0.9200307130813599,
+        "bands": {
+          "80-1000": {
+            "source_energy_db": -49.76839352990336,
+            "level_error_db": 0.016274132885370603
+          },
+          "1000-4000": {
+            "source_energy_db": -42.93308149387912,
+            "level_error_db": -0.00831811305971657
+          },
+          "4000-8000": {
+            "source_energy_db": -60.8985648186131,
+            "level_error_db": 0.013423172786668231
+          },
+          "8000-12000": {
+            "source_energy_db": -61.88051199151144,
+            "level_error_db": 0.01766397538038747
+          },
+          "12000-16000": {
+            "source_energy_db": -61.72890103068084,
+            "level_error_db": -0.007341550953534542
+          },
+          "16000-20000": {
+            "source_energy_db": -61.216283909368954,
+            "level_error_db": 0.02439294722251644
+          }
+        }
+      }
+    },
+    {
+      "fixture": "transients",
+      "bitrate": 128000,
+      "profile": "browser-lowdelay",
+      "engine": "rust",
+      "settings": {
+        "application": 2051,
+        "complexity": 5,
+        "vbr": 1,
+        "vbr_constraint": 1,
+        "fec": 0,
+        "loss_hint": 0,
+        "precision": 24,
+        "maximum_packet_bytes": 320
+      },
+      "loss": "none",
+      "missing_packets": [],
+      "toc_modes": {
+        "CELT": 200
+      },
+      "toc_configs": {
+        "31": 200
+      },
+      "actual_payload_bps": 19010.0,
+      "timing": {
+        "application": "RestrictedLowDelay",
+        "lookahead_samples": 120,
+        "complexity": 5,
+        "frames": 200,
+        "encode_p50_ns": 24920,
+        "encode_p95_ns": 56951,
+        "encode_max_ns": 101471
+      },
+      "metrics": {
+        "samples": 191880,
+        "alignment": "declared lookahead only; no gain/phase/lag fitting",
+        "fixed_gain_snr_db": 16.026806109026932,
+        "rms_gain_db": -0.08766803572455252,
+        "peak": 0.9102627038955688,
+        "bands": {
+          "80-1000": {
+            "source_energy_db": -49.77421907714713,
+            "level_error_db": 0.01212016381709905
+          },
+          "1000-4000": {
+            "source_energy_db": -42.938907041122874,
+            "level_error_db": -0.009112768893014584
+          },
+          "4000-8000": {
+            "source_energy_db": -60.90439036585686,
+            "level_error_db": 0.027840017475366956
+          },
+          "8000-12000": {
+            "source_energy_db": -61.88633753875521,
+            "level_error_db": -0.04003747659954622
+          },
+          "12000-16000": {
+            "source_energy_db": -61.7347265779246,
+            "level_error_db": 0.005263869741440155
+          },
+          "16000-20000": {
+            "source_energy_db": -61.22210945661272,
+            "level_error_db": -0.05316875440617061
+          }
+        }
+      }
+    },
+    {
+      "fixture": "transients",
+      "bitrate": 128000,
+      "profile": "mumble",
+      "engine": "libopus",
+      "settings": {
+        "application": 2051,
+        "complexity": 9,
+        "vbr": 0,
+        "vbr_constraint": 1,
+        "fec": 0,
+        "loss_hint": 0,
+        "precision": 16,
+        "maximum_packet_bytes": 320
+      },
+      "loss": "none",
+      "missing_packets": [],
+      "toc_modes": {
+        "CELT": 200
+      },
+      "toc_configs": {
+        "31": 200
+      },
+      "actual_payload_bps": 128000.0,
+      "timing": {
+        "lookahead_samples": 120,
+        "encode_p50_ns": 61106.0,
+        "encode_p95_ns": 77558.5,
+        "encode_max_ns": 311015
+      },
+      "metrics": {
+        "samples": 191880,
+        "alignment": "declared lookahead only; no gain/phase/lag fitting",
+        "fixed_gain_snr_db": 16.92560851230556,
+        "rms_gain_db": -0.06643165737185378,
+        "peak": 0.9209223985671997,
+        "bands": {
+          "80-1000": {
+            "source_energy_db": -49.77421907714713,
+            "level_error_db": -0.014369306693292061
+          },
+          "1000-4000": {
+            "source_energy_db": -42.938907041122874,
+            "level_error_db": 0.014212728155147927
+          },
+          "4000-8000": {
+            "source_energy_db": -60.90439036585686,
+            "level_error_db": 0.012574147984112775
+          },
+          "8000-12000": {
+            "source_energy_db": -61.88633753875521,
+            "level_error_db": -0.03851184130794069
+          },
+          "12000-16000": {
+            "source_energy_db": -61.7347265779246,
+            "level_error_db": 0.034920109517137976
+          },
+          "16000-20000": {
+            "source_energy_db": -61.22210945661272,
+            "level_error_db": 0.013135337867779399
+          }
+        }
+      }
+    },
+    {
+      "fixture": "highband",
+      "bitrate": 128000,
+      "profile": "native-voip",
+      "engine": "rust",
+      "settings": {
+        "application": 2048,
+        "complexity": 9,
+        "vbr": 1,
+        "vbr_constraint": 1,
+        "fec": 1,
+        "loss_hint": 5,
+        "precision": 24,
+        "maximum_packet_bytes": 320
+      },
+      "loss": "none",
+      "missing_packets": [],
+      "toc_modes": {
+        "CELT": 200
+      },
+      "toc_configs": {
+        "31": 200
+      },
+      "actual_payload_bps": 90830.0,
+      "timing": {
+        "application": "Voip",
+        "lookahead_samples": 312,
+        "complexity": 9,
+        "frames": 200,
+        "encode_p50_ns": 58710,
+        "encode_p95_ns": 77191,
+        "encode_max_ns": 151792
+      },
+      "metrics": {
+        "samples": 191688,
+        "alignment": "declared lookahead only; no gain/phase/lag fitting",
+        "fixed_gain_snr_db": 23.6694090344535,
+        "rms_gain_db": -0.04306484898854765,
+        "peak": 0.2947712242603302,
+        "bands": {
+          "80-1000": {
+            "source_energy_db": -34.68783185727989,
+            "level_error_db": 0.0006216857311786739
+          },
+          "1000-4000": {
+            "source_energy_db": -42.80076513848595,
+            "level_error_db": 0.000797970925963972
+          },
+          "4000-8000": {
+            "source_energy_db": -39.22778745893822,
+            "level_error_db": -0.01487158943431563
+          },
+          "8000-12000": {
+            "source_energy_db": -39.22778944389174,
+            "level_error_db": -0.0012449092646403866
+          },
+          "12000-16000": {
+            "source_energy_db": -39.27858436745952,
+            "level_error_db": -0.004689712445912308
+          },
+          "16000-20000": {
+            "source_energy_db": -36.21748589582708,
+            "level_error_db": -0.12015574144101221
+          }
+        }
+      }
+    },
+    {
+      "fixture": "highband",
+      "bitrate": 128000,
+      "profile": "native-audio",
+      "engine": "rust",
+      "settings": {
+        "application": 2049,
+        "complexity": 9,
+        "vbr": 1,
+        "vbr_constraint": 1,
+        "fec": 1,
+        "loss_hint": 5,
+        "precision": 24,
+        "maximum_packet_bytes": 320
+      },
+      "loss": "none",
+      "missing_packets": [],
+      "toc_modes": {
+        "CELT": 200
+      },
+      "toc_configs": {
+        "31": 200
+      },
+      "actual_payload_bps": 90830.0,
+      "timing": {
+        "application": "Audio",
+        "lookahead_samples": 312,
+        "complexity": 9,
+        "frames": 200,
+        "encode_p50_ns": 58521,
+        "encode_p95_ns": 72381,
+        "encode_max_ns": 94321
+      },
+      "metrics": {
+        "samples": 191688,
+        "alignment": "declared lookahead only; no gain/phase/lag fitting",
+        "fixed_gain_snr_db": 23.6694090344535,
+        "rms_gain_db": -0.04306484898854765,
+        "peak": 0.2947712242603302,
+        "bands": {
+          "80-1000": {
+            "source_energy_db": -34.68783185727989,
+            "level_error_db": 0.0006216857311786739
+          },
+          "1000-4000": {
+            "source_energy_db": -42.80076513848595,
+            "level_error_db": 0.000797970925963972
+          },
+          "4000-8000": {
+            "source_energy_db": -39.22778745893822,
+            "level_error_db": -0.01487158943431563
+          },
+          "8000-12000": {
+            "source_energy_db": -39.22778944389174,
+            "level_error_db": -0.0012449092646403866
+          },
+          "12000-16000": {
+            "source_energy_db": -39.27858436745952,
+            "level_error_db": -0.004689712445912308
+          },
+          "16000-20000": {
+            "source_energy_db": -36.21748589582708,
+            "level_error_db": -0.12015574144101221
+          }
+        }
+      }
+    },
+    {
+      "fixture": "highband",
+      "bitrate": 128000,
+      "profile": "native-lowdelay",
+      "engine": "rust",
+      "settings": {
+        "application": 2051,
+        "complexity": 9,
+        "vbr": 1,
+        "vbr_constraint": 1,
+        "fec": 1,
+        "loss_hint": 5,
+        "precision": 24,
+        "maximum_packet_bytes": 320
+      },
+      "loss": "none",
+      "missing_packets": [],
+      "toc_modes": {
+        "CELT": 200
+      },
+      "toc_configs": {
+        "31": 200
+      },
+      "actual_payload_bps": 90830.0,
+      "timing": {
+        "application": "RestrictedLowDelay",
+        "lookahead_samples": 120,
+        "complexity": 9,
+        "frames": 200,
+        "encode_p50_ns": 59401,
+        "encode_p95_ns": 78332,
+        "encode_max_ns": 668430
+      },
+      "metrics": {
+        "samples": 191880,
+        "alignment": "declared lookahead only; no gain/phase/lag fitting",
+        "fixed_gain_snr_db": 23.513897821362185,
+        "rms_gain_db": -0.0423115299911547,
+        "peak": 0.29397907853126526,
+        "bands": {
+          "80-1000": {
+            "source_energy_db": -34.693657404523655,
+            "level_error_db": 0.004237443925316128
+          },
+          "1000-4000": {
+            "source_energy_db": -42.80659068572972,
+            "level_error_db": 0.003929545490326636
+          },
+          "4000-8000": {
+            "source_energy_db": -39.233613006181976,
+            "level_error_db": -0.0161480327185752
+          },
+          "8000-12000": {
+            "source_energy_db": -39.2336149911355,
+            "level_error_db": -0.00020476336384815582
+          },
+          "12000-16000": {
+            "source_energy_db": -39.28440991470328,
+            "level_error_db": -0.005990955255566532
+          },
+          "16000-20000": {
+            "source_energy_db": -36.22331144307084,
+            "level_error_db": -0.1188451127188528
+          }
+        }
+      }
+    },
+    {
+      "fixture": "highband",
+      "bitrate": 128000,
+      "profile": "browser-voip",
+      "engine": "rust",
+      "settings": {
+        "application": 2048,
+        "complexity": 5,
+        "vbr": 1,
+        "vbr_constraint": 1,
+        "fec": 0,
+        "loss_hint": 0,
+        "precision": 24,
+        "maximum_packet_bytes": 320
+      },
+      "loss": "none",
+      "missing_packets": [],
+      "toc_modes": {
+        "CELT": 200
+      },
+      "toc_configs": {
+        "31": 200
+      },
+      "actual_payload_bps": 90830.0,
+      "timing": {
+        "application": "Voip",
+        "lookahead_samples": 312,
+        "complexity": 5,
+        "frames": 200,
+        "encode_p50_ns": 46080,
+        "encode_p95_ns": 68121,
+        "encode_max_ns": 100722
+      },
+      "metrics": {
+        "samples": 191688,
+        "alignment": "declared lookahead only; no gain/phase/lag fitting",
+        "fixed_gain_snr_db": 24.879191293729473,
+        "rms_gain_db": -0.032202365713435155,
+        "peak": 0.29891279339790344,
+        "bands": {
+          "80-1000": {
+            "source_energy_db": -34.68783185727989,
+            "level_error_db": -0.00021859329088009312
+          },
+          "1000-4000": {
+            "source_energy_db": -42.80076513848595,
+            "level_error_db": -0.00021479314992622252
+          },
+          "4000-8000": {
+            "source_energy_db": -39.22778745893822,
+            "level_error_db": -0.002533378232196064
+          },
+          "8000-12000": {
+            "source_energy_db": -39.22778944389174,
+            "level_error_db": -0.007983533485535712
+          },
+          "12000-16000": {
+            "source_energy_db": -39.27858436745952,
+            "level_error_db": -0.0016802352431901201
+          },
+          "16000-20000": {
+            "source_energy_db": -36.21748589582708,
+            "level_error_db": -0.09099894725561769
+          }
+        }
+      }
+    },
+    {
+      "fixture": "highband",
+      "bitrate": 128000,
+      "profile": "browser-audio",
+      "engine": "rust",
+      "settings": {
+        "application": 2049,
+        "complexity": 5,
+        "vbr": 1,
+        "vbr_constraint": 1,
+        "fec": 0,
+        "loss_hint": 0,
+        "precision": 24,
+        "maximum_packet_bytes": 320
+      },
+      "loss": "none",
+      "missing_packets": [],
+      "toc_modes": {
+        "CELT": 200
+      },
+      "toc_configs": {
+        "31": 200
+      },
+      "actual_payload_bps": 90830.0,
+      "timing": {
+        "application": "Audio",
+        "lookahead_samples": 312,
+        "complexity": 5,
+        "frames": 200,
+        "encode_p50_ns": 46841,
+        "encode_p95_ns": 66141,
+        "encode_max_ns": 79352
+      },
+      "metrics": {
+        "samples": 191688,
+        "alignment": "declared lookahead only; no gain/phase/lag fitting",
+        "fixed_gain_snr_db": 24.879191293729473,
+        "rms_gain_db": -0.032202365713435155,
+        "peak": 0.29891279339790344,
+        "bands": {
+          "80-1000": {
+            "source_energy_db": -34.68783185727989,
+            "level_error_db": -0.00021859329088009312
+          },
+          "1000-4000": {
+            "source_energy_db": -42.80076513848595,
+            "level_error_db": -0.00021479314992622252
+          },
+          "4000-8000": {
+            "source_energy_db": -39.22778745893822,
+            "level_error_db": -0.002533378232196064
+          },
+          "8000-12000": {
+            "source_energy_db": -39.22778944389174,
+            "level_error_db": -0.007983533485535712
+          },
+          "12000-16000": {
+            "source_energy_db": -39.27858436745952,
+            "level_error_db": -0.0016802352431901201
+          },
+          "16000-20000": {
+            "source_energy_db": -36.21748589582708,
+            "level_error_db": -0.09099894725561769
+          }
+        }
+      }
+    },
+    {
+      "fixture": "highband",
+      "bitrate": 128000,
+      "profile": "browser-lowdelay",
+      "engine": "rust",
+      "settings": {
+        "application": 2051,
+        "complexity": 5,
+        "vbr": 1,
+        "vbr_constraint": 1,
+        "fec": 0,
+        "loss_hint": 0,
+        "precision": 24,
+        "maximum_packet_bytes": 320
+      },
+      "loss": "none",
+      "missing_packets": [],
+      "toc_modes": {
+        "CELT": 200
+      },
+      "toc_configs": {
+        "31": 200
+      },
+      "actual_payload_bps": 90830.0,
+      "timing": {
+        "application": "RestrictedLowDelay",
+        "lookahead_samples": 120,
+        "complexity": 5,
+        "frames": 200,
+        "encode_p50_ns": 45601,
+        "encode_p95_ns": 58711,
+        "encode_max_ns": 75871
+      },
+      "metrics": {
+        "samples": 191880,
+        "alignment": "declared lookahead only; no gain/phase/lag fitting",
+        "fixed_gain_snr_db": 24.855483383258957,
+        "rms_gain_db": -0.03913815802717052,
+        "peak": 0.29087620973587036,
+        "bands": {
+          "80-1000": {
+            "source_energy_db": -34.693657404523655,
+            "level_error_db": 0.0005335964610462651
+          },
+          "1000-4000": {
+            "source_energy_db": -42.80659068572972,
+            "level_error_db": 0.0008271702411812977
+          },
+          "4000-8000": {
+            "source_energy_db": -39.233613006181976,
+            "level_error_db": 0.009630003237028896
+          },
+          "8000-12000": {
+            "source_energy_db": -39.2336149911355,
+            "level_error_db": 0.0029376803379664216
+          },
+          "12000-16000": {
+            "source_energy_db": -39.28440991470328,
+            "level_error_db": 0.0010568149786425835
+          },
+          "16000-20000": {
+            "source_energy_db": -36.22331144307084,
+            "level_error_db": -0.12583097625118383
+          }
+        }
+      }
+    },
+    {
+      "fixture": "highband",
+      "bitrate": 128000,
+      "profile": "mumble",
+      "engine": "libopus",
+      "settings": {
+        "application": 2051,
+        "complexity": 9,
+        "vbr": 0,
+        "vbr_constraint": 1,
+        "fec": 0,
+        "loss_hint": 0,
+        "precision": 16,
+        "maximum_packet_bytes": 320
+      },
+      "loss": "none",
+      "missing_packets": [],
+      "toc_modes": {
+        "CELT": 200
+      },
+      "toc_configs": {
+        "31": 200
+      },
+      "actual_payload_bps": 128000.0,
+      "timing": {
+        "lookahead_samples": 120,
+        "encode_p50_ns": 55321.0,
+        "encode_p95_ns": 71570.0,
+        "encode_max_ns": 91881
+      },
+      "metrics": {
+        "samples": 191880,
+        "alignment": "declared lookahead only; no gain/phase/lag fitting",
+        "fixed_gain_snr_db": 23.539236306396106,
+        "rms_gain_db": 0.006328052848305379,
+        "peak": 0.29729458689689636,
+        "bands": {
+          "80-1000": {
+            "source_energy_db": -34.693657404523655,
+            "level_error_db": -0.003213477018834535
+          },
+          "1000-4000": {
+            "source_energy_db": -42.80659068572972,
+            "level_error_db": -0.003051084419198554
+          },
+          "4000-8000": {
+            "source_energy_db": -39.233613006181976,
+            "level_error_db": 0.008967107469509517
+          },
+          "8000-12000": {
+            "source_energy_db": -39.2336149911355,
+            "level_error_db": 0.0032287110811798966
+          },
+          "12000-16000": {
+            "source_energy_db": -39.28440991470328,
+            "level_error_db": 0.018065672038234795
+          },
+          "16000-20000": {
+            "source_energy_db": -36.22331144307084,
+            "level_error_db": 0.005417287757165378
+          }
+        }
+      }
+    }
+  ],
+  "actual_encoder_contract": {
+    "passed": true,
+    "scope": "Audio constructor/packet/delay/source validation; not cross-target equality or perceptual parity",
+    "paths": 20,
+    "wasm_sha256": "edcff77addd346fb9d20211d8cb4d39363d405895d6d9573b06a19aed958502d",
+    "cross_target_60db_equality_diagnostic_passed": false,
+    "results": [
+      {
+        "path": "actual native codec IPC",
+        "fixture": "speech-like",
+        "bitrate": 128000,
+        "native_binary": "/nix/store/sxv2q6524pyhyvqhjfnjkpqzisy8ii80-rust_nuschl-media-worker-0.1.0-linked/bin/nuschl-media-worker",
+        "settings": {
+          "application": 2049,
+          "complexity": 9,
+          "vbr": 1,
+          "vbr_constraint": 1,
+          "fec": 0,
+          "loss_hint": 0,
+          "precision": 24,
+          "maximum_packet_bytes": 1275
+        },
+        "lookahead_samples": 312,
+        "lookahead_scope": "C query +actual native factory unit assertion, not an IPC telemetry field",
+        "metrics": {
+          "samples": 191688,
+          "alignment": "declared lookahead only; no gain/phase/lag fitting",
+          "fixed_gain_snr_db": 22.334658957274588,
+          "rms_gain_db": -0.0022031469978057838,
+          "peak": 0.3420032858848572,
+          "bands": {
+            "80-1000": {
+              "source_energy_db": -34.91356261862582,
+              "level_error_db": -0.0009906600106353595
+            },
+            "1000-4000": {
+              "source_energy_db": -46.78249321327776,
+              "level_error_db": -0.012776517997694092
+            },
+            "4000-8000": {
+              "source_energy_db": -55.34869986198902,
+              "level_error_db": 0.026876162739990602
+            },
+            "8000-12000": {
+              "source_energy_db": -54.93586268281515,
+              "level_error_db": -0.017701747183326285
+            },
+            "12000-16000": {
+              "source_energy_db": -56.01058551362375,
+              "level_error_db": 0.013310218007221954
+            },
+            "16000-20000": {
+              "source_energy_db": -97.13700144599171,
+              "level_error_db": -0.09774576445486599
+            }
+          }
+        },
+        "matched_C_metrics": {
+          "samples": 191688,
+          "alignment": "declared lookahead only; no gain/phase/lag fitting",
+          "fixed_gain_snr_db": 23.975135962070976,
+          "rms_gain_db": 0.004250601244423587,
+          "peak": 0.3373209238052368,
+          "bands": {
+            "80-1000": {
+              "source_energy_db": -34.91356261862582,
+              "level_error_db": 0.002577671071128534
+            },
+            "1000-4000": {
+              "source_energy_db": -46.78249321327776,
+              "level_error_db": 0.006913763254950469
+            },
+            "4000-8000": {
+              "source_energy_db": -55.34869986198902,
+              "level_error_db": 0.03729258627272352
+            },
+            "8000-12000": {
+              "source_energy_db": -54.93586268281515,
+              "level_error_db": 0.0013164345378217862
+            },
+            "12000-16000": {
+              "source_energy_db": -56.01058551362375,
+              "level_error_db": 0.003226383173063414
+            },
+            "16000-20000": {
+              "source_energy_db": -97.13700144599171,
+              "level_error_db": -0.04294662306366924
+            }
+          }
+        },
+        "toc_configs": {
+          "31": 200
+        }
+      },
+      {
+        "path": "actual wasm-bindgen VoiceEncoder",
+        "fixture": "speech-like",
+        "bitrate": 32000,
+        "settings": {
+          "application": 2049,
+          "complexity": 5,
+          "vbr": 1,
+          "vbr_constraint": 1,
+          "fec": 0,
+          "loss_hint": 0,
+          "precision": 24,
+          "maximum_packet_bytes": 80
+        },
+        "metadata": {
+          "actual_codec": "/nix/store/0ncf4nzpcqbf1vg146fr1akxiqk7f7z0-nuschl-web-audio-codec",
+          "lookahead_samples": 312,
+          "frames": 200,
+          "encode_p50_ns": 187513.0000000027,
+          "encode_p95_ns": 278944.00000000274,
+          "encode_max_ns": 8136966.999999998,
+          "timing_scope": "Node JS+WASM call, not physical browser hardware latency"
+        },
+        "metrics": {
+          "samples": 191688,
+          "alignment": "declared lookahead only; no gain/phase/lag fitting",
+          "fixed_gain_snr_db": 9.336483843143576,
+          "rms_gain_db": -0.008139070046363762,
+          "peak": 0.3746412396430969,
+          "bands": {
+            "80-1000": {
+              "source_energy_db": -34.91356261862582,
+              "level_error_db": -0.017599314999999754
+            },
+            "1000-4000": {
+              "source_energy_db": -46.78249321327776,
+              "level_error_db": -0.009788936418902733
+            },
+            "4000-8000": {
+              "source_energy_db": -55.34869986198902,
+              "level_error_db": 0.04805565224904974
+            },
+            "8000-12000": {
+              "source_energy_db": -54.93586268281515,
+              "level_error_db": 0.1404895972327096
+            },
+            "12000-16000": {
+              "source_energy_db": -56.01058551362375,
+              "level_error_db": 0.026717975381233203
+            },
+            "16000-20000": {
+              "source_energy_db": -97.13700144599171,
+              "level_error_db": 0.7347648042095232
+            }
+          }
+        },
+        "matched_C_metrics": {
+          "samples": 191688,
+          "alignment": "declared lookahead only; no gain/phase/lag fitting",
+          "fixed_gain_snr_db": 9.503208627756257,
+          "rms_gain_db": -0.05040091114893716,
+          "peak": 0.3588917851448059,
+          "bands": {
+            "80-1000": {
+              "source_energy_db": -34.91356261862582,
+              "level_error_db": -0.05290795287687129
+            },
+            "1000-4000": {
+              "source_energy_db": -46.78249321327776,
+              "level_error_db": -0.08936368578556964
+            },
+            "4000-8000": {
+              "source_energy_db": -55.34869986198902,
+              "level_error_db": 0.08419801779839245
+            },
+            "8000-12000": {
+              "source_energy_db": -54.93586268281515,
+              "level_error_db": 0.131797995336996
+            },
+            "12000-16000": {
+              "source_energy_db": -56.01058551362375,
+              "level_error_db": -0.12967184496284864
+            },
+            "16000-20000": {
+              "source_energy_db": -97.13700144599171,
+              "level_error_db": 0.5951526466326064
+            }
+          }
+        },
+        "standalone_controls_decode_snr_db": 39.76691908513653,
+        "toc_configs": {
+          "31": 200
+        },
+        "cross_target_60db_diagnostic_passed": false
+      },
+      {
+        "path": "actual wasm-bindgen VoiceEncoder",
+        "fixture": "speech-like",
+        "bitrate": 48000,
+        "settings": {
+          "application": 2049,
+          "complexity": 5,
+          "vbr": 1,
+          "vbr_constraint": 1,
+          "fec": 0,
+          "loss_hint": 0,
+          "precision": 24,
+          "maximum_packet_bytes": 120
+        },
+        "metadata": {
+          "actual_codec": "/nix/store/0ncf4nzpcqbf1vg146fr1akxiqk7f7z0-nuschl-web-audio-codec",
+          "lookahead_samples": 312,
+          "frames": 200,
+          "encode_p50_ns": 194192.99999999852,
+          "encode_p95_ns": 290524.9999999953,
+          "encode_max_ns": 7521318.000000001,
+          "timing_scope": "Node JS+WASM call, not physical browser hardware latency"
+        },
+        "metrics": {
+          "samples": 191688,
+          "alignment": "declared lookahead only; no gain/phase/lag fitting",
+          "fixed_gain_snr_db": 13.274987354805834,
+          "rms_gain_db": 0.006061278444559926,
+          "peak": 0.3341066837310791,
+          "bands": {
+            "80-1000": {
+              "source_energy_db": -34.91356261862582,
+              "level_error_db": 0.01049905348916663
+            },
+            "1000-4000": {
+              "source_energy_db": -46.78249321327776,
+              "level_error_db": -0.018110454386330913
+            },
+            "4000-8000": {
+              "source_energy_db": -55.34869986198902,
+              "level_error_db": 0.03563902555856893
+            },
+            "8000-12000": {
+              "source_energy_db": -54.93586268281515,
+              "level_error_db": -0.0081656647575845
+            },
+            "12000-16000": {
+              "source_energy_db": -56.01058551362375,
+              "level_error_db": 0.00623284423225073
+            },
+            "16000-20000": {
+              "source_energy_db": -97.13700144599171,
+              "level_error_db": 0.3831984912513018
+            }
+          }
+        },
+        "matched_C_metrics": {
+          "samples": 191688,
+          "alignment": "declared lookahead only; no gain/phase/lag fitting",
+          "fixed_gain_snr_db": 13.664234304362504,
+          "rms_gain_db": -0.008048781934747168,
+          "peak": 0.33208078145980835,
+          "bands": {
+            "80-1000": {
+              "source_energy_db": -34.91356261862582,
+              "level_error_db": 0.0035365421946919693
+            },
+            "1000-4000": {
+              "source_energy_db": -46.78249321327776,
+              "level_error_db": -0.07913606920116009
+            },
+            "4000-8000": {
+              "source_energy_db": -55.34869986198902,
+              "level_error_db": 0.036518409232661815
+            },
+            "8000-12000": {
+              "source_energy_db": -54.93586268281515,
+              "level_error_db": 0.02068505362180364
+            },
+            "12000-16000": {
+              "source_energy_db": -56.01058551362375,
+              "level_error_db": -0.005560753463684415
+            },
+            "16000-20000": {
+              "source_energy_db": -97.13700144599171,
+              "level_error_db": 0.5384307334559253
+            }
+          }
+        },
+        "standalone_controls_decode_snr_db": 39.127146175103334,
+        "toc_configs": {
+          "31": 200
+        },
+        "cross_target_60db_diagnostic_passed": false
+      },
+      {
+        "path": "actual wasm-bindgen VoiceEncoder",
+        "fixture": "speech-like",
+        "bitrate": 64000,
+        "settings": {
+          "application": 2049,
+          "complexity": 5,
+          "vbr": 1,
+          "vbr_constraint": 1,
+          "fec": 0,
+          "loss_hint": 0,
+          "precision": 24,
+          "maximum_packet_bytes": 160
+        },
+        "metadata": {
+          "actual_codec": "/nix/store/0ncf4nzpcqbf1vg146fr1akxiqk7f7z0-nuschl-web-audio-codec",
+          "lookahead_samples": 312,
+          "frames": 200,
+          "encode_p50_ns": 211432.99999999953,
+          "encode_p95_ns": 346785.99999999447,
+          "encode_max_ns": 8165887.999999995,
+          "timing_scope": "Node JS+WASM call, not physical browser hardware latency"
+        },
+        "metrics": {
+          "samples": 191688,
+          "alignment": "declared lookahead only; no gain/phase/lag fitting",
+          "fixed_gain_snr_db": 16.87714856382235,
+          "rms_gain_db": 0.0017710134833602107,
+          "peak": 0.3309605121612549,
+          "bands": {
+            "80-1000": {
+              "source_energy_db": -34.91356261862582,
+              "level_error_db": -4.8170135100828465e-06
+            },
+            "1000-4000": {
+              "source_energy_db": -46.78249321327776,
+              "level_error_db": 0.006579947730508679
+            },
+            "4000-8000": {
+              "source_energy_db": -55.34869986198902,
+              "level_error_db": 0.05560930976453059
+            },
+            "8000-12000": {
+              "source_energy_db": -54.93586268281515,
+              "level_error_db": -0.022675446730138868
+            },
+            "12000-16000": {
+              "source_energy_db": -56.01058551362375,
+              "level_error_db": -0.0070539129114970825
+            },
+            "16000-20000": {
+              "source_energy_db": -97.13700144599171,
+              "level_error_db": 0.20025461324580263
+            }
+          }
+        },
+        "matched_C_metrics": {
+          "samples": 191688,
+          "alignment": "declared lookahead only; no gain/phase/lag fitting",
+          "fixed_gain_snr_db": 16.913295040396452,
+          "rms_gain_db": -0.007293809810742748,
+          "peak": 0.33404722809791565,
+          "bands": {
+            "80-1000": {
+              "source_energy_db": -34.91356261862582,
+              "level_error_db": -0.0015620940941777164
+            },
+            "1000-4000": {
+              "source_energy_db": -46.78249321327776,
+              "level_error_db": -0.052694628131148794
+            },
+            "4000-8000": {
+              "source_energy_db": -55.34869986198902,
+              "level_error_db": 0.059896752891761
+            },
+            "8000-12000": {
+              "source_energy_db": -54.93586268281515,
+              "level_error_db": 0.014461565257113578
+            },
+            "12000-16000": {
+              "source_energy_db": -56.01058551362375,
+              "level_error_db": -0.0037776995020109456
+            },
+            "16000-20000": {
+              "source_energy_db": -97.13700144599171,
+              "level_error_db": 0.1865653076027577
+            }
+          }
+        },
+        "standalone_controls_decode_snr_db": 37.29994663742992,
+        "toc_configs": {
+          "31": 200
+        },
+        "cross_target_60db_diagnostic_passed": false
+      },
+      {
+        "path": "actual wasm-bindgen VoiceEncoder",
+        "fixture": "speech-like",
+        "bitrate": 128000,
+        "settings": {
+          "application": 2049,
+          "complexity": 5,
+          "vbr": 1,
+          "vbr_constraint": 1,
+          "fec": 0,
+          "loss_hint": 0,
+          "precision": 24,
+          "maximum_packet_bytes": 320
+        },
+        "metadata": {
+          "actual_codec": "/nix/store/0ncf4nzpcqbf1vg146fr1akxiqk7f7z0-nuschl-web-audio-codec",
+          "lookahead_samples": 312,
+          "frames": 200,
+          "encode_p50_ns": 214553.99999999258,
+          "encode_p95_ns": 380986.00000000006,
+          "encode_max_ns": 7623439.000000005,
+          "timing_scope": "Node JS+WASM call, not physical browser hardware latency"
+        },
+        "metrics": {
+          "samples": 191688,
+          "alignment": "declared lookahead only; no gain/phase/lag fitting",
+          "fixed_gain_snr_db": 25.836059512321302,
+          "rms_gain_db": -0.0002627762098035636,
+          "peak": 0.3403364419937134,
+          "bands": {
+            "80-1000": {
+              "source_energy_db": -34.91356261862582,
+              "level_error_db": -0.0015065169693040904
+            },
+            "1000-4000": {
+              "source_energy_db": -46.78249321327776,
+              "level_error_db": 0.004372748626233274
+            },
+            "4000-8000": {
+              "source_energy_db": -55.34869986198902,
+              "level_error_db": 0.019579066135687866
+            },
+            "8000-12000": {
+              "source_energy_db": -54.93586268281515,
+              "level_error_db": -0.012126942287343876
+            },
+            "12000-16000": {
+              "source_energy_db": -56.01058551362375,
+              "level_error_db": 0.000148564660354187
+            },
+            "16000-20000": {
+              "source_energy_db": -97.13700144599171,
+              "level_error_db": -0.2179963782259224
+            }
+          }
+        },
+        "matched_C_metrics": {
+          "samples": 191688,
+          "alignment": "declared lookahead only; no gain/phase/lag fitting",
+          "fixed_gain_snr_db": 25.786005686762714,
+          "rms_gain_db": -0.0005742648158258162,
+          "peak": 0.3347178101539612,
+          "bands": {
+            "80-1000": {
+              "source_energy_db": -34.91356261862582,
+              "level_error_db": -0.0012495539844128956
+            },
+            "1000-4000": {
+              "source_energy_db": -46.78249321327776,
+              "level_error_db": -0.009304389277491951
+            },
+            "4000-8000": {
+              "source_energy_db": -55.34869986198902,
+              "level_error_db": 0.02402496994990766
+            },
+            "8000-12000": {
+              "source_energy_db": -54.93586268281515,
+              "level_error_db": 0.018621085513961442
+            },
+            "12000-16000": {
+              "source_energy_db": -56.01058551362375,
+              "level_error_db": 0.02111698882030645
+            },
+            "16000-20000": {
+              "source_energy_db": -97.13700144599171,
+              "level_error_db": -0.016740054282051123
+            }
+          }
+        },
+        "standalone_controls_decode_snr_db": 39.234825299465356,
+        "toc_configs": {
+          "31": 200
+        },
+        "cross_target_60db_diagnostic_passed": false
+      },
+      {
+        "path": "actual native codec IPC",
+        "fixture": "music",
+        "bitrate": 128000,
+        "native_binary": "/nix/store/sxv2q6524pyhyvqhjfnjkpqzisy8ii80-rust_nuschl-media-worker-0.1.0-linked/bin/nuschl-media-worker",
+        "settings": {
+          "application": 2049,
+          "complexity": 9,
+          "vbr": 1,
+          "vbr_constraint": 1,
+          "fec": 0,
+          "loss_hint": 0,
+          "precision": 24,
+          "maximum_packet_bytes": 1275
+        },
+        "lookahead_samples": 312,
+        "lookahead_scope": "C query +actual native factory unit assertion, not an IPC telemetry field",
+        "metrics": {
+          "samples": 191688,
+          "alignment": "declared lookahead only; no gain/phase/lag fitting",
+          "fixed_gain_snr_db": 19.519882510462722,
+          "rms_gain_db": -0.034943371447772854,
+          "peak": 0.574918270111084,
+          "bands": {
+            "80-1000": {
+              "source_energy_db": -29.0565182794252,
+              "level_error_db": 0.004115625240756352
+            },
+            "1000-4000": {
+              "source_energy_db": -42.16960076859201,
+              "level_error_db": -2.087825882627e-05
+            },
+            "4000-8000": {
+              "source_energy_db": -50.54571574501629,
+              "level_error_db": -0.0007776602651204008
+            },
+            "8000-12000": {
+              "source_energy_db": -55.263900259800636,
+              "level_error_db": 0.013261720390443906
+            },
+            "12000-16000": {
+              "source_energy_db": -55.54322159131033,
+              "level_error_db": 0.024361975800455234
+            },
+            "16000-20000": {
+              "source_energy_db": -54.82768570060445,
+              "level_error_db": -0.0605085406840679
+            }
+          }
+        },
+        "matched_C_metrics": {
+          "samples": 191688,
+          "alignment": "declared lookahead only; no gain/phase/lag fitting",
+          "fixed_gain_snr_db": 19.438861141736666,
+          "rms_gain_db": -0.03362961478409243,
+          "peak": 0.5814763307571411,
+          "bands": {
+            "80-1000": {
+              "source_energy_db": -29.0565182794252,
+              "level_error_db": 0.005525765114266801
+            },
+            "1000-4000": {
+              "source_energy_db": -42.16960076859201,
+              "level_error_db": -1.5087039133719531e-05
+            },
+            "4000-8000": {
+              "source_energy_db": -50.54571574501629,
+              "level_error_db": 0.009450201208509361
+            },
+            "8000-12000": {
+              "source_energy_db": -55.263900259800636,
+              "level_error_db": 0.04466925577603219
+            },
+            "12000-16000": {
+              "source_energy_db": -55.54322159131033,
+              "level_error_db": 0.019545749040465
+            },
+            "16000-20000": {
+              "source_energy_db": -54.82768570060445,
+              "level_error_db": -0.11606269401767252
+            }
+          }
+        },
+        "toc_configs": {
+          "31": 200
+        }
+      },
+      {
+        "path": "actual wasm-bindgen VoiceEncoder",
+        "fixture": "music",
+        "bitrate": 32000,
+        "settings": {
+          "application": 2049,
+          "complexity": 5,
+          "vbr": 1,
+          "vbr_constraint": 1,
+          "fec": 0,
+          "loss_hint": 0,
+          "precision": 24,
+          "maximum_packet_bytes": 80
+        },
+        "metadata": {
+          "actual_codec": "/nix/store/0ncf4nzpcqbf1vg146fr1akxiqk7f7z0-nuschl-web-audio-codec",
+          "lookahead_samples": 312,
+          "frames": 200,
+          "encode_p50_ns": 183812.99999999357,
+          "encode_p95_ns": 268754.0000000013,
+          "encode_max_ns": 8583704.999999998,
+          "timing_scope": "Node JS+WASM call, not physical browser hardware latency"
+        },
+        "metrics": {
+          "samples": 191688,
+          "alignment": "declared lookahead only; no gain/phase/lag fitting",
+          "fixed_gain_snr_db": 10.845398959079585,
+          "rms_gain_db": -0.033117294712187384,
+          "peak": 0.6814165115356445,
+          "bands": {
+            "80-1000": {
+              "source_energy_db": -29.0565182794252,
+              "level_error_db": 0.0020814976474489233
+            },
+            "1000-4000": {
+              "source_energy_db": -42.16960076859201,
+              "level_error_db": -0.01869299884376696
+            },
+            "4000-8000": {
+              "source_energy_db": -50.54571574501629,
+              "level_error_db": 0.013678775911906457
+            },
+            "8000-12000": {
+              "source_energy_db": -55.263900259800636,
+              "level_error_db": 0.02176188955659255
+            },
+            "12000-16000": {
+              "source_energy_db": -55.54322159131033,
+              "level_error_db": 0.17466812224765801
+            },
+            "16000-20000": {
+              "source_energy_db": -54.82768570060445,
+              "level_error_db": 0.28845295575750746
+            }
+          }
+        },
+        "matched_C_metrics": {
+          "samples": 191688,
+          "alignment": "declared lookahead only; no gain/phase/lag fitting",
+          "fixed_gain_snr_db": 10.895644356069392,
+          "rms_gain_db": -0.03727065208505746,
+          "peak": 0.6570014953613281,
+          "bands": {
+            "80-1000": {
+              "source_energy_db": -29.0565182794252,
+              "level_error_db": -0.00021515923815858197
+            },
+            "1000-4000": {
+              "source_energy_db": -42.16960076859201,
+              "level_error_db": 0.0023345461803083267
+            },
+            "4000-8000": {
+              "source_energy_db": -50.54571574501629,
+              "level_error_db": -0.03075313666698439
+            },
+            "8000-12000": {
+              "source_energy_db": -55.263900259800636,
+              "level_error_db": 0.03323229293719202
+            },
+            "12000-16000": {
+              "source_energy_db": -55.54322159131033,
+              "level_error_db": 0.1395964355560182
+            },
+            "16000-20000": {
+              "source_energy_db": -54.82768570060445,
+              "level_error_db": -0.17157373315354732
+            }
+          }
+        },
+        "standalone_controls_decode_snr_db": 36.21237227450061,
+        "toc_configs": {
+          "31": 200
+        },
+        "cross_target_60db_diagnostic_passed": false
+      },
+      {
+        "path": "actual wasm-bindgen VoiceEncoder",
+        "fixture": "music",
+        "bitrate": 48000,
+        "settings": {
+          "application": 2049,
+          "complexity": 5,
+          "vbr": 1,
+          "vbr_constraint": 1,
+          "fec": 0,
+          "loss_hint": 0,
+          "precision": 24,
+          "maximum_packet_bytes": 120
+        },
+        "metadata": {
+          "actual_codec": "/nix/store/0ncf4nzpcqbf1vg146fr1akxiqk7f7z0-nuschl-web-audio-codec",
+          "lookahead_samples": 312,
+          "frames": 200,
+          "encode_p50_ns": 194453.00000000288,
+          "encode_p95_ns": 261524.00000000143,
+          "encode_max_ns": 8064556.000000003,
+          "timing_scope": "Node JS+WASM call, not physical browser hardware latency"
+        },
+        "metrics": {
+          "samples": 191688,
+          "alignment": "declared lookahead only; no gain/phase/lag fitting",
+          "fixed_gain_snr_db": 12.72425800574516,
+          "rms_gain_db": -0.0242440653824205,
+          "peak": 0.6009477376937866,
+          "bands": {
+            "80-1000": {
+              "source_energy_db": -29.0565182794252,
+              "level_error_db": 0.01239947891058634
+            },
+            "1000-4000": {
+              "source_energy_db": -42.16960076859201,
+              "level_error_db": 0.0006668310620884993
+            },
+            "4000-8000": {
+              "source_energy_db": -50.54571574501629,
+              "level_error_db": 0.011729377860097067
+            },
+            "8000-12000": {
+              "source_energy_db": -55.263900259800636,
+              "level_error_db": 0.013300424482808751
+            },
+            "12000-16000": {
+              "source_energy_db": -55.54322159131033,
+              "level_error_db": -0.03203621417340091
+            },
+            "16000-20000": {
+              "source_energy_db": -54.82768570060445,
+              "level_error_db": 0.31665686265592674
+            }
+          }
+        },
+        "matched_C_metrics": {
+          "samples": 191688,
+          "alignment": "declared lookahead only; no gain/phase/lag fitting",
+          "fixed_gain_snr_db": 12.844159300160387,
+          "rms_gain_db": -0.020260023938110272,
+          "peak": 0.6002357006072998,
+          "bands": {
+            "80-1000": {
+              "source_energy_db": -29.0565182794252,
+              "level_error_db": 0.02101950619728801
+            },
+            "1000-4000": {
+              "source_energy_db": -42.16960076859201,
+              "level_error_db": 0.008126522690415836
+            },
+            "4000-8000": {
+              "source_energy_db": -50.54571574501629,
+              "level_error_db": -0.02180123218467666
+            },
+            "8000-12000": {
+              "source_energy_db": -55.263900259800636,
+              "level_error_db": 0.06578571077269084
+            },
+            "12000-16000": {
+              "source_energy_db": -55.54322159131033,
+              "level_error_db": -0.000770103893455091
+            },
+            "16000-20000": {
+              "source_energy_db": -54.82768570060445,
+              "level_error_db": -0.13430622708930245
+            }
+          }
+        },
+        "standalone_controls_decode_snr_db": 36.24890744862357,
+        "toc_configs": {
+          "31": 200
+        },
+        "cross_target_60db_diagnostic_passed": false
+      },
+      {
+        "path": "actual wasm-bindgen VoiceEncoder",
+        "fixture": "music",
+        "bitrate": 64000,
+        "settings": {
+          "application": 2049,
+          "complexity": 5,
+          "vbr": 1,
+          "vbr_constraint": 1,
+          "fec": 0,
+          "loss_hint": 0,
+          "precision": 24,
+          "maximum_packet_bytes": 160
+        },
+        "metadata": {
+          "actual_codec": "/nix/store/0ncf4nzpcqbf1vg146fr1akxiqk7f7z0-nuschl-web-audio-codec",
+          "lookahead_samples": 312,
+          "frames": 200,
+          "encode_p50_ns": 201774.00000000035,
+          "encode_p95_ns": 309084.99999999604,
+          "encode_max_ns": 8149958.000000002,
+          "timing_scope": "Node JS+WASM call, not physical browser hardware latency"
+        },
+        "metrics": {
+          "samples": 191688,
+          "alignment": "declared lookahead only; no gain/phase/lag fitting",
+          "fixed_gain_snr_db": 14.121786876493925,
+          "rms_gain_db": -0.030890517316233806,
+          "peak": 0.6363643407821655,
+          "bands": {
+            "80-1000": {
+              "source_energy_db": -29.0565182794252,
+              "level_error_db": 0.002798019607418392
+            },
+            "1000-4000": {
+              "source_energy_db": -42.16960076859201,
+              "level_error_db": 0.0016375983517740878
+            },
+            "4000-8000": {
+              "source_energy_db": -50.54571574501629,
+              "level_error_db": 0.010082208618414834
+            },
+            "8000-12000": {
+              "source_energy_db": -55.263900259800636,
+              "level_error_db": 0.02202698727573401
+            },
+            "12000-16000": {
+              "source_energy_db": -55.54322159131033,
+              "level_error_db": 0.3281645325117436
+            },
+            "16000-20000": {
+              "source_energy_db": -54.82768570060445,
+              "level_error_db": 0.1464588468381153
+            }
+          }
+        },
+        "matched_C_metrics": {
+          "samples": 191688,
+          "alignment": "declared lookahead only; no gain/phase/lag fitting",
+          "fixed_gain_snr_db": 14.953636152049567,
+          "rms_gain_db": -0.028943237788240168,
+          "peak": 0.6521690487861633,
+          "bands": {
+            "80-1000": {
+              "source_energy_db": -29.0565182794252,
+              "level_error_db": 0.013620326933602354
+            },
+            "1000-4000": {
+              "source_energy_db": -42.16960076859201,
+              "level_error_db": 0.004250182705115306
+            },
+            "4000-8000": {
+              "source_energy_db": -50.54571574501629,
+              "level_error_db": -0.014721329391029714
+            },
+            "8000-12000": {
+              "source_energy_db": -55.263900259800636,
+              "level_error_db": 0.0369950221824204
+            },
+            "12000-16000": {
+              "source_energy_db": -55.54322159131033,
+              "level_error_db": 0.1028702397402357
+            },
+            "16000-20000": {
+              "source_energy_db": -54.82768570060445,
+              "level_error_db": -0.45581522663414675
+            }
+          }
+        },
+        "standalone_controls_decode_snr_db": 33.734629144551654,
+        "toc_configs": {
+          "31": 200
+        },
+        "cross_target_60db_diagnostic_passed": false
+      },
+      {
+        "path": "actual wasm-bindgen VoiceEncoder",
+        "fixture": "music",
+        "bitrate": 128000,
+        "settings": {
+          "application": 2049,
+          "complexity": 5,
+          "vbr": 1,
+          "vbr_constraint": 1,
+          "fec": 0,
+          "loss_hint": 0,
+          "precision": 24,
+          "maximum_packet_bytes": 320
+        },
+        "metadata": {
+          "actual_codec": "/nix/store/0ncf4nzpcqbf1vg146fr1akxiqk7f7z0-nuschl-web-audio-codec",
+          "lookahead_samples": 312,
+          "frames": 200,
+          "encode_p50_ns": 245094.00000000882,
+          "encode_p95_ns": 361015.99999999936,
+          "encode_max_ns": 8469203,
+          "timing_scope": "Node JS+WASM call, not physical browser hardware latency"
+        },
+        "metrics": {
+          "samples": 191688,
+          "alignment": "declared lookahead only; no gain/phase/lag fitting",
+          "fixed_gain_snr_db": 19.305003174814072,
+          "rms_gain_db": -0.03467391427924618,
+          "peak": 0.5813820958137512,
+          "bands": {
+            "80-1000": {
+              "source_energy_db": -29.0565182794252,
+              "level_error_db": 0.003269391245392173
+            },
+            "1000-4000": {
+              "source_energy_db": -42.16960076859201,
+              "level_error_db": 0.005202123825885659
+            },
+            "4000-8000": {
+              "source_energy_db": -50.54571574501629,
+              "level_error_db": 0.008422781329701463
+            },
+            "8000-12000": {
+              "source_energy_db": -55.263900259800636,
+              "level_error_db": 0.0036621758439929894
+            },
+            "12000-16000": {
+              "source_energy_db": -55.54322159131033,
+              "level_error_db": 0.0025538764584512406
+            },
+            "16000-20000": {
+              "source_energy_db": -54.82768570060445,
+              "level_error_db": -0.034517570053068374
+            }
+          }
+        },
+        "matched_C_metrics": {
+          "samples": 191688,
+          "alignment": "declared lookahead only; no gain/phase/lag fitting",
+          "fixed_gain_snr_db": 19.41901502345981,
+          "rms_gain_db": -0.03705137988530899,
+          "peak": 0.5732539892196655,
+          "bands": {
+            "80-1000": {
+              "source_energy_db": -29.0565182794252,
+              "level_error_db": 0.0006865314885474605
+            },
+            "1000-4000": {
+              "source_energy_db": -42.16960076859201,
+              "level_error_db": 0.0008414309343423682
+            },
+            "4000-8000": {
+              "source_energy_db": -50.54571574501629,
+              "level_error_db": 0.009564283538905085
+            },
+            "8000-12000": {
+              "source_energy_db": -55.263900259800636,
+              "level_error_db": 0.0472897212931453
+            },
+            "12000-16000": {
+              "source_energy_db": -55.54322159131033,
+              "level_error_db": 0.034915061757428506
+            },
+            "16000-20000": {
+              "source_energy_db": -54.82768570060445,
+              "level_error_db": -0.0902642233337337
+            }
+          }
+        },
+        "standalone_controls_decode_snr_db": 37.097003678516415,
+        "toc_configs": {
+          "31": 200
+        },
+        "cross_target_60db_diagnostic_passed": false
+      },
+      {
+        "path": "actual native codec IPC",
+        "fixture": "transients",
+        "bitrate": 128000,
+        "native_binary": "/nix/store/sxv2q6524pyhyvqhjfnjkpqzisy8ii80-rust_nuschl-media-worker-0.1.0-linked/bin/nuschl-media-worker",
+        "settings": {
+          "application": 2049,
+          "complexity": 9,
+          "vbr": 1,
+          "vbr_constraint": 1,
+          "fec": 0,
+          "loss_hint": 0,
+          "precision": 24,
+          "maximum_packet_bytes": 1275
+        },
+        "lookahead_samples": 312,
+        "lookahead_scope": "C query +actual native factory unit assertion, not an IPC telemetry field",
+        "metrics": {
+          "samples": 191688,
+          "alignment": "declared lookahead only; no gain/phase/lag fitting",
+          "fixed_gain_snr_db": 17.355810700719516,
+          "rms_gain_db": -0.0781270708854259,
+          "peak": 0.9059895277023315,
+          "bands": {
+            "80-1000": {
+              "source_energy_db": -49.76839352990336,
+              "level_error_db": 0.0032766540535722043
+            },
+            "1000-4000": {
+              "source_energy_db": -42.93308149387912,
+              "level_error_db": -0.0004538131923260883
+            },
+            "4000-8000": {
+              "source_energy_db": -60.8985648186131,
+              "level_error_db": 0.0010966518617034062
+            },
+            "8000-12000": {
+              "source_energy_db": -61.88051199151144,
+              "level_error_db": 2.8393074891896284e-05
+            },
+            "12000-16000": {
+              "source_energy_db": -61.72890103068084,
+              "level_error_db": 0.007454049358771594
+            },
+            "16000-20000": {
+              "source_energy_db": -61.216283909368954,
+              "level_error_db": 0.013295036439735463
+            }
+          }
+        },
+        "matched_C_metrics": {
+          "samples": 191688,
+          "alignment": "declared lookahead only; no gain/phase/lag fitting",
+          "fixed_gain_snr_db": 16.98116060201449,
+          "rms_gain_db": -0.07863729832670921,
+          "peak": 0.9163525104522705,
+          "bands": {
+            "80-1000": {
+              "source_energy_db": -49.76839352990336,
+              "level_error_db": 0.024742852433323557
+            },
+            "1000-4000": {
+              "source_energy_db": -42.93308149387912,
+              "level_error_db": -0.00176076368549059
+            },
+            "4000-8000": {
+              "source_energy_db": -60.8985648186131,
+              "level_error_db": 0.015019934680431791
+            },
+            "8000-12000": {
+              "source_energy_db": -61.88051199151144,
+              "level_error_db": 0.02467692886451106
+            },
+            "12000-16000": {
+              "source_energy_db": -61.72890103068084,
+              "level_error_db": -0.02672978480590144
+            },
+            "16000-20000": {
+              "source_energy_db": -61.216283909368954,
+              "level_error_db": 0.0021962162400250124
+            }
+          }
+        },
+        "toc_configs": {
+          "31": 200
+        }
+      },
+      {
+        "path": "actual wasm-bindgen VoiceEncoder",
+        "fixture": "transients",
+        "bitrate": 32000,
+        "settings": {
+          "application": 2049,
+          "complexity": 5,
+          "vbr": 1,
+          "vbr_constraint": 1,
+          "fec": 0,
+          "loss_hint": 0,
+          "precision": 24,
+          "maximum_packet_bytes": 80
+        },
+        "metadata": {
+          "actual_codec": "/nix/store/0ncf4nzpcqbf1vg146fr1akxiqk7f7z0-nuschl-web-audio-codec",
+          "lookahead_samples": 312,
+          "frames": 200,
+          "encode_p50_ns": 146492.00000000207,
+          "encode_p95_ns": 233522.99999999104,
+          "encode_max_ns": 10944921,
+          "timing_scope": "Node JS+WASM call, not physical browser hardware latency"
+        },
+        "metrics": {
+          "samples": 191688,
+          "alignment": "declared lookahead only; no gain/phase/lag fitting",
+          "fixed_gain_snr_db": 9.191842509834938,
+          "rms_gain_db": 0.017584899954276274,
+          "peak": 0.9260602593421936,
+          "bands": {
+            "80-1000": {
+              "source_energy_db": -49.76839352990336,
+              "level_error_db": -0.34371570594906614
+            },
+            "1000-4000": {
+              "source_energy_db": -42.93308149387912,
+              "level_error_db": 0.13648029999919878
+            },
+            "4000-8000": {
+              "source_energy_db": -60.8985648186131,
+              "level_error_db": 0.07520102797373705
+            },
+            "8000-12000": {
+              "source_energy_db": -61.88051199151144,
+              "level_error_db": 0.03198573146856605
+            },
+            "12000-16000": {
+              "source_energy_db": -61.72890103068084,
+              "level_error_db": 0.2901350748465654
+            },
+            "16000-20000": {
+              "source_energy_db": -61.216283909368954,
+              "level_error_db": -0.7375843780231417
+            }
+          }
+        },
+        "matched_C_metrics": {
+          "samples": 191688,
+          "alignment": "declared lookahead only; no gain/phase/lag fitting",
+          "fixed_gain_snr_db": 9.199099621144704,
+          "rms_gain_db": 0.016325477323183353,
+          "peak": 0.9260426759719849,
+          "bands": {
+            "80-1000": {
+              "source_energy_db": -49.76839352990336,
+              "level_error_db": -0.3612307829518222
+            },
+            "1000-4000": {
+              "source_energy_db": -42.93308149387912,
+              "level_error_db": 0.13707295442547754
+            },
+            "4000-8000": {
+              "source_energy_db": -60.8985648186131,
+              "level_error_db": 0.06265391506694838
+            },
+            "8000-12000": {
+              "source_energy_db": -61.88051199151144,
+              "level_error_db": 0.028909133729646697
+            },
+            "12000-16000": {
+              "source_energy_db": -61.72890103068084,
+              "level_error_db": 0.2905425905293885
+            },
+            "16000-20000": {
+              "source_energy_db": -61.216283909368954,
+              "level_error_db": -0.7365310888499961
+            }
+          }
+        },
+        "standalone_controls_decode_snr_db": 47.42405472283024,
+        "toc_configs": {
+          "31": 200
+        },
+        "cross_target_60db_diagnostic_passed": false
+      },
+      {
+        "path": "actual wasm-bindgen VoiceEncoder",
+        "fixture": "transients",
+        "bitrate": 48000,
+        "settings": {
+          "application": 2049,
+          "complexity": 5,
+          "vbr": 1,
+          "vbr_constraint": 1,
+          "fec": 0,
+          "loss_hint": 0,
+          "precision": 24,
+          "maximum_packet_bytes": 120
+        },
+        "metadata": {
+          "actual_codec": "/nix/store/0ncf4nzpcqbf1vg146fr1akxiqk7f7z0-nuschl-web-audio-codec",
+          "lookahead_samples": 312,
+          "frames": 200,
+          "encode_p50_ns": 189573.00000000998,
+          "encode_p95_ns": 291434.0000000024,
+          "encode_max_ns": 7669620.000000002,
+          "timing_scope": "Node JS+WASM call, not physical browser hardware latency"
+        },
+        "metrics": {
+          "samples": 191688,
+          "alignment": "declared lookahead only; no gain/phase/lag fitting",
+          "fixed_gain_snr_db": 11.268954282522227,
+          "rms_gain_db": -0.06206054668293431,
+          "peak": 0.9268615245819092,
+          "bands": {
+            "80-1000": {
+              "source_energy_db": -49.76839352990336,
+              "level_error_db": -0.2506167995941467
+            },
+            "1000-4000": {
+              "source_energy_db": -42.93308149387912,
+              "level_error_db": 0.04698870255062062
+            },
+            "4000-8000": {
+              "source_energy_db": -60.8985648186131,
+              "level_error_db": -0.0007772334429577731
+            },
+            "8000-12000": {
+              "source_energy_db": -61.88051199151144,
+              "level_error_db": 0.036177469177186145
+            },
+            "12000-16000": {
+              "source_energy_db": -61.72890103068084,
+              "level_error_db": -0.18082847579787953
+            },
+            "16000-20000": {
+              "source_energy_db": -61.216283909368954,
+              "level_error_db": -0.4963995486084966
+            }
+          }
+        },
+        "matched_C_metrics": {
+          "samples": 191688,
+          "alignment": "declared lookahead only; no gain/phase/lag fitting",
+          "fixed_gain_snr_db": 11.279853325968983,
+          "rms_gain_db": -0.06344159763640665,
+          "peak": 0.9322450757026672,
+          "bands": {
+            "80-1000": {
+              "source_energy_db": -49.76839352990336,
+              "level_error_db": -0.22736178325025908
+            },
+            "1000-4000": {
+              "source_energy_db": -42.93308149387912,
+              "level_error_db": 0.044501782539968365
+            },
+            "4000-8000": {
+              "source_energy_db": -60.8985648186131,
+              "level_error_db": -0.008242603859794001
+            },
+            "8000-12000": {
+              "source_energy_db": -61.88051199151144,
+              "level_error_db": 0.03713553664084909
+            },
+            "12000-16000": {
+              "source_energy_db": -61.72890103068084,
+              "level_error_db": -0.18162051069552487
+            },
+            "16000-20000": {
+              "source_energy_db": -61.216283909368954,
+              "level_error_db": -0.49466653242444814
+            }
+          }
+        },
+        "standalone_controls_decode_snr_db": 44.75573725943874,
+        "toc_configs": {
+          "31": 200
+        },
+        "cross_target_60db_diagnostic_passed": false
+      },
+      {
+        "path": "actual wasm-bindgen VoiceEncoder",
+        "fixture": "transients",
+        "bitrate": 64000,
+        "settings": {
+          "application": 2049,
+          "complexity": 5,
+          "vbr": 1,
+          "vbr_constraint": 1,
+          "fec": 0,
+          "loss_hint": 0,
+          "precision": 24,
+          "maximum_packet_bytes": 160
+        },
+        "metadata": {
+          "actual_codec": "/nix/store/0ncf4nzpcqbf1vg146fr1akxiqk7f7z0-nuschl-web-audio-codec",
+          "lookahead_samples": 312,
+          "frames": 200,
+          "encode_p50_ns": 178373.00000000055,
+          "encode_p95_ns": 298394.9999999993,
+          "encode_max_ns": 8107367.000000004,
+          "timing_scope": "Node JS+WASM call, not physical browser hardware latency"
+        },
+        "metrics": {
+          "samples": 191688,
+          "alignment": "declared lookahead only; no gain/phase/lag fitting",
+          "fixed_gain_snr_db": 13.758360423549703,
+          "rms_gain_db": -0.11557373419578187,
+          "peak": 0.8565020561218262,
+          "bands": {
+            "80-1000": {
+              "source_energy_db": -49.76839352990336,
+              "level_error_db": -0.04061910957079118
+            },
+            "1000-4000": {
+              "source_energy_db": -42.93308149387912,
+              "level_error_db": -0.04141998545609514
+            },
+            "4000-8000": {
+              "source_energy_db": -60.8985648186131,
+              "level_error_db": 0.006235348147368698
+            },
+            "8000-12000": {
+              "source_energy_db": -61.88051199151144,
+              "level_error_db": 0.05796739828136918
+            },
+            "12000-16000": {
+              "source_energy_db": -61.72890103068084,
+              "level_error_db": 0.04763790292236509
+            },
+            "16000-20000": {
+              "source_energy_db": -61.216283909368954,
+              "level_error_db": -0.0017687960217790649
+            }
+          }
+        },
+        "matched_C_metrics": {
+          "samples": 191688,
+          "alignment": "declared lookahead only; no gain/phase/lag fitting",
+          "fixed_gain_snr_db": 13.777860586883708,
+          "rms_gain_db": -0.12210173118800108,
+          "peak": 0.8565012216567993,
+          "bands": {
+            "80-1000": {
+              "source_energy_db": -49.76839352990336,
+              "level_error_db": -0.07238453438546891
+            },
+            "1000-4000": {
+              "source_energy_db": -42.93308149387912,
+              "level_error_db": -0.04633867711824857
+            },
+            "4000-8000": {
+              "source_energy_db": -60.8985648186131,
+              "level_error_db": 0.000750209478549649
+            },
+            "8000-12000": {
+              "source_energy_db": -61.88051199151144,
+              "level_error_db": 0.05663721077546507
+            },
+            "12000-16000": {
+              "source_energy_db": -61.72890103068084,
+              "level_error_db": 0.04292668557243948
+            },
+            "16000-20000": {
+              "source_energy_db": -61.216283909368954,
+              "level_error_db": -0.0016045217066230364
+            }
+          }
+        },
+        "standalone_controls_decode_snr_db": 29.531247697463332,
+        "toc_configs": {
+          "31": 200
+        },
+        "cross_target_60db_diagnostic_passed": false
+      },
+      {
+        "path": "actual wasm-bindgen VoiceEncoder",
+        "fixture": "transients",
+        "bitrate": 128000,
+        "settings": {
+          "application": 2049,
+          "complexity": 5,
+          "vbr": 1,
+          "vbr_constraint": 1,
+          "fec": 0,
+          "loss_hint": 0,
+          "precision": 24,
+          "maximum_packet_bytes": 320
+        },
+        "metadata": {
+          "actual_codec": "/nix/store/0ncf4nzpcqbf1vg146fr1akxiqk7f7z0-nuschl-web-audio-codec",
+          "lookahead_samples": 312,
+          "frames": 200,
+          "encode_p50_ns": 187673.00000000375,
+          "encode_p95_ns": 319835.0000000119,
+          "encode_max_ns": 9381317,
+          "timing_scope": "Node JS+WASM call, not physical browser hardware latency"
+        },
+        "metrics": {
+          "samples": 191688,
+          "alignment": "declared lookahead only; no gain/phase/lag fitting",
+          "fixed_gain_snr_db": 16.95811324659758,
+          "rms_gain_db": -0.08482053116864738,
+          "peak": 0.9198082089424133,
+          "bands": {
+            "80-1000": {
+              "source_energy_db": -49.76839352990336,
+              "level_error_db": 0.0041445784291007474
+            },
+            "1000-4000": {
+              "source_energy_db": -42.93308149387912,
+              "level_error_db": -0.00860438502150887
+            },
+            "4000-8000": {
+              "source_energy_db": -60.8985648186131,
+              "level_error_db": 0.013264911638480958
+            },
+            "8000-12000": {
+              "source_energy_db": -61.88051199151144,
+              "level_error_db": 0.018741897390081634
+            },
+            "12000-16000": {
+              "source_energy_db": -61.72890103068084,
+              "level_error_db": -0.007272721483988956
+            },
+            "16000-20000": {
+              "source_energy_db": -61.216283909368954,
+              "level_error_db": 0.02438686947812867
+            }
+          }
+        },
+        "matched_C_metrics": {
+          "samples": 191688,
+          "alignment": "declared lookahead only; no gain/phase/lag fitting",
+          "fixed_gain_snr_db": 16.93605509403746,
+          "rms_gain_db": -0.09024068926573607,
+          "peak": 0.9206604361534119,
+          "bands": {
+            "80-1000": {
+              "source_energy_db": -49.76839352990336,
+              "level_error_db": 0.015915323066791772
+            },
+            "1000-4000": {
+              "source_energy_db": -42.93308149387912,
+              "level_error_db": -0.015040713651453024
+            },
+            "4000-8000": {
+              "source_energy_db": -60.8985648186131,
+              "level_error_db": 0.007659217001479879
+            },
+            "8000-12000": {
+              "source_energy_db": -61.88051199151144,
+              "level_error_db": 0.01843566558847667
+            },
+            "12000-16000": {
+              "source_energy_db": -61.72890103068084,
+              "level_error_db": -0.011150989559703
+            },
+            "16000-20000": {
+              "source_energy_db": -61.216283909368954,
+              "level_error_db": 0.025010067977857663
+            }
+          }
+        },
+        "standalone_controls_decode_snr_db": 36.39503513417866,
+        "toc_configs": {
+          "31": 200
+        },
+        "cross_target_60db_diagnostic_passed": false
+      },
+      {
+        "path": "actual native codec IPC",
+        "fixture": "highband",
+        "bitrate": 128000,
+        "native_binary": "/nix/store/sxv2q6524pyhyvqhjfnjkpqzisy8ii80-rust_nuschl-media-worker-0.1.0-linked/bin/nuschl-media-worker",
+        "settings": {
+          "application": 2049,
+          "complexity": 9,
+          "vbr": 1,
+          "vbr_constraint": 1,
+          "fec": 0,
+          "loss_hint": 0,
+          "precision": 24,
+          "maximum_packet_bytes": 1275
+        },
+        "lookahead_samples": 312,
+        "lookahead_scope": "C query +actual native factory unit assertion, not an IPC telemetry field",
+        "metrics": {
+          "samples": 191688,
+          "alignment": "declared lookahead only; no gain/phase/lag fitting",
+          "fixed_gain_snr_db": 23.6650222046506,
+          "rms_gain_db": -0.04232122245084892,
+          "peak": 0.2909430265426636,
+          "bands": {
+            "80-1000": {
+              "source_energy_db": -34.68783185727989,
+              "level_error_db": -0.0003676107695447619
+            },
+            "1000-4000": {
+              "source_energy_db": -42.80076513848595,
+              "level_error_db": -0.0002453354242479633
+            },
+            "4000-8000": {
+              "source_energy_db": -39.22778745893822,
+              "level_error_db": -0.017048679027474836
+            },
+            "8000-12000": {
+              "source_energy_db": -39.22778944389174,
+              "level_error_db": -0.00010143779338477652
+            },
+            "12000-16000": {
+              "source_energy_db": -39.27858436745952,
+              "level_error_db": 0.0036098863261192723
+            },
+            "16000-20000": {
+              "source_energy_db": -36.21748589582708,
+              "level_error_db": -0.12110551753408577
+            }
+          }
+        },
+        "matched_C_metrics": {
+          "samples": 191688,
+          "alignment": "declared lookahead only; no gain/phase/lag fitting",
+          "fixed_gain_snr_db": 23.71726696539906,
+          "rms_gain_db": 0.0022023047868355862,
+          "peak": 0.30086231231689453,
+          "bands": {
+            "80-1000": {
+              "source_energy_db": -34.68783185727989,
+              "level_error_db": 0.0022171483122267006
+            },
+            "1000-4000": {
+              "source_energy_db": -42.80076513848595,
+              "level_error_db": 0.0023525673810183513
+            },
+            "4000-8000": {
+              "source_energy_db": -39.22778745893822,
+              "level_error_db": 0.006621244776096194
+            },
+            "8000-12000": {
+              "source_energy_db": -39.22778944389174,
+              "level_error_db": -0.0034506643278993956
+            },
+            "12000-16000": {
+              "source_energy_db": -39.27858436745952,
+              "level_error_db": 0.0016496953368383034
+            },
+            "16000-20000": {
+              "source_energy_db": -36.21748589582708,
+              "level_error_db": 0.0030609012589253824
+            }
+          }
+        },
+        "toc_configs": {
+          "31": 200
+        }
+      },
+      {
+        "path": "actual wasm-bindgen VoiceEncoder",
+        "fixture": "highband",
+        "bitrate": 32000,
+        "settings": {
+          "application": 2049,
+          "complexity": 5,
+          "vbr": 1,
+          "vbr_constraint": 1,
+          "fec": 0,
+          "loss_hint": 0,
+          "precision": 24,
+          "maximum_packet_bytes": 80
+        },
+        "metadata": {
+          "actual_codec": "/nix/store/0ncf4nzpcqbf1vg146fr1akxiqk7f7z0-nuschl-web-audio-codec",
+          "lookahead_samples": 312,
+          "frames": 200,
+          "encode_p50_ns": 205772.99999999354,
+          "encode_p95_ns": 270654.99999999785,
+          "encode_max_ns": 7866963.999999996,
+          "timing_scope": "Node JS+WASM call, not physical browser hardware latency"
+        },
+        "metrics": {
+          "samples": 191688,
+          "alignment": "declared lookahead only; no gain/phase/lag fitting",
+          "fixed_gain_snr_db": 24.022900597167247,
+          "rms_gain_db": -0.059175278069826365,
+          "peak": 0.2817196846008301,
+          "bands": {
+            "80-1000": {
+              "source_energy_db": -34.68783185727989,
+              "level_error_db": -0.000247977995221163
+            },
+            "1000-4000": {
+              "source_energy_db": -42.80076513848595,
+              "level_error_db": 0.003286484033772254
+            },
+            "4000-8000": {
+              "source_energy_db": -39.22778745893822,
+              "level_error_db": 0.13274233011681574
+            },
+            "8000-12000": {
+              "source_energy_db": -39.22778944389174,
+              "level_error_db": 0.039178051213412564
+            },
+            "12000-16000": {
+              "source_energy_db": -39.27858436745952,
+              "level_error_db": -0.01014093931046374
+            },
+            "16000-20000": {
+              "source_energy_db": -36.21748589582708,
+              "level_error_db": -0.26682892518114715
+            }
+          }
+        },
+        "matched_C_metrics": {
+          "samples": 191688,
+          "alignment": "declared lookahead only; no gain/phase/lag fitting",
+          "fixed_gain_snr_db": 23.875487413408386,
+          "rms_gain_db": 0.01674677939175951,
+          "peak": 0.2971149682998657,
+          "bands": {
+            "80-1000": {
+              "source_energy_db": -34.68783185727989,
+              "level_error_db": -0.005197653026651829
+            },
+            "1000-4000": {
+              "source_energy_db": -42.80076513848595,
+              "level_error_db": -0.0017646917364718094
+            },
+            "4000-8000": {
+              "source_energy_db": -39.22778745893822,
+              "level_error_db": 0.049116874397022475
+            },
+            "8000-12000": {
+              "source_energy_db": -39.22778944389174,
+              "level_error_db": 0.012540570461506964
+            },
+            "12000-16000": {
+              "source_energy_db": -39.27858436745952,
+              "level_error_db": -0.017096156394843874
+            },
+            "16000-20000": {
+              "source_energy_db": -36.21748589582708,
+              "level_error_db": 0.029818810334202597
+            }
+          }
+        },
+        "standalone_controls_decode_snr_db": 38.38138332458278,
+        "toc_configs": {
+          "31": 200
+        },
+        "cross_target_60db_diagnostic_passed": false
+      },
+      {
+        "path": "actual wasm-bindgen VoiceEncoder",
+        "fixture": "highband",
+        "bitrate": 48000,
+        "settings": {
+          "application": 2049,
+          "complexity": 5,
+          "vbr": 1,
+          "vbr_constraint": 1,
+          "fec": 0,
+          "loss_hint": 0,
+          "precision": 24,
+          "maximum_packet_bytes": 120
+        },
+        "metadata": {
+          "actual_codec": "/nix/store/0ncf4nzpcqbf1vg146fr1akxiqk7f7z0-nuschl-web-audio-codec",
+          "lookahead_samples": 312,
+          "frames": 200,
+          "encode_p50_ns": 186152.99999999735,
+          "encode_p95_ns": 261164.00000000795,
+          "encode_max_ns": 7508557.000000003,
+          "timing_scope": "Node JS+WASM call, not physical browser hardware latency"
+        },
+        "metrics": {
+          "samples": 191688,
+          "alignment": "declared lookahead only; no gain/phase/lag fitting",
+          "fixed_gain_snr_db": 24.25322429173084,
+          "rms_gain_db": -0.0975528426412583,
+          "peak": 0.29673436284065247,
+          "bands": {
+            "80-1000": {
+              "source_energy_db": -34.68783185727989,
+              "level_error_db": -0.006345901770335354
+            },
+            "1000-4000": {
+              "source_energy_db": -42.80076513848595,
+              "level_error_db": -0.0054624399230275705
+            },
+            "4000-8000": {
+              "source_energy_db": -39.22778745893822,
+              "level_error_db": 0.09037171393480688
+            },
+            "8000-12000": {
+              "source_energy_db": -39.22778944389174,
+              "level_error_db": -0.03875015584218594
+            },
+            "12000-16000": {
+              "source_energy_db": -39.27858436745952,
+              "level_error_db": -0.1254125633248043
+            },
+            "16000-20000": {
+              "source_energy_db": -36.21748589582708,
+              "level_error_db": -0.258478995913926
+            }
+          }
+        },
+        "matched_C_metrics": {
+          "samples": 191688,
+          "alignment": "declared lookahead only; no gain/phase/lag fitting",
+          "fixed_gain_snr_db": 24.116190186537374,
+          "rms_gain_db": 0.009600307687215794,
+          "peak": 0.2978781461715698,
+          "bands": {
+            "80-1000": {
+              "source_energy_db": -34.68783185727989,
+              "level_error_db": 0.0082776991162909
+            },
+            "1000-4000": {
+              "source_energy_db": -42.80076513848595,
+              "level_error_db": 0.00908432567595851
+            },
+            "4000-8000": {
+              "source_energy_db": -39.22778745893822,
+              "level_error_db": 0.058028633188267384
+            },
+            "8000-12000": {
+              "source_energy_db": -39.22778944389174,
+              "level_error_db": -0.00337943086526197
+            },
+            "12000-16000": {
+              "source_energy_db": -39.27858436745952,
+              "level_error_db": -0.0006924003910610067
+            },
+            "16000-20000": {
+              "source_energy_db": -36.21748589582708,
+              "level_error_db": -0.002618128171309971
+            }
+          }
+        },
+        "standalone_controls_decode_snr_db": 36.84552623922897,
+        "toc_configs": {
+          "31": 200
+        },
+        "cross_target_60db_diagnostic_passed": false
+      },
+      {
+        "path": "actual wasm-bindgen VoiceEncoder",
+        "fixture": "highband",
+        "bitrate": 64000,
+        "settings": {
+          "application": 2049,
+          "complexity": 5,
+          "vbr": 1,
+          "vbr_constraint": 1,
+          "fec": 0,
+          "loss_hint": 0,
+          "precision": 24,
+          "maximum_packet_bytes": 160
+        },
+        "metadata": {
+          "actual_codec": "/nix/store/0ncf4nzpcqbf1vg146fr1akxiqk7f7z0-nuschl-web-audio-codec",
+          "lookahead_samples": 312,
+          "frames": 200,
+          "encode_p50_ns": 188842.99999999854,
+          "encode_p95_ns": 294474.9999999985,
+          "encode_max_ns": 7960853.999999997,
+          "timing_scope": "Node JS+WASM call, not physical browser hardware latency"
+        },
+        "metrics": {
+          "samples": 191688,
+          "alignment": "declared lookahead only; no gain/phase/lag fitting",
+          "fixed_gain_snr_db": 24.420623036927974,
+          "rms_gain_db": -0.07464539725070159,
+          "peak": 0.2967231869697571,
+          "bands": {
+            "80-1000": {
+              "source_energy_db": -34.68783185727989,
+              "level_error_db": 0.006816668429935839
+            },
+            "1000-4000": {
+              "source_energy_db": -42.80076513848595,
+              "level_error_db": 0.007136009247701322
+            },
+            "4000-8000": {
+              "source_energy_db": -39.22778745893822,
+              "level_error_db": 0.14066785018430264
+            },
+            "8000-12000": {
+              "source_energy_db": -39.22778944389174,
+              "level_error_db": -0.01025853392401103
+            },
+            "12000-16000": {
+              "source_energy_db": -39.27858436745952,
+              "level_error_db": -0.11042006139735516
+            },
+            "16000-20000": {
+              "source_energy_db": -36.21748589582708,
+              "level_error_db": -0.24407136832369952
+            }
+          }
+        },
+        "matched_C_metrics": {
+          "samples": 191688,
+          "alignment": "declared lookahead only; no gain/phase/lag fitting",
+          "fixed_gain_snr_db": 24.13301368033466,
+          "rms_gain_db": 0.005434907504079309,
+          "peak": 0.2978949546813965,
+          "bands": {
+            "80-1000": {
+              "source_energy_db": -34.68783185727989,
+              "level_error_db": 0.004615895559413205
+            },
+            "1000-4000": {
+              "source_energy_db": -42.80076513848595,
+              "level_error_db": 0.004680260034530639
+            },
+            "4000-8000": {
+              "source_energy_db": -39.22778745893822,
+              "level_error_db": 0.035482676768689304
+            },
+            "8000-12000": {
+              "source_energy_db": -39.22778944389174,
+              "level_error_db": -0.004782754059020295
+            },
+            "12000-16000": {
+              "source_energy_db": -39.27858436745952,
+              "level_error_db": -0.0006556895848719282
+            },
+            "16000-20000": {
+              "source_energy_db": -36.21748589582708,
+              "level_error_db": -0.0011010803647755589
+            }
+          }
+        },
+        "standalone_controls_decode_snr_db": 40.864859255088454,
+        "toc_configs": {
+          "31": 200
+        },
+        "cross_target_60db_diagnostic_passed": false
+      },
+      {
+        "path": "actual wasm-bindgen VoiceEncoder",
+        "fixture": "highband",
+        "bitrate": 128000,
+        "settings": {
+          "application": 2049,
+          "complexity": 5,
+          "vbr": 1,
+          "vbr_constraint": 1,
+          "fec": 0,
+          "loss_hint": 0,
+          "precision": 24,
+          "maximum_packet_bytes": 320
+        },
+        "metadata": {
+          "actual_codec": "/nix/store/0ncf4nzpcqbf1vg146fr1akxiqk7f7z0-nuschl-web-audio-codec",
+          "lookahead_samples": 312,
+          "frames": 200,
+          "encode_p50_ns": 207292.99999999994,
+          "encode_p95_ns": 272244.0000000006,
+          "encode_max_ns": 8606024.000000006,
+          "timing_scope": "Node JS+WASM call, not physical browser hardware latency"
+        },
+        "metrics": {
+          "samples": 191688,
+          "alignment": "declared lookahead only; no gain/phase/lag fitting",
+          "fixed_gain_snr_db": 24.87260518378763,
+          "rms_gain_db": -0.03232556750490818,
+          "peak": 0.2971497178077698,
+          "bands": {
+            "80-1000": {
+              "source_energy_db": -34.68783185727989,
+              "level_error_db": -0.0001947741291259419
+            },
+            "1000-4000": {
+              "source_energy_db": -42.80076513848595,
+              "level_error_db": -0.00023157233231403608
+            },
+            "4000-8000": {
+              "source_energy_db": -39.22778745893822,
+              "level_error_db": -0.0026442140024095194
+            },
+            "8000-12000": {
+              "source_energy_db": -39.22778944389174,
+              "level_error_db": -0.007983599961141157
+            },
+            "12000-16000": {
+              "source_energy_db": -39.27858436745952,
+              "level_error_db": -0.0029279408854661695
+            },
+            "16000-20000": {
+              "source_energy_db": -36.21748589582708,
+              "level_error_db": -0.09068557743176378
+            }
+          }
+        },
+        "matched_C_metrics": {
+          "samples": 191688,
+          "alignment": "declared lookahead only; no gain/phase/lag fitting",
+          "fixed_gain_snr_db": 24.16089115654765,
+          "rms_gain_db": -0.008666670297897552,
+          "peak": 0.2964898347854614,
+          "bands": {
+            "80-1000": {
+              "source_energy_db": -34.68783185727989,
+              "level_error_db": -0.0011829513128387705
+            },
+            "1000-4000": {
+              "source_energy_db": -42.80076513848595,
+              "level_error_db": -0.0006028812252297651
+            },
+            "4000-8000": {
+              "source_energy_db": -39.22778745893822,
+              "level_error_db": -0.0034642522715065127
+            },
+            "8000-12000": {
+              "source_energy_db": -39.22778944389174,
+              "level_error_db": -0.005995075250529977
+            },
+            "12000-16000": {
+              "source_energy_db": -39.27858436745952,
+              "level_error_db": -0.014546532916860266
+            },
+            "16000-20000": {
+              "source_energy_db": -36.21748589582708,
+              "level_error_db": -0.013511433765391007
+            }
+          }
+        },
+        "standalone_controls_decode_snr_db": 40.101735277853756,
+        "toc_configs": {
+          "31": 200
+        },
+        "cross_target_60db_diagnostic_passed": false
+      }
+    ]
+  },
+  "open_findings": [
+    "RLD lower-delay lookahead is real, but sparse-transient and some browser-profile speech-like Rust regressions prevent an equivalence claim.",
+    "Native/WASM encoded output is not bit-identical under these controls; preserve the initially failing60dB diagnostic.",
+    "Browser complexity5 and native FEC/loss policy still require separate review; requestedFEC and actualcodedFEC are distinct.",
+    "Capture preprocessing/rate conversion and perceptual/hardware tests remain outside this constructor-specific checkpoint."
+  ],
+  "full_evidence": "~/.cache/nuschl-opus-tx-quality/handoff.json"
+}
