@@ -226,7 +226,7 @@ class LocalRelease(unittest.TestCase):
             self.assertEqual(mode, 'x', 'mutable archive must never be parsed')
             return real(file, mode, *args, **kwargs)
         with patch.object(local.zipfile, 'ZipFile', side_effect=only_new_archives):
-            with self.assertRaisesRegex(ValueError, 'ZIP bytes'):
+            with self.assertRaisesRegex(ValueError, 'archive differs'):
                 local.archive_tree(path, local.tree(self.stage / 'install/windows'), zipped=True,
                                    source_root=self.stage / 'install/windows')
 

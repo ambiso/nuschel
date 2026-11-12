@@ -234,43 +234,14 @@ def select_product(flake, name):
 
 
 def archive_tree(path, expected, prefix=None, *, zipped=False, source_root=None):
-    if zipped:
-        # Do not parse/decompress a mutable ZIP at all. Reconstruct our canonical
-        # archive from already store-matched inputs and compare its exact digest.
-        require(source_root is not None and tree(source_root) == expected,
-                'canonical ZIP needs its exact selected input tree')
-        with tempfile.TemporaryDirectory(prefix='release-zip-check-') as temporary:
-            canonical = Path(temporary) / 'expected.zip'
-            canonical_zip(source_root, canonical, prefix)
-            require(sha(path) == sha(canonical), 'ZIP bytes differ from canonical selected product')
-        return
-    found, total = {}, 0
-    with tarfile.open(path, 'r:') as archive:
-        members = archive
-        for item in members:
-            name = item.name
-            size = item.size
-            require(item.isfile(), 'regular-only archive required')
-            require(len(found) < 32768 and name not in found and size <= 512 * 1024**2,
-                    'duplicate/oversized archive member')
-            total += size
-            require(total <= 4 * 1024**3, 'aggregate archive size exceeded')
-            if prefix:
-                require(name.startswith(prefix + '/'), 'foreign archive root')
-                name = name[len(prefix) + 1:]
-            require(name in expected and name not in found, 'foreign/duplicate archive file')
-            require(size == expected[name]['size'], 'archive member size differs from product')
-            mode = item.mode
-            stream = archive.extractfile(item)
-            digest, count = hashlib.sha256(), 0
-            with stream:
-                while block := stream.read(1024 * 1024):
-                    count += len(block)
-                    require(count <= size, 'archive expanded beyond declared length')
-                    digest.update(block)
-            require(count == size, 'truncated archive member')
-            found[name] = {'size': size, 'sha256': digest.hexdigest(), 'executable': bool(mode & 0o111)}
-    require(found == expected, 'archive differs from exact selected product')
+    # Never parse mutable release archives. Both producers are deterministic;
+    # reconstruct from store-matched inputs and compare exact bytes by digest.
+    require(source_root is not None and tree(source_root) == expected,
+            'canonical archive needs its exact selected input tree')
+    with tempfile.TemporaryDirectory(prefix='release-archive-check-') as temporary:
+        canonical = Path(temporary) / ('expected.zip' if zipped else 'expected.tar')
+        (canonical_zip if zipped else canonical_tar)(source_root, canonical, prefix)
+        require(sha(path) == sha(canonical), 'archive differs from canonical selected product')
 
 
 def nix_instructions(repository, commit):
@@ -291,12 +262,14 @@ def check_products(stage, ledger, repository):
     mac = tree(Path(expected['macos-app']['output']) / 'Nuschl.app')
     require(tree(stage / 'install/Nuschl.app') == mac, 'staged Mac files differ from selected Nix product')
     version = ledger['version']
-    archive_tree(stage / 'macos-install.tar', mac, 'Nuschl.app')
+    archive_tree(stage / 'macos-install.tar', mac, 'Nuschl.app',
+                 source_root=stage / 'install/Nuschl.app')
     archive_tree(stage / f'dist/nuschl-{version}-macos-universal.zip', mac, 'Nuschl.app', zipped=True,
                  source_root=stage / 'install/Nuschl.app')
     archive_tree(stage / f'dist/nuschl-{version}-windows-x86_64.zip', mapped, zipped=True, source_root=stage / 'install/windows')
     archive_tree(stage / f'dist/nuschl-{version}-web-site.tar',
-                 tree(Path(expected['web-site']['output']), size=512 * 1024**2))
+                 tree(Path(expected['web-site']['output']), size=512 * 1024**2),
+                 source_root=Path(expected['web-site']['output']))
     require(load(stage / f'dist/nuschl-{version}-linux-nix.json') == expected,
             'Linux build references differ from actual selected outputs')
     require(sha(stage / 'dist/flake.lock') == sha(stage / 'source/flake.lock'), 'foreign published lockfile')
