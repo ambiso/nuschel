@@ -447,7 +447,7 @@ fn picker(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement> {
         };
         let choose = Rc::new(choose);
         let key_choose = choose.clone();
-        div()
+        let control = div()
             .id(("font-choice", index))
             .role(Role::RadioButton)
             .aria_label(label.clone())
@@ -470,9 +470,11 @@ fn picker(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement> {
                 if matches!(event.keystroke.key.as_str(), "enter" | "space") {
                     key_choose(this, window, cx);
                     cx.notify();
+                    cx.stop_propagation();
                 }
             }))
-            .child(text!(label).with_id(("font-choice-name", index)))
+            .child(text!(label).with_id(("font-choice-name", index)));
+        crate::layout::focusable(("font-choice", index), control)
     });
     Some(
         div()

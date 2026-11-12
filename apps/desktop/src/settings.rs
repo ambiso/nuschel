@@ -506,8 +506,10 @@ fn device_list(
         let chosen = device.as_deref() == selected;
         let live = device.is_some() && device.as_deref() == active;
         let choose = choose.clone();
+        let key_choose = choose.clone();
         let value = device.clone();
-        div()
+        let key_value = value.clone();
+        let control = div()
             .id((id, index))
             .role(Role::RadioButton)
             .aria_selected(chosen)
@@ -526,6 +528,13 @@ fn device_list(
             .on_click(cx.listener(move |this, _, _, cx| {
                 choose(this, value.clone());
                 cx.notify();
+            }))
+            .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
+                if activation(event) {
+                    key_choose(this, key_value.clone());
+                    cx.notify();
+                    cx.stop_propagation();
+                }
             }))
             .child(
                 div()
@@ -549,7 +558,8 @@ fn device_list(
                         .text_color(color(SUCCESS))
                         .child(text!("in use").with_id((id, index + 2000))),
                 )
-            })
+            });
+        crate::layout::focusable((id, index), control)
     });
     div()
         .rounded(px(8.))
