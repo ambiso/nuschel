@@ -788,6 +788,19 @@ Later (reported):
       A printable key in the timeline goes to the composer and is typed there.
 - [ ] An optional Orca step in `tests/accessibility.py` (Orca 51 has a D-Bus test
       interface; a probe exists in the 2026-11-11 session's scratchpad).
+- [ ] Audit total runtime RAM use and remove low-hanging allocation/retention
+      costs (user, 2026-11-12). Aim for a chat client near 10 MB where avoidable
+      overhead permits; measure feasibility instead of assuming the budget.
+      Include the desktop, all workers, allocator/heap retention, shared mappings
+      and GPU/driver/texture allocations. Report private/proportional memory
+      separately from summed RSS so shared pages are not counted repeatedly.
+      Establish reproducible idle, connected/voice, long-history, multi-server
+      and image-heavy baselines, then verify cleanup after leaving/reopening
+      views and servers. Inspect oversized caches/queues/pools, duplicate document
+      or image buffers, unnecessary eager workers and allocation churn; prioritize
+      simple measured reductions without sacrificing isolation, paging, audio
+      latency, accessibility or image correctness. Use owned fixtures and preserve
+      before/after evidence. Queued behind the urgent VAD fix.
 - [ ] With a screen reader, 1000 loaded messages cost about 4–5 ms per frame (labels
       plus AccessKit work); still 60 fps.
 - [x] Friends and local nicknames by certificate hash (heart marker, nickname shown
@@ -1103,14 +1116,23 @@ The media worker uses per-speaker adaptive jitter buffers and Opus loss concealm
       not a claim that the synthetic surrogate is labeled room noise or that the
       user's physical-input mechanism is fully identified. Matched white-noise
       controls stay closed in old/new builds; non-48k conversion changes marginal
-      quiet speech but has not reproduced this background failure. Test a minimal
-      correction using the existing AGC2 noise estimator: its default output
-      noise ceiling (-50 dBFS) exceeds the postprocessed gate floor (-60 dBFS).
-      Independently review indefinite medium-confidence hangover refresh. Preserve
-      cold/quiet/high-SNR speech, sustained vowels, immediate onset and actual
-      encoded level; no hard speech-duration cutoff or fixed pre-gain -60 floor.
-      Validate periodic mechanical/footfall controls without claiming synthetic
-      noise is the user's room recording. Earshot is dropped at user request;
+      quiet speech but has not reproduced this background failure. The physical
+      AGC noise-ceiling candidate is rejected: genuine quiet speech loses about
+      14 dB after noise. Finite confidence hold and scalar pre-gain SNR prototypes
+      do not improve the actual private walking-pad fixture; none is integrated
+      as a fix. User reports AGC off almost entirely removes false triggering but
+      leaves the microphone quiet; retain speech amplification. All user-authorized
+      recordings and derived audio remain private outside the repository and must
+      never be committed. The 80-second recording has a vocalization near four
+      seconds and normal speech starting at 67 seconds; background measurements
+      exclude the first ten seconds. The already-shipped Sonora/WebRTC RNN is a
+      positive detector-only candidate: primary 30–60 s background gate frames
+      fall 2204/3000 to 66/3000 with identical processed PCM. Preserve RNNoise
+      suppression, a stable pre-local-NS/pre-gain detector tap, persistent state
+      across AGC/NS changes and first-syllable retention. Calibrate the new score
+      thresholds against quiet speech and walking-pad noise before integration;
+      the old 0.6 default can add excessive quiet-speech onset delay. No new model
+      download or Earshot work;
       playback-lifetime work remains secondary.
       Claude's separate slider/threshold-helper edits must stay disjoint. Existing
       short DSP checks do not establish long-idle stability.
