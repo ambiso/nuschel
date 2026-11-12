@@ -88,27 +88,35 @@ Switching only the enum is not a demonstrated quality fix.
 ## Capture defaults are another independent variable
 
 Native capture follows the chosen device's rate/channel configuration, averages
-its channels to mono and converts to 48 kHz. `CaptureConverter` is still a
-linear interpolator; its separate non-48 kHz passband/aliasing audit remains open.
-The output/reference filtered SRC fixes do not imply capture is filtered.
+its channels to mono and converts to 48 kHz. Non-48 kHz capture now uses the
+scalar Rust Speex quality-3 filter, with exact-ratio clocks and capture-side
+filter-delay compensation. At 48 kHz it preserves the input samples.
 
 The default `AudioSettings` enable voice activity, sensitivity 0.5, noise
 suppression, automatic gain and automatic echo handling. In the media worker:
 
 1. Sonora's high-pass stage runs on 10 ms mono frames. Its AEC is enabled when
    the route needs Nuschl cancellation; recognized upstream AEC is reused instead.
-2. `nnnoiseless` RNNoise always estimates voice probability. Its processed PCM
-   replaces capture when noise suppression is enabled; recognized upstream
-   suppression bypasses this replacement to avoid doubling it.
+2. A persistent Sonora/WebRTC RNN measures speech probability before local
+   suppression and adaptive gain. Its model already ships with Sonora; this
+   adds no model download. Its state survives gain/suppression setting changes.
+   `nnnoiseless` RNNoise still supplies noise suppression: its processed PCM
+   replaces capture when enabled, unless recognized upstream suppression already
+   supplies it. RNNoise's probability is no longer the transmit decision.
 3. Sonora AGC2 adaptive digital gain defaults on, with max gain 30 dB and limiter.
    Echo-dominant frames cannot raise gain beyond the remembered near-end ceiling.
    With AGC disabled, a soft limiter above 0.85 remains. The final native frame
    sanitizes nonfinite values and clamps to full scale.
-4. The VAD gate uses RNNoise speech probability and signal level. Default open
-   threshold is 0.6 and close threshold 0.3, with hold; PTT and continuous modes
-   have distinct admission. Twenty-millisecond encoding joins processed frames,
-   preserving current consent/onset queue rules. This audit does not relax mute
-   privacy, reopen capture, or change startup sequencing.
+4. The VAD gate combines the WebRTC speech probability with the unchanged
+   processed-input floor (-60 dBFS) and 300 ms hangover. The shared
+   `audio::gate_thresholds` opens at 0.9 / 0.4 / 0.1 for sensitivity 0% / 50% /
+   100%, with two linear segments and a closing threshold half the opening
+   threshold. **0% is stricter; 100% is more sensitive.** Calibration trades
+   background rejection against quiet-speech onset; it is not a universal
+   guarantee for every noise source. The current 80 ms processed-input prefix
+   remains bounded and permission-scoped. PTT and continuous mode keep their
+   explicit admission rules. Encoding and speech amplification are unchanged;
+   no microphone is kept open while muted to warm up the detector.
 
 Browser capture asks `getUserMedia` for mono/48k, echo cancellation, noise
 suppression and automatic gain, then truthfully reports the browser's applied
