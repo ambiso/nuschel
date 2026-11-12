@@ -1476,6 +1476,9 @@ struct State {
     allow_html: bool,
     message_limit: usize,
     image_limit: usize,
+    max_users: Option<u32>,
+    recording_allowed: bool,
+    max_bandwidth: u32,
     opus: bool,
     local_muted: bool,
     local_deafened: bool,
@@ -1520,6 +1523,9 @@ impl Default for State {
             allow_html: true,
             message_limit: 5000,
             image_limit: 131_072,
+            max_users: None,
+            recording_allowed: true,
+            max_bandwidth: nuschl_core::audio::DEFAULT_SERVER_BANDWIDTH,
             opus: true,
             local_muted: true,
             local_deafened: false,
@@ -3169,6 +3175,9 @@ impl State {
                     .session
                     .ok_or_else(|| Error::Protocol("ServerSync omitted session".into()))?;
                 self.own_session = Some(session);
+                self.max_bandwidth = sync
+                    .max_bandwidth
+                    .unwrap_or(nuschl_core::audio::DEFAULT_SERVER_BANDWIDTH);
                 if self.voice_target == 31 {
                     emit(events, SessionEvent::Notice("The previous whisper is suspended after reconnect. Select a new target or normal talking before speaking.".into())).await?;
                 }
@@ -3176,7 +3185,7 @@ impl State {
                     events,
                     SessionEvent::Connected {
                         session,
-                        max_bandwidth: sync.max_bandwidth.unwrap_or(72_000),
+                        max_bandwidth: self.max_bandwidth,
                     },
                 )
                 .await?;
@@ -3590,15 +3599,24 @@ impl State {
                         (limit as usize).min(1024 * 1024)
                     };
                 }
+                if let Some(value) = config.max_users {
+                    self.max_users = Some(value);
+                }
+                if let Some(value) = config.recording_allowed {
+                    self.recording_allowed = value;
+                }
+                if let Some(value) = config.max_bandwidth {
+                    self.max_bandwidth = value;
+                }
                 emit(
                     events,
                     SessionEvent::Limits(ServerLimits {
                         allow_html: self.allow_html,
                         message_length: self.message_limit,
                         image_message_length: self.image_limit,
-                        max_users: config.max_users,
-                        recording_allowed: config.recording_allowed.unwrap_or(true),
-                        max_bandwidth: config.max_bandwidth,
+                        max_users: self.max_users,
+                        recording_allowed: self.recording_allowed,
+                        max_bandwidth: Some(self.max_bandwidth),
                     }),
                 )
                 .await?;
@@ -4323,6 +4341,147 @@ pub mod fuzzing {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn sparse_config_preserves_full_limits_and_reconnect_defaults() {
+        let mut state = State::default();
+        let (tx, mut rx) = mpsc::channel(16);
+        state
+            .handle(
+                frame(
+                    kind::SERVER_SYNC,
+                    proto::ServerSync {
+                        session: Some(3),
+                        max_bandwidth: Some(48_000),
+                        ..Default::default()
+                    },
+                ),
+                &tx,
+            )
+            .await
+            .unwrap();
+        drain(&mut rx).await;
+        for (config, expected) in [
+            (
+                proto::ServerConfig {
+                    allow_html: Some(false),
+                    message_length: Some(128),
+                    image_message_length: Some(256),
+                    max_users: Some(12),
+                    recording_allowed: Some(false),
+                    ..Default::default()
+                },
+                (false, 128, 256, Some(12), false, 48_000),
+            ),
+            (
+                proto::ServerConfig {
+                    max_bandwidth: Some(24_000),
+                    ..Default::default()
+                },
+                (false, 128, 256, Some(12), false, 24_000),
+            ),
+            (
+                proto::ServerConfig {
+                    message_length: Some(0),
+                    ..Default::default()
+                },
+                (false, MAX_CONTENT_BYTES, 256, Some(12), false, 24_000),
+            ),
+            (
+                proto::ServerConfig {
+                    image_message_length: Some(0),
+                    max_users: Some(0),
+                    ..Default::default()
+                },
+                (
+                    false,
+                    MAX_CONTENT_BYTES,
+                    1024 * 1024,
+                    Some(0),
+                    false,
+                    24_000,
+                ),
+            ),
+            (
+                proto::ServerConfig {
+                    recording_allowed: Some(true),
+                    ..Default::default()
+                },
+                (false, MAX_CONTENT_BYTES, 1024 * 1024, Some(0), true, 24_000),
+            ),
+            (
+                proto::ServerConfig {
+                    allow_html: Some(true),
+                    message_length: Some(u32::MAX),
+                    ..Default::default()
+                },
+                (true, MAX_CONTENT_BYTES, 1024 * 1024, Some(0), true, 24_000),
+            ),
+        ] {
+            state
+                .handle(frame(kind::SERVER_CONFIG, config), &tx)
+                .await
+                .unwrap();
+            let events = drain(&mut rx).await;
+            let [SessionEvent::Limits(value)] = events.as_slice() else {
+                panic!("limits missing")
+            };
+            assert_eq!(
+                (
+                    value.allow_html,
+                    value.message_length,
+                    value.image_message_length,
+                    value.max_users,
+                    value.recording_allowed,
+                    value.max_bandwidth.unwrap()
+                ),
+                expected
+            );
+        }
+        let mut fresh = State::default();
+        fresh
+            .handle(
+                frame(
+                    kind::SERVER_SYNC,
+                    proto::ServerSync {
+                        session: Some(3),
+                        ..Default::default()
+                    },
+                ),
+                &tx,
+            )
+            .await
+            .unwrap();
+        drain(&mut rx).await;
+        fresh
+            .handle(
+                frame(
+                    kind::SERVER_CONFIG,
+                    proto::ServerConfig {
+                        max_users: Some(1),
+                        ..Default::default()
+                    },
+                ),
+                &tx,
+            )
+            .await
+            .unwrap();
+        let events = drain(&mut rx).await;
+        let [SessionEvent::Limits(value)] = events.as_slice() else {
+            panic!("limits missing")
+        };
+        assert_eq!(
+            (
+                value.allow_html,
+                value.message_length,
+                value.image_message_length,
+                value.max_users,
+                value.recording_allowed,
+                value.max_bandwidth
+            ),
+            (true, 5000, 131_072, Some(1), true, Some(72_000))
+        );
+    }
 
     #[tokio::test]
     async fn live_welcomes_are_connected_exact_source_updates_without_policy_side_effects() {

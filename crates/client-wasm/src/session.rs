@@ -202,6 +202,10 @@ pub struct Session {
     last_ping: f64,
     certificate_reported: bool,
     allow_html: bool,
+    message_limit: usize,
+    image_limit: usize,
+    max_users: Option<u32>,
+    recording_allowed: bool,
     voice_version: u64,
     opus_allowed: bool,
     max_bandwidth: u32,
@@ -279,6 +283,10 @@ impl Session {
             last_ping: 0.0,
             certificate_reported: false,
             allow_html: true,
+            message_limit: 5000,
+            image_limit: 131_072,
+            max_users: None,
+            recording_allowed: true,
             voice_version: 0,
             opus_allowed: true,
             max_bandwidth: nuschl_core::audio::DEFAULT_SERVER_BANDWIDTH,
@@ -491,6 +499,12 @@ impl Session {
         } else {
             body.clone()
         };
+        if wire.message.len() > self.message_limit {
+            return Err(format!(
+                "Message exceeds this server's {}-byte limit.",
+                self.message_limit
+            ));
+        }
         self.send(kind::TEXT_MESSAGE, &wire);
         if self.is_closed() {
             return Err("TLS failed while sending.".into());
@@ -811,23 +825,33 @@ impl Session {
                     if let Some(bandwidth) = config.max_bandwidth {
                         self.max_bandwidth = bandwidth;
                     }
+                    if let Some(value) = config.message_length {
+                        self.message_limit = if value == 0 {
+                            MAX_CONTENT_BYTES
+                        } else {
+                            (value as usize).min(MAX_CONTENT_BYTES)
+                        };
+                    }
+                    if let Some(value) = config.image_message_length {
+                        self.image_limit = if value == 0 {
+                            1024 * 1024
+                        } else {
+                            (value as usize).min(1024 * 1024)
+                        };
+                    }
+                    if let Some(value) = config.max_users {
+                        self.max_users = Some(value);
+                    }
+                    if let Some(value) = config.recording_allowed {
+                        self.recording_allowed = value;
+                    }
                     self.events.push_back(Event::Server(ServerEvent::Limits(
                         nuschl_core::model::ServerLimits {
                             allow_html: self.allow_html,
-                            message_length: config
-                                .message_length
-                                .filter(|n| *n != 0)
-                                .map(|n| n as usize)
-                                .unwrap_or(MAX_CONTENT_BYTES)
-                                .min(MAX_CONTENT_BYTES),
-                            image_message_length: config
-                                .image_message_length
-                                .filter(|n| *n != 0)
-                                .map(|n| n as usize)
-                                .unwrap_or(1024 * 1024)
-                                .min(1024 * 1024),
-                            max_users: config.max_users,
-                            recording_allowed: config.recording_allowed.unwrap_or(true),
+                            message_length: self.message_limit,
+                            image_message_length: self.image_limit,
+                            max_users: self.max_users,
+                            recording_allowed: self.recording_allowed,
                             max_bandwidth: Some(self.max_bandwidth),
                         },
                     )));
@@ -999,6 +1023,185 @@ fn webpki_roots() -> impl Iterator<Item = rustls::pki_types::TrustAnchor<'static
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sparse_config_keeps_previous_limits_and_fresh_connections_reset_them() {
+        let mut s = voice_session();
+        s.max_bandwidth = 48_000;
+        for (config, expected) in [
+            (
+                proto::ServerConfig {
+                    allow_html: Some(false),
+                    message_length: Some(128),
+                    image_message_length: Some(256),
+                    max_users: Some(12),
+                    recording_allowed: Some(false),
+                    ..Default::default()
+                },
+                (false, 128, 256, Some(12), false, 48_000),
+            ),
+            (
+                proto::ServerConfig {
+                    max_bandwidth: Some(24_000),
+                    ..Default::default()
+                },
+                (false, 128, 256, Some(12), false, 24_000),
+            ),
+            (
+                proto::ServerConfig {
+                    message_length: Some(0),
+                    ..Default::default()
+                },
+                (false, MAX_CONTENT_BYTES, 256, Some(12), false, 24_000),
+            ),
+            (
+                proto::ServerConfig {
+                    image_message_length: Some(0),
+                    max_users: Some(0),
+                    ..Default::default()
+                },
+                (
+                    false,
+                    MAX_CONTENT_BYTES,
+                    1024 * 1024,
+                    Some(0),
+                    false,
+                    24_000,
+                ),
+            ),
+            (
+                proto::ServerConfig {
+                    recording_allowed: Some(true),
+                    ..Default::default()
+                },
+                (false, MAX_CONTENT_BYTES, 1024 * 1024, Some(0), true, 24_000),
+            ),
+            (
+                proto::ServerConfig {
+                    allow_html: Some(true),
+                    message_length: Some(u32::MAX),
+                    ..Default::default()
+                },
+                (true, MAX_CONTENT_BYTES, 1024 * 1024, Some(0), true, 24_000),
+            ),
+        ] {
+            s.control(kind::SERVER_CONFIG, config.encode_to_vec().into());
+            let events = s.take_events();
+            let [Event::Server(ServerEvent::Limits(value))] = events.as_slice() else {
+                panic!("limits missing")
+            };
+            assert_eq!(
+                (
+                    value.allow_html,
+                    value.message_length,
+                    value.image_message_length,
+                    value.max_users,
+                    value.recording_allowed,
+                    value.max_bandwidth.unwrap()
+                ),
+                expected
+            );
+        }
+        let mut fresh = voice_session();
+        fresh.control(
+            kind::SERVER_CONFIG,
+            proto::ServerConfig {
+                max_users: Some(1),
+                ..Default::default()
+            }
+            .encode_to_vec()
+            .into(),
+        );
+        let events = fresh.take_events();
+        let [Event::Server(ServerEvent::Limits(value))] = events.as_slice() else {
+            panic!("limits missing")
+        };
+        assert_eq!(
+            (
+                value.allow_html,
+                value.message_length,
+                value.image_message_length,
+                value.max_users,
+                value.recording_allowed,
+                value.max_bandwidth
+            ),
+            (true, 5000, 131_072, Some(1), true, Some(72_000))
+        );
+    }
+
+    #[test]
+    fn send_caps_count_actual_escaped_utf8_and_reject_before_any_output_or_ack() {
+        for (html, body, cap, allowed) in [
+            (true, "<&>\n", 16, false),
+            (true, "<&>\n", 17, true),
+            (false, "<&>\n", 4, true),
+            (false, "é", 1, false),
+            (false, "é", 2, true),
+        ] {
+            let mut s = voice_session();
+            s.channels.insert(
+                0,
+                Channel {
+                    id: 0,
+                    ..Default::default()
+                },
+            );
+            s.take_outgoing();
+            s.control(
+                kind::SERVER_CONFIG,
+                proto::ServerConfig {
+                    allow_html: Some(html),
+                    message_length: Some(cap),
+                    ..Default::default()
+                }
+                .encode_to_vec()
+                .into(),
+            );
+            s.take_events();
+            let result = s.send_text(TextTarget::Channel(0), body.into(), None);
+            assert_eq!(result.is_ok(), allowed, "{html:?} {body:?} {cap}");
+            if !allowed {
+                assert!(s.take_outgoing().is_empty());
+                assert!(s.take_events().is_empty());
+            }
+        }
+        let mut s = voice_session();
+        s.channels.insert(
+            0,
+            Channel {
+                id: 0,
+                ..Default::default()
+            },
+        );
+        s.take_outgoing();
+        assert!(
+            s.send_text(TextTarget::Channel(0), "x".repeat(5001), None)
+                .is_err()
+        );
+        s.control(
+            kind::SERVER_CONFIG,
+            proto::ServerConfig {
+                allow_html: Some(false),
+                message_length: Some(0),
+                ..Default::default()
+            }
+            .encode_to_vec()
+            .into(),
+        );
+        s.take_events();
+        assert!(
+            s.send_text(TextTarget::Channel(0), "x".repeat(5001), None)
+                .is_ok()
+        );
+        assert!(
+            s.send_text(
+                TextTarget::Channel(0),
+                "x".repeat(MAX_CONTENT_BYTES + 1),
+                None
+            )
+            .is_err()
+        );
+    }
 
     #[test]
     fn live_welcome_changes_and_empty_revocation_never_reset_limits_or_audio() {
