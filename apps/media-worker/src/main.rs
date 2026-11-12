@@ -2,6 +2,7 @@
 mod adaptive;
 mod capture_queue;
 mod dsp;
+mod encoder;
 mod graph;
 mod jitter;
 mod live;
@@ -15,7 +16,7 @@ mod timing;
 use std::io;
 
 use nuschl_ipc::{Envelope, MediaRequest, MediaResponse, read_frame, write_frame};
-use opus_pure::{Application, MAX_PACKET_BYTES, MAX_PACKET_SAMPLES, OpusDecoder, OpusEncoder};
+use opus_pure::{MAX_PACKET_BYTES, MAX_PACKET_SAMPLES, OpusDecoder, OpusEncoder};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // On Windows, the launch stage starts this worker again in its AppContainer.
@@ -28,8 +29,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return live::probe_route();
     }
     // Native device I/O and DSP will live here too. This process receives no server credentials.
-    let mut encoder = OpusEncoder::new(48_000, 1, Application::Voip)?;
-    encoder.bitrate_bps = nuschl_core::audio::DEFAULT_VOICE_BITRATE as i32;
+    let mut encoder = encoder::new()?;
     let mut decoder = OpusDecoder::new(48_000, 1)?;
     let mut input = io::stdin().lock();
     let mut output = io::stdout().lock();

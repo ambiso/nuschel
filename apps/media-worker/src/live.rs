@@ -21,7 +21,9 @@ use cpal::{
 };
 use nuschl_core::audio::{AudioDevice, AudioSettings, EchoMode, EchoSource};
 use nuschl_ipc::{Envelope, LiveMediaEvent, LiveMediaRequest, read_frame, write_frame};
-use opus_pure::{Application, MAX_PACKET_BYTES, OpusEncoder};
+#[cfg(test)]
+use opus_pure::Application;
+use opus_pure::{MAX_PACKET_BYTES, OpusEncoder};
 use rtrb::{Consumer, Producer, RingBuffer};
 use std::{
     collections::VecDeque,
@@ -151,10 +153,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     });
     let mut output = io::stdout().lock();
     let mut settings = AudioSettings::default();
-    let mut encoder = OpusEncoder::new(48_000, 1, Application::Voip)?;
-    encoder.bitrate_bps = nuschl_core::audio::DEFAULT_VOICE_BITRATE as i32;
-    encoder.use_inband_fec = true;
-    encoder.packet_loss_perc = 5;
+    let encoder = crate::encoder::live()?;
     let mut transmit = Transmit {
         encoder,
         queue: CaptureQueue::default(),

@@ -32,11 +32,16 @@ impl VoiceEncoder {
         wasm_bindgen(constructor)
     )]
     pub fn new() -> Result<Self, String> {
-        let mut encoder = OpusEncoder::new(SAMPLE_RATE as i32, 1, Application::Voip)
+        let mut encoder = OpusEncoder::new(SAMPLE_RATE as i32, 1, Application::Audio)
             .map_err(|error| error.to_string())?;
         encoder.bitrate_bps = DEFAULT_BITRATE as i32;
         encoder.complexity = 5;
         Ok(Self { encoder })
+    }
+
+    /// Query this codec's actual algorithmic delay, including its profile.
+    pub fn lookahead_samples(&self) -> u32 {
+        self.encoder.lookahead() as u32
     }
 
     /// A target selected by the authenticated session's current server budget.
@@ -121,6 +126,34 @@ impl VoiceDecoder {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn transmit_audio_profile_survives_server_forced_bitrates() {
+        let mut encoder = VoiceEncoder::new().unwrap();
+        assert_eq!(encoder.encoder.complexity, 5);
+        assert!(!encoder.encoder.use_inband_fec);
+        assert_eq!(encoder.encoder.packet_loss_perc, 0);
+        assert_eq!(
+            encoder.encoder.rate_control,
+            opus_pure::RateControl::ConstrainedVbr
+        );
+        for bitrate in [128_000, 32_000, 48_000, 64_000, 128_000] {
+            encoder.set_bitrate(bitrate).unwrap();
+            assert_eq!(encoder.encoder.application(), Application::Audio);
+            assert_eq!(encoder.lookahead_samples(), 312);
+            let samples: Vec<_> = (0..FRAME_SAMPLES)
+                .map(|index| {
+                    let time = index as f32 / SAMPLE_RATE as f32;
+                    0.2 * (std::f32::consts::TAU * 997. * time).sin()
+                        + 0.08 * (std::f32::consts::TAU * 17_011. * time).sin()
+                })
+                .collect();
+            let encoded = encoder.encode(&samples).unwrap();
+            packet::validate(&encoded).unwrap();
+            assert_eq!(packet::samples_48k(&encoded).unwrap(), FRAME_SAMPLES);
+            assert!(encoded.len() <= bitrate as usize / 400);
+        }
+    }
 
     #[test]
     fn receive_decoder_uses_mumbles_phase_setting() {
