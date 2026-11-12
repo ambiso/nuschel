@@ -1,0 +1,133 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: EUPL-1.2
+"""Actual playback-converter PCM versus Mumble's Speex quality-3 resampler.
+
+Uses an explicitly invoked Rust test fixture, never devices or a live server.
+Reference C library is test-only. Every sample comparison keeps requested gain.
+"""
+import argparse
+import ctypes
+import json
+import math
+import os
+from pathlib import Path
+import struct
+import subprocess
+
+from output_quality import amplitude
+
+RATE = 48000
+
+
+def write_pcm(path, values):
+    path.write_bytes(struct.pack(f'<{len(values)}f', *values))
+
+
+def read_pcm(path):
+    raw = path.read_bytes()
+    assert len(raw) % 8 == 0
+    values = struct.unpack(f'<{len(raw) // 4}f', raw)
+    assert all(math.isfinite(v) for v in values)
+    return values
+
+
+class Speex:
+    def __init__(self, library):
+        self.lib = ctypes.CDLL(str(library))
+        ptr, uint = ctypes.c_void_p, ctypes.c_uint32
+        self.lib.speex_resampler_init.argtypes = [uint, uint, uint, ctypes.c_int, ctypes.POINTER(ctypes.c_int)]
+        self.lib.speex_resampler_init.restype = ptr
+        self.lib.speex_resampler_destroy.argtypes = [ptr]
+        self.lib.speex_resampler_process_interleaved_float.argtypes = [ptr, ctypes.POINTER(ctypes.c_float),
+            ctypes.POINTER(uint), ctypes.POINTER(ctypes.c_float), ctypes.POINTER(uint)]
+        self.lib.speex_resampler_process_interleaved_float.restype = ctypes.c_int
+        self.lib.speex_resampler_get_output_latency.argtypes = [ptr]
+        self.lib.speex_resampler_get_output_latency.restype = ctypes.c_int
+
+    def convert(self, pcm, rate):
+        error = ctypes.c_int()
+        state = self.lib.speex_resampler_init(2, RATE, rate, 3, ctypes.byref(error))
+        assert state and error.value == 0, error.value
+        try:
+            source = (ctypes.c_float * len(pcm))(*pcm)
+            capacity = len(pcm) // 2 * rate // RATE + 4096
+            output = (ctypes.c_float * (capacity * 2))()
+            frames, produced = ctypes.c_uint32(len(pcm) // 2), ctypes.c_uint32(capacity)
+            result = self.lib.speex_resampler_process_interleaved_float(state, source, ctypes.byref(frames),
+                output, ctypes.byref(produced))
+            assert result == 0 and frames.value == len(pcm) // 2, (result, frames.value)
+            return list(output[:produced.value * 2]), self.lib.speex_resampler_get_output_latency(state)
+        finally:
+            self.lib.speex_resampler_destroy(state)
+
+
+def tone(frequency, seconds=1):
+    return [v for i in range(round(RATE * seconds)) for v in
+            (.2 * math.sin(2 * math.pi * frequency * i / RATE),
+             .13 * math.sin(2 * math.pi * frequency * i / RATE + .71))]
+
+
+def level(pcm, frequency, rate):
+    stable = pcm[rate // 5 * 2:rate // 5 * 8:2]
+    return 20 * math.log10(max(amplitude(stable, frequency, rate) / .2, 1e-20))
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--test-binary', required=True, type=Path)
+    parser.add_argument('--engine', choices=['converter','sonora'], default='converter')
+    parser.add_argument('--speex-library', required=True, type=Path)
+    parser.add_argument('--output', required=True, type=Path)
+    args = parser.parse_args()
+    args.output.mkdir(parents=True, exist_ok=True)
+    speex = Speex(args.speex_library)
+    cases = []
+    for rate in [11025, 22050, 44100, 48000, 96000]:
+        descriptions = [('passband-997', 997, 997), ('passband-high', .35 * min(RATE, rate), .35 * min(RATE, rate))]
+        if rate < RATE:
+            source = min(23000, rate * .75)
+            descriptions.append(('alias', source, abs(source - rate * round(source / rate))))
+        elif rate > RATE:
+            descriptions.append(('image', 16800, RATE - 16800))
+        impulse = [0.] * (RATE * 2)
+        impulse[4800 * 2], impulse[4800 * 2 + 1] = .2, -.13
+        peak_positions = {}
+        for name, frequency, measured in [*descriptions, ('impulse', 0, 0)]:
+            source = impulse if name == 'impulse' else tone(frequency)
+            input_path = args.output / f'{rate}-{name}-input.f32le'
+            write_pcm(input_path, source)
+            results = []
+            for suffix, chunks in [('contiguous', '8192'), ('irregular', '1,127,511,37,960,256')]:
+                output = args.output / f'{rate}-{name}-{suffix}.f32le'
+                env = {**os.environ, 'NUSCHL_OUTPUT_INPUT': str(input_path), 'NUSCHL_OUTPUT_OUTPUT': str(output),
+                       'NUSCHL_OUTPUT_RATE': str(rate), 'NUSCHL_OUTPUT_CHUNKS': chunks}
+                command = ([str(args.test_binary), '--ignored', '--exact', 'live::output_fixture::dump']
+                    if args.engine == 'converter' else [str(args.test_binary), str(input_path), str(output), str(rate), chunks])
+                subprocess.run(command, env=env, capture_output=True, check=True, timeout=20)
+                pcm = read_pcm(output)
+                assert len(pcm) == rate * 2, (rate, len(pcm))
+                results.append(pcm)
+            assert results[0] == results[1], (rate, name, 'callback boundaries changed PCM')
+            expected, latency = speex.convert(source, rate)
+            if name == 'impulse':
+                peak = max(range(len(results[0]) // 2), key=lambda i: abs(results[0][i * 2]))
+                reference_peak = max(range(len(expected) // 2), key=lambda i: abs(expected[i * 2]))
+                peak_positions = {'converter_peak_frame': peak, 'reference_peak_frame': reference_peak,
+                    'source_impulse_time_seconds': .1, 'converter_delay_seconds': peak / rate - .1,
+                    'reference_delay_seconds': reference_peak / rate - .1, 'reference_reported_delay_frames': latency}
+            else:
+                actual_db, reference_db = level(results[0], measured, rate), level(expected, measured, rate)
+                cases.append({'rate': rate, 'case': name, 'source_frequency': frequency,
+                    'measured_frequency': measured, 'converter_db': actual_db, 'reference_db': reference_db,
+                    'delta_db': actual_db - reference_db, 'chunk_exact': True})
+        cases.append({'rate': rate, 'case': 'delay', **peak_positions, 'chunk_exact': True})
+    report = {'engine': args.engine, 'test_binary': str(args.test_binary), 'reference_library': str(args.speex_library),
+        'reference_quality': 3, 'host_devices': False, 'gain': 1, 'cases': cases,
+        'limits': ['Source-matched Speex resampler comparison, not full reference-Mumble output.',
+                   'No subjective/perceptual or hardware-quality guarantee.']}
+    (args.output / 'proof.json').write_text(json.dumps(report, indent=2) + '\n')
+    print(json.dumps(report), flush=True)
+
+
+if __name__ == '__main__':
+    main()

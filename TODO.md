@@ -604,6 +604,12 @@ The media worker uses per-speaker adaptive jitter buffers and Opus loss concealm
       queue from an accidental 100 ms to its documented 200 ms, corrected jitter
       tick advancement for variable durations, and retained browser packet tails
       across its startup hold. Independent native/WASM 120 ms stereo PCM passes.
+      Non-48 kHz audit confirms material linear-SRC errors: at 44.1 kHz the
+      15.435 kHz passband is -3.06 dB and a synthetic 23→21.1 kHz alias is -7.14 dB
+      versus reference Speex quality-3 -85.14 dB; 96 kHz imaging is -11.28 dB
+      versus -93.96 dB. Exact-ratio Sonora candidate was measured and rejected
+      (insufficient passband/alias rejection), not silently integrated. Reviewed
+      scalar Rust Speex candidate and long fractional-clock tests are next.
       These scoped results do not establish absolute perceptual equivalence.
 
 ### Optional local speech (requested 2026-11-11)

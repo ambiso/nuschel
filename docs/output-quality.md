@@ -175,6 +175,49 @@ not include the live mixer, device converter, Worklet or final output path.
 `tests/media_live.py` proves bounded jitter gaps and routing in private Pulse,
 but does not compare complete fixed-gain stereo PCM against reference playback.
 
+## Non-48 kHz converter audit and rejected candidate
+
+`tests/output_resample.py` invokes the actual native converter through an explicit
+ignored test-only PCM dumper (`live::output_fixture::dump`). It constructs no
+devices or audio sessions. Contiguous and irregular callbacks must produce
+bit-identical output. The test-side reference is SpeexDSP 1.2.1, quality 3,
+matching the pinned Mumble constructor; it is not a new production C dependency.
+Impulse delay is measured separately from carrier amplitude; gain is never fitted.
+
+| Rate | Probe | Existing linear converter | Speex quality 3 |
+| --- | --- | --- | --- |
+| 11,025 Hz | 3,858.75 Hz passband | -0.187 dB | -0.0003 dB |
+| 11,025 Hz | 8,268.75 → 2,756.25 Hz alias | -0.857 dB | -95.82 dB |
+| 22,050 Hz | 7,717.5 Hz passband | -0.745 dB | -0.0010 dB |
+| 44,100 Hz | 15,435 Hz passband | -3.062 dB | -0.0007 dB |
+| 44,100 Hz | 23,000 → 21,100 Hz alias | -7.142 dB | -85.14 dB |
+| 96,000 Hz | 16,800 Hz passband | -2.769 dB | +0.00003 dB |
+| 96,000 Hz | 16,800 → 31,200 Hz image | -11.277 dB | -93.96 dB |
+
+The passband probes stay below the Opus music band (20 kHz). The 23 kHz input is
+broader synthetic PCM alias stress, not a claim that ordinary Opus carries 23 kHz.
+All five rate cases (including 48 kHz) were exactly invariant to callback chunk
+boundaries in this fixture. The current converter's impulse delay is about two
+48 kHz samples; reference group delay depends on rate/filter. These one-second
+fixtures do not yet establish long-duration fractional-rate drift bounds.
+
+The already-locked Sonora 0.3 `SincResampler` was tested independently before any
+production integration, using `tests/resample_sonora.rs` against its actual cached
+Rust library. Its source revision was `1632d47c1e77d0857f9145bd175134b348541e11`.
+The fixed 32-tap Blackman kernel improves on linear interpolation but fails the
+reference quality goal: at 11,025 Hz it loses 2.126 dB in the same passband and
+aliases at -46.72 dB; at 44,100 Hz the 23 kHz alias is -42.87 dB. Therefore it is
+**rejected for this playback conversion**, without changing its existing capture
+DSP use. No new Sonora dependency edge or production converter change was made.
+
+Evidence: `resample-linear-baseline/proof.json`,
+`resample-sonora-candidate/proof.json` and `sonora-compile.json` in the owned cache.
+The reference library is the explicit x86-64
+`/nix/store/9mzqdjywmmlb10c06jiql8mgwlk5lw1s-speexdsp-1.2.1/lib/libspeexdsp.so`.
+The next candidate is the reviewed scalar Rust SpeexDSP port, tested against the
+same unchanged reference before choosing a production dependency. Do not weaken
+alias/passband requirements or invent a new filter to make a candidate pass.
+
 ## Implementation sequence
 
 1. Preserve two Opus channels through native per-speaker queues/mixer and browser
