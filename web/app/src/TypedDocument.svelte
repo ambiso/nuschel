@@ -35,7 +35,7 @@
         <hr>
       {:else}
         <div class="text" class:quote={block.role === "quote"} class:heading={typeof block.role === "object" && block.role?.heading} class:list-item={typeof block.role === "object" && block.role?.item}>
-          {#if block.role?.item}<span class="list-marker">{block.role.item.marker}</span>{/if}{#each textRuns(block) as run}{#if run.math && !run.style.code && !run.link}<MathFormula tex={run.math} source={run.text} />{:else if run.link}<a href={run.link} target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer">{run.text}</a>{:else}<span class:bold={run.style.bold} class:italic={run.style.italic} class:underline={run.style.underline} class:strike={run.style.strike} class:inline-code={run.style.code}>{run.text}</span>{/if}{/each}
+          {#if block.role?.item}<span class="list-marker">{block.role.item.marker}</span>{/if}{#each textRuns(block) as run}{#if run.math && !run.style.code && !run.link}<MathFormula tex={run.math} source={run.text} />{:else if run.link}<a class:bold={run.style.bold} class:italic={run.style.italic} class:underline={run.style.underline} class:strike={run.style.strike} href={run.link} target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer">{run.text}</a>{:else}<span class:bold={run.style.bold} class:italic={run.style.italic} class:underline={run.style.underline} class:strike={run.style.strike} class:inline-code={run.style.code}>{run.text}</span>{/if}{/each}
         </div>
       {/if}
     {/each}

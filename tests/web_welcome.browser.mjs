@@ -78,7 +78,7 @@ try{
   const text=await welcome.textContent();assert.ok(text.includes("<em>literal.test</em>"));assert.ok(!text.includes("bsomething.de/b"));assert.ok(!text.includes("hiddenWelcome"));
   assert.equal(await welcome.locator("img,script,iframe,svg").count(),0);
   const link=welcome.getByRole("link",{name:"linked.test",exact:true});assert.equal(await link.getAttribute("href"),"https://linked.test/");
-  assert.equal(await link.getAttribute("referrerpolicy"),"no-referrer");
+  assert.equal(await link.getAttribute("referrerpolicy"),"no-referrer");assert.ok(Number(await link.evaluate(e=>getComputedStyle(e).fontWeight))>=700);
   assert.ok(await welcome.locator('pre[aria-label="rust code"] span').count()>1);
   const more=welcome.getByRole("button",{name:"Show more",exact:true});if(await more.count())await more.click();
   assert.ok((await welcome.textContent()).includes("Welcome line 34"));
