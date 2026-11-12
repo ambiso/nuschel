@@ -1846,7 +1846,7 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
           session; voice (WebAudio, getUserMedia, datagrams through the tunnel);
           IndexedDB storage and identity in a Worker; its version requirement; the
           Svelte build in the Nix site package; a real-browser test; WebTransport.
-    - [ ] Integrate the verified content-owner retirement proof/docs. Source
+    - [x] Integrate the verified content-owner retirement proof/docs. Source
           `191a8d8d`/`732e31c2` is integrated; the final factory-release follow-up
           `82903f9f` and actual-WASM fixtures `6d427430` complete the scoped guard.
           One page/module owner shares global eight-job/16 MiB budgets across
