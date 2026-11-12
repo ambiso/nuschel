@@ -1159,7 +1159,7 @@ mod tests {
         assert_eq!(edited.server_volume("home"), MAX_GAIN);
         assert_eq!(
             Setting::Sensitivity.readout(0.5),
-            "50 % · opens above 60 % speech probability"
+            "50 % · opens above 40 % speech probability"
         );
         assert_eq!(
             Setting::UserVolume("ada".into()).managed_key(),
