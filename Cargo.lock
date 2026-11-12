@@ -6982,6 +6982,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "nuschl-content-wasm"
+version = "0.1.0"
+dependencies = [
+ "nuschl-content",
+ "nuschl-core",
+ "serde",
+ "serde_json",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "nuschl-content-worker"
 version = "0.1.0"
 dependencies = [

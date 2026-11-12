@@ -103,6 +103,16 @@ rec {
       # File a bug if you depend on any for non-debug work!
       debug = internal.debugCrate { inherit packageId; };
     };
+    "nuschl-content-wasm" = rec {
+      packageId = "nuschl-content-wasm";
+      build = internal.buildRustCrateWithFeatures {
+        packageId = "nuschl-content-wasm";
+      };
+
+      # Debug support which might change between releases.
+      # File a bug if you depend on any for non-debug work!
+      debug = internal.debugCrate { inherit packageId; };
+    };
     "nuschl-content-worker" = rec {
       packageId = "nuschl-content-worker";
       build = internal.buildRustCrateWithFeatures {
@@ -22861,6 +22871,38 @@ rec {
           "images" = [ "dep:image" ];
         };
         resolvedDefaultFeatures = [ "default" "images" ];
+      };
+      "nuschl-content-wasm" = rec {
+        crateName = "nuschl-content-wasm";
+        version = "0.1.0";
+        edition = "2024";
+        src = lib.cleanSourceWith { filter = sourceFilter;  src = ../../crates/content-wasm; };
+        libName = "nuschl_content_wasm";type = [ "cdylib" "rlib" ];
+        dependencies = [
+          {
+            name = "nuschl-content";
+            packageId = "nuschl-content";
+          }
+          {
+            name = "nuschl-core";
+            packageId = "nuschl-core";
+          }
+          {
+            name = "serde";
+            packageId = "serde";
+            features = [ "derive" ];
+          }
+          {
+            name = "serde_json";
+            packageId = "serde_json";
+          }
+          {
+            name = "wasm-bindgen";
+            packageId = "wasm-bindgen";
+            target = { target, features }: (("wasm32" == target."arch" or null) && ("unknown" == target."os" or null));
+          }
+        ];
+
       };
       "nuschl-content-worker" = rec {
         crateName = "nuschl-content-worker";

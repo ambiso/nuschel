@@ -460,6 +460,7 @@
         packages.web-client = webClient.app;
         packages.web-wasm = webClient.wasm;
         packages.web-audio-wasm = webClient.audioWasm;
+        packages.web-content-wasm = webClient.contentWasm;
         # Keep share-link routes at the root; the Svelte client lives at /app/.
         packages.web-site = pkgs.runCommand "nuschl-web-site" { } ''
           cp -R ${./web/site} "$out"

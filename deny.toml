@@ -111,7 +111,8 @@ deny = [
   { name = "nuschl-content", wrappers = [
     "nuschl-content-worker",
     "nuschl-client-wasm",
-  ], reason = "Native UI consumes typed spans over IPC; the browser's Web Worker uses the text-only renderer without image decoders" },
+    "nuschl-content-wasm",
+  ], reason = "Native UI consumes typed spans over IPC; browser TLS uses the text-only renderer, while image codecs run in separate content-worker WASM memory" },
   { name = "typst", wrappers = [
     "nuschl-math",
   ], reason = "Typst (a scripting language with file, package and plugin access) runs only in the sandboxed math worker, behind its LaTeX converter" },
