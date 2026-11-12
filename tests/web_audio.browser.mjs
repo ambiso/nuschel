@@ -105,10 +105,10 @@ try {
   await new Promise(resolve=>setTimeout(resolve,250));assert.equal(await b.evaluate(()=>fixture.snapshot().received),rapid,"rapid policy changes leaked queued capture");
   // Disconnect/reconnect leaves the new generation muted and without old consent.
   const oldGeneration=(await state(a)).voice.connection_generation;
-  const id=(await state(a)).servers[0].id;
-  await a.evaluate(id=>fixture.request("disconnect",[id]),id);
+  const index=0;
+  await a.evaluate(index=>fixture.request("disconnect",[index]),index);
   await a.waitForFunction(()=>fixture.snapshot().voice===null);
-  await a.evaluate(id=>fixture.request("connect",[id]),id);
+  await a.evaluate(index=>fixture.request("connect",[index]),index);
   await a.waitForFunction(()=>fixture.snapshot().servers[0]?.status==="connected");
   await a.getByRole("button",{name:"Join voice",exact:true}).click();
   await a.waitForFunction(()=>fixture.snapshot().voice?.joined&&fixture.snapshot().audio.playback);
