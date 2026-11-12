@@ -42,7 +42,7 @@ let
     }).overrideAttrs
       (old: {
         configurePhase =
-          assert pkgs.lib.hasInfix "${originalLib}" old.configurePhase;
+          assert builtins.replaceStrings [ "${originalLib}" ] [ "" ] old.configurePhase != old.configurePhase;
           builtins.replaceStrings [ "${originalLib}" ] [ "${windowsLib}" ] old.configurePhase;
         postInstall = (old.postInstall or "") + ''
           test -f "$out/bin/nuschl-update-verify-${feature}.exe"
