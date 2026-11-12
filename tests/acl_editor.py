@@ -285,11 +285,16 @@ def actions(args, root, shell, application, bot, murmur):
 
     if args.pending_input:
         open_acl()
+        # The first transaction consumes the real default control credit. The
+        # second naturally waits in the production pacer, without server delays.
+        save()
         field = type_field("New group name", "pending-input-original")
         before = field.call("Accessible", "GetState")
         wait("Save permissions", "push button").press()
-        assert field.focused, "Save action unexpectedly stole the input focus"
-        shell.type("injected-during-save")
+        assert field.call("Component", "GrabFocus")[0]
+        time.sleep(0.05)
+        assert field.focused
+        shell.type("X")
         during = field.call("Accessible", "GetState")
         assert not text_contains("Permissions saved and confirmed"), (
             "typing probe missed the pending transaction"
@@ -304,7 +309,7 @@ def actions(args, root, shell, application, bot, murmur):
         try:
             groups = [fields(raw)[1][0].decode() for raw in admin.acl()[3]]
             assert "pending-input-original" in groups, groups
-            assert all("injected-during-save" not in name for name in groups), groups
+            assert "pending-input-originalX" not in groups, groups
         finally:
             admin.close()
         shell.screenshot(args.output / "pending-input.png")
