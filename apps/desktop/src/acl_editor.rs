@@ -3,6 +3,7 @@
 //! remain snapshots. Every delayed callback also carries the per-open token.
 use crate::{
     dialogs::{Tone, styled_button},
+    layout,
     menus::{ActionOrigin, MenuTarget},
     panels::Panel,
     state::{Desktop, ServerView, accessible},
@@ -411,35 +412,36 @@ fn inspect_list(
     .h(px(34. * count.clamp(1, 5) as f32))
     .w_full();
     let focus_on_key = focus.clone();
-    div()
-        .id(SharedString::from(format!(
-            "acl-inspect-owner-{token}-{key}"
-        )))
-        .role(Role::ListBox)
-        .aria_label(format!("Retained draft {key}"))
-        .track_focus(&focus)
-        .tab_index(0)
-        .min_w_0()
-        .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
-            let Some(editor) = local_editor(this, token) else {
-                return;
-            };
-            if !editor.stale {
-                return;
-            }
-            let current = inspect_selection(editor, kind).map_or(0, |(index, _)| index);
-            if let Some(next) = list_key(event, current, count) {
-                if let Some((id, _)) = inspect_row(editor, kind, next) {
-                    window.focus(&focus_on_key, cx);
-                    inspect_select(editor, kind, next, id);
-                    scroll.scroll_to_item(next, ScrollStrategy::Nearest);
-                    cx.stop_propagation();
-                    cx.notify();
+    layout::focusable_with_handle(
+        SharedString::from(format!("acl-inspect-focus-{token}-{key}")),
+        focus.clone(),
+        div()
+            .id(SharedString::from(format!(
+                "acl-inspect-owner-{token}-{key}"
+            )))
+            .role(Role::ListBox)
+            .aria_label(format!("Retained draft {key}"))
+            .min_w_0()
+            .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
+                let Some(editor) = local_editor(this, token) else {
+                    return;
+                };
+                if !editor.stale {
+                    return;
                 }
-            }
-        }))
-        .child(list)
-        .into_any_element()
+                let current = inspect_selection(editor, kind).map_or(0, |(index, _)| index);
+                if let Some(next) = list_key(event, current, count) {
+                    if let Some((id, _)) = inspect_row(editor, kind, next) {
+                        window.focus(&focus_on_key, cx);
+                        inspect_select(editor, kind, next, id);
+                        scroll.scroll_to_item(next, ScrollStrategy::Nearest);
+                        cx.stop_propagation();
+                        cx.notify();
+                    }
+                }
+            }))
+            .child(list),
+    )
 }
 
 pub fn render_stale(editor: &Editor, cx: &mut Context<Desktop>) -> AnyElement {
@@ -1202,13 +1204,13 @@ pub fn render(view: &ServerView, editor: &Editor, cx: &mut Context<Desktop>) -> 
             "acl-rule-title",
             format!("Rules · {count} (order matters)"),
         ))
-        .child(
+        .child(layout::focusable_with_handle(
+            SharedString::from(format!("acl-rule-focus-{token}")),
+            editor.rule_focus.clone(),
             div()
                 .id(SharedString::from(format!("acl-rule-list-{token}")))
                 .role(Role::ListBox)
                 .aria_label("ACL rules")
-                .track_focus(&editor.rule_focus)
-                .tab_index(0)
                 .min_w_0()
                 .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
                     let Some(editor) = active_editor(this, token) else {
@@ -1227,7 +1229,7 @@ pub fn render(view: &ServerView, editor: &Editor, cx: &mut Context<Desktop>) -> 
                     }
                 }))
                 .child(rules),
-        )
+        ))
         .child(styled_button(
             SharedString::from(format!("acl-add-rule-{token}")),
             "Add rule",
@@ -1705,13 +1707,13 @@ fn groups(view: &ServerView, editor: &Editor, cx: &mut Context<Desktop>) -> AnyE
         .flex_col()
         .gap_2()
         .child(note("acl-groups-title", format!("Groups · {count}")))
-        .child(
+        .child(layout::focusable_with_handle(
+            SharedString::from(format!("acl-group-focus-{token}")),
+            editor.group_focus.clone(),
             div()
                 .id(SharedString::from(format!("acl-group-list-{token}")))
                 .role(Role::ListBox)
                 .aria_label("ACL groups")
-                .track_focus(&editor.group_focus)
-                .tab_index(0)
                 .min_w_0()
                 .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
                     let Some(editor) = active_editor(this, token) else {
@@ -1727,7 +1729,7 @@ fn groups(view: &ServerView, editor: &Editor, cx: &mut Context<Desktop>) -> AnyE
                     }
                 }))
                 .child(list),
-        )
+        ))
         .child(field("New group name", &editor.group_name))
         .child(styled_button(
             SharedString::from(format!("acl-add-group-{token}")),
@@ -1950,55 +1952,56 @@ fn member_list(
         1 => "Local group exclusions",
         _ => "Inherited group members",
     };
-    div()
-        .id(SharedString::from(format!(
-            "acl-member-list-{token}-{}-{kind}",
-            group_key.1
-        )))
-        .role(Role::ListBox)
-        .aria_label(label)
-        .track_focus(&editor.member_focus[kind])
-        .tab_index(0)
-        .min_w_0()
-        .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
-            let Some(editor) = active_editor(this, token) else {
-                return;
-            };
-            if editor.selected_group != Some(group_key) {
-                return;
-            }
-            let Some(group) = editor
-                .state
-                .draft()
-                .and_then(|draft| draft.groups().get(group_key.0))
-                .filter(|row| row.id == group_key.1)
-            else {
-                return;
-            };
-            let members = match kind {
-                0 => &group.value.add,
-                1 => &group.value.remove,
-                _ => &group.value.inherited_members,
-            };
-            let current = editor.member_selected[kind]
-                .filter(|(index, id)| members.get(*index) == Some(id))
-                .map_or(0, |(index, _)| index);
-            if let Some(next) = list_key(event, current, members.len()) {
-                window.focus(&editor.member_focus[kind], cx);
-                editor.member_selected[kind] = Some((next, members[next]));
-                editor.member_scroll[kind].scroll_to_item(next, ScrollStrategy::Nearest);
-                cx.stop_propagation();
-                cx.notify();
-            } else if matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                if let Some((index, account)) = editor.member_selected[kind] {
-                    if members.get(index) == Some(&account) {
-                        member_action(this, token, group_key.1, kind, account);
-                        cx.stop_propagation();
-                        cx.notify();
+    layout::focusable_with_handle(
+        SharedString::from(format!("acl-member-focus-{token}-{}-{kind}", group_key.1)),
+        editor.member_focus[kind].clone(),
+        div()
+            .id(SharedString::from(format!(
+                "acl-member-list-{token}-{}-{kind}",
+                group_key.1
+            )))
+            .role(Role::ListBox)
+            .aria_label(label)
+            .min_w_0()
+            .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
+                let Some(editor) = active_editor(this, token) else {
+                    return;
+                };
+                if editor.selected_group != Some(group_key) {
+                    return;
+                }
+                let Some(group) = editor
+                    .state
+                    .draft()
+                    .and_then(|draft| draft.groups().get(group_key.0))
+                    .filter(|row| row.id == group_key.1)
+                else {
+                    return;
+                };
+                let members = match kind {
+                    0 => &group.value.add,
+                    1 => &group.value.remove,
+                    _ => &group.value.inherited_members,
+                };
+                let current = editor.member_selected[kind]
+                    .filter(|(index, id)| members.get(*index) == Some(id))
+                    .map_or(0, |(index, _)| index);
+                if let Some(next) = list_key(event, current, members.len()) {
+                    window.focus(&editor.member_focus[kind], cx);
+                    editor.member_selected[kind] = Some((next, members[next]));
+                    editor.member_scroll[kind].scroll_to_item(next, ScrollStrategy::Nearest);
+                    cx.stop_propagation();
+                    cx.notify();
+                } else if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                    if let Some((index, account)) = editor.member_selected[kind] {
+                        if members.get(index) == Some(&account) {
+                            member_action(this, token, group_key.1, kind, account);
+                            cx.stop_propagation();
+                            cx.notify();
+                        }
                     }
                 }
-            }
-        }))
-        .child(list)
-        .into_any_element()
+            }))
+            .child(list),
+    )
 }
