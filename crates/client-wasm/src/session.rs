@@ -272,6 +272,7 @@ pub struct Session {
     outgoing: Vec<Vec<u8>>,
     outgoing_bytes: usize,
     transport_queued: u64,
+    transport_taken: u64,
     events: VecDeque<Event>,
     channels: BTreeMap<u32, Channel>,
     users: BTreeMap<u32, User>,
@@ -349,6 +350,7 @@ impl Session {
             plaintext: BytesMut::new(),
             outgoing_bytes: open.len(),
             transport_queued: 1,
+            transport_taken: 0,
             outgoing: vec![open],
             events: VecDeque::new(),
             channels: BTreeMap::new(),
@@ -375,16 +377,17 @@ impl Session {
     /// WebSocket messages to send, in order.
     pub fn take_outgoing(&mut self) -> Vec<Vec<u8>> {
         self.outgoing_bytes = 0;
-        std::mem::take(&mut self.outgoing)
+        let outgoing = std::mem::take(&mut self.outgoing);
+        if !outgoing.is_empty() {
+            self.transport_taken = self.transport_queued;
+        }
+        outgoing
     }
 
     /// Boundary preceding this exact drained batch. The legacy native helper
     /// above remains unchanged; browser admission records each actual WS write.
     pub fn take_outgoing_batch(&mut self) -> (u64, Vec<Vec<u8>>) {
-        let before = self
-            .transport_queued
-            .checked_sub(self.outgoing.len() as u64)
-            .expect("queued transport counter covers retained records");
+        let before = self.transport_taken;
         (before, self.take_outgoing())
     }
 
@@ -1300,7 +1303,20 @@ mod tests {
         // Draining cannot encrypt it yet: fail closed instead of spinning.
         assert!(session.send_frame(&vec![0; 200_000]).is_err());
         assert!(session.is_closed());
-        assert!(session.take_outgoing().is_empty());
+        let (before, outgoing) = session.take_outgoing_batch();
+        assert_eq!(
+            before, 0,
+            "discarded unsent TLS records are never an admitted/drained boundary"
+        );
+        assert!(outgoing.is_empty());
+        assert!(
+            !Event::Sent {
+                target: TextTarget::Channel(0),
+                body: "discarded".into(),
+                transport: 1
+            }
+            .transport_admitted(before)
+        );
         assert!(session.take_events().iter().all(|event| !matches!(
             event,
             Event::Sent { .. } | Event::Text { outgoing: true, .. }
