@@ -146,21 +146,32 @@ pub struct Document {
 }
 
 /// The family code in messages is drawn in: the configured code font when
-/// the text system has it, else the `monospace` generic family (the
-/// platform's monospace face). GPUI picks a missing family's fallback by its
-/// name, so a missing code font without a mono-sounding name (Iosevka, Hack)
-/// would be drawn in a proportional face; code asks for monospace instead.
+/// the text system has it, in the spelling the text system reports, else the
+/// `monospace` generic family (the platform's monospace face). The text
+/// system finds a family by its exact name (cosmic-text), so a font
+/// configured in another case is asked for by its installed name. GPUI picks
+/// a missing family's fallback by its name, so a missing code font without a
+/// mono-sounding name (Iosevka, Hack; Menlo and Monaco are not in that
+/// heuristic either) would be drawn in a proportional face; code asks for
+/// monospace instead.
 pub fn code_family(configured: &str, available: &[String]) -> SharedString {
     let generic = ["monospace", "mono", "ui-monospace"]
-        .iter()
-        .any(|name| configured.eq_ignore_ascii_case(name));
+        .into_iter()
+        .find(|name| configured.eq_ignore_ascii_case(name));
+    if let Some(generic) = generic {
+        return SharedString::from(generic);
+    }
     let installed = available
         .iter()
-        .any(|family| family.eq_ignore_ascii_case(configured));
-    if generic || installed {
-        SharedString::from(configured.to_owned())
-    } else {
-        SharedString::from("monospace")
+        .find(|family| family.as_str() == configured)
+        .or_else(|| {
+            available
+                .iter()
+                .find(|family| family.eq_ignore_ascii_case(configured))
+        });
+    match installed {
+        Some(family) => SharedString::from(family.clone()),
+        None => SharedString::from("monospace"),
     }
 }
 
@@ -528,15 +539,44 @@ mod tests {
         );
         assert_eq!(super::code_family("Hack", &installed).as_ref(), "monospace");
         assert_eq!(super::code_family("Fira Code", &[]).as_ref(), "monospace");
-        // An installed one, in any case, and the generic families, stay.
+        // An installed one, by its installed name, and the generic families.
         assert_eq!(
             super::code_family("adwaita mono", &installed).as_ref(),
-            "adwaita mono"
+            "Adwaita Mono"
         );
         assert_eq!(super::code_family("monospace", &[]).as_ref(), "monospace");
         assert_eq!(
             super::code_family("ui-monospace", &[]).as_ref(),
             "ui-monospace"
+        );
+    }
+
+    /// The text system finds a family only by its exact name (cosmic-text):
+    /// a code font configured in another case must come back as the
+    /// installed family's spelling. Hack and Iosevka are monospace without a
+    /// name GPUI's fallback would recognise as monospace, so the wrong
+    /// spelling would draw them proportional.
+    #[test]
+    fn code_uses_the_installed_spelling_of_its_font() {
+        let installed = [
+            "DejaVu Sans".to_owned(),
+            "Hack".to_owned(),
+            "Iosevka Term".to_owned(),
+        ];
+        assert_eq!(super::code_family("hack", &installed).as_ref(), "Hack");
+        assert_eq!(
+            super::code_family("IOSEVKA TERM", &installed).as_ref(),
+            "Iosevka Term"
+        );
+        assert_eq!(super::code_family("Hack", &installed).as_ref(), "Hack");
+        // Not installed in any spelling: the monospace family.
+        assert_eq!(
+            super::code_family("iosevka", &installed).as_ref(),
+            "monospace"
+        );
+        assert_eq!(
+            super::code_family("Menlo", &installed).as_ref(),
+            "monospace"
         );
     }
 

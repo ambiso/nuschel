@@ -21,9 +21,11 @@ message is cropped by its accessible bounds and measured:
 - geometry: each row's ink top, bottom and the pitch between rows.
 
 Code must be monospace whatever the configured code font: the code spans and
-code blocks are checked for equal advances too (run with `--mono-font
-Iosevka`, a family that is not installed, for a code font the desktop has to
-replace with a monospace face).
+code blocks are checked for equal advances too. Run with `--mono-font
+Iosevka` (not installed) for a code font the desktop has to replace with a
+monospace face, and with `--mono-font hack --font-dir HACK/share/fonts` for an
+installed one configured in another case (the text system finds a family only
+by its exact name; Hack's name does not sound monospace to GPUI's fallback).
 
 The desktop user also types Markdown (docs/desktop.md, "Markdown"), and the
 typed messages are checked, live and restored: `**Wordmark Wordmark**` over
@@ -257,6 +259,9 @@ def summarize(measured):
         if {"iiiiii", "MMMMMM"} <= block.keys():
             summary[f"{source}_pitch"] = {key: block[key]["pitch"] for key in ("iiiiii", "MMMMMM")}
             summary[f"{source}_runs"] = {key: block[key]["glyph_runs"] for key in ("iiiiii", "MMMMMM")}
+            summary[f"{source}_ink_width"] = {key: block[key]["ink_right"] - block[key]["ink_left"]
+                                              for key in ("iiiiii", "MMMMMM")
+                                              if block[key]["ink_left"] is not None}
     welcome = measured.get("welcome", {})
     if "bold_domain_ink_ratio" in welcome:
         summary["welcome_bold_domain_ink_ratio"] = welcome["bold_domain_ink_ratio"]
@@ -296,11 +301,21 @@ def checks(results):
         ratio = summary.get("inline_code_M_over_i")
         verdicts[f"{stage}: <code> spans equally wide (M/i {ratio})"] = (
             ratio is not None and abs(ratio - 1) <= 0.05)
+        # Equal pitches where all six glyphs stand apart; where some touch
+        # (Hack's M), the rows' ink widths: in a monospace face they differ
+        # by less than one advance (a sixth of the M row), in a proportional
+        # one by about five times the difference of the two advances.
         for block in ("block", "typed block"):
             pitch = summary.get(f"{block}_pitch")
-            verdicts[f"{stage}: {block} glyphs at equal advances ({pitch})"] = (
-                pitch is not None and None not in pitch.values()
-                and abs(pitch["iiiiii"] - pitch["MMMMMM"]) <= 0.5)
+            runs = summary.get(f"{block}_runs", {})
+            width = summary.get(f"{block}_ink_width", {})
+            separate = runs.get("iiiiii") == 6 and runs.get("MMMMMM") == 6
+            if separate:
+                equal = pitch is not None and abs(pitch["iiiiii"] - pitch["MMMMMM"]) <= 0.5
+            else:
+                equal = len(width) == 2 and width["MMMMMM"] - width["iiiiii"] < width["MMMMMM"] / 6
+            verdicts[f"{stage}: {block} glyphs at equal advances (pitch {pitch}, runs {runs}, "
+                     f"ink width {width})"] = equal
         pitches = summary.get("typed_row_pitch", {})
         for spaced, tight, lines in LINE_PAIRS:
             if spaced in pitches and tight in pitches:
@@ -453,6 +468,15 @@ def run(args):
         server.start()
         # Tall enough for every message and the welcome card at once.
         shell = GnomeSession(args.gnome_shell, 1600, 2100, log=(args.output / "gnome.log").open("w"))
+        # Fonts for this run only, in the private session's own font folder
+        # ($XDG_DATA_HOME/fonts), never the user's.
+        fonts = shell.home / "data" / "fonts"
+        for directory in args.font_dir or []:
+            fonts.mkdir(parents=True, exist_ok=True)
+            for font in sorted(Path(directory).rglob("*")):
+                if font.suffix.lower() in (".ttf", ".otf"):
+                    (fonts / font.name).write_bytes(font.read_bytes())
+        notes["fonts"] = sorted(font.name for font in fonts.glob("*")) if fonts.exists() else []
         helpers, app, bot = [], None, None
         try:
             shell.start()
@@ -660,6 +684,8 @@ if __name__ == "__main__":
     parser.add_argument("--output", type=Path)
     parser.add_argument("--ui-font")
     parser.add_argument("--mono-font")
+    parser.add_argument("--font-dir", type=Path, action="append",
+                        help="fonts to install for this run only (in the private session)")
     parser.add_argument("--analyze", type=Path, help="measure an earlier run's screenshots again")
     parser.add_argument("--compare", type=Path, nargs=2, metavar=("BEFORE", "AFTER"),
                         help="compare two analysed runs (geometry, ink, interface labels)")
