@@ -41,7 +41,10 @@
 <div class="typed-document">
     {#each documentRows(shown.blocks) as row}
       {#if row.kind === "break"}
-        <div class="break" style:--lines={row.lines} aria-hidden="true"></div>
+        <!-- Its blank lines as one text node of line breaks, so a selection
+             copies them; at most documentRows' clamp per break, and the
+             document's break budget in all. -->
+        <div class="break" style:--lines={row.lines} aria-hidden="true">{"\n".repeat(row.lines)}</div>
       {:else if row.blocks.length > 1}
         <div class="joined">{#each row.blocks as block}{@render one(block)}{/each}</div>
       {:else}
