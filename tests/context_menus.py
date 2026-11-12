@@ -219,13 +219,13 @@ def actions(args, root, shell, application, bot, murmur):
         ).press()
         certificate = target.users[target.session]["certificate_hash"]
         settings = root / "profile/config/settings.json"
-        eventually(
-            lambda: (
-                json.loads(settings.read_text()).get("nicknames", {}).get(certificate)
-                == "AsampleXBY"
-            ),
-            "menu navigation changed native prompt editing or saved the wrong value",
+        time.sleep(0.3)
+        actual = json.loads(settings.read_text()).get("nicknames", {}).get(certificate)
+        (args.output / "prompt-result.json").write_text(
+            json.dumps({"expected": "AsampleXBY", "actual": actual}, indent=2) + "\n"
         )
+        assert actual == "AsampleXBY", f"native prompt editing mismatch: {actual!r}"
+
         return {
             "saved_private_nickname": "AsampleXBY",
             "keys": ["Home", "End", "Left", "Right"],
@@ -278,6 +278,12 @@ def actions(args, root, shell, application, bot, murmur):
 
     try:
         shell.key("Shift_L")
+        if args.only_prompt:
+            return {
+                "passed": True,
+                "prompt_editing": check_prompt_editing(),
+                "diagnostic_only": True,
+            }
         for width, height, zoom, steps in [
             (1280, 800, 100, 0),
             (900, 600, 100, 0),
@@ -496,6 +502,11 @@ def main():
     parser.add_argument("--pulse-bin", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--expect-clipped", action="store_true")
+    parser.add_argument(
+        "--only-prompt",
+        action="store_true",
+        help="diagnose input routing independently of geometry",
+    )
     args = parser.parse_args()
     args.document_links, args.expect_markers = True, False
     fixture.WELCOME_EXTRA = ""
