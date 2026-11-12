@@ -198,6 +198,7 @@ pub struct Session {
     channels: BTreeMap<u32, Channel>,
     users: BTreeMap<u32, User>,
     own: Option<u32>,
+    welcome_source: Option<String>,
     last_ping: f64,
     certificate_reported: bool,
     allow_html: bool,
@@ -212,6 +213,22 @@ pub struct Session {
 }
 
 impl Session {
+    fn welcome(&mut self, source: String) {
+        if self.phase != Phase::LoggedIn {
+            return;
+        }
+        let source = if source.len() > MAX_CONTENT_BYTES {
+            "[Server welcome exceeds the display limit]".into()
+        } else {
+            source
+        };
+        if self.welcome_source.as_deref() == Some(source.as_str()) {
+            return;
+        }
+        self.welcome_source = Some(source.clone());
+        self.events.push_back(Event::Welcome(source));
+    }
+
     /// A session whose first message (the tunnel's `Open`) is waiting in
     /// [`Session::take_outgoing`].
     pub fn new(login: Login) -> Result<Self, String> {
@@ -258,6 +275,7 @@ impl Session {
             channels: BTreeMap::new(),
             users: BTreeMap::new(),
             own: None,
+            welcome_source: None,
             last_ping: 0.0,
             certificate_reported: false,
             allow_html: true,
@@ -725,13 +743,7 @@ impl Session {
                 self.events
                     .push_back(Event::Server(ServerEvent::Connected { session }));
                 if let Some(source) = sync.welcome_text {
-                    // Do not parse a partial tag/entity or an oversized document.
-                    let source = if source.len() > MAX_CONTENT_BYTES {
-                        "[Server welcome exceeds the display limit]".into()
-                    } else {
-                        source
-                    };
-                    self.events.push_back(Event::Welcome(source));
+                    self.welcome(source);
                 }
             }
             kind::REJECT => {
@@ -781,6 +793,18 @@ impl Session {
             }
             kind::SERVER_CONFIG => {
                 if let Ok(config) = proto::ServerConfig::decode(payload) {
+                    if let Some(source) = config.welcome_text {
+                        self.welcome(source);
+                    }
+                    if config.max_bandwidth.is_none()
+                        && config.allow_html.is_none()
+                        && config.message_length.is_none()
+                        && config.image_message_length.is_none()
+                        && config.max_users.is_none()
+                        && config.recording_allowed.is_none()
+                    {
+                        return;
+                    }
                     if let Some(html) = config.allow_html {
                         self.allow_html = html;
                     }
@@ -975,6 +999,107 @@ fn webpki_roots() -> impl Iterator<Item = rustls::pki_types::TrustAnchor<'static
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn live_welcome_changes_and_empty_revocation_never_reset_limits_or_audio() {
+        let mut s = session();
+        let send = |s: &mut Session, source: Option<&str>| {
+            s.control(
+                kind::SERVER_CONFIG,
+                proto::ServerConfig {
+                    welcome_text: source.map(str::to_owned),
+                    ..Default::default()
+                }
+                .encode_to_vec()
+                .into(),
+            )
+        };
+        send(&mut s, Some("before"));
+        assert!(s.take_events().is_empty());
+        assert!(s.welcome_source.is_none());
+        s.control(
+            kind::SERVER_SYNC,
+            proto::ServerSync {
+                session: Some(3),
+                welcome_text: Some("initial".into()),
+                max_bandwidth: Some(48_000),
+                ..Default::default()
+            }
+            .encode_to_vec()
+            .into(),
+        );
+        s.take_events();
+        s.take_outgoing();
+        let policy = (
+            s.voice_policy(),
+            s.voice_bitrate(),
+            s.max_bandwidth,
+            s.allow_html,
+            s.desired_muted,
+            s.desired_deafened,
+        );
+        for (source, expected) in [
+            (None, None),
+            (Some("initial"), None),
+            (
+                Some("<b>changed.test</b>\nsecond"),
+                Some("<b>changed.test</b>\nsecond"),
+            ),
+            (Some(""), Some("")),
+            (Some(""), None),
+            (None, None),
+            (Some("initial"), Some("initial")),
+        ] {
+            send(&mut s, source);
+            let events = s.take_events();
+            match expected {
+                Some(expected) => assert!(
+                    matches!(events.as_slice(), [Event::Welcome(value)] if value == expected)
+                ),
+                None => assert!(events.is_empty()),
+            }
+            assert_eq!(
+                (
+                    s.voice_policy(),
+                    s.voice_bitrate(),
+                    s.max_bandwidth,
+                    s.allow_html,
+                    s.desired_muted,
+                    s.desired_deafened
+                ),
+                policy
+            );
+            assert!(s.take_outgoing().is_empty());
+        }
+        s.close("test disconnect".into());
+        s.take_events();
+        send(&mut s, Some("late closed"));
+        assert!(s.take_events().is_empty());
+        let mut replacement = voice_session();
+        send(&mut replacement, Some("initial"));
+        assert!(
+            matches!(replacement.take_events().as_slice(),[Event::Welcome(value)] if value=="initial")
+        );
+    }
+
+    #[test]
+    fn oversized_live_welcome_uses_the_same_plain_fallback() {
+        let mut s = voice_session();
+        s.control(
+            kind::SERVER_CONFIG,
+            proto::ServerConfig {
+                welcome_text: Some("界".repeat(MAX_CONTENT_BYTES)),
+                allow_html: Some(false),
+                ..Default::default()
+            }
+            .encode_to_vec()
+            .into(),
+        );
+        assert!(
+            matches!(&s.take_events()[0],Event::Welcome(value) if value=="[Server welcome exceeds the display limit]")
+        );
+        assert!(!s.allow_html);
+    }
 
     #[test]
     fn welcome_is_ordered_after_connected_and_preserves_markup_and_newlines() {

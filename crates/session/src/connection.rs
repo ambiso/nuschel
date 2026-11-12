@@ -1470,6 +1470,8 @@ struct State {
     channels: BTreeMap<u32, Channel>,
     users: BTreeMap<u32, User>,
     own_session: Option<u32>,
+    /// Exact bounded source last emitted on this connection; duplicates stay dismissed.
+    welcome_source: Option<String>,
     version: u64,
     allow_html: bool,
     message_limit: usize,
@@ -1513,6 +1515,7 @@ impl Default for State {
             channels: BTreeMap::new(),
             users: BTreeMap::new(),
             own_session: None,
+            welcome_source: None,
             version: 0,
             allow_html: true,
             message_limit: 5000,
@@ -1542,6 +1545,22 @@ impl Default for State {
     }
 }
 impl State {
+    async fn welcome(
+        &mut self,
+        source: String,
+        events: &mpsc::Sender<SessionEvent>,
+    ) -> Result<(), Error> {
+        if self.own_session.is_none() {
+            return Ok(());
+        }
+        let source = bounded(source, MAX_CONTENT_BYTES);
+        if self.welcome_source.as_deref() == Some(source.as_str()) {
+            return Ok(());
+        }
+        self.welcome_source = Some(source.clone());
+        emit(events, SessionEvent::Welcome(source)).await
+    }
+
     fn encrypted_server(&self) -> bool {
         self.extension
             .as_ref()
@@ -3174,11 +3193,7 @@ impl State {
                     .await?;
                 }
                 if let Some(welcome) = sync.welcome_text {
-                    emit(
-                        events,
-                        SessionEvent::Welcome(bounded(welcome, MAX_CONTENT_BYTES)),
-                    )
-                    .await?;
+                    self.welcome(welcome, events).await?;
                 }
                 if let Some(channel) = self.rejoin.take()
                     && self.channels.contains_key(&channel)
@@ -3544,6 +3559,20 @@ impl State {
             }
             kind::SERVER_CONFIG => {
                 let config: proto::ServerConfig = decode(&frame)?;
+                if let Some(source) = config.welcome_text {
+                    self.welcome(source, events).await?;
+                }
+                // Omitted limit fields are not an instruction to reset them.
+                // In particular, welcome-only updates must not touch audio policy.
+                if config.max_bandwidth.is_none()
+                    && config.allow_html.is_none()
+                    && config.message_length.is_none()
+                    && config.image_message_length.is_none()
+                    && config.max_users.is_none()
+                    && config.recording_allowed.is_none()
+                {
+                    return Ok(());
+                }
                 if let Some(html) = config.allow_html {
                     self.allow_html = html;
                 }
@@ -4294,6 +4323,138 @@ pub mod fuzzing {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn live_welcomes_are_connected_exact_source_updates_without_policy_side_effects() {
+        let mut state = State::default();
+        let (tx, mut rx) = mpsc::channel(32);
+        state
+            .handle(
+                frame(
+                    kind::SERVER_CONFIG,
+                    proto::ServerConfig {
+                        welcome_text: Some("before".into()),
+                        ..Default::default()
+                    },
+                ),
+                &tx,
+            )
+            .await
+            .unwrap();
+        assert!(drain(&mut rx).await.is_empty());
+        assert!(state.welcome_source.is_none());
+        state
+            .handle(
+                frame(
+                    kind::SERVER_SYNC,
+                    proto::ServerSync {
+                        session: Some(3),
+                        welcome_text: Some("<b>initial.test</b>".into()),
+                        ..Default::default()
+                    },
+                ),
+                &tx,
+            )
+            .await
+            .unwrap();
+        let events = drain(&mut rx).await;
+        assert!(matches!(
+            &events[0],
+            SessionEvent::Connected { session: 3, .. }
+        ));
+        assert!(matches!(&events[1], SessionEvent::Welcome(s) if s == "<b>initial.test</b>"));
+        let policy = (
+            state.allow_html,
+            state.message_limit,
+            state.image_limit,
+            state.local_muted,
+            state.local_deafened,
+            state.voice_revision,
+            state.voice_route.revision(),
+            state.voice_route.target(),
+        );
+        let outbound = state.outbound.len();
+        for (source, expected) in [
+            (None, None),
+            (Some("<b>initial.test</b>"), None),
+            (
+                Some("<b>changed.test</b>\nsecond"),
+                Some("<b>changed.test</b>\nsecond"),
+            ),
+            (Some(""), Some("")),
+            (Some(""), None),
+            (None, None),
+            (Some("<b>initial.test</b>"), Some("<b>initial.test</b>")),
+        ] {
+            state
+                .handle(
+                    frame(
+                        kind::SERVER_CONFIG,
+                        proto::ServerConfig {
+                            welcome_text: source.map(str::to_owned),
+                            ..Default::default()
+                        },
+                    ),
+                    &tx,
+                )
+                .await
+                .unwrap();
+            let events = drain(&mut rx).await;
+            match expected {
+                Some(expected) => assert!(
+                    matches!(events.as_slice(), [SessionEvent::Welcome(value)] if value == expected)
+                ),
+                None => assert!(events.is_empty()),
+            }
+            assert_eq!(
+                (
+                    state.allow_html,
+                    state.message_limit,
+                    state.image_limit,
+                    state.local_muted,
+                    state.local_deafened,
+                    state.voice_revision,
+                    state.voice_route.revision(),
+                    state.voice_route.target()
+                ),
+                policy
+            );
+            assert_eq!(state.outbound.len(), outbound);
+        }
+    }
+
+    #[tokio::test]
+    async fn live_welcome_bounds_and_new_connections_do_not_share_dismissal_state() {
+        let (tx, mut rx) = mpsc::channel(16);
+        for _ in 0..2 {
+            let mut state = State {
+                own_session: Some(3),
+                ..Default::default()
+            };
+            state
+                .handle(
+                    frame(
+                        kind::SERVER_CONFIG,
+                        proto::ServerConfig {
+                            welcome_text: Some("界".repeat(MAX_CONTENT_BYTES)),
+                            allow_html: Some(false),
+                            ..Default::default()
+                        },
+                    ),
+                    &tx,
+                )
+                .await
+                .unwrap();
+            let events = drain(&mut rx).await;
+            let SessionEvent::Welcome(source) = &events[0] else {
+                panic!("welcome missing")
+            };
+            assert!(source.len() <= MAX_CONTENT_BYTES);
+            assert!(source.ends_with('界'));
+            assert!(matches!(events[1], SessionEvent::Limits(_)));
+            assert!(!state.allow_html);
+        }
+    }
 
     #[tokio::test]
     async fn encrypted_session_emits_no_plaintext_chat_frames_from_raw_or_restored_commands() {
