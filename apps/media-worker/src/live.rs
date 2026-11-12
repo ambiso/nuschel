@@ -967,17 +967,6 @@ fn open_host(
     let mut input_id = input_device.as_ref().and_then(device_id);
     #[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
     let mut input_name = input_device.as_ref().map(device_name).unwrap_or_default();
-    // PipeWire's default devices are virtual nodes that follow the session
-    // default; resolve the real node through the PulseAudio API so a system
-    // echo canceller can be recognised and its reference fed.
-    #[cfg(target_os = "linux")]
-    if host.id() == cpal::HostId::PipeWire
-        && settings.input_device.is_none()
-        && let Some((id, name)) = resolve_pulse_default(true)
-    {
-        input_id = Some(format!("pipewire:{}", backend_name(&id)));
-        input_name = name;
-    }
     // The microphone opens first: a filter-chain's capture (as in PipeWire's
     // RNNoise configuration) is passive and is linked to its own source only
     // once someone records from the chain.
@@ -1016,10 +1005,18 @@ fn open_host(
     // upstream (mic → echo-cancel → RNNoise → default source), falling back to
     // recognising an echo-cancel source by name (PulseAudio, other systems).
     #[cfg(target_os = "linux")]
-    let found = input_id
+    let (found, resolved_input) = input_id
         .as_ref()
-        .map(|id| upstream_processing(backend_name(id), input.is_some()))
+        .map(|id| upstream_processing(backend_name(id), input.is_some(), pipewire))
         .unwrap_or_default();
+    // The virtual CPAL default follows native PipeWire metadata. Resolve it
+    // while inspecting the existing graph, without a second startup query or
+    // a dependency on the optional pipewire-pulse compatibility service.
+    #[cfg(target_os = "linux")]
+    if pipewire && let Some((name, label)) = resolved_input {
+        input_id = Some(format!("pipewire:{name}"));
+        input_name = label;
+    }
     #[cfg(not(target_os = "linux"))]
     let found = crate::graph::Upstream::default();
     timing.mark("graph_inspected");
@@ -1161,19 +1158,47 @@ fn open_host(
 /// just started, passive filter links may still be on their way: wait for
 /// them briefly rather than miss a canceller behind a noise suppressor.
 #[cfg(target_os = "linux")]
-fn upstream_processing(source: &str, capturing: bool) -> crate::graph::Upstream {
+fn upstream_processing(
+    source: &str,
+    capturing: bool,
+    pipewire: bool,
+) -> (crate::graph::Upstream, Option<(String, String)>) {
     let mut found = crate::graph::Upstream::default();
+    let default = pipewire && crate::graph::default_source_alias(source);
+    let mut resolved = None;
+    // Query the compatibility API at most once, and only if the native
+    // effective default is absent. Explicit device selections stay pinned.
+    let mut pulse_fallback = None;
     for attempt in 0..8 {
-        let Some(graph) = crate::graph::snapshot() else {
+        let graph = crate::graph::snapshot();
+        if default {
+            resolved = graph
+                .as_ref()
+                .and_then(|graph| graph.source_identity(source));
+            if resolved.is_none()
+                && graph
+                    .as_ref()
+                    .is_none_or(|graph| graph.default_source.is_none())
+            {
+                resolved = pulse_fallback
+                    .get_or_insert_with(|| {
+                        resolve_pulse_default(true)
+                            .map(|(id, label)| (backend_name(&id).to_owned(), label))
+                    })
+                    .clone();
+            }
+        }
+        let Some(graph) = graph else {
             break;
         };
+        let source = resolved.as_ref().map_or(source, |(name, _)| name);
         found = graph.upstream(source);
         if !(capturing && found.dangling) {
             break;
         }
         std::thread::sleep(Duration::from_millis(50 + attempt * 25));
     }
-    found
+    (found, resolved)
 }
 
 /// Whether a PulseAudio server (native or pipewire-pulse) may be listening,

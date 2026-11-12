@@ -31,6 +31,8 @@ pub struct Link {
 pub struct Graph {
     pub nodes: Vec<Node>,
     pub links: Vec<Link>,
+    /// The session manager's effective native default (not its configured preference).
+    pub default_source: Option<String>,
 }
 
 /// Processing found upstream of a source.
@@ -81,6 +83,31 @@ impl Node {
 }
 
 impl Graph {
+    /// CPAL's default input is an alias which follows PipeWire metadata. It is
+    /// not a real registry node, and need not match pipewire-pulse's default.
+    pub fn source(&self, source: &str) -> Option<&Node> {
+        let default = default_source_alias(source);
+        let source = if default {
+            self.default_source.as_deref()?
+        } else {
+            source
+        };
+        self.nodes.iter().find(|node| {
+            node.name == source && (!default || node.class.starts_with("Audio/Source"))
+        })
+    }
+
+    pub fn source_identity(&self, source: &str) -> Option<(String, String)> {
+        let node = self.source(source)?;
+        Some((node.name.clone(), node.label()))
+    }
+
+    fn default_property(&mut self, subject: u32, key: Option<&str>, value: Option<&str>) {
+        if subject == 0 && matches!(key, None | Some("default.audio.source")) {
+            self.default_source = value.and_then(default_source_name);
+        }
+    }
+
     fn node(&self, id: u32) -> Option<&Node> {
         self.nodes.iter().find(|node| node.id == id)
     }
@@ -100,7 +127,7 @@ impl Graph {
     /// Walk upstream from the source named `source` (a PipeWire `node.name`).
     pub fn upstream(&self, source: &str) -> Upstream {
         let mut found = Upstream::default();
-        let Some(mut current) = self.nodes.iter().find(|node| node.name == source) else {
+        let Some(mut current) = self.source(source) else {
             return found;
         };
         let mut visited = vec![current.id];
@@ -174,6 +201,22 @@ impl Graph {
     }
 }
 
+pub fn default_source_alias(source: &str) -> bool {
+    matches!(source, "input_default" | "source_default")
+}
+
+fn default_source_name(value: &str) -> Option<String> {
+    // Metadata is local but still bounded input. Never treat arbitrary JSON or
+    // an alias as a node name; a missing/invalid effective default stays unknown.
+    if value.len() > 4096 {
+        return None;
+    }
+    let value: serde_json::Value = serde_json::from_str(value).ok()?;
+    let name = value.get("name")?.as_str()?;
+    (!name.is_empty() && name.len() <= 1024 && !name.contains('\0') && !default_source_alias(name))
+        .then(|| name.to_owned())
+}
+
 /// Read the current graph from the PipeWire daemon, or `None` without one.
 #[cfg(target_os = "linux")]
 pub fn snapshot() -> Option<Graph> {
@@ -196,6 +239,7 @@ pub fn snapshot() -> Option<Graph> {
     // grouping (`node.link-group`) and stream targets come with each node's
     // info, so every node is bound and read in a second round trip.
     let bound = Rc::new(RefCell::new(Vec::new()));
+    let metadata_bound = Rc::new(RefCell::new(Vec::new()));
     let pending = Rc::new(std::cell::Cell::new(core.sync(0).ok()?));
     let rounds = Rc::new(std::cell::Cell::new(0_u8));
     let finished = Rc::new(std::cell::Cell::new(false));
@@ -227,6 +271,7 @@ pub fn snapshot() -> Option<Graph> {
         .global({
             let graph = graph.clone();
             let bound = bound.clone();
+            let metadata_bound = metadata_bound.clone();
             let registry = registry.downgrade();
             move |global| {
                 let Some(props) = global.props else {
@@ -234,6 +279,26 @@ pub fn snapshot() -> Option<Graph> {
                 };
                 let text = |key: &str| props.get(key).unwrap_or_default().to_string();
                 match global.type_ {
+                    pw::types::ObjectType::Metadata
+                        if props.get("metadata.name") == Some("default") =>
+                    {
+                        let Some(registry) = registry.upgrade() else {
+                            return;
+                        };
+                        let Ok(metadata) = registry.bind::<pw::metadata::Metadata, _>(global)
+                        else {
+                            return;
+                        };
+                        let graph = graph.clone();
+                        let listener = metadata
+                            .add_listener_local()
+                            .property(move |subject, key, _type, value| {
+                                graph.borrow_mut().default_property(subject, key, value);
+                                0
+                            })
+                            .register();
+                        metadata_bound.borrow_mut().push((metadata, listener));
+                    }
                     pw::types::ObjectType::Node => {
                         graph.borrow_mut().nodes.push(Node {
                             id: global.id,
@@ -324,6 +389,7 @@ mod tests {
     /// source-rnnoise.conf) → default source; Firefox plays into echo-cancel-sink.
     fn rnnoise_after_echo_cancel() -> Graph {
         Graph {
+            default_source: Some("effect_output.rnnoise".into()),
             nodes: vec![
                 node(
                     40,
@@ -479,6 +545,7 @@ mod tests {
     fn a_noise_suppressor_through_a_loopback_into_a_virtual_source_is_found() {
         // NoiseTorch-style: filter → loopback playback → null sink used as a source.
         let graph = Graph {
+            default_source: None,
             nodes: vec![
                 node(1, "alsa_input.pci", "Built-in Mic", "Audio/Source", None),
                 node(
