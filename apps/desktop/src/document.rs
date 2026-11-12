@@ -136,6 +136,9 @@ impl Block {
 #[derive(Clone, Default)]
 pub struct Document {
     pub blocks: Vec<Block>,
+    /// Interaction callbacks borrow this lease; replacing a cached document
+    /// revokes old-frame actions without retaining its text or pixels.
+    pub(crate) lease: Arc<()>,
 }
 
 /// Build a GPUI image from worker RGBA pixels (GPUI expects BGRA).
@@ -209,6 +212,7 @@ impl From<MessageDocument> for Document {
                     },
                 })
                 .collect(),
+            ..Default::default()
         }
     }
 }
@@ -409,6 +413,10 @@ pub fn data_uri_file(uri: &str) -> Option<(Vec<u8>, &'static str)> {
 }
 
 impl Document {
+    pub(crate) fn lease(&self) -> std::sync::Weak<()> {
+        Arc::downgrade(&self.lease)
+    }
+
     pub fn first_image(&self) -> Option<Arc<RenderImage>> {
         self.blocks.iter().find_map(|block| match block {
             Block::Image { image, .. } => Some(image.clone()),

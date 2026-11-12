@@ -262,7 +262,15 @@ pub fn panel(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement> {
             let comment = this
                 .ui_of(*server)
                 .and_then(|ui| ui.comments.get(session))
-                .map(|(_, document)| document_blocks(this, document, cx));
+                .map(|(_, document)| {
+                    document_blocks(
+                        this,
+                        server_view,
+                        nuschl_client::platform::RenderKey::Comment(*session),
+                        document,
+                        cx,
+                    )
+                });
             let body = div()
                 .px_6()
                 .pb_6()

@@ -7,7 +7,10 @@
 //! `render <start> <duration>` (`Desktop::render` alone) and
 //! `present <start> <duration>` (handing the scene to the GPU). The first
 //! line, `origin Instant { tv_sec: …, tv_nsec: … }`, places startup on the
-//! monotonic clock, to line events up with the compositor's.
+//! monotonic clock, to line events up with the compositor's. Constant native
+//! notification kinds (`input_transport`, `input_audio_status`,
+//! `input_audio_devices`, `input_audio_health`) use `<start> 0`; no input payload
+//! is logged. Existing phase summaries ignore these additional event kinds.
 use gpui_profiler::{FrameEvent, FrameTimingCollector, set_trace_enabled};
 use std::{
     cell::RefCell,
@@ -46,6 +49,17 @@ pub fn init() {
         collector: FrameTimingCollector::new(),
         origin,
     }));
+}
+
+/// Constant input categories only: correlate native notifications with draws
+/// without logging server identity, message bodies, URLs or device details.
+pub fn input(kind: &'static str) {
+    LOG.with_borrow_mut(|log| {
+        let Some(log) = log else { return };
+        let at = log.origin.elapsed().as_micros();
+        let _ = writeln!(log.file, "{kind} {at} 0");
+        let _ = log.file.flush();
+    });
 }
 
 /// After `Desktop::render`, which began at `start`: write it and the frames

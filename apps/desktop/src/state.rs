@@ -2231,7 +2231,26 @@ impl Desktop {
         self.client.set_time(monotonic_ms());
         for event in events {
             match event.into_input() {
-                Ok(input) => self.client.handle(input),
+                Ok(input) => {
+                    #[cfg(feature = "frame-timing")]
+                    {
+                        use nuschl_client::input::{Input, ServerEvent};
+                        let kind = match &input {
+                            Input::Server {
+                                event: ServerEvent::Transport(_),
+                                ..
+                            } => Some("input_transport"),
+                            Input::AudioStatus { .. } => Some("input_audio_status"),
+                            Input::AudioDevices { .. } => Some("input_audio_devices"),
+                            Input::AudioHealth { .. } => Some("input_audio_health"),
+                            _ => None,
+                        };
+                        if let Some(kind) = kind {
+                            crate::frame_timing::input(kind);
+                        }
+                    }
+                    self.client.handle(input);
+                }
                 Err(Native::OwnIdentity(result)) => self.own_identity.apply(*result),
                 Err(Native::Identity {
                     server,

@@ -583,6 +583,7 @@ pub struct BlockText {
     styled: StyledText,
     layout: BlockLayout,
     math: Option<MathText>,
+    document_links: Option<crate::document_links::Links>,
 }
 
 /// What laying out inline formulas needs: the formulas, the styles over the
@@ -657,7 +658,23 @@ impl BlockText {
             styled,
             layout,
             math,
+            document_links: None,
         }
+    }
+
+    pub(crate) fn document_links(mut self, scope: Rc<crate::document_links::Scope>) -> Self {
+        if let Some(links) = self.links.as_ref().filter(|links| !links.is_empty()) {
+            self.document_links = Some(crate::document_links::Links::new(
+                scope,
+                TextBox {
+                    block: 0,
+                    text: self.text.clone(),
+                    layout: self.layout.clone(),
+                    links: Some(links.clone()),
+                },
+            ));
+        }
+        self
     }
 
     /// Maps positions to offsets once the text is laid out.
@@ -796,6 +813,14 @@ struct Laid {
 }
 
 impl BlockLayout {
+    pub(crate) fn text_layout(&self) -> TextLayout {
+        self.0.borrow().layout.clone()
+    }
+
+    pub(crate) fn shown_range(&self, range: &Range<usize>) -> Range<usize> {
+        let laid = self.0.borrow();
+        to_shown(&laid.map, range.start, false)..to_shown(&laid.map, range.end, true)
+    }
     pub fn bounds(&self) -> Bounds<Pixels> {
         self.0.borrow().layout.bounds()
     }
@@ -820,7 +845,7 @@ impl IntoElement for BlockText {
 
 impl Element for BlockText {
     type RequestLayoutState = ();
-    type PrepaintState = ();
+    type PrepaintState = Option<crate::document_links::Frame>;
 
     fn id(&self) -> Option<ElementId> {
         self.id.clone()
@@ -838,9 +863,16 @@ impl Element for BlockText {
         node.set_value(self.text.to_string());
     }
 
-    fn a11y_synthetic_children(&mut self, _: &mut (), builder: &mut A11ySubtreeBuilder) {
+    fn a11y_synthetic_children(
+        &mut self,
+        _: &mut Self::PrepaintState,
+        builder: &mut A11ySubtreeBuilder,
+    ) {
         let mut index = 0;
         for (range, url) in self.links.iter().flat_map(|links| links.iter()) {
+            if self.document_links.is_some() {
+                continue;
+            }
             let mut node = accesskit::Node::new(Role::Link);
             node.set_label(&self.text[range.clone()]);
             node.set_url(url.to_string());
@@ -866,6 +898,9 @@ impl Element for BlockText {
         window: &mut Window,
         cx: &mut App,
     ) -> (LayoutId, ()) {
+        if let Some(links) = &mut self.document_links {
+            links.retain(window, cx);
+        }
         self.place_math(window, cx);
         let line_height = self.math.as_ref().and_then(|math| math.line_height);
         let refinement = line_height.map(|height| TextStyleRefinement {
@@ -885,9 +920,12 @@ impl Element for BlockText {
         _: &mut (),
         window: &mut Window,
         cx: &mut App,
-    ) {
+    ) -> Self::PrepaintState {
         self.styled
             .prepaint(None, inspector_id, bounds, &mut (), window, cx);
+        self.document_links
+            .as_mut()
+            .map(|links| links.prepaint(window, cx))
     }
 
     fn paint(
@@ -896,12 +934,15 @@ impl Element for BlockText {
         inspector_id: Option<&InspectorElementId>,
         bounds: Bounds<Pixels>,
         _: &mut (),
-        _: &mut (),
+        links: &mut Self::PrepaintState,
         window: &mut Window,
         cx: &mut App,
     ) {
         self.styled
             .paint(None, inspector_id, bounds, &mut (), &mut (), window, cx);
+        if let Some(links) = links {
+            links.paint(window, cx);
+        }
         let Some(math) = &self.math else {
             return;
         };
@@ -989,7 +1030,7 @@ fn overshoot(bounds: Bounds<Pixels>, y: Pixels) -> f32 {
 }
 
 /// The text (by index) and link under the pointer.
-fn link_at(
+pub(crate) fn link_at(
     texts: &[TextBox],
     hitboxes: &[Hitbox],
     position: Point<Pixels>,
@@ -1517,6 +1558,7 @@ mod tests {
                     kind: Kind::Paragraph,
                 },
             ],
+            ..Default::default()
         };
         let caret = |block, offset| Caret { block, offset };
         assert_eq!(selected_text(&document, caret(0, 6), caret(0, 11)), "there");

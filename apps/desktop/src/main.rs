@@ -10,6 +10,7 @@ mod autostart;
 mod chrome;
 mod dialogs;
 mod document;
+mod document_links;
 mod editing;
 mod emoji;
 mod finder;

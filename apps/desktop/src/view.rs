@@ -2142,7 +2142,13 @@ fn timeline_intro(
                         .flex_col()
                         .gap_2()
                         .text_sm()
-                        .children(document_blocks(this, description, cx)),
+                        .children(document_blocks(
+                            this,
+                            server,
+                            nuschl_client::platform::RenderKey::Description(channel.id),
+                            description,
+                            cx,
+                        )),
                 )
             },
         )
@@ -2172,7 +2178,13 @@ fn timeline_intro(
                         .flex()
                         .flex_col()
                         .gap_2()
-                        .children(document_blocks(this, welcome, cx)),
+                        .children(document_blocks(
+                            this,
+                            server,
+                            nuschl_client::platform::RenderKey::Welcome,
+                            welcome,
+                            cx,
+                        )),
                 )
             },
         )
@@ -2785,7 +2797,7 @@ fn message_row(
     let mut texts = Vec::new();
     // A file offer shows as a card in place of its text (transfer.rs).
     let blocks = card.map_or_else(
-        || blocks(this, &ui.document, selected, hovered, &mut texts, cx),
+        || blocks(this, &ui.document, selected, hovered, &mut texts, None, cx),
         |card| vec![card],
     );
     div()
@@ -3492,10 +3504,13 @@ fn security_icon_labelled(
 /// A document's blocks, where its text is not selectable (descriptions, comments).
 pub fn document_blocks(
     this: &Desktop,
+    server: &crate::state::ServerView,
+    key: nuschl_client::platform::RenderKey,
     document: &Document,
     cx: &mut Context<Desktop>,
 ) -> Vec<AnyElement> {
-    blocks(this, document, None, None, &mut Vec::new(), cx)
+    let scope = crate::document_links::Scope::new(server, key, document, cx);
+    blocks(this, document, None, None, &mut Vec::new(), Some(scope), cx)
 }
 
 /// A document's blocks with the `selected` part and the `hovered` link
@@ -3506,6 +3521,7 @@ fn blocks(
     selected: Option<(Caret, Caret)>,
     hovered: Option<&HoveredLink>,
     texts: &mut Texts,
+    document_links: Option<Rc<crate::document_links::Scope>>,
     cx: &mut Context<Desktop>,
 ) -> Vec<AnyElement> {
     crate::math::prepare(this, cx);
@@ -3536,7 +3552,7 @@ fn blocks(
                     .and_then(|hovered| Some(links.get(hovered.link)?.0.clone()));
                 let links = (!links.is_empty()).then(|| links.clone());
                 let id = Some(("body", index).into());
-                let content = BlockText::with_math(
+                let mut content = BlockText::with_math(
                     id,
                     text.clone(),
                     highlights,
@@ -3546,6 +3562,9 @@ fn blocks(
                     links.clone(),
                     math.clone(),
                 );
+                if let Some(scope) = document_links.as_ref() {
+                    content = content.document_links(scope.clone());
+                }
                 texts.push(TextBox {
                     block: index,
                     text: text.clone(),
