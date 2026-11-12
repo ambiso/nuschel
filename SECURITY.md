@@ -96,8 +96,9 @@ time or version is older than the newest it has accepted; a client that never sa
 newer manifest can still be offered an older unexpired one, and withheld releases
 are not discovered automatically. Signed v2 metadata expires within 30 days; the
 local clock also gates acceptance. Two separately confined fixed-algorithm
-Ed25519/ML-DSA-44 workers must both succeed. Trust is embedded only, currently
-unenrolled; no adjacent writable key or minisign fallback is accepted. The
+Ed25519/ML-DSA-44 workers must both succeed. Trust is embedded only. On 2026-11-12 the dedicated production public pair
+`dbc40ac478b51573eaebebb0a40532bec7cf2a87282a98ae08f1a25ee5b42535`
+was enrolled; no adjacent writable key or minisign fallback is accepted. The
 [updater boundary and proof limits](apps/update-worker/README.md#confinement-and-actual-proof)
 include shared parent/OS/compiler/hash dependencies and the CI signing authority.
 Hybrid verifier/LPAC, library-install and desktop update/restart proof exist on

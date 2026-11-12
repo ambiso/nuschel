@@ -11,9 +11,10 @@ The update-key tooling uses RustCrypto `ml-dsa` 0.1.2 (ML-DSA-44 and its
 SHAKE/Keccak stack) and `ed25519-dalek` 2.2.0 for Ed25519. `ed25519` supplies
 formats/traits; dalek supplies the implementation. The optional signing tool
 keeps these engines outside the UI/updater parent, and production verification
-is being moved to two independently confined algorithm processes with a
-mandatory parent-side AND. This prototype does not yet replace the minisign
-release path. The v2 trust store has no production key enrolled.
+uses two independently confined algorithm processes with a mandatory
+parent-side AND and no minisign fallback. The dedicated production public pair
+was enrolled on 2026-11-12; matching CI signing-secret provisioning and actual
+publication remain separate operator/release gates.
 
 RustCrypto ML-DSA 0.1.2 is newer than the fixes for the disclosed
 [decomposition timing issue](https://github.com/advisories/GHSA-hcp2-x6j4-29j7)

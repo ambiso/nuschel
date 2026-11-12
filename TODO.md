@@ -347,11 +347,12 @@ Current integration checkpoint (2026-11-12):
   update/restart additionally passes exact profile/state continuity and every
   signed installed hash; its eight helper/worker EXEs match runtime-tested official
   products. Current-head cross archives and macOS execution remain separate gates;
-  see `docs/windows-hybrid-update.md`. Production trust stays empty.
+  see `docs/windows-hybrid-update.md`. The dedicated production public pair was
+  enrolled on 2026-11-12; historical fixture proofs retain their original scope.
 - **Release remains gated.** Independent Linux, Windows, universal macOS and web
   artifacts, hybrid update verification, exact notices and final packaging must
-  pass. Production public-key enrollment and CI secret provisioning remain
-  operator steps. Do not publish unsigned updates.
+  pass. Production public-key enrollment is complete; matching CI secret
+  provisioning/verification and protected private-key backups remain operator steps. Do not publish unsigned updates.
 - Knocking is integrated through `1f979943` (134 source-branch tests); SDK/UI
   consumers remain. MLS admission is refused. RTC RustCrypto certificates and
   bounded four-track transport are integrated (five signaling and 12 transport

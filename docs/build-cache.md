@@ -150,3 +150,8 @@ although the real dependency derivations stay cached. Narrowing final source
 filtering without losing actual embedded assets/policy inputs remains in TODO.
 The broader per-crate migration and production trust enrollment are also separate
 open work. No remote publication or host device access occurred.
+
+Production trust update (2026-11-12): the dedicated public pair is now enrolled
+in `crates/update/update-trust.json`. Statements above about absent enrollment
+describe the recorded historical work, not the current source trust store.
+This does not establish CI secret availability, a remote release or new platform proof.

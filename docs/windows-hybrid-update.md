@@ -169,3 +169,8 @@ exact products, archive/hash data, source authority, public-only cache provenanc
 and the original failing Mac-tool diagnostic. These local frozen-source results
 are not first remote CI/release evidence, physical Windows proof, native Mac
 acceptance or production trust enrollment.
+
+Production trust update (2026-11-12): the dedicated public pair is now enrolled
+in `crates/update/update-trust.json`. Statements above about absent enrollment
+describe the recorded historical work, not the current source trust store.
+This does not establish CI secret availability, a remote release or new platform proof.
