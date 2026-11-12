@@ -1,3 +1,5 @@
+![WARN: LLM GENERATED](https://img.shields.io/badge/WARN-LLM%20GENERATED-FF6347)
+
 # Nuschl
 
 ![Nuschl in a voice channel: the channel tree with the people in it, and a conversation with code, a photo and a formula while Ada talks](docs/images/nuschl.png)
@@ -182,6 +184,14 @@ Windows and macOS builds are cross-compiled on Linux (`nix build .#windows`,
 `.#macos-app`). More in [docs/development.md](docs/development.md), what the tests
 cover in [tests/README.md](tests/README.md), how it fits together in
 [docs/architecture.md](docs/architecture.md), and what is next in [TODO.md](TODO.md).
+
+## AI assistance
+
+Most of Nuschl's own code and documentation was written with AI assistance.
+The project is experimental and has not had an independent security audit.
+See the [test coverage](tests/README.md) and [security notes](SECURITY.md) for
+verification scope and known limits. Desktop, audio and cross-platform behaviour
+still need testing on the systems where you use them.
 
 ## Licence
 
