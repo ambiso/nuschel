@@ -1125,39 +1125,14 @@ impl Desktop {
     }
 
     pub fn render_comment(&mut self, server: usize, session: u32) {
-        let Some(view) = self.client.servers.get(server) else {
-            return;
-        };
-        let Some(user) = view.users.get(&session) else {
-            return;
-        };
-        match (&user.comment, &user.comment_hash) {
-            (Some(comment), _) => {
-                if self
-                    .ui_of(server)
-                    .and_then(|ui| ui.comments.get(&session))
-                    .is_none_or(|(source, _)| source != comment)
-                {
-                    self.driver.render_html(
-                        view.id.clone(),
-                        view.generation,
-                        nuschl_client::platform::RenderKey::Comment(session),
-                        comment.clone(),
-                    );
-                }
-            }
-            (None, Some(_)) => {
-                let _ = self.driver.command(
-                    &view.id,
-                    Command::RequestBlobs {
-                        textures: vec![],
-                        comments: vec![session],
-                        descriptions: vec![],
-                    },
-                );
-            }
-            (None, None) => {}
-        }
+        let cached_source = self
+            .client
+            .servers
+            .get(server)
+            .and_then(|view| self.ui.get(&view.id))
+            .and_then(|ui| ui.comments.get(&session))
+            .map(|(source, _)| source.as_str());
+        self.client.open_comment(server, session, cached_source);
     }
 }
 

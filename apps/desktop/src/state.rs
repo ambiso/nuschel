@@ -2228,6 +2228,12 @@ impl Desktop {
     /// Apply what the driver reported: the client decides, the desktop
     /// follows its updates.
     fn apply_events(&mut self, events: impl IntoIterator<Item = Event>, cx: &mut Context<Self>) {
+        // A closed/replaced profile cannot keep requesting or rendering comment
+        // updates. Only the explicit profile-open action creates SDK interest.
+        self.client.retain_comment_interest(match self.panel {
+            Some(Panel::UserInfo { server, session }) => Some((server, session)),
+            _ => None,
+        });
         self.client.set_time(monotonic_ms());
         for event in events {
             match event.into_input() {

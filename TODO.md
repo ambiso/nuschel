@@ -68,6 +68,14 @@ Current integration checkpoint (2026-11-12):
   controls remain unimplemented; see `docs/browser-content.md`. The pinned,
   isolated Temml 0.14 formula renderer with notices is integrated through
   `309ad791`/`9159eae5`; this does not complete image/attachment parity.
+- **Hash-only document delivery is integrated.** The shared SDK requests selected
+  descriptions and current-profile comments once per hash/connection; arriving
+  comments update the open profile. Private stock-Murmur/GNOME proofs reproduce
+  both old gaps and verify first-open, replacement, hidden/reopen and raw hash/body
+  frames on the fixed package. SDK tests pass 99 (one existing ignored), desktop
+  tests pass 79. Existing-document cache reuse and stale/hidden interest guards
+  pass. Separate legacy hash/body normalization and native cross-platform checks
+  remain open; see `docs/hash-documents.md`.
 - **Modern browser identity/archive flows remain open.** Do not advertise MLS,
   authenticated modern archive parity or other desktop-only capabilities until
   end-to-end browser interoperability and capability checks prove them.
@@ -835,14 +843,26 @@ listed below. Plugin data remains the explicit gap.
       script/link policy, stale generations and cache revocation. This closes
       the duplicate shared-source report above; Windows GUI confirmation remains
       a platform verification gap, and general document-link activation is separate.
-- [ ] Stock-Murmur hash-only description/comment delivery needs a separate fetch/render
-      follow-up. Native interaction probes (2026-11-12) receive full inline documents
-      correctly, but a long channel description is advertised only by hash and the
-      normal channel view never requests its blob. Opening a profile requests a
-      hash-only comment in `menus::render_comment`, but the arriving full comment
-      is not submitted to the content worker until the profile is opened again.
-      The document-link fixture deliberately uses inline bodies below Murmur's
-      128-byte hash threshold; it does not establish hash-only retrieval/rendering.
+- [x] Integrate the verified stock-Murmur hash-only document fetch/render fix.
+      The SDK now requests a selected channel's missing description once per hash
+      and binds open-profile comment interest to connection/session/presence.
+      Arriving comments and hash replacements render without reopening; hidden
+      or replaced profiles revoke interest before event processing. Prepared and
+      pending sources are reused. The private old-package baseline reproduces
+      both gaps; the fixed Linux package passes first-selection/first-open,
+      replacement and hidden/reopen checks against stock Murmur, with raw pinned
+      loopback hash/body frames retained. SDK tests pass 99 (one existing ignored)
+      and all 79 native unit tests pass; the reviewed fix is integrated. See
+      `docs/hash-documents.md`. No Windows/macOS or new browser profile-UI claim.
+- [ ] Audit native legacy blob hash/body normalization separately (source-level
+      finding, not a reproduced exploit). A new small inline description/comment
+      can leave a prior long-body hash in normalized session state, while body-only
+      blob responses are not independently digest-checked. Validate incoming
+      20-byte hash shapes before retaining model metadata as part of that audit.
+      Murmur's synchronous current-body replies use ordered TLS; old-body-after-
+      new-hash reordering is unproven. Preserve valid inline replacements without
+      hash fields, current stored-source checks and HTML sanitization; blindly
+      rejecting against an older retained hash would break legitimate updates.
 - [x] Shared nonselectable document links (2026-11-12): welcome cards, delivered
       channel descriptions and profile comments reuse `BlockText`'s existing
       layout/hit testing, real retained link focus and the safe `open_link`

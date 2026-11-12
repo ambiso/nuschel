@@ -168,6 +168,33 @@ struct PendingSend {
     body: String,
 }
 
+#[derive(Default)]
+struct DescriptionRequests {
+    generation: u64,
+    channels: BTreeMap<u32, DescriptionRequest>,
+}
+
+struct DescriptionRequest {
+    hash: String,
+    sent: bool,
+}
+
+/// Only an explicit profile-open action creates interest. A UI may retain or
+/// revoke it while applying events; that cannot re-authorize a reused session.
+struct CommentInterest {
+    server: String,
+    generation: u64,
+    session: u32,
+    instance: u64,
+    hash: Option<String>,
+    sent: bool,
+}
+
+fn blob_hash(hash: &Option<String>) -> Option<&String> {
+    hash.as_ref()
+        .filter(|hash| hash.len() == 40 && hash.bytes().all(|byte| byte.is_ascii_hexdigit()))
+}
+
 /// Welcome content belongs only to the connection that supplied it.
 fn clear_welcome(server: &mut ServerState, updates: &mut Vec<Update>) {
     if server.welcome.take().is_some() {
@@ -223,6 +250,8 @@ pub struct Client {
     typing_sent: Option<((String, u32), u64)>,
     /// Passwords of this run's connections, until they log in.
     passwords: BTreeMap<String, String>,
+    description_requests: BTreeMap<String, DescriptionRequests>,
+    comment_interest: Option<CommentInterest>,
     pub(crate) updates: Vec<Update>,
     now_ms: u64,
 }
@@ -247,6 +276,8 @@ impl Client {
             share_requests: BTreeMap::new(),
             typing_sent: None,
             passwords: BTreeMap::new(),
+            description_requests: BTreeMap::new(),
+            comment_interest: None,
             updates: Vec::new(),
             now_ms: 0,
         }
@@ -314,6 +345,7 @@ impl Client {
     /// Replace a saved server (its address or name changed), dropping its
     /// connection and what was known of it.
     pub fn replace_server(&mut self, index: usize, bookmark: ServerBookmark) {
+        self.forget_document_requests(index);
         clear_welcome(&mut self.servers[index], &mut self.updates);
         self.platform.disconnect(&self.servers[index].id);
         self.voice.disconnected(&self.servers[index].id, None);
@@ -323,6 +355,9 @@ impl Client {
     }
 
     pub fn remove_server(&mut self, id: &str) {
+        if let Some(index) = self.server_index(id) {
+            self.forget_document_requests(index);
+        }
         if let Some(server) = self.servers.iter_mut().find(|server| server.id == id) {
             clear_welcome(server, &mut self.updates);
         }
@@ -347,6 +382,14 @@ impl Client {
             .connect(server.bookmark.clone(), password, deafened)
         {
             Ok(generation) => {
+                self.description_requests.remove(&server.id);
+                if self
+                    .comment_interest
+                    .as_ref()
+                    .is_some_and(|interest| interest.server == server.id)
+                {
+                    self.comment_interest = None;
+                }
                 clear_welcome(server, &mut self.updates);
                 server.generation = generation;
                 server.muted = true;
@@ -411,6 +454,7 @@ impl Client {
     }
 
     pub fn disconnect(&mut self, index: usize) {
+        self.forget_document_requests(index);
         let Some(server) = self.servers.get_mut(index) else {
             return;
         };
@@ -673,7 +717,184 @@ impl Client {
                 },
             );
         }
+        self.request_selected_description(index);
         result
+    }
+
+    fn forget_document_requests(&mut self, index: usize) {
+        let Some(server) = self.servers.get(index) else {
+            return;
+        };
+        self.description_requests.remove(&server.id);
+        if self
+            .comment_interest
+            .as_ref()
+            .is_some_and(|interest| interest.server == server.id)
+        {
+            self.comment_interest = None;
+        }
+    }
+
+    /// Fetch a hash-only description only when its real channel is selected.
+    /// One request per advertised hash/connection; no per-frame polling or timer.
+    fn request_selected_description(&mut self, index: usize) {
+        let Some(server) = self.servers.get(index) else {
+            return;
+        };
+        let Some(selected) = self
+            .navigation
+            .selection()
+            .filter(|selected| selected.server == server.id)
+        else {
+            return;
+        };
+        let Some(channel) = server
+            .channels
+            .iter()
+            .find(|channel| channel.id == selected.channel)
+        else {
+            return;
+        };
+        let TextTarget::Channel(id) = channel.target else {
+            return;
+        };
+        if server.status != Status::Connected || !channel.description_raw.is_empty() {
+            return;
+        }
+        let Some(requests) = self
+            .description_requests
+            .get_mut(&server.id)
+            .filter(|requests| requests.generation == server.generation)
+        else {
+            return;
+        };
+        let Some(request) = requests
+            .channels
+            .get_mut(&id)
+            .filter(|request| !request.sent)
+        else {
+            return;
+        };
+        if self
+            .platform
+            .request(
+                &server.id,
+                Request::RequestBlobs {
+                    textures: vec![],
+                    comments: vec![],
+                    descriptions: vec![id],
+                },
+            )
+            .is_ok()
+        {
+            request.sent = true;
+        }
+    }
+
+    /// Open one profile comment. The content worker renders a body already held
+    /// or the body that later answers this hash-only request, without reopening.
+    /// A matching UI cache source avoids re-parsing an already prepared body.
+    pub fn open_comment(&mut self, index: usize, session: u32, cached_source: Option<&str>) {
+        let Some(server) = self
+            .servers
+            .get(index)
+            .filter(|server| server.status == Status::Connected)
+        else {
+            return;
+        };
+        let Some(user) = server.users.get(&session) else {
+            return;
+        };
+        let same = self.comment_interest.as_ref().is_some_and(|interest| {
+            interest.server == server.id
+                && interest.generation == server.generation
+                && interest.session == session
+                && interest.instance == user.instance
+        });
+        let render_existing = !same && user.comment.as_deref() != cached_source;
+        if !same {
+            self.comment_interest = Some(CommentInterest {
+                server: server.id.clone(),
+                generation: server.generation,
+                session,
+                instance: user.instance,
+                hash: blob_hash(&user.comment_hash).cloned(),
+                sent: false,
+            });
+        }
+        self.refresh_comment_interest(render_existing);
+    }
+
+    /// A native UI calls this before applying a batch with its still-visible
+    /// profile. It may revoke interest, but never create it after a reconnect.
+    pub fn retain_comment_interest(&mut self, shown: Option<(usize, u32)>) {
+        let keep = shown.is_some_and(|(index, session)| {
+            self.servers.get(index).is_some_and(|server| {
+                self.comment_interest.as_ref().is_some_and(|interest| {
+                    interest.server == server.id
+                        && interest.generation == server.generation
+                        && interest.session == session
+                        && server.status == Status::Connected
+                        && server
+                            .users
+                            .get(&session)
+                            .is_some_and(|user| user.instance == interest.instance)
+                })
+            })
+        });
+        if !keep {
+            self.comment_interest = None;
+        }
+    }
+
+    fn refresh_comment_interest(&mut self, render_body: bool) {
+        let Some(mut interest) = self.comment_interest.take() else {
+            return;
+        };
+        let Some(server) = self.servers.iter().find(|server| {
+            server.id == interest.server
+                && server.generation == interest.generation
+                && server.status == Status::Connected
+        }) else {
+            return;
+        };
+        let Some(user) = server
+            .users
+            .get(&interest.session)
+            .filter(|user| user.instance == interest.instance)
+        else {
+            return;
+        };
+        if blob_hash(&user.comment_hash) != interest.hash.as_ref() {
+            interest.hash = blob_hash(&user.comment_hash).cloned();
+            interest.sent = false;
+        }
+        if let Some(source) = &user.comment {
+            if render_body {
+                self.platform.render_html(
+                    server.id.clone(),
+                    server.generation,
+                    RenderKey::Comment(user.session),
+                    source.clone(),
+                );
+            }
+        } else if interest.hash.is_some()
+            && !interest.sent
+            && self
+                .platform
+                .request(
+                    &server.id,
+                    Request::RequestBlobs {
+                        textures: vec![],
+                        comments: vec![user.session],
+                        descriptions: vec![],
+                    },
+                )
+                .is_ok()
+        {
+            interest.sent = true;
+        }
+        self.comment_interest = Some(interest);
     }
 
     /// Load a page of the open conversation's history before `before` (the
@@ -1248,6 +1469,7 @@ impl Client {
                 reason,
             } => {
                 if let Some(index) = self.current(&server, generation) {
+                    self.forget_document_requests(index);
                     let server = &mut self.servers[index];
                     server.status = Status::Disconnected;
                     clear_welcome(server, &mut self.updates);
@@ -1290,6 +1512,7 @@ impl Client {
                 reason,
             } => {
                 if let Some(index) = self.current(&server, generation) {
+                    self.forget_document_requests(index);
                     let server = &mut self.servers[index];
                     if server.status == Status::Connected && !server.deafened {
                         self.platform.chime(Sound::Disconnected);
@@ -1335,13 +1558,24 @@ impl Client {
                     let state = &mut self.servers[index];
                     let current = match key {
                         RenderKey::Welcome => state.welcome.as_deref() == Some(source.as_str()),
-                        RenderKey::Description(id) => state
-                            .channel_view(id)
-                            .is_some_and(|channel| channel.description_raw == source),
-                        RenderKey::Comment(session) => state
-                            .users
-                            .get(&session)
-                            .is_some_and(|user| user.comment.as_deref() == Some(source.as_str())),
+                        RenderKey::Description(id) => {
+                            state.status == Status::Connected
+                                && state
+                                    .channel_view(id)
+                                    .is_some_and(|channel| channel.description_raw == source)
+                        }
+                        RenderKey::Comment(session) => {
+                            state.status == Status::Connected
+                                && state.users.get(&session).is_some_and(|user| {
+                                    user.comment.as_deref() == Some(source.as_str())
+                                        && self.comment_interest.as_ref().is_some_and(|interest| {
+                                            interest.server == state.id
+                                                && interest.generation == state.generation
+                                                && interest.session == session
+                                                && interest.instance == user.instance
+                                        })
+                                })
+                        }
                     };
                     if current {
                         self.updates.push(Update::Rendered {
@@ -1699,6 +1933,24 @@ impl Client {
     }
 
     fn server_event(&mut self, index: usize, event: ServerEvent) {
+        let fetch_description = matches!(
+            &event,
+            ServerEvent::Connected { .. } | ServerEvent::Channel(_)
+        );
+        let refresh_comment = matches!(&event, ServerEvent::User(_) | ServerEvent::UserRemoved(_));
+        let render_comment = match &event {
+            ServerEvent::User(user)
+                if self.comment_interest.as_ref().is_some_and(|interest| {
+                    interest.session == user.session && interest.server == self.servers[index].id
+                }) =>
+            {
+                self.servers[index]
+                    .users
+                    .get(&user.session)
+                    .is_none_or(|old| old.comment != user.comment)
+            }
+            _ => false,
+        };
         let server = &mut self.servers[index];
         match event {
             ServerEvent::EncryptionGap {
@@ -1890,6 +2142,33 @@ impl Client {
                 }
             }
             ServerEvent::Channel(update) => {
+                let requests = self
+                    .description_requests
+                    .entry(server.id.clone())
+                    .or_default();
+                if requests.generation != server.generation {
+                    *requests = DescriptionRequests {
+                        generation: server.generation,
+                        ..Default::default()
+                    };
+                }
+                if let Some(hash) = blob_hash(&update.description_hash) {
+                    if requests
+                        .channels
+                        .get(&update.id)
+                        .is_none_or(|request| request.hash != *hash)
+                    {
+                        requests.channels.insert(
+                            update.id,
+                            DescriptionRequest {
+                                hash: hash.clone(),
+                                sent: false,
+                            },
+                        );
+                    }
+                } else {
+                    requests.channels.remove(&update.id);
+                }
                 server.seen_channels.insert(update.id);
                 let cached = CachedChannel {
                     id: update.id,
@@ -2051,6 +2330,9 @@ impl Client {
                 }
             }
             ServerEvent::ChannelRemoved(id) => {
+                if let Some(requests) = self.description_requests.get_mut(&server.id) {
+                    requests.channels.remove(&id);
+                }
                 server.expansion.remove(&id);
                 server.permissions.remove(&id);
                 let cached = server.bookmark.cached_channels.len();
@@ -2181,6 +2463,12 @@ impl Client {
             }
             ServerEvent::Welcome { .. } => {}
             ServerEvent::Transport(stats) => server.transport = Some(stats),
+        }
+        if fetch_description {
+            self.request_selected_description(index);
+        }
+        if refresh_comment {
+            self.refresh_comment_interest(render_comment);
         }
     }
 
@@ -2338,6 +2626,7 @@ mod tests {
         requests: Mutex<Vec<(String, Request)>>,
         pages: Mutex<Vec<(String, HistoryTicket, Page)>>,
         sounds: Mutex<Vec<Sound>>,
+        rendered: Mutex<Vec<(String, u64, RenderKey, String)>>,
     }
 
     impl Platform for Recorder {
@@ -2377,7 +2666,12 @@ mod tests {
         fn change_message(&self, _: ChangeRequest) -> Result<(), String> {
             Ok(())
         }
-        fn render_html(&self, _: String, _: u64, _: RenderKey, _: String) {}
+        fn render_html(&self, server: String, generation: u64, key: RenderKey, source: String) {
+            self.rendered
+                .lock()
+                .unwrap()
+                .push((server, generation, key, source));
+        }
         fn decode_avatar(&self, _: String, _: u64, _: String, _: Vec<u8>) {}
         fn play_sound(&self, _: &str, sound: Sound) {
             self.sounds.lock().unwrap().push(sound);
@@ -3135,6 +3429,312 @@ mod tests {
         assert!(client.take_updates().iter().any(|update| matches!(update,
             Update::Rendered { key: RenderKey::Welcome, source, document, .. }
                 if source.is_empty() && document.blocks.is_empty())));
+    }
+
+    fn document_event(id: &str, event: ServerEvent) -> Input {
+        Input::Server {
+            server: id.into(),
+            generation: 1,
+            event,
+        }
+    }
+
+    fn description(id: u32, hash: &str, body: &str) -> Channel {
+        Channel {
+            id,
+            parent: Some(0),
+            name: format!("Channel {id}"),
+            description_hash: Some(hash.into()),
+            description: body.into(),
+            ..Default::default()
+        }
+    }
+
+    fn comment_user(session: u32, instance: u64, hash: &str, body: Option<&str>) -> User {
+        User {
+            session,
+            instance,
+            name: format!("User {session}"),
+            channel: 2,
+            comment_hash: Some(hash.into()),
+            comment: body.map(str::to_owned),
+            ..Default::default()
+        }
+    }
+
+    fn blob_requests(recorder: &Recorder) -> Vec<Request> {
+        recorder
+            .requests
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(_, request)| request.clone())
+            .filter(|request| matches!(request, Request::RequestBlobs { .. }))
+            .collect()
+    }
+
+    fn rendered_comment(id: &str, source: &str) -> Input {
+        Input::Rendered {
+            server: id.into(),
+            generation: 1,
+            key: RenderKey::Comment(7),
+            source: source.into(),
+            document: MessageDocument {
+                blocks: vec![ContentBlock::text("prepared comment")],
+            },
+        }
+    }
+
+    #[test]
+    fn hash_only_descriptions_fetch_selected_channel_once_and_render_arrival() {
+        let (mut client, recorder, id) = connected();
+        let first = "ab".repeat(20);
+        let second = "cd".repeat(20);
+        client.handle(document_event(
+            &id,
+            ServerEvent::Channel(description(2, &first, "")),
+        ));
+        assert!(
+            blob_requests(&recorder).is_empty(),
+            "unselected descriptions must not fetch"
+        );
+        client.open(0, 2).unwrap();
+        client.open(0, 2).unwrap();
+        client.handle(document_event(
+            &id,
+            ServerEvent::Channel(description(2, &first, "")),
+        ));
+        assert_eq!(
+            blob_requests(&recorder),
+            vec![Request::RequestBlobs {
+                textures: vec![],
+                comments: vec![],
+                descriptions: vec![2]
+            }]
+        );
+        let body = format!("<b>Long description</b><br>{}", "x".repeat(160));
+        client.handle(document_event(
+            &id,
+            ServerEvent::Channel(description(2, &first, &body)),
+        ));
+        assert_eq!(
+            recorder.rendered.lock().unwrap().as_slice(),
+            &[(id.clone(), 1, RenderKey::Description(2), body.clone())]
+        );
+        client.handle(document_event(
+            &id,
+            ServerEvent::Channel(description(2, &second, "")),
+        ));
+        assert_eq!(
+            blob_requests(&recorder).len(),
+            2,
+            "new selected hash must fetch once"
+        );
+        client.open(0, 3).unwrap();
+        client.handle(document_event(
+            &id,
+            ServerEvent::Channel(description(2, &first, "")),
+        ));
+        assert_eq!(blob_requests(&recorder).len(), 2);
+        client.open(0, 2).unwrap();
+        assert_eq!(blob_requests(&recorder).len(), 3);
+        client.handle(document_event(&id, ServerEvent::ChannelRemoved(2)));
+        assert!(!client.description_requests[&id].channels.contains_key(&2));
+        client.disconnect(0);
+        assert!(!client.description_requests.contains_key(&id));
+    }
+
+    #[test]
+    fn selected_cached_description_waits_until_connected_and_invalid_hashes_are_not_copied() {
+        let (mut client, recorder, id) = connected();
+        client.open(0, 2).unwrap();
+        client.servers[0].status = Status::Connecting;
+        client.handle(document_event(
+            &id,
+            ServerEvent::Channel(description(2, &"ab".repeat(20), "")),
+        ));
+        assert!(blob_requests(&recorder).is_empty());
+        client.handle(document_event(&id, ServerEvent::Connected { session: 1 }));
+        assert_eq!(blob_requests(&recorder).len(), 1);
+        client.handle(document_event(
+            &id,
+            ServerEvent::Channel(description(2, &"x".repeat(4096), "")),
+        ));
+        assert!(!client.description_requests[&id].channels.contains_key(&2));
+        assert_eq!(blob_requests(&recorder).len(), 1);
+    }
+
+    #[test]
+    fn requested_comment_renders_when_body_arrives_without_reopening_and_deduplicates() {
+        let (mut client, recorder, id) = connected();
+        let hash = "ab".repeat(20);
+        let user = comment_user(7, 70, &hash, None);
+        client.handle(document_event(&id, ServerEvent::User(user.clone())));
+        assert!(blob_requests(&recorder).is_empty());
+        client.open_comment(0, 7, None);
+        client.open_comment(0, 7, None);
+        client.retain_comment_interest(Some((0, 7)));
+        assert_eq!(
+            blob_requests(&recorder),
+            vec![Request::RequestBlobs {
+                textures: vec![],
+                comments: vec![7],
+                descriptions: vec![]
+            }]
+        );
+        let body = format!("<b>Long comment</b><br>{}", "y".repeat(160));
+        let with_body = comment_user(7, 70, &hash, Some(&body));
+        client.handle(document_event(&id, ServerEvent::User(with_body.clone())));
+        client.handle(document_event(&id, ServerEvent::User(with_body)));
+        client.handle(document_event(
+            &id,
+            ServerEvent::User(comment_user(8, 80, &hash, Some("unrelated"))),
+        ));
+        assert_eq!(
+            recorder.rendered.lock().unwrap().as_slice(),
+            &[(id.clone(), 1, RenderKey::Comment(7), body.clone())]
+        );
+        client.handle(rendered_comment(&id, &body));
+        assert!(client.take_updates().iter().any(|update| matches!(
+            update,
+            Update::Rendered {
+                key: RenderKey::Comment(7),
+                ..
+            }
+        )));
+        client.handle(document_event(
+            &id,
+            ServerEvent::User(comment_user(7, 70, &"cd".repeat(20), None)),
+        ));
+        assert_eq!(
+            blob_requests(&recorder).len(),
+            2,
+            "changed hash while open fetches new body"
+        );
+        client.handle(rendered_comment(&id, &body));
+        assert!(
+            !client
+                .take_updates()
+                .iter()
+                .any(|update| matches!(update, Update::Rendered { .. }))
+        );
+    }
+
+    #[test]
+    fn prepared_comment_source_is_reused_and_uncached_pending_body_is_not_resubmitted() {
+        let (mut client, recorder, id) = connected();
+        let body = "<b>Existing complete profile comment</b>";
+        client.handle(document_event(
+            &id,
+            ServerEvent::User(comment_user(7, 70, &"ab".repeat(20), Some(body))),
+        ));
+        assert_eq!(client.servers[0].users[&7].comment.as_deref(), Some(body));
+        client.open_comment(0, 7, Some(body));
+        assert!(
+            recorder.rendered.lock().unwrap().is_empty(),
+            "matching prepared source must skip parsing a present body"
+        );
+        client.retain_comment_interest(None);
+        client.open_comment(0, 7, Some("outdated cached source"));
+        assert_eq!(
+            recorder.rendered.lock().unwrap().as_slice(),
+            &[(id, 1, RenderKey::Comment(7), body.into())],
+            "a wrong cached source must render the present current body"
+        );
+        client.open_comment(0, 7, None);
+        client.open_comment(0, 7, Some("outdated cached source"));
+        assert_eq!(
+            recorder.rendered.lock().unwrap().len(),
+            1,
+            "repeated opens must not resubmit the same pending body"
+        );
+    }
+
+    #[test]
+    fn hidden_or_replaced_comment_interest_cannot_schedule_or_accept_old_work() {
+        let (mut client, recorder, id) = connected();
+        let hash = "ab".repeat(20);
+        client.handle(document_event(
+            &id,
+            ServerEvent::User(comment_user(7, 70, &hash, None)),
+        ));
+        client.open_comment(0, 7, None);
+        client.retain_comment_interest(None);
+        client.handle(document_event(
+            &id,
+            ServerEvent::User(comment_user(7, 70, &hash, Some("hidden body"))),
+        ));
+        client.handle(rendered_comment(&id, "hidden body"));
+        assert!(recorder.rendered.lock().unwrap().is_empty());
+        assert!(
+            !client
+                .take_updates()
+                .iter()
+                .any(|update| matches!(update, Update::Rendered { .. }))
+        );
+        client.open_comment(0, 7, None);
+        recorder.rendered.lock().unwrap().clear();
+        client.handle(document_event(
+            &id,
+            ServerEvent::User(comment_user(8, 80, &hash, None)),
+        ));
+        client.open_comment(0, 8, None);
+        client.handle(document_event(
+            &id,
+            ServerEvent::User(comment_user(7, 70, &hash, Some("late previous profile"))),
+        ));
+        client.handle(rendered_comment(&id, "late previous profile"));
+        assert!(recorder.rendered.lock().unwrap().is_empty());
+        assert!(
+            !client
+                .take_updates()
+                .iter()
+                .any(|update| matches!(update, Update::Rendered { .. }))
+        );
+        client.retain_comment_interest(Some((0, 7)));
+        assert!(
+            client.comment_interest.is_none(),
+            "retaining cannot open a different profile"
+        );
+    }
+
+    #[test]
+    fn reused_sessions_and_reconnections_revoke_comment_interest_permanently() {
+        let (mut client, recorder, id) = connected();
+        let hash = "ab".repeat(20);
+        client.handle(document_event(
+            &id,
+            ServerEvent::User(comment_user(7, 70, &hash, Some("old body"))),
+        ));
+        client.open_comment(0, 7, None);
+        recorder.rendered.lock().unwrap().clear();
+        client.handle(document_event(
+            &id,
+            ServerEvent::User(comment_user(7, 71, &hash, Some("old body"))),
+        ));
+        client.handle(rendered_comment(&id, "old body"));
+        assert!(client.comment_interest.is_none());
+        assert!(recorder.rendered.lock().unwrap().is_empty());
+        assert!(
+            !client
+                .take_updates()
+                .iter()
+                .any(|update| matches!(update, Update::Rendered { .. }))
+        );
+        client.open_comment(0, 7, None);
+        recorder.rendered.lock().unwrap().clear();
+        client.disconnect(0);
+        client.retain_comment_interest(Some((0, 7)));
+        client.servers[0].generation = 2;
+        client.servers[0].status = Status::Connected;
+        client.handle(document_event(
+            &id,
+            ServerEvent::User(comment_user(7, 71, &hash, Some("old body"))),
+        ));
+        client.handle(rendered_comment(&id, "old body"));
+        assert!(client.servers[0].users.is_empty());
+        assert!(recorder.rendered.lock().unwrap().is_empty());
+        assert!(client.comment_interest.is_none());
     }
 
     #[test]
