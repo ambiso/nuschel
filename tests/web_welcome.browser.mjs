@@ -136,11 +136,22 @@ try{
   await page.waitForFunction(()=>__welcomeProof.results.length===2);
   assert.match((await page.evaluate(()=>__welcomeProof.results[1])).error,/changed/);
   assert.equal(await welcome.count(),1);
+  const preferenceFonts=await page.evaluate(()=>({
+    selected:Number(JSON.parse(localStorage.getItem("nuschl.appearance.v1")).fontSize),
+    root:getComputedStyle(document.documentElement).fontSize,body:getComputedStyle(document.body).fontSize,
+    welcome:getComputedStyle(document.querySelector(".server-welcome .text")).fontSize
+  }));
+  // An explicit CSS root-font stress, not a claim of physical mobile/browser zoom.
+  await page.evaluate(()=>document.documentElement.style.fontSize="32px");
+  const rootFontStress=await welcome.evaluate(e=>{const b=e.getBoundingClientRect(),d=e.querySelector("header button").getBoundingClientRect();return{root:getComputedStyle(document.documentElement).fontSize,pageWidth:document.documentElement.scrollWidth,panelBottom:b.bottom,dismiss:{x:d.x,right:d.right,bottom:d.bottom}};});
+  assert.equal(rootFontStress.root,"32px");assert.ok(rootFontStress.pageWidth<=320);
+  assert.ok(rootFontStress.dismiss.x>=0&&rootFontStress.dismiss.right<=320&&rootFontStress.dismiss.bottom<=rootFontStress.panelBottom);
+  await page.screenshot({path:resolve(output,"welcome-root-font-stress-320.png")});
   const proof=await page.evaluate(()=>__welcomeProof);assert.equal(proof.documents.length,3);assert.equal(proof.captures,0);assert.deepEqual(proof.violations,[]);
   for(const state of proof.states)for(const server of state)assert.ok(!server.keys.includes("welcome")&&!server.keys.includes("document"));
   assert.deepEqual(errors,[]);assert.deepEqual(canaries,[]);
   assert.ok(requests.every(url=>url.startsWith(origin+"/")||url.startsWith(origin.replace("http:","ws:")+"/")));
-  await writeFile(resolve(output,"proof.json"),JSON.stringify({passed:true,site,csp,geometries,longBounds,document_deliveries:proof.documents.length,documents:proof.documents,checks:["private stock Murmur→real TLS/WASM SDK→typed App", "bold exact domain and safe explicit link", "escaped tags/newlines/highlighted code", "inert script/remote+same-origin images", "single document delivery per connection", "320/390/900/1280 bounded panel/fixed Dismiss/reachable composer", "keyboard body scroll+Dismiss", "reconnect refresh and stale token refusal", "draft preserved", "no capture/remote requests/CSP violations"]},null,2));
+  await writeFile(resolve(output,"proof.json"),JSON.stringify({passed:true,site,csp,geometries,longBounds,preferenceFonts,rootFontStress,document_deliveries:proof.documents.length,documents:proof.documents,checks:["private stock Murmur→real TLS/WASM SDK→typed App", "bold exact domain and safe explicit link", "escaped tags/newlines/highlighted code", "inert script/remote+same-origin images", "single document delivery per connection", "320/390/900/1280 bounded panel/fixed Dismiss/reachable composer", "keyboard body scroll+Dismiss", "reconnect refresh and stale token refusal", "draft preserved", "no capture/remote requests/CSP violations"]},null,2));
   console.log("Welcome App proof passed");
 }catch(error){await writeFile(resolve(output,"failure.json"),JSON.stringify({error:String(error),errors,canaries,pages:await Promise.all(pages.map(page=>page.evaluate(()=>({body:document.body.textContent,proof:__welcomeProof})).catch(()=>null)))},null,2));throw error;}
 finally{for(const context of contexts)await context.close();await browser.close();for(const socket of tunnels)socket.destroy();await new Promise(done=>server.close(done));}
