@@ -4,6 +4,7 @@
 //! decide them. Plain data only, no runtime and no clock: it builds for
 //! `wasm32-unknown-unknown`, and platform adapters execute what it decides.
 
+pub mod bitrate;
 pub mod client;
 pub mod conversation;
 pub mod favicon;
