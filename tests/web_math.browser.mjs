@@ -95,7 +95,18 @@ try{
     await page.waitForFunction(()=>document.querySelectorAll(".math-render-notice").length>=2);
     assert.ok((await page.locator(".code-block").textContent()).includes(String.raw`$$\frac{not}{math}$$`));
     assert.equal(await page.locator(".code-block math").count(),0);
-    assert.ok((await page.locator("article").textContent()).includes("`$code$`"));
+    // A code span is inline code: its backticks are Markdown syntax (hidden),
+    // its text is drawn in a monospace face (every glyph the same advance),
+    // nothing in it is a formula, and a selection copies the line as shown
+    // (as the desktop's copy does): "Literal $code$ stays literal.".
+    const literal=page.locator("article .text").filter({hasText:"stays literal."});
+    const inline=literal.locator(".inline-code");
+    assert.equal(await inline.count(),1);assert.equal(await inline.textContent(),"$code$");
+    const advances=await inline.evaluate(e=>{const node=e.firstChild,widths=[];for(let i=0;i<node.data.length;i++){const r=document.createRange();r.setStart(node,i);r.setEnd(node,i+1);widths.push(r.getBoundingClientRect().width);}return widths;});
+    assert.ok(advances.length===6&&Math.max(...advances)-Math.min(...advances)<=.5,JSON.stringify(advances));
+    assert.equal(await literal.locator("math,.math-formula").count(),0);
+    const copied=await literal.evaluate(e=>{const s=getSelection();s.removeAllRanges();const r=document.createRange();r.selectNodeContents(e);s.addRange(r);const text=s.toString();s.removeAllRanges();return text;});
+    assert.equal(copied,"Literal $code$ stays literal.");
     assert.equal(await page.locator("math [href],math [style],math [class],math [src],math img,math svg").count(),0);
   }
   const fractionBounds=await phone.locator("mfrac").first().evaluate(node=>[...node.children].map(child=>{const b=child.getBoundingClientRect();return{y:b.y,height:b.height,width:b.width};}));
