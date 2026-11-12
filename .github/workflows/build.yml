@@ -24,8 +24,8 @@ on:
         description: install.tar rooted at windows/, plus metadata and checksums
         value: ${{ jobs.windows.outputs.artifact }}
       macos-artifact:
-        description: install.tar rooted at Nuschl.app/, plus metadata and checksums
-        value: ${{ jobs.macos.outputs.artifact }}
+        description: Native Apple static-verified install.tar rooted at Nuschl.app/, plus metadata and checksums
+        value: ${{ jobs.macos-native-verify.outputs.artifact }}
 
 permissions:
   contents: read
@@ -406,3 +406,79 @@ jobs:
           overwrite: true
           retention-days: ${{ inputs.retention-days }}
 
+
+  # No rebuild, artifact execution, credentials or publisher-identity claim.
+  # A single native host can statically verify BOTH universal architectures.
+  macos-native-verify:
+    needs: macos
+    runs-on: macos-26
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    outputs:
+      artifact: ${{ steps.verified.outputs.artifact }}
+    env:
+      EXPECTED_MAC_ARTIFACT: ${{ needs.macos.outputs.artifact }}
+      REQUESTED_RETENTION: ${{ inputs.retention-days }}
+    steps:
+      - name: Reject unsupported contexts before checkout or artifact download
+        run: |
+          mkdir -p "$RUNNER_TEMP/macos-native-logs"
+          # Reusable workflows inherit the caller's event. Only the existing
+          # manual build or release tag caller has artifact-verification authority.
+          case "$GITHUB_EVENT_NAME:$GITHUB_REF" in
+            workflow_dispatch:*|push:refs/tags/v*) ;;
+            *) echo 'Unsupported event: native verification refuses PR/cross-run artifacts.' >&2; exit 1 ;;
+          esac
+          if [[ "$EXPECTED_MAC_ARTIFACT" != "nuschl-macos-universal-$GITHUB_SHA" ]]; then
+            echo 'Unexpected same-run macOS producer output.' >&2
+            exit 1
+          fi
+          if ! [[ "$REQUESTED_RETENTION" =~ ^([1-9]|[12][0-9]|30)$ ]]; then
+            echo 'Invalid diagnostic retention.' >&2
+            exit 1
+          fi
+          printf 'Native static verification only; no artifact programs execute.\n' > "$RUNNER_TEMP/macos-native-logs/context.txt"
+
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      # Omit github-token/repository/run-id: pinned v4 uses this repository and
+      # this workflow run only. Never search arbitrary successful runs or PRs.
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: ${{ needs.macos.outputs.artifact }}
+          path: ${{ runner.temp }}/nuschl-macos-artifact
+
+      - name: Verify exact-source archive and both architectures with Apple tools
+        id: verified
+        run: |
+          python3 tests/macos_native.py \
+            --artifact "$RUNNER_TEMP/nuschl-macos-artifact" \
+            --artifact-name "$EXPECTED_MAC_ARTIFACT" \
+            --repository "$GITHUB_REPOSITORY" --commit "$GITHUB_SHA" \
+            --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" \
+            --output "$RUNNER_TEMP/macos-native-verification"
+          python3 - "$RUNNER_TEMP/macos-native-verification/report.json" <<'PYCODE'
+          import json, pathlib, sys
+          report = json.loads(pathlib.Path(sys.argv[1]).read_bytes())
+          if report.get('status') != 'native_apple_static_verified' or report.get('artifact_binaries_executed') is not False:
+              raise SystemExit('native static verification did not complete')
+          PYCODE
+          printf 'artifact=%s\n' "$EXPECTED_MAC_ARTIFACT" >> "$GITHUB_OUTPUT"
+
+      - name: Upload bounded native diagnostics even after failure
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: nuschl-macos-native-verification-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/macos-native-logs/context.txt
+            ${{ runner.temp }}/macos-native-verification/report.json
+            ${{ runner.temp }}/macos-native-verification/commands.json
+            ${{ runner.temp }}/macos-native-verification/apple-*.log
+          if-no-files-found: ignore
+          overwrite: true
+          retention-days: ${{ inputs.retention-days }}
