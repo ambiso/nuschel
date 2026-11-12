@@ -447,8 +447,10 @@ Later (reported):
       them today, so both can read `HKCU\Environment`; try `lpacCom` and friends), an
       audit of what AppContainers may read (registry, system folders), removing a
       deleted Nuschl profile's AppContainer profiles, a run on physical hardware.
-- [ ] The desktop shows Murmur's HTML welcome text as stripped source: tags vanish
-      and images become U+FFFC boxes (seen on Windows against a stock Murmur).
+- [x] Shared native welcome document-loss bug (originally seen on Windows as
+      stripped tags and U+FFFC boxes): the worker-produced document is retained
+      and rendered through the shared document blocks. See the stock-server
+      welcome proof below; the packaged runtime proof is Linux, not Windows.
 
 Limits review (user, 2026-11-11): hard limits are themselves an availability risk
 when chosen too low or handled badly (cf. sshd skipping work for long passwords).
@@ -720,11 +722,17 @@ listed below. Plugin data remains the explicit gap.
 - [x] Channel descriptions, user comments and avatars through `RequestBlob` (23);
       parse in the content worker; decode images with a memory-safe decoder in a worker.
 - [x] Inline images in legacy HTML messages through the content worker.
-- [ ] Investigate stock-server welcome HTML rendering (2026-11-12): the private
-      screenshot fixture sends `Welcome to the <b>Nuschl</b> screenshot server.`,
-      but the real chat displays `Welcome to the bNuschl/b screenshot server.`
-      Reproduce the welcome-specific path before attributing it to HTML parsing,
-      preparation or fixture encoding; other HTML paths are not diagnosed here.
+- [x] Stock-server welcome document rendering (2026-11-12): the native adapter
+      discarded the correct worker document and displayed its internal storage
+      markers (`bNuschl/b`, link directives) as plain text. It now keeps the typed
+      document, renders it with the shared blocks, and revokes its cache across
+      disconnect/reconnect/replacement. `tests/welcome_html.py` reproduces the
+      old output and checks the fixed packaged desktop against a private stock
+      Murmur, alongside a normal-chat HTML control: formatting, explicit breaks,
+      sanitized link data and blocked remote images. Worker/client tests cover
+      script/link policy, stale generations and cache revocation. This closes
+      the duplicate shared-source report above; Windows GUI confirmation remains
+      a platform verification gap, and general document-link activation is separate.
 - [x] `UserStats` (22) for the connection-info dialog.
       Profile bandwidth units corrected (2026-11-12, `d8f5999d`): the protocol
       statistic is bytes/second, so divide by 125 for kbit/s. Server bandwidth
