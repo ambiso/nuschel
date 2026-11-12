@@ -66,10 +66,41 @@ replacement, old-token rejection and retained drafts. The 320/390/900/1280
 viewport checks and long-name screenshots are synthetic Chromium checks, not
 physical Safari/mobile keyboard or assistive-technology certification.
 
-Live `ServerConfig.welcome_text` updates remain a distinct queued gap: both
-native and browser handlers currently discard that optional field, whereas
-stock Mumble's `MainWindow::msgServerConfig` logs nonempty values. These checks
-cover initial `ServerSync` delivery, not live configuration updates.
+## Live configuration welcomes
+
+Both session adapters now consume authenticated `ServerConfig.welcome_text`
+through their existing welcome-document path. An absent field leaves the notice
+unchanged, an empty field revokes it, and a changed bounded source gets a fresh
+display/dismissal lease. Each connection remembers its last exact bounded source
+so repeats do not reopen a dismissed notice. Fresh connections reset this state.
+Pre-sync sources are ignored; closed browser sessions cannot publish them. The
+shared client keeps its existing generation checks for dropped connections.
+Native byte/UTF-8 source limits and the browser oversize fallback are unchanged.
+
+Stock Mumble's pinned `Messages.cpp::msgServerConfig` logs nonempty values;
+Nuschl additionally keeps the existing explicit-empty revocation semantics.
+Welcome-only and empty configuration messages no longer emit a full Limits
+replacement, so they cannot reset omitted limits, mute/deaf state or audio intent.
+Mixed/sparse non-welcome Limits merging remains a separate queued correction.
+
+Scoped verification: 81 native session units passed (one existing ignored),
+27 browser-SDK units and six local relay integrations passed. The real compiled
+App/SDK under production CSP also passed `tests/web_live_welcome.py`: owned
+loopback TLS plus independently encoded protobuf frames, pre-sync rejection,
+dismissed repeat, absent/change/empty/reappearance, stale-token rejection,
+oversize fallback and 320/390/1280 Dismiss bounds. Its delayed old connection
+really receives the trigger before reconnect; no old source replaces the new
+welcome. Wire action/error logs and screenshots are retained under
+`~/.cache/nuschl-live-welcome/browser-exact/`. This fixture is not stock Murmur;
+no new native GPUI or physical/mobile-device proof is claimed.
+
+An additional `--check-send-cap` diagnostic found an independent browser defect:
+`Session::send_text` checks only the global 256 KiB cap, so an actual compiled
+SDK sent 129 bytes despite an advertised 128-byte limit. The first failure is
+preserved in `browser-final/`; negotiated wire-body cap enforcement is assigned
+to the separate sparse-configuration follow-up. Passing welcome checks do not
+claim that sending defect is fixed. The complete handoff is
+`~/.cache/nuschl-live-welcome/handoff.json`.
 
 ## Appearance preference regression
 

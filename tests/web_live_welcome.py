@@ -26,7 +26,7 @@ def text(key, value):
 
 class Server:
     def __init__(self, root, openssl):
-        self.log, self.lock, self.stop = [], threading.Lock(), threading.Event()
+        self.log, self.errors, self.lock, self.stop = [], [], threading.Lock(), threading.Event()
         key, cert = root / "key.pem", root / "cert.pem"
         subprocess.run([str(openssl), "req", "-x509", "-newkey", "ed25519", "-nodes", "-subj", "/CN=localhost", "-days", "1", "-keyout", str(key), "-out", str(cert)], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15)
         key.chmod(0o600)
@@ -91,6 +91,10 @@ class Server:
                             send(24, integer(1, 48_000) + integer(3, 1) + integer(4, 128) + integer(5, 256) + integer(7, 0))
                         elif kind == 11 and authenticated:
                             command = value[5][0].decode()
+                            if command == "x" * 129:
+                                with self.lock:
+                                    self.log.append("send-cap-probe-129")
+                                continue
                             assert command in {"repeat", "changed", "empty", "absent", "oversized", "delayed", "original"}
                             with self.lock:
                                 self.log.append(command)
@@ -101,6 +105,9 @@ class Server:
                             send(11, integer(1, 3) + integer(3, 0) + text(5, "done:" + command))
         except (OSError, ssl.SSLError):
             pass  # Expected closed old sessions and initial untrusted TLS handshakes.
+        except Exception as error:
+            with self.lock:
+                self.errors.append(str(error))
         finally:
             raw.close()
 
@@ -122,6 +129,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("site", "relay", "openssl", "wrapper", "browser-tmp", "playwright", "output"):
         parser.add_argument("--" + name, required=True, type=Path)
+    parser.add_argument("--check-send-cap", action="store_true", help="independent diagnostic for the separately queued negotiated TX-cap defect")
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
     fixture = Server(args.output, args.openssl)
@@ -130,17 +138,23 @@ def main():
     config.write_text(f'listen="127.0.0.1:{port}"\nports=["1024-65535"]\nallow_networks=["127.0.0.0/8"]\n')
     with (args.output / "relay.log").open("w") as log:
         relay = subprocess.Popen([str(args.relay), "--config", str(config)], stdout=log, stderr=log)
+        completed = False
         try:
             def listening():
                 with socket.socket() as probe:
                     return probe.connect_ex(("127.0.0.1", port)) == 0
             eventually(listening, "private relay failed to start")
-            subprocess.run(["node", str(Path(__file__).with_suffix(".browser.mjs")), str(args.site), f"ws://127.0.0.1:{port}/relay", str(fixture.port), str(args.wrapper), str(args.playwright), str(args.output)], env={**os.environ, "TMPDIR": str(args.browser_tmp)}, timeout=100, check=True)
+            subprocess.run(["node", str(Path(__file__).with_suffix(".browser.mjs")), str(args.site), f"ws://127.0.0.1:{port}/relay", str(fixture.port), str(args.wrapper), str(args.playwright), str(args.output)], env={**os.environ, "TMPDIR": str(args.browser_tmp), "NUSCHL_REQUIRE_BROWSER_SEND_CAP": "1" if args.check_send_cap else "0"}, timeout=100, check=True)
+            completed = True
         finally:
             relay.terminate()
             relay.wait(timeout=10)
             fixture.close()
             (args.output / "wire-actions.json").write_text(json.dumps(fixture.log, indent=2) + "\n")
+            (args.output / "wire-errors.json").write_text(json.dumps(fixture.errors, indent=2) + "\n")
+            assert not fixture.errors, fixture.errors
+            if completed:
+                assert fixture.log == ["repeat", "absent", "changed", "empty", "absent", "original", "oversized", "delayed"], fixture.log
 
 
 if __name__ == "__main__":

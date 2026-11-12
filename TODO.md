@@ -1108,12 +1108,14 @@ listed below. Plugin data remains the explicit gap.
       domain proof already passes; no new native fix claimed. Parent source,
       runtime-asset, distribution and notice checks pass; see
       `docs/welcome-domain.md` and the integration checkpoint above.
-- [ ] Live `ServerConfig.welcome_text` parity: source audit finds both native
-      and browser handlers currently discard this optional field, while stock
-      Mumble's `MainWindow::msgServerConfig` logs nonempty welcomes. Initial
-      `ServerSync` delivery is covered separately. Add authenticated bounded
-      updates with source/dismissal guards and private protocol fixtures before
-      claiming live welcome-configuration parity; no public-server test needed.
+- [ ] Integrate the verified live `ServerConfig.welcome_text` implementation:
+      both session adapters now apply connected, exact bounded source updates;
+      None preserves, empty revokes, repeats remain dismissed and fresh
+      connections reset. Welcome-only updates emit no Limits/audio changes.
+      Native 81/1 existing ignored, browser 27+6 and an actual compiled App/private
+      TLS framing fixture pass (320/390/1280, old-token/old-connection/canaries).
+      Parent combined checks remain pending. No new GPUI proof claimed;
+      see `docs/welcome-domain.md`.
 - [ ] Preserve omitted fields in sparse non-welcome `ServerConfig` updates.
       Source review finds browser updates can reset omitted message/image limits
       and both native/browser updates can restore omitted recording permission
@@ -1130,6 +1132,7 @@ listed below. Plugin data remains the explicit gap.
       zero, sparse updates and reconnect defaults; retain rejected drafts.
       This predates live welcome changes and is assigned to the separate config
       follow-up. Retaining image limits does not imply attachment sending exists.
+      Retained failing diagnostic: `~/.cache/nuschl-live-welcome/browser-final/`.
 - [x] Integrate the separate central browser text-size correction: Settings
       previously changed body font size while rem-sized text kept the root's
       16px. `html` now uses the same preference variable; actual compiled App
