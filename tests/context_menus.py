@@ -15,7 +15,7 @@ from layout_regression import inside
 from local_murmur import eventually
 from mumble_client import Client
 
-TARGET = "Menu target " + "LongUnbrokenName" * 7 + "日本語"
+TARGET = "Menu target " + "LongUnbrokenName" * 6 + "日本語"
 
 
 def seed(database):
