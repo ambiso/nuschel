@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: EUPL-1.2
 """Actual device-free native capture SRC versus independent C Speex quality3."""
 import argparse
+import ctypes
 import hashlib
 import json
 import os
@@ -23,6 +24,48 @@ def level(pcm, frequency):
     return 2*abs(np.sum(stable*np.exp(-1j*phase)))/len(stable)
 
 
+class MonoReference(Speex):
+    def mono(self, source, rate):
+        error = ctypes.c_int()
+        state = self.lib.speex_resampler_init(1, rate, 48000, 3, ctypes.byref(error))
+        assert state and error.value == 0
+        self.lib.speex_resampler_process_float.argtypes = [ctypes.c_void_p, ctypes.c_uint32,
+            ctypes.POINTER(ctypes.c_float), ctypes.POINTER(ctypes.c_uint32),
+            ctypes.POINTER(ctypes.c_float), ctypes.POINTER(ctypes.c_uint32)]
+        self.lib.speex_resampler_process_float.restype = ctypes.c_int
+        try:
+            pcm = np.ascontiguousarray(source, dtype='<f4')
+            output = np.empty(len(pcm)*48000//rate+4096, dtype='<f4')
+            consumed, produced = ctypes.c_uint32(len(pcm)), ctypes.c_uint32(len(output))
+            if rate == 48000: return pcm.copy(), 0
+            status = self.lib.speex_resampler_process_float(state, 0,
+                pcm.ctypes.data_as(ctypes.POINTER(ctypes.c_float)), ctypes.byref(consumed),
+                output.ctypes.data_as(ctypes.POINTER(ctypes.c_float)), ctypes.byref(produced))
+            assert status == 0 and consumed.value == len(pcm)
+            return output[:produced.value].copy(), self.lib.speex_resampler_get_output_latency(state)
+        finally:
+            self.lib.speex_resampler_destroy(state)
+
+
+def acceptance(measured, input_rms, *, stopband=False, alias_db=None, reference_alias_db=None):
+    # Relative output SNR is ill-conditioned after a strong intentional stopband.
+    # Preserve that raw diagnostic; use a stricter fixed-input error budget plus
+    # two explicit attenuation rails ONLY for the declared36k->12k fixture.
+    output_gate = snr_pass(measured, 100)
+    input_snr = 20*np.log10(input_rms)-measured['rms_error_dbfs']
+    maximum = measured['max_abs_error'] <= 2e-6
+    rails = {'output_relative_100db_diagnostic': output_gate,
+        'max_abs_error_2e6_gate': maximum, 'input_referenced_snr_db': float(input_snr)}
+    if stopband:
+        rails.update({'input_relative_120db_gate': bool(input_snr >= 120),
+            'alias_below_minus90db_gate': bool(alias_db <= -90),
+            'alias_no_more_than_C_plus_half_db_gate': bool(alias_db <= reference_alias_db+0.5)})
+        rails['passed'] = maximum and all(rails[key] for key in
+            ('input_relative_120db_gate','alias_below_minus90db_gate','alias_no_more_than_C_plus_half_db_gate'))
+    else: rails['passed'] = maximum and output_gate
+    return rails
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--test-binary', type=Path, required=True)
@@ -32,7 +75,7 @@ def main():
     parser.add_argument('--filtered', action='store_true', help='also require actual filtered capture timestamps and rational count')
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
-    c = Speex(args.speex_library)
+    c = MonoReference(args.speex_library)
     rows = []
     for rate in (11025, 22050, 44100, 48000, 96000):
         t = np.arange(rate)/rate
@@ -47,12 +90,8 @@ def main():
             weights = np.array([1., .5, -.25, .75, -.5, .2][:channels])
             source = np.asarray(mono[:, None]*weights, dtype='<f4')
             average = np.clip(source.astype(float).mean(axis=1), -1, 1).astype(np.float32)
-            # Existing C helper uses2 identical channels: verify they remain
-            # identical, then take one. There is no reference channel mixing.
-            reference, latency = c.convert(np.repeat(average, 2).tolist(), 48000, input_rate=rate)
-            reference = np.asarray(reference, dtype=np.float32).reshape(-1, 2)
-            assert np.array_equal(reference[:, 0], reference[:, 1])
-            reference = np.clip(reference[:, 0], -1, 1)
+            reference, latency = c.mono(average, rate)
+            reference = np.clip(reference, -1, 1)
             stem = f'{rate}-{name}'
             before = args.output/(stem+'-source.f32le'); source.tofile(before)
             outputs = []
@@ -110,6 +149,10 @@ def main():
                 if row['image_or_alias_frequency'] is not None:
                     f = row['image_or_alias_frequency']
                     row.update({'image_or_alias_db': db(level(outputs[0], f)), 'reference_image_or_alias_db': db(level(reference, f))})
+            rails = acceptance(measured, float(np.sqrt(np.mean(average.astype(float)**2))),
+                stopband=name == 'tone-alias', alias_db=row.get('image_or_alias_db'), reference_alias_db=row.get('reference_image_or_alias_db'))
+            row['quality_gate'] = rails
+            row['passed'] = rails['passed']
             rows.append(row)
             if name == 'tone-high' and rate in (11025, 44100, 96000):
                 fig, ax = plt.subplots(figsize=(10, 4), constrained_layout=True)
@@ -124,7 +167,8 @@ def main():
     sha = lambda p: hashlib.sha256(Path(p).read_bytes()).hexdigest()
     report = {'passed': all(row['passed'] for row in rows), 'filtered_clock_gate':args.filtered, 'source_revision': args.source_revision,
         'host_devices': False, 'network': False, 'gain_fitted': False, 'delay_fitted': False,
-        'reference': {'library': str(args.speex_library), 'sha256': sha(args.speex_library), 'quality': 3,
+        'all_output_relative_100db_diagnostics_passed':all(row['quality_gate']['output_relative_100db_diagnostic'] for row in rows),
+        'reference': {'channels':1, 'library': str(args.speex_library), 'sha256': sha(args.speex_library), 'quality': 3,
             'mumble_source': '35dce9e4801fe52b2217f0d9f421d17b0aaf3bb0/src/mumble/AudioInput.cpp:515,587',
             'scope': 'C SRC policy; not full Mumble capture/DSP/encoder or its PCM16 quantization'},
         'test_binary': {'path': str(args.test_binary), 'sha256': sha(args.test_binary)}, 'cases': rows,
