@@ -262,7 +262,7 @@ credential handling and retained parent restrictions without starting a service.
 `musicbot_service_isolation.py` runs only inside the owned NixOS VM and verifies
 actual service/child metadata and non-mutating access checks.
 
-The artwork/SSE follow-up passed 91 bot tests, 29 frontend tests, 20 IPC tests
+The artwork/SSE follow-up passed 91 bot tests, 30 frontend tests, 20 IPC tests
 (one existing ignored test), and one content-worker unit plus four integration
 tests (one existing ignored test). `musicbot_artwork_boundary.py` drives the real
 supervisor against malformed replies, oversized advertised lengths, missing
@@ -275,6 +275,11 @@ responses, malformed JSON, offscreen Canvas release and no image/media requests.
 The browser is isolated from host devices and profiles; its non-local background
 requests meet an owned rejecting proxy. This proves synthetic artwork behavior,
 not full browser resource-exhaustion resistance or platform-wide confinement.
+The final NixOS VM also passed the actual service artwork route, codec-child
+capability checks and full standalone interoperability suite. An earlier run
+failed because its best-effort event drain raced the actor's subscription-switch
+end marker; the fixture now observes that specific bounded boundary before
+starting new music, retaining the original packet-count/end assertions.
 
 Rust tests cover queue ordering, seek boundaries, history lifecycle and retention,
 durable state, library identity across reordering/removal, gain ramps, and VAD.
