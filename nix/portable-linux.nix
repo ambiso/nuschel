@@ -105,10 +105,14 @@ in
         ];
       }
       ''
-        python3 ${../packaging/linux/tests.py} \
-          --scratch "$TMPDIR" --rustc ${toolchain}/bin/rustc \
-          --readelf ${pkgs.binutils}/bin/readelf --patchelf ${pkgs.patchelf}/bin/patchelf
-        touch "$out"
+            mkdir -p packaging/linux packaging/debian
+        cp ${../packaging/linux/tests.py} packaging/linux/tests.py
+        cp ${../packaging/linux/linker.py} packaging/linux/linker.py
+        cp ${../packaging/debian/build-deb.py} packaging/debian/build-deb.py
+        python3 packaging/linux/tests.py \
+              --scratch "$TMPDIR" --rustc ${toolchain}/bin/rustc \
+              --readelf ${pkgs.binutils}/bin/readelf --patchelf ${pkgs.patchelf}/bin/patchelf
+            touch "$out"
       '';
   content = leaf "nuschl-content-worker";
   desktop = leaf "nuschl";
