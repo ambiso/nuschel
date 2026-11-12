@@ -14,6 +14,17 @@
 assert pkgs.lib.assertMsg (pkgs.stdenv.hostPlatform.system == "x86_64-linux") "The signed native sysroot currently targets amd64 Linux only";
 let
   inherit (pkgs) lib;
+  packagingSource = lib.fileset.toSource {
+    root = ../.;
+    fileset = lib.fileset.unions [
+      ./portable-linux.nix
+      ../packaging/debian/build-deb.py
+      ../packaging/linux/audit-stage.py
+      ../packaging/linux/linker.py
+      ../packaging/linux/pin-debian.py
+      ../packaging/linux/debian/sysroot-lock.json
+    ];
+  };
   pins = builtins.fromJSON (builtins.readFile ../packaging/linux/debian/sysroot-lock.json);
   assertPins =
     assert pins.schema == 1 && pins.architecture == "amd64";
@@ -154,7 +165,7 @@ let
           install -Dm644 ${appstreamXML} "$out/usr/share/metainfo/org.nuschl.Nuschl.metainfo.xml"
         ''}
         python3 ${../packaging/linux/audit-stage.py} --stage "$out" \
-          --project-root ${projectRoot} --packaging-root ${../.} --revision ${lib.escapeShellArg revision} \
+          --project-root ${projectRoot} --packaging-root ${packagingSource} --revision ${lib.escapeShellArg revision} \
           --version ${lib.escapeShellArg version} --readelf ${pkgs.binutils}/bin/readelf \
           --rust-version ${lib.escapeShellArg toolchain.version}
       '';
