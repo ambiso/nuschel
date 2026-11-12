@@ -1208,6 +1208,13 @@ listed below. Plugin data remains the explicit gap.
       unbounded request burst. Virtualize large rule/member lists or show one
       selected item's details so model limits do not become per-frame UI work.
       Track offline admin-CLI ACL/group commands in the existing server follow-up.
+      Active native-editor verification also found default Murmur rate limiting
+      silently drops rapid ACL requests after save/reconnect. A bounded semantic
+      queue with dispatch-time authority checks is under private-server test;
+      preserve immediate mute/deafen and the original draft/target. Do not close
+      this until the unmodified default-rate, zero-settle matrix passes.
+      Root Write must permit ACL editing on children whose local Write is denied,
+      as both servers allow, without granting unrelated channel operations.
 - [x] Users listed inside the channel tree with talking indicators and mute/deafen/
       suppress icons.
 - [x] Context menus: user (direct message, local volume/mute, info, whisper), channel
