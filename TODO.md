@@ -759,6 +759,14 @@ listed below. Plugin data remains the explicit gap.
       script/link policy, stale generations and cache revocation. This closes
       the duplicate shared-source report above; Windows GUI confirmation remains
       a platform verification gap, and general document-link activation is separate.
+- [ ] Stock-Murmur hash-only description/comment delivery needs a separate fetch/render
+      follow-up. Native interaction probes (2026-11-12) receive full inline documents
+      correctly, but a long channel description is advertised only by hash and the
+      normal channel view never requests its blob. Opening a profile requests a
+      hash-only comment in `menus::render_comment`, but the arriving full comment
+      is not submitted to the content worker until the profile is opened again.
+      The document-link fixture deliberately uses inline bodies below Murmur's
+      128-byte hash threshold; it does not establish hash-only retrieval/rendering.
 - [ ] Activate links in shared nonselectable documents (welcome cards, channel
       descriptions and user comments). `view::document_blocks` preserves the
       worker's safe URL spans, styles and accessibility URLs, but does not install
