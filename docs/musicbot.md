@@ -209,10 +209,26 @@ capabilities prevent host sysctl writes, kernel-log syscalls are explicitly deni
 and PrivateDevices excludes /dev/kmsg. No host proc is bound into a codec child.
 These are measured service-policy changes, not an unrestricted worker fallback.
 
-The owned Linux launcher and service-profile replica denied a synthetic credential
-file, a loopback listener and a synthetic credential environment variable. Actual
-full final-service regression remains required for the latest module settings;
-Windows/macOS runtime and all-format corpus coverage remain unverified.
+The owned Linux launcher and exact service-profile replica denied a synthetic
+credential file, a loopback listener and a synthetic credential environment
+variable. The final NixOS VM passed actual service playback, then inspected the
+running encoder: fixed role arguments, only stdio file descriptors, private PID
+and network namespaces, a 1 GiB address-space limit, and no profile/credential
+mounts or inherited parent environment. Under the actual service UID and mount
+namespace, non-mutating checks confirmed empty effective capabilities, unwritable
+host sysctl/sysrq paths and writable service-owned state. The VM also passed the
+full standalone stock-Murmur/fake-Subsonic suite. Its network was restricted and
+all media was generated; it opened no host microphone or audio service.
+
+These checks do not establish Windows/macOS confinement, a complete hostile-media
+corpus for every supported format, physical audio quality or instantaneous
+revocation of packets already submitted to the session. A canceled blocking
+library read can delay replacement until its existing 30-second read bound.
+
+Two separate HTTP/browser review items remain open: authenticated SSE subscribers
+currently have no global admission cap, and cover art is bounded as encoded bytes
+but is served to the browser without a decoded-pixel admission/normalization step.
+The codec-role isolation proof does not cover that artwork decoder path.
 
 Use `tokens_file = "channel-tokens"` for private Mumble ACL tokens; its contents
 are a JSON array of token strings supplied through `credentials.channel-tokens`.
@@ -222,6 +238,17 @@ that configuration file like the other credentials. API keys/passwords retain
 existing credential-file handling. Never put secret values directly in Nix settings.
 
 ## Tests
+
+The integration checkpoint passed 90 Rust tests, 23 frontend tests and eleven
+real NixOS module-evaluation invariants, plus package/deny/audit/fmt/crate2nix
+checks. `tests/musicbot_workers.py` exercises actual confined decode/encode/duck
+roles (malformed media and framing, fresh-owner recovery, finite PCM, encoder
+reset and independent C libopus interoperability). Its companion
+`musicbot_sandbox.rs` links the production IPC launcher; `musicbot_sandbox.py`
+uses only owned file/network/environment sentinels. `musicbot_module.nix` evaluates
+credential handling and retained parent restrictions without starting a service.
+`musicbot_service_isolation.py` runs only inside the owned NixOS VM and verifies
+actual service/child metadata and non-mutating access checks.
 
 Rust tests cover queue ordering, seek boundaries, history lifecycle and retention,
 durable state, library identity across reordering/removal, gain ramps, and VAD.

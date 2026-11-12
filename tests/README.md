@@ -12,8 +12,14 @@ Screenshots are copied into the test result.
 `nix build .#checks.x86_64-linux.vm-musicbot` exercises the packaged bot against
 stock Murmur and a local Subsonic fixture. `musicbot.py` checks shared/separate
 audio, channel-subscription playback, seeking, ducking, public comments, history pagination and restart recovery
-with reordered/removed libraries. Run instructions are in
-[musicbot.md](../docs/musicbot.md).
+with reordered/removed libraries. The module test also checks actual codec child
+PID/network namespaces, role arguments, credential/environment/FD absence and
+address-space bounds. Non-mutating checks under the service UID verify empty
+effective capabilities and unwritable host sysctl/sysrq paths. The fixture uses
+restricted VM networking and no host audio devices. Separate launcher canaries and
+actual child role/framing tests are described in
+[musicbot.md](../docs/musicbot.md); Windows/macOS and unnormalized browser artwork
+are outside this proof.
 
 The iOS app track is cancelled/deferred by the user; its stopped environment experiment is documented in [ios-vm.md](../docs/ios-vm.md).
 `just ios-preflight` checks this Linux host without downloading VM media;
