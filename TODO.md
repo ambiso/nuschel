@@ -1,44 +1,61 @@
 # Nuschl TODO
 
-Current focus: **web client feature parity, working voice, and mobile web layout**
-(user, 2026-11-12). The first release remains queued behind signing and packaging
-checks. The user has now supplied `Xcode_16.2.xip`, removing the
-earlier iOS download blocker; archive verification and installed-guest/Simulator
-feasibility are the next iOS gates, not yet completed.
-The desktop and server support stock Mumble interoperability; shared multi-server
-audio, key-transparency witnesses, the browser foundation and experimental MLS
-text/history are implemented. The rename and build-cache cleanup are complete.
-Historical package/cross-build/VM verification remains recorded below; each new
-change has its own validation.
+Current focus (user, 2026-11-12): **fluid persistent server reordering, web
+feature parity, and robust desktop layout**. Active independent owners cover
+native ordering, ACME/PKI and browser formulas. The rename/build-cache cleanup is
+complete; publication remains behind signing, notice and packaging gates. Public
+`main` is still the last user-pushed `7f28f8d4`; no new push, tag or release is
+implied by the integrated source checkpoints below.
 
-Current integration checkpoint (2026-11-11):
+Current integration checkpoint (2026-11-12):
 
-- Web parity work (2026-11-12): desktop double-click joins voice; touch gets an
-  explicit Join control. Mobile is chat-first with a hamburger/channel drawer
-  and a guarded swipe gesture, rather than squeezed sidebars. Independent owners
-  cover responsive UI, shared SDK/legacy and modern protocol support, and bounded
-  browser audio/WASM Opus. Synthetic media/private servers only. None of these
-  additions is claimed complete until integrated browser tests pass.
-
-- Release: prepare independent downloadable Linux, Windows and universal macOS CI
-  builds plus web artifacts, then publish the first preview once hybrid update
-  verification and packaging pass. Enrolling the production public-key pair and
-  provisioning its CI secret remain operator steps. Do not publish unsigned updates.
-- Web: legacy text/private chat, IndexedDB and crate2nix WASM/site packaging are
-  integrated; native, Node/WASM and real-browser proofs passed against private
-  stock Murmur and compatible Nuschl servers. Hosted deployment remains separate.
-- Knocking: compatible-server implementation integrated through `1f979943`;
-  134 tests passed on the source branch. SDK/UI consumers remain. MLS admission
-  is refused.
-- RTC: RustCrypto provider/certificates and bounded four-track transport integrated;
-  5 signaling and 12 transport tests passed, including simultaneous microphone,
-  system audio, camera and screen packets. Production calling/capture/signaling
-  remain unfinished. ICE restart has a plan, no implementation.
-- Desktop image clipboard/contrast and authenticated Windows VM control integrated;
-  combined validation/release checkpoint remains before publishing these changes.
-- Local speech: model-cache and isolated CPU Voxtral implementation checkpoints
-  passed private synthetic/silence tests on their source branch; not yet integrated.
-  GPU backends, Kokoro and user-facing controls remain unfinished.
+- **Desktop layout foundation is integrated through `12d6695c`.** Shared finite
+  text/action lanes, one bounded notice stack, restored connection indicator,
+  wrapped headers/footers, keyboard/pointer dismissal and nested focus reveal
+  passed 75 native tests and 12 real private-GNOME width/sidebar/zoom cases.
+  First/last server decorations and shared animated icon/outline radii passed
+  eight endpoint/zoom cases; the old executable reproduced the clipped first
+  outline. README screenshot regenerated. Matched timing records added layout
+  cost honestly and show no idle redraw loop; see `docs/desktop-layout.md`.
+  The frozen integrated Linux `.#default` package built successfully; its exact
+  package control and eight-case rail GUI repeats passed. Native Windows/macOS runtime proof remains
+  separate.
+- **Server reordering is active, not complete.** The SDK catalog keeps canonical
+  stable-ID display order separate from live connection vectors and async
+  indexes. Native drag preview/ghost, cancellation, edge scrolling, keyboard
+  alternatives and atomic persistence are under implementation. Browser callers
+  must use explicit runtime indexes when display order changes. All bookmark
+  writers must preserve canonical order; no per-frame persistence.
+- **Real web voice/mobile baseline is integrated through `690fe1f9`.** Shared SDK
+  legacy voice, explicit touch Join, desktop double-click, chat-first responsive
+  drawer and browser audio were verified with synthetic media/private servers.
+  Evidence includes 18 native units, five stock-Murmur integrations, three
+  worker tests, nine presentation/invite tests, six production-CSP viewport
+  cases, final real-App Opus/IndexedDB/multiline/rapid-deafen/private-cache proof,
+  and audio packet handling without timeline snapshots. Codec checks include
+  independent 997 Hz libopus decoding. This is a working baseline, not full
+  desktop parity or physical Safari/mobile/headset quality proof.
+- **Browser content producer is integrated through `e91ff46e`.** Three native,
+  eight Node and real confined-worker RGBA/code/canary checks passed with a
+  256 MiB maximum. The source-ticket SDK bridge and App image paste/attachment
+  controls remain unimplemented; see `docs/browser-content.md`. A pinned,
+  isolated Temml 0.14 formula renderer with notices is active in a separate lane.
+- **Modern browser identity/archive flows remain open.** Do not advertise MLS,
+  authenticated modern archive parity or other desktop-only capabilities until
+  end-to-end browser interoperability and capability checks prove them.
+- **ACME/PKI is active.** Trust/certificate handlers and shared history identity
+  checks have a separate exclusive owner; ordering must not alter them.
+- **Release remains gated.** Independent Linux, Windows, universal macOS and web
+  artifacts, hybrid update verification, exact notices and final packaging must
+  pass. Production public-key enrollment and CI secret provisioning remain
+  operator steps. Do not publish unsigned updates.
+- Knocking is integrated through `1f979943` (134 source-branch tests); SDK/UI
+  consumers remain. MLS admission is refused. RTC RustCrypto certificates and
+  bounded four-track transport are integrated (five signaling and 12 transport
+  tests); production calling/capture/signaling and ICE restart remain unfinished.
+- Local speech model-cache/isolated CPU Voxtral checkpoints passed private
+  synthetic/silence tests on their source branch. GPU backends, Kokoro and
+  user-facing controls remain unfinished; no runtime quality claim follows.
 
 ## Execution order
 

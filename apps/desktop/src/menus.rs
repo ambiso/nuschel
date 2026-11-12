@@ -960,6 +960,29 @@ impl Desktop {
                 entries.push(item("Edit server…", "pencil", move |this, window, cx| {
                     this.open_form(Some(index), window, cx)
                 }));
+                if let Some(position) = self
+                    .client
+                    .server_order()
+                    .iter()
+                    .position(|id| id == &server.id)
+                {
+                    if position > 0 {
+                        let id = server.id.clone();
+                        entries.push(item(
+                            "Move server earlier",
+                            "chevron-up",
+                            move |this, window, cx| this.move_saved_server(&id, -1, window, cx),
+                        ));
+                    }
+                    if position + 1 < self.client.server_order().len() {
+                        let id = server.id.clone();
+                        entries.push(item(
+                            "Move server later",
+                            "chevron-down",
+                            move |this, window, cx| this.move_saved_server(&id, 1, window, cx),
+                        ));
+                    }
+                }
                 if connected {
                     entries.push(danger("Disconnect", "hang-up", move |this, _, _| {
                         this.disconnect(index)

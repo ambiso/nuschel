@@ -32,6 +32,7 @@ const BREATH_FRAME: Duration = Duration::from_millis(40);
 pub struct Motion {
     servers: BTreeMap<String, Rings>,
     hovered: Option<String>,
+    dragged: Option<String>,
     /// A timer redraws breathing badges (see `BREATH_FRAME`).
     breathing: bool,
 }
@@ -54,7 +55,8 @@ impl Motion {
             .retain(|id, _| client.servers.iter().any(|server| &server.id == id));
         let (mut moving, mut breathing) = (false, false);
         for (index, server) in client.servers.iter().enumerate() {
-            let rounded = self.hovered.as_deref() == Some(server.id.as_str())
+            let rounded = self.dragged.as_deref() == Some(server.id.as_str())
+                || self.hovered.as_deref() == Some(server.id.as_str())
                 || client
                     .navigation
                     .selection()
@@ -89,6 +91,12 @@ impl Motion {
             breathing |= rings.pulse.moving();
         }
         (moving, breathing)
+    }
+
+    pub fn dragged(&mut self, server: Option<&str>) {
+        if self.dragged.as_deref() != server {
+            self.dragged = server.map(str::to_owned);
+        }
     }
 
     pub fn hover(&mut self, server: &str, hovered: bool) {

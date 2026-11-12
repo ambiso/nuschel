@@ -217,6 +217,7 @@ pub struct Desktop {
     pub scroll: ScrollHandle,
     pub channel_scroll: ScrollHandle,
     pub server_scroll: ScrollHandle,
+    pub rail: crate::rail::Rail,
     pub unread: crate::unread::Navigation,
     chat_motion: SmoothScroll,
     channel_motion: SmoothScroll,
@@ -507,6 +508,7 @@ impl Desktop {
             scroll: ScrollHandle::new(),
             channel_scroll: ScrollHandle::new(),
             server_scroll: ScrollHandle::new(),
+            rail: Default::default(),
             unread: Default::default(),
             chat_motion: SmoothScroll::default(),
             channel_motion: SmoothScroll::default(),
@@ -924,6 +926,10 @@ impl Desktop {
 
     pub fn cancel_channel_scroll(&mut self) {
         self.channel_motion.cancel();
+    }
+
+    pub fn cancel_server_scroll(&mut self) {
+        self.server_motion.cancel();
     }
 
     pub fn reveal_server(&mut self, slot: usize) {

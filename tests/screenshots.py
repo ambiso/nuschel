@@ -348,7 +348,7 @@ def main():
             murmur.ini.write_text(murmur.ini.read_text() + "messagelimit=1000\nmessageburst=1000\n")
             bot_options = ["--message-limit", "1000", "--message-burst", "1000"]
         murmur.seed()
-        rail_scene = "rail-layout" in args.scenes.split(",")
+        rail_scene = bool({"rail-layout", "server-order"} & set(args.scenes.split(",")))
         layout_scene = bool({"layout", "layout-controls", "layout-performance"} & set(args.scenes.split(",")))
         if layout_scene:
             murmur.ini.write_text(murmur.ini.read_text() + "suggestPushToTalk=true\n")
@@ -546,6 +546,9 @@ def main():
             if {"layout", "layout-controls"} & scenes:
                 from layout_regression import run as run_layout
                 run_layout(args, root, shell, registry, bots, profile, port, pin, shot)
+            if "server-order" in scenes:
+                from server_order import run as run_order
+                run_order(args, root, shell, registry, bots, profile, port, pin, shot, app)
             if "rail-layout" in scenes:
                 from rail_layout import run as run_rail
                 run_rail(args, shell, registry, profile, shot)

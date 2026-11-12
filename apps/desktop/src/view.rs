@@ -29,7 +29,6 @@ impl Render for Desktop {
         let started = std::time::Instant::now();
         crate::images::collect(window);
         self.ease_voice_toggles(window, cx);
-        self.animate_voice(window, cx);
         // Which dialog the last frame showed (see dialogs::modal).
         self.modal_seen.set(self.modal_shown.take());
         self.keep_dialog_focus(window, cx);
@@ -37,6 +36,8 @@ impl Render for Desktop {
         self.apply_updates(cx);
         self.apply_composer_acks(window, cx);
         self.reconcile_selection(window, cx);
+        self.animate_server_rail(window, cx);
+        self.animate_voice(window, cx);
         self.settle_timeline();
         self.mark_read();
         self.present_selected();
@@ -72,7 +73,12 @@ impl Render for Desktop {
             .text_size(px(self.settings.appearance.text_size))
             .track_focus(&self.window_focus)
             // A shortcut being recorded takes the key before any focused control.
-            .capture_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+            .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                if event.keystroke.key == "escape" && this.rail.dragged().is_some() {
+                    this.cancel_server_drag(window, cx);
+                    cx.stop_propagation();
+                    return;
+                }
                 if this.record_key(&event.keystroke) {
                     cx.stop_propagation();
                     cx.notify();
@@ -170,12 +176,12 @@ impl Render for Desktop {
 }
 
 fn server_rail(this: &Desktop, selected: Option<usize>, cx: &mut Context<Desktop>) -> AnyElement {
-    let unread_servers = this
-        .client
-        .servers
+    let order = this.rail.order(this.client.ordered_server_indices());
+    let unread_servers = order
         .iter()
         .enumerate()
-        .filter_map(|(slot, server)| {
+        .filter_map(|(slot, index)| {
+            let server = &this.client.servers[*index];
             let first = server.channels.iter().find(|channel| channel.unread > 0)?;
             Some(unread::Candidate {
                 // scrollable's first child establishes the autoscroll scope;
@@ -195,16 +201,18 @@ fn server_rail(this: &Desktop, selected: Option<usize>, cx: &mut Context<Desktop
             })
         })
         .collect();
-    let servers = this
-        .client
-        .servers
+    let servers = order
         .iter()
-        .enumerate()
-        .map(|(index, server)| {
+        .copied()
+        .map(|index| {
+            let server = &this.client.servers[index];
             let active = Some(index) == selected;
             let online = server.status == Status::Connected;
             let radius = this.voice_motion.radius(&server.id, active);
             let hover_id = server.id.clone();
+            let key_id = server.id.clone();
+            let drag_id = server.id.clone();
+            let drag_owner = cx.entity().downgrade();
             // Discord-like: the pill marks unread conversations; a red count
             // marks mentions and direct messages.
             let unread = server.channels.iter().any(|channel| channel.unread > 0);
@@ -216,6 +224,7 @@ fn server_rail(this: &Desktop, selected: Option<usize>, cx: &mut Context<Desktop
                 .sum();
             layout::decorated_slot(px(crate::voice::RAIL_DECORATION_OUTSET))
                 .id(("server-slot", index))
+                .top(px(this.rail.offset(&server.id)))
                 .w_full()
                 .flex()
                 .justify_center()
@@ -254,7 +263,7 @@ fn server_rail(this: &Desktop, selected: Option<usize>, cx: &mut Context<Desktop
                         })
                         .aria_selected(active)
                         .relative()
-                        .size(px(48.))
+                        .size(px(crate::rail::TILE))
                         .flex_shrink_0()
                         .flex()
                         .items_center()
@@ -286,7 +295,30 @@ fn server_rail(this: &Desktop, selected: Option<usize>, cx: &mut Context<Desktop
                                 cx.notify();
                             }),
                         )
+                        .on_drag(
+                            crate::rail::DragItem { server: drag_id },
+                            move |item, _, _, cx| crate::rail::drag_view(&drag_owner, item, cx),
+                        )
+                        .when(this.rail.dragged() == Some(server.id.as_str()), |tile| {
+                            tile.opacity(0.18)
+                        })
                         .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
+                            let modifiers = event.keystroke.modifiers;
+                            if modifiers.control
+                                && modifiers.shift
+                                && !modifiers.alt
+                                && !modifiers.platform
+                                && matches!(event.keystroke.key.as_str(), "up" | "down")
+                            {
+                                this.move_saved_server(
+                                    &key_id,
+                                    if event.keystroke.key == "up" { -1 } else { 1 },
+                                    window,
+                                    cx,
+                                );
+                                cx.stop_propagation();
+                                return;
+                            }
                             if activation_key(event) {
                                 this.browse_server(index, window, cx);
                                 cx.notify();
@@ -295,9 +327,9 @@ fn server_rail(this: &Desktop, selected: Option<usize>, cx: &mut Context<Desktop
                         .map(|tile| {
                             let icon = this.ui.get(&server.id).and_then(|ui| ui.icon.clone());
                             match icon.filter(|_| this.settings.server_icons) {
-                                Some(icon) => {
-                                    tile.child(img(icon).size(px(48.)).rounded(px(radius)))
-                                }
+                                Some(icon) => tile.child(
+                                    img(icon).size(px(crate::rail::TILE)).rounded(px(radius)),
+                                ),
                                 None => tile.child(
                                     text!(theme::initials(&server.name))
                                         .with_id(("server-name", index)),
@@ -389,6 +421,16 @@ fn server_rail(this: &Desktop, selected: Option<usize>, cx: &mut Context<Desktop
                         .on_scroll(cx.listener(|this, event, window, cx| {
                             this.smooth_server_scroll(event, window, cx)
                         }))
+                        .on_drag_move(cx.listener(
+                            |this, event: &DragMoveEvent<crate::rail::DragItem>, _, cx| {
+                                this.move_server_drag(event, cx)
+                            },
+                        ))
+                        .on_drop(
+                            cx.listener(|this, item: &crate::rail::DragItem, window, cx| {
+                                this.drop_server_drag(item, window, cx)
+                            }),
+                        )
                         .children(servers),
                 )
                 .child(unread::overlay(

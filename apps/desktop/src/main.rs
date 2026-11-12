@@ -28,6 +28,7 @@ mod notify;
 mod panels;
 mod presentation;
 mod preview;
+mod rail;
 mod scrolling;
 mod search;
 mod selection;

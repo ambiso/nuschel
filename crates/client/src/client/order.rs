@@ -3,7 +3,7 @@
 //! validated stable-ID permutation changes it; an adapter commits its ordered
 //! bookmark snapshot atomically before reporting a successful drop.
 use super::Client;
-use crate::{Update, server::ServerState};
+use crate::server::ServerState;
 use nuschl_core::bookmark::ServerBookmark;
 use std::collections::{HashMap, HashSet};
 
@@ -60,6 +60,10 @@ impl Client {
         &self.catalog.ids
     }
 
+    pub fn ordered_server_indices(&self) -> &[usize] {
+        &self.catalog.indices
+    }
+
     /// No allocation or sorting on the UI draw path. Commands still use the
     /// returned runtime index, never the ordinal position in this iterator.
     pub fn ordered_servers(&self) -> impl Iterator<Item = (usize, &ServerState)> {
@@ -99,7 +103,6 @@ impl Client {
         }
         self.catalog.ids = ids.to_vec();
         self.catalog.indices = order;
-        self.updates.push(Update::Changed);
         Ok(true)
     }
 
@@ -274,7 +277,31 @@ mod tests {
             Some("ab".repeat(32).as_str())
         );
         assert_eq!(io.0.load(Ordering::SeqCst), 0);
-        assert_eq!(client.take_updates().len(), 1);
+        assert!(client.take_updates().is_empty());
+    }
+
+    #[test]
+    fn late_server_inputs_keep_their_stable_id_and_generation_after_reordering() {
+        let (mut client, io) = client();
+        let ids = client.server_order().to_vec();
+        client.servers[1].generation = 7;
+        client
+            .set_server_order(&[ids[1].clone(), ids[2].clone(), ids[0].clone()])
+            .unwrap();
+        client.handle(crate::input::Input::Server {
+            server: ids[1].clone(),
+            generation: 7,
+            event: crate::input::ServerEvent::Notice("for B only".into()),
+        });
+        assert_eq!(client.servers[1].notice.as_deref(), Some("for B only"));
+        assert!(client.servers[0].notice.is_none());
+        client.handle(crate::input::Input::Server {
+            server: ids[1].clone(),
+            generation: 6,
+            event: crate::input::ServerEvent::Notice("stale".into()),
+        });
+        assert_eq!(client.servers[1].notice.as_deref(), Some("for B only"));
+        assert_eq!(io.0.load(Ordering::SeqCst), 0);
     }
 
     #[test]
