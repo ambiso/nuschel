@@ -616,14 +616,25 @@ Reported while testing (2026-11-10/11):
 Later (reported):
 
 - [ ] Investigate laggy Windows audio (user, 2026-11-12). Both input and output
-      are intermittently affected. Clarify delayed/catching-up audio versus
-      stuttering/dropouts, and bind the report to an exact build/device/output route.
+      intermittently stutter/drop out. Reported ping is 82 ms versus other
+      participants' 7–20 ms, with zero reported late/lost packets toward the
+      server; these observations do not establish incoming loss or its absence.
+      Bind the report to an exact build/device/output route.
       Compare Nuschl and stock Mumble using owned private servers and synthetic
       audio. Inspect WASAPI callback/buffer sizes, sample-rate conversion, bounded
       capture/playback queues, underruns and drift rather than guessing at buffer
       reductions. Preserve the VAD fix, microphone consent and mute/deafen epochs;
       VM evidence must not be presented as physical-device proof. Record latency
       and discontinuities before/after any correction.
+- [ ] Show packet statistics in both directions in user profiles (user,
+      2026-11-12). The session/core already retain Mumble `from_server`, but the
+      desktop only shows `from_client`. Root's staged `f4073093` adds a separate
+      "Packets to client" row and reports missing counters as "Not reported";
+      affected package/runtime checks and integration remain. Its connection
+      statistics calculation also avoids `u32` overflow when adding long-lived
+      good/lost counters. These UDP crypt counters do not diagnose downstream
+      jitter-buffer, decoder or device dropouts; add scoped playout diagnostics
+      rather than treating zero upstream loss as end-to-end audio proof.
 - [ ] Fix the server rail's encryption badge stacking (user, 2026-11-12):
       the E2EE lock/unlocked icon renders behind the server's surrounding circle.
       Draw it in front, consistently with the mute/deafen badges. Check both
