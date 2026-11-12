@@ -671,6 +671,17 @@ Later (reported):
 - [x] Dark faint-text contrast raised to 6.04:1 on the main background and 4.68:1
       on selected rows; desktop tests and real GNOME clipboard/UI checks passed.
 - [ ] Ctrl+scroll / pinch zoom; IME placement at zoom ≠ 100 % untested.
+- [ ] Integrate native spacing regression proof for the rail bottom and compact
+      Settings/mute/deafen gaps: exact root 1db package passes 16 real private-GNOME
+      window/100–200% zoom cases, contained first/last rail decorations and
+      pointer actions with owned null Pulse. Cached pre-spacing GUI fails with
+      0px control gaps and 1px Add gutter; positive gaps 4 logical and bottom 13+
+      logical. See `docs/native-spacing.md`; test/docs integration pending.
+- [ ] Smallest native 860×520 window at 200% remains visually cramped in the chat
+      pane because rail/sidebar consume most width (observed in spacing screenshot).
+      Spacing/contained footer controls are verified separately; consider a
+      responsive/collapsible sidebar or zoom-aware pane budget before claiming
+      full chat usability at that combination.
 - [x] Smooth resizing: only messages near the viewport are laid out (1000-message
       resize: 113 ms → 7 ms per frame), full frame rate during drag-resizes.
 - [x] Off-screen messages are in the accessibility tree again (2026-11-11): every

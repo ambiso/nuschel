@@ -33,7 +33,7 @@ def run(args, shell, registry, bots, profile, shot):
     proof_file = args.output / "spacing-proof.json"
     def save():
         proof_file.write_text(json.dumps({"cases": records, "capture_backend": "owned null Pulse only"}, indent=2) + "\n")
-    for label, width, height in [("narrow-small", 900, 500), ("default", 1280, 800), ("wide", 1600, 900), ("short", 1200, 480)]:
+    for label, width, height in [("narrow-small", 860, 520), ("default", 1280, 800), ("wide", 1600, 900), ("short", 1200, 520)]:
         for percent, steps in [(100, 0), (125, 2), (150, 3), (200, 5)]:
             shell.chord("Control_L", "0")
             shell.place("Nuschl", 40, 40, width, height)
@@ -42,8 +42,17 @@ def run(args, shell, registry, bots, profile, shot):
                 time.sleep(.1)
             scale = percent / 100
             eventually(lambda: abs(json.loads((profile / "config/settings.json").read_text())["appearance"]["zoom"] - scale) < .001, "native zoom not saved")
-            add = find("Add a server")
+            eventually(lambda: geometry()["frame"]["width"] == width and geometry()["frame"]["height"] == height, "compositor did not commit requested valid window size")
+            add, settings = find("Add a server"), find("Settings")
             eventually(lambda: abs(add.extents()[2] - 48 * scale) <= 2, "native zoom not laid out")
+            def resized_footer_committed():
+                current = geometry(); bottom = current["frame"]["y"] + current["frame"]["height"] - current["buffer"]["y"]
+                # Allow zero padding so the pre-fix baseline still reaches the
+                # actual regression assertions. Exclude the previous resize's
+                # distant footer, without assuming the inaccessible root frame
+                # has bounds (AT-SPI legitimately returns [-1,-1,-1,-1] there).
+                return all(-1 <= bottom - node.extents()[1] - node.extents()[3] <= 32 * scale for node in (add, settings))
+            eventually(resized_footer_committed, "footer still represents a previous window size")
             g = geometry(); frame, buffer = g["frame"], g["buffer"]
             viewport = (frame["x"] - buffer["x"], frame["y"] - buffer["y"], frame["width"], frame["height"])
             controls = [find(name) for name in ("Settings", "Unmute", "Deafen")]
@@ -54,6 +63,8 @@ def run(args, shell, registry, bots, profile, shot):
                 x, y = node.centre()
                 assert node.call("Component", "Contains", "iiu", str(x), str(y), "1")[0], node.name + " center is not hittable"
             gaps = [boxes[i + 1][0] - boxes[i][0] - boxes[i][2] for i in range(2)]
+            sample_add = add.extents()
+            (args.output / "spacing-last-sample.json").write_text(json.dumps({"case":label,"zoom":percent,"viewport":viewport,"controls":boxes,"gaps":gaps,"add":sample_add,"bottom_gutter":viewport[1]+viewport[3]-sample_add[1]-sample_add[3],"geometry":g},indent=2)+"\n")
             assert all(gap >= 2 * scale for gap in gaps), f"footer gaps missing at {percent}%: {boxes} {gaps}"
             assert max(box[1] + box[3] / 2 for box in boxes) - min(box[1] + box[3] / 2 for box in boxes) <= 2, "control cluster rows diverged"
             add_box = add.extents(); gutter = viewport[1] + viewport[3] - add_box[1] - add_box[3]
@@ -75,8 +86,8 @@ def run(args, shell, registry, bots, profile, shot):
             if label == "default" and percent == 100 or label == "narrow-small" and percent == 200:
                 pointer(find("Settings")); eventually(lambda: named("dialog", "Settings"), "Settings pointer activation failed")
                 shell.key("Escape"); eventually(lambda: named("dialog", "Settings") is None, "Settings did not close")
-                pointer(find("Add a server")); eventually(lambda: named("dialog", "Add a server"), "Add pointer activation failed")
-                shell.key("Escape"); eventually(lambda: named("dialog", "Add a server") is None, "Add did not close")
+                pointer(find("Add a server")); eventually(lambda: named("dialog", "Add or connect to a Mumble server"), "Add pointer activation failed")
+                shell.key("Escape"); eventually(lambda: named("dialog", "Add or connect to a Mumble server") is None, "Add did not close")
                 records[-1]["pointer_settings_add"] = True; save()
     shell.chord("Control_L", "0"); shell.place("Nuschl", 40, 40, 1280, 800)
     eventually(lambda: abs(find("Add a server").extents()[2] - 48) <= 2, "tail zoom not ready")
