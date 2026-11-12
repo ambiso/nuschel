@@ -634,6 +634,10 @@
             ];
           };
           update-unit = crates.project.workspaceMembers."nuschl-update".build.override { runTests = true; };
+          # Scoped unit-test leaves over the cached per-crate graph (no Cargo target).
+          desktop-unit = crates.project.workspaceMembers."nuschl".build.override { runTests = true; };
+          core-unit = crates.project.workspaceMembers."nuschl-core".build.override { runTests = true; };
+          media-unit = crates.project.workspaceMembers."nuschl-media-worker".build.override { runTests = true; };
           update-crypto = crates.project.workspaceMembers."nuschl-update-worker".build.override {
             features = [ "signer" ];
             runTests = true;

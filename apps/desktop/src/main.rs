@@ -37,6 +37,7 @@ mod selection;
 mod services;
 mod settings;
 mod shortcuts;
+mod slider;
 mod state;
 mod theme;
 mod timeline_keys;
