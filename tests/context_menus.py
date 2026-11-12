@@ -91,10 +91,18 @@ def actions(args, root, shell, application, bot, murmur):
         try:
             current = eventually(menu, "user menu missing", timeout=5)
         except AssertionError:
+            shell.screenshot(args.output / "missing-menu.png")
+
+            def bounds(node):
+                try:
+                    return node.extents()
+                except RuntimeError:
+                    return None
+
             (args.output / "missing-menu-tree.json").write_text(
                 json.dumps(
                     [
-                        {"role": role, "name": name, "bounds": node.extents()}
+                        {"role": role, "name": name, "bounds": bounds(node)}
                         for node, role, name, _ in items(application)
                     ],
                     indent=2,
@@ -162,12 +170,14 @@ def actions(args, root, shell, application, bot, murmur):
         assert target.process.poll() is None, "fixture target was actually moderated"
 
     def close_profile():
+        dialog = eventually(
+            lambda: named("Details", "dialog"), "profile dialog missing"
+        )
         eventually(
-            lambda: named("Close", "push button"), "profile close missing"
+            lambda: named("Done", "push button", dialog), "profile Done missing"
         ).press()
         eventually(
-            lambda: named("Close", "push button") is None,
-            "profile remained after close",
+            lambda: named("Details", "dialog") is None, "profile remained after Done"
         )
 
     try:
