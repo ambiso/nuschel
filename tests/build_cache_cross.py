@@ -104,7 +104,7 @@ def main():
                 report = run([data["llvm"] + "/llvm-otool", "-l", str(binary)])
                 assert "minos 14.2" in report
                 links = run([data["llvm"] + "/llvm-otool", "-L", str(binary)])
-                assert "/nix/store/" not in links
+                assert not any("/nix/store/" in line for line in links.splitlines()[1:])
                 arch = "arm64" if "aarch64" in name else "x86_64"
                 run([data["llvm"] + "/llvm-lipo", str(binary), "-verify_arch", arch])
                 product["minimum_os"] = "14.2"

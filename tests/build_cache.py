@@ -80,6 +80,14 @@ def main():
     results["target_flag"] = flags
     assert flags["windows"]["deps"] != edited["windows"]["deps"]
     assert flags["macos"]["deps"] == edited["macos"]["deps"]
+    # The dummy pass deliberately retains this patched dependency's real API.
+    # Its source bytes must still invalidate caches, unlike application bodies.
+    dependency = baseline / "vendor/ratatui-image/src/lib.rs"
+    dependency.write_bytes(dependency.read_bytes() + b"\n// Retained dependency source regression.\n")
+    dependency_edit = evaluate(baseline)
+    results["retained_dependency_source"] = dependency_edit
+    for platform in base:
+        assert dependency_edit[platform]["deps"] != flags[platform]["deps"], platform
     # Native dependency passes must not acquire final notice closure inputs.
     for platform, item in edited.items():
         drv = json.loads(run(["nix", "derivation", "show", item["deps"]]))
