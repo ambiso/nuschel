@@ -29,9 +29,20 @@ COLORS = ((53, 62, 78), (148, 159, 178), (154, 164, 183))
 class ScrollbarScenes(Scenes):
     def __init__(self, args, root):
         super().__init__(args, root)
-        self.proof = {'cases': [], 'private_audio': 'owned Pulse null devices only',
+        self.proof = {'cases': [], 'package': str(args.binaries.parent),
+                      'desktop_sha256': hashlib.sha256((args.binaries.parent / 'libexec/nuschl/nuschl').read_bytes()).hexdigest(),
+                      'fixture_sha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+                      'private_audio': 'owned Pulse null devices only',
                       'host_devices_or_clipboard': False}
         self.stopped = []
+
+    def screen(self, x, y):
+        # AccessKit window coordinates include GPUI's client-side shadow. The
+        # compositor frame excludes it; thin scrollbar hitboxes need the buffer.
+        rect = json.loads(self.shell.eval("JSON.stringify((()=>{const w=global.get_window_actors()"
+            ".map(a=>a.meta_window).find(w=>(w.get_title()||'').startsWith('Nuschl'));"
+            "const r=w.get_buffer_rect();return{x:r.x,y:r.y,width:r.width,height:r.height};})())"))
+        return rect['x'] + x, rect['y'] + y
 
     def timeline(self):
         return self.wait_for('list', 'Messages in #Development', 'missing timeline')
@@ -54,7 +65,7 @@ class ScrollbarScenes(Scenes):
         return result
 
     def gutter(self):
-        node = self.wait_for('grouping', 'Chat history scrollbar', 'missing scrollbar area')
+        node = self.wait_for(None, 'Chat history scrollbar', 'missing scrollbar area')
         x, y, width, height = node.extents()
         tx, ty, tw, th = self.timeline().extents()
         assert width >= 8 and height > 100, [x, y, width, height]
@@ -90,18 +101,39 @@ class ScrollbarScenes(Scenes):
         return self.screen(x + width / 2, y + (start + end) / 2), [x, y + start, width, end - start]
 
     def private_storage(self):
-        pending, found = [self.app.pid], []
+        pending, graph = [self.app.pid], {}
         while pending:
             pid = pending.pop()
+            if pid in graph:
+                continue
+            assert len(graph) < 512, 'unexpected owned process fanout'
             try:
-                children = Path(f'/proc/{pid}/task/{pid}/children').read_text().split()
-                pending.extend(map(int, children))
-                if 'nuschl-storage-worker' in Path(f'/proc/{pid}/exe').readlink().name:
-                    found.append(pid)
+                children = set()
+                for path in Path(f'/proc/{pid}/task').glob('*/children'):
+                    children.update(map(int, path.read_text().split()))
+                command = Path(f'/proc/{pid}/cmdline').read_bytes().split(b'\0')
+                graph[pid] = {'children': sorted(children),
+                              'argv': [os.fsdecode(arg) for arg in command if arg]}
+                pending.extend(children)
             except (FileNotFoundError, ProcessLookupError, PermissionError):
                 pass
-        assert len(found) == 1, f'expected one owned storage worker: {found}'
-        return found[0]
+        # bwrap renames its executable mount to /worker. Identify its actual
+        # role from our own launcher's fixed --ro-bind input, then take its leaf.
+        roots = [pid for pid, data in graph.items() if any(
+            Path(arg).name == 'nuschl-storage-worker' for arg in data['argv'])]
+        leaves = set()
+        for root in roots:
+            pending = [root]
+            while pending:
+                pid = pending.pop()
+                children = graph.get(pid, {}).get('children', [])
+                if children:
+                    pending.extend(children)
+                else:
+                    leaves.add(pid)
+        (self.out / 'owned-processes.json').write_text(json.dumps(graph, indent=2) + '\n')
+        assert len(leaves) == 1, f'expected one owned storage leaf: roots={roots}, leaves={leaves}'
+        return leaves.pop()
 
     def release_storage(self):
         for pid in self.stopped:
@@ -148,19 +180,31 @@ class ScrollbarScenes(Scenes):
                 time.sleep(.025)
             self.latest(160)
             time.sleep(2)
-            self.channel('Lobby'); self.channel('Development')
+            # A different channel retains its in-memory timeline; a real app
+            # restart proves paging from durable legacy history instead.
+            self.quit()
+            time.sleep(.5)
+            self.launch(profile, f'mumble://Reader@127.0.0.1:{port}/Lobby/Development')
             self.latest(160)
             initial = sorted(self.loaded())
             assert len(initial) < 160 and initial[-1] == 160, initial
+            time.sleep(3)  # prove Always remains painted after the default idle hold
+            self.proof['idle_visibility_wait_seconds'] = 3
             self.shot('01-latest')
             start, _ = self.thumb('01-latest')
             pid = self.private_storage()
             os.kill(pid, signal.SIGSTOP); self.stopped.append(pid)
+            eventually(lambda: re.search(r'^State:\s+[Tt]\b', Path(f'/proc/{pid}/status').read_text(), re.M),
+                       'owned storage worker did not enter stopped state')
             x, y, w, h = self.gutter()
             self.shell.drag(start, self.screen(x + w/2, y + 2), steps=18)
             time.sleep(.4)
+            assert sorted(self.loaded()) == initial, 'history advanced despite stopped storage child'
             before = self.visible()
-            anchor = sorted(before)[len(before)//2]
+            # The keeper anchors the FIRST visible stored message. Its row
+            # can lose an author header when older same-author rows arrive;
+            # lower rows legitimately reflow while this row's top stays fixed.
+            anchor = min(before)
             anchor_y = before[anchor][1]
             self.shot('02-page-pending')
             self.release_storage()
@@ -169,7 +213,8 @@ class ScrollbarScenes(Scenes):
             after = self.visible()
             assert anchor in after and abs(after[anchor][1] - anchor_y) <= 2, (anchor, before, after)
             self.proof['cases'].append({'older_prepend_anchor': anchor, 'before_y': anchor_y,
-                                       'after_y': after[anchor][1], 'loaded_before': initial,
+                                       'after_y': after[anchor][1], 'row_height_before': before[anchor][3],
+                                       'row_height_after': after[anchor][3], 'loaded_before': initial,
                                        'loaded_after': sorted(self.loaded())})
             self.shot('03-prepended-anchor')
             # Let an actual wheel animation begin, then grab the thumb before
@@ -180,9 +225,12 @@ class ScrollbarScenes(Scenes):
             # wheel() and a second pointer press in one compositor call, avoiding
             # bus/screenshot delay that could accidentally wait out the animation.
             self.shell.move(*start)
+            content_x, content_y = self.screen(x - 100, y + h/2)
             self.shell.eval("const p=global._nuschlPointer,C=imports.gi.Clutter,t=imports.gi.GLib.get_monotonic_time();"
-                            "p.notify_discrete_scroll(t,C.ScrollDirection.DOWN,C.ScrollSource.WHEEL);"
-                            "p.notify_button(t+1000,1,C.ButtonState.PRESSED); 'ok'")
+                            f"p.notify_absolute_motion(t,{content_x},{content_y});"
+                            "p.notify_discrete_scroll(t+1000,C.ScrollDirection.DOWN,C.ScrollSource.WHEEL);"
+                            f"p.notify_absolute_motion(t+2000,{start[0]},{start[1]});"
+                            "p.notify_button(t+3000,1,C.ButtonState.PRESSED); 'ok'")
             time.sleep(.05)
             held = self.visible()
             key = sorted(held)[len(held)//2]
