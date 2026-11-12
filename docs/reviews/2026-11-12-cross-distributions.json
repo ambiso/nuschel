@@ -54,7 +54,7 @@
     "Ad-hoc CodeDirectory integrity does not authenticate a publisher or establish Apple codesign/Gatekeeper acceptance",
     "Native macOS Seatbelt/media/updater behavior and physical Windows hardware untested",
     "Winsock10107 network initialization unavailable under LPAC is not a socket-level denial claim",
-    "Production trust remains unenrolled; only fresh fixture public pair entered separate source/store; private seeds stayed sibling0600 outside source/store/guest",
+    "Production trust remains unenrolled; only fresh fixture public pair entered separate source/store; GUI signing seeds stayed sibling0600 outside source/store/guest; native fixture independently generated and removed its own temporary guest pair",
     "No production signature/publisher policy change, release, tag, remote workflow, host device or public server used"
   ],
   "source_binding": {

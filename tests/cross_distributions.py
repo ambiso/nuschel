@@ -137,7 +137,8 @@ def main():
                       "LSMinimumSystemVersion": "14.2", "NSHighResolutionCapable": True,
                       "NSMicrophoneUsageDescription": "Nuschl sends your voice to the people in your channel.",
                       "NSAudioCaptureUsageDescription": "Nuschl removes what your speakers play from your microphone, so others do not hear it. The sound stays on this Mac."}
-    assert all(plist.get(key) == value for key, value in expected_plist.items())
+    assert all(type(plist.get(key)) is type(value) and plist[key] == value
+               for key, value in expected_plist.items())
     proof["macos_bundle_metadata"] = expected_plist
     for program in PROGRAMS:
         binary = windows / "bin" / (program + ".exe")
