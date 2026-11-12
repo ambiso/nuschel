@@ -10,10 +10,16 @@
   import { welcomeDocuments } from "./welcome.js";
   import { SdkRpc, SdkUnavailableError } from "./sdk-rpc.js";
   import { BrowserAudio } from "./audio.js";
+  import { ErrorLifetime } from "./error-lifetime.js";
   const link = inviteFragment(location.hash);
   let relay = $state(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/relay`);
   let host = $state(link.host), port = $state(link.port), username = $state(link.username), pin = $state(link.pin), serverName = $state(""), password = $state("");
   let loaded = $state(false), clientUnavailable = $state(false), error = $state(link.error), servers = $state([]), timeline = $state(null);
+  const errorLifetime = new ErrorLifetime();
+  function setError(message, conversation = null) {
+    errorLifetime.replace(conversation);
+    error = message;
+  }
   let showAdd = $state(false), editingIndex = $state(null), showSettings = $state(false), drawer = $state(false), mobile = $state(false);
   let body = $state(""), expanded = $state(new Map()), search = $state(""), showSearch = $state(false);
   let messagesElement = $state(), composerElement = $state(), navigationButton = $state(), searchElement = $state();
@@ -70,7 +76,7 @@
     }
     return rpc.request(method,args);
   }
-  async function act(method, ...args) { try { return await command(method, ...args); } catch (reason) { error = String(reason?.message || reason); } }
+  async function act(method, ...args) { try { return await command(method, ...args); } catch (reason) { setError(String(reason?.message || reason)); } }
   function rememberDraft() {
     const key = conversationKey(timeline, selected);
     if (!key) return;
@@ -81,7 +87,7 @@
   }
   function persistSettings() {
     settings = appearance(settings);
-    try { localStorage.setItem("nuschl.appearance.v1", JSON.stringify(settings)); } catch { error = "Appearance preferences could not be saved in this browser."; }
+    try { localStorage.setItem("nuschl.appearance.v1", JSON.stringify(settings)); } catch { setError("Appearance preferences could not be saved in this browser."); }
   }
   $effect(() => {
     document.documentElement.dataset.theme = settings.theme;
@@ -115,7 +121,7 @@
       servers = servers.map(server => ({...server,status:"unavailable",muted:true,deafened:true,
         users:server.users.map(user => ({...user,talking:false}))}));
       if (timeline?.sending) timeline = {...timeline,sending:false};
-      error = reason;
+      setError(reason);
     };
     try { worker = new Worker(new URL("./sdk.worker.js", import.meta.url), { type:"module" }); }
     catch { unavailable("The browser client could not be created. Reload to try again."); return cleanup; }
@@ -139,7 +145,7 @@
       }
       if (data.kind === "result") {
         rpc.accept(data);
-      } else if (data.kind === "error") error = data.message;
+      } else if (data.kind === "error") setError(data.message);
       else if (data.kind === "ready") {
         if (!rpc.acceptReady()) return;
         loaded = true; capabilities = data.capabilities || [];
@@ -149,7 +155,7 @@
         rememberDraft();
         selectedFallback = selected?.id || null;
         try { servers = serverIndices(data.servers, capabilities.includes("server_order")); }
-        catch (reason) { audio.setLocalPolicy({muted:true,deafened:true}); audio.syncVoice(null); voice = null; loaded = false; error = "The server list could not be read safely. Reload to reconnect."; return; }
+        catch (reason) { audio.setLocalPolicy({muted:true,deafened:true}); audio.syncVoice(null); voice = null; loaded = false; setError("The server list could not be read safely. Reload to reconnect."); return; }
         welcomes = welcomeDocuments(welcomes, servers, data.updates);
         if (orderDrag && !sameOrder(orderDrag.baseline, servers.map(server => server.id))) cancelOrder();
         timeline = data.timeline;
@@ -160,7 +166,7 @@
           if (!voice || !state || (state.muted===audioActionPending.muted && state.deafened===audioActionPending.deafened)) audioActionPending=null;
         }
         for (const update of data.updates || []) {
-          if (update.kind === "error") error = update.message;
+          if (update.kind === "error") setError(update.message);
           if (update.kind === "sent") {
             const target = servers.find(server => server.id === update.server);
             const key = conversationKey({server:update.server,channel:update.channel},target);
@@ -197,14 +203,14 @@
   });
   async function connect(event) {
     event?.preventDefault();
-    if (link.error) { error = link.error; return; }
+    if (link.error) { setError(link.error); return; }
     try {
-      error = "";
+      setError("");
       const fields = [serverName.trim(),host.trim(),Number(port),username.trim(),pin.trim() || undefined];
       const index = editingIndex === null ? await command("add_server",...fields) : await command("edit_server",editingIndex,...fields);
       if (password) await command("connect_with_password",index,password); else await command("connect", index);
       password = ""; await command("open", index, 0); showAdd = false;
-    } catch (reason) { error = String(reason?.message || reason); }
+    } catch (reason) { setError(String(reason?.message || reason)); }
   }
   function addServer() { editingIndex = null; password = ""; serverName = ""; host = ""; port = 64738; username = selected?.username || ""; pin = ""; showAdd = true; drawer = false; }
   function editServer() { if (!selected) return; editingIndex = selectedIndex; password = ""; serverName = selected.name; host = selected.host; port = selected.port; username = selected.username; pin = selected.pin || ""; showAdd = true; drawer = false; }
@@ -214,8 +220,12 @@
     if (!sent.trim() || !canSend) return;
     // Shared SDK Sent identifies both the original conversation and body.
     // A command being queued never clears text typed during an earlier send.
-    try { await command("send_text", sent); }
-    catch (reason) { error = String(reason?.message || reason); }
+    const conversation = conversationKey(timeline, selected);
+    const previousError = errorLifetime.capture(conversation);
+    try {
+      await command("send_text", sent);
+      if (errorLifetime.accepts(previousError)) setError("");
+    } catch (reason) { setError(String(reason?.message || reason), conversation); }
   }
   async function openChannel(id) { rememberDraft(); await act("open", selectedIndex, id); if (mobile) drawer = false; }
   function joinVoice(channel = timeline?.channel) {
@@ -229,14 +239,14 @@
     audioActionPending={server:voice.server_id,muted:!microphoneMuted,deafened:false};
     if (microphoneMuted) void activateAudio({microphone:true});
     else audio?.setLocalPolicy({muted:true});
-    void command("toggle_mute",voiceIndex).catch(reason=>{audioActionPending=null;error=String(reason?.message || reason);});
+    void command("toggle_mute",voiceIndex).catch(reason=>{audioActionPending=null;setError(String(reason?.message || reason));});
   }
   function togglePlayback() {
     if (voiceIndex < 0 || !voice?.joined || audioActionPending) return;
     audioActionPending={server:voice.server_id,muted:true,deafened:!playbackDeafened};
     if (playbackDeafened) void activateAudio({microphone:false});
     else audio?.setLocalPolicy({muted:true,deafened:true});
-    void command("toggle_deaf",voiceIndex).catch(reason=>{audioActionPending=null;error=String(reason?.message || reason);});
+    void command("toggle_deaf",voiceIndex).catch(reason=>{audioActionPending=null;setError(String(reason?.message || reason));});
   }
   function stopAudio() {
     audio?.setLocalPolicy({muted:true,deafened:true}); audio?.syncVoice(null);
@@ -325,7 +335,7 @@
     if (orderPending || !capabilities.includes("server_order") || sameOrder(ids,servers.map(server => server.id))) return;
     orderPending = true; orderStatus = "Saving server order…";
     try { await command("set_server_order",ids); orderStatus = "Server order saved in this browser."; }
-    catch (reason) { error = String(reason?.message || reason); orderStatus = "Server order was not saved."; }
+    catch (reason) { setError(String(reason?.message || reason)); orderStatus = "Server order was not saved."; }
     finally { orderPending = false; await tick(); updateUnread(); }
   }
   function dropOrder(event, pointer = false) {
@@ -412,7 +422,7 @@
       </div>
     </header>
     {#if showSearch}<form class="search-bar" onsubmit={(event) => event.preventDefault()}><label for="search-messages">Search this loaded history</label><input id="search-messages" bind:this={searchElement} bind:value={search} type="search" placeholder="Message text or person…" onkeydown={(event) => { if (event.key === "Escape") { showSearch = false; search = ""; } }}><small>{displayedMessages.length} results</small><button class="icon-button" aria-label="Close search" onclick={() => { showSearch = false; search = ""; }}>{@render icon("close")}</button></form>{/if}
-    {#if clientUnavailable}<div class="error" role="alert"><span>{error || "The client is unavailable. Reload to reconnect."}</span><button class="text-button" onclick={() => location.reload()}>Reload client</button></div>{:else if error}<div class="error" role="alert"><span>{error}</span><button class="icon-button" aria-label="Dismiss error" onclick={() => error = ""}>{@render icon("close")}</button></div>{/if}
+    {#if clientUnavailable}<div class="error" role="alert"><span>{error || "The client is unavailable. Reload to reconnect."}</span><button class="text-button" onclick={() => location.reload()}>Reload client</button></div>{:else if error}<div class="error" role="alert"><span>{error}</span><button class="icon-button" aria-label="Dismiss error" onclick={() => setError("")}>{@render icon("close")}</button></div>{/if}
     {#if welcome}
       {#key welcome.token}<section class="server-welcome" aria-label="Server welcome">
         <header><h3 title={`Welcome to ${selected.name}`}>Welcome to {selected.name}</h3><button onclick={() => act("dismiss_welcome", selectedIndex, welcome.token)} aria-label="Dismiss server welcome">Dismiss</button></header>
