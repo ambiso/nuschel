@@ -16,7 +16,10 @@ import urllib.request
 
 
 def run(*args, check=True, input=None):
-    return subprocess.run(args, input=input, capture_output=True, check=check)
+    result = subprocess.run(args, input=input, capture_output=True)
+    if check and result.returncode:
+        raise AssertionError(f"{args[:3]} exit {result.returncode}: " + result.stderr.decode(errors="replace")[:8192])
+    return result
 
 
 def property_of(unit, name):
@@ -168,9 +171,19 @@ def main():
         proof["publisher_script_sha256"] = hashlib.sha256(Path(cfg["publisherCommand"]).read_bytes()).hexdigest()
         proof["server_executable"] = os.readlink(f"/proc/{pid}/exe")
         proof["passed"] = True
+    except BaseException as error:
+        proof["error"] = str(error)
+        raise
     finally:
         if retained:
             retained.stream.close()
+        # Only PUBLIC certificates, never keys, are retained for failure diagnosis.
+        for name, source in [("issuer", directory / "issuer.pem"), *(
+            (host + "-" + kind, Path(f"/var/lib/acme/{host}/{kind}.pem"))
+            for host in ("voice.test", "web.test", "witness.test")
+            for kind in ("cert", "fullchain"))]:
+            if source.exists():
+                (directory / ("public-" + name + ".pem")).write_bytes(source.read_bytes())
         (directory / "proof.json").write_text(json.dumps(proof, indent=2) + "\n")
     print(json.dumps(proof, indent=2))
 

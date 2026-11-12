@@ -133,5 +133,7 @@ pkgs.testers.runNixOSTest {
         acme.copy_from_machine("/tmp/pebble-journal.txt")
         if server.succeed("test -f /run/http01-test/proof.json && echo yes || true").strip() == "yes":
             server.copy_from_machine("/run/http01-test/proof.json")
+        for public in server.succeed("find /run/http01-test -maxdepth 1 -name 'public-*.pem'").splitlines():
+            server.copy_from_machine(public)
   '';
 }
