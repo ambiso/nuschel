@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! One explicit browser voice destination, independent of text navigation.
 //! This module has no device, codec, network or secret-key access.
+use nuschl_core::bitrate::{BitrateLimit, VoiceBitrate, voice_frame_fits};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -13,7 +14,13 @@ pub struct VoiceView {
     pub muted: bool,
     pub deafened: bool,
     pub can_transmit: bool,
+    /// The effective encoder target (bits per second); zero: no capture.
     pub bitrate: u32,
+    /// What the user asked for, the server's advertised budget, and why
+    /// `bitrate` is lower, if it is (nuschl_core::bitrate).
+    pub requested_bitrate: u32,
+    pub server_bandwidth: u32,
+    pub bitrate_limit: BitrateLimit,
 }
 
 #[derive(Deserialize)]
@@ -60,6 +67,8 @@ pub struct Route {
     capture_ready: bool,
     playback_ready: bool,
     last_sequence: Option<u64>,
+    /// The user's requested target; `None`: the default.
+    requested: Option<u32>,
 }
 
 impl Route {
@@ -70,8 +79,22 @@ impl Route {
         Some(view)
     }
 
+    /// The user's requested target, in the supported range.
+    pub fn requested(&self) -> u32 {
+        self.requested
+            .unwrap_or(nuschl_core::audio::DEFAULT_VOICE_BITRATE)
+    }
+
+    pub fn set_requested(&mut self, requested: u32) {
+        self.requested = Some(nuschl_core::bitrate::requested_voice_bitrate(requested));
+    }
+
     pub fn select(&mut self, server: String, generation: u64, channel: u32) {
         self.invalidate();
+        let target = VoiceBitrate::resolve(
+            self.requested(),
+            nuschl_core::audio::DEFAULT_SERVER_BANDWIDTH,
+        );
         self.view = Some(VoiceView {
             server_id: server,
             connection_generation: generation.to_string(),
@@ -81,9 +104,10 @@ impl Route {
             muted: true,
             deafened: true,
             can_transmit: false,
-            bitrate: nuschl_core::audio::voice_bitrate(
-                nuschl_core::audio::DEFAULT_SERVER_BANDWIDTH,
-            ),
+            bitrate: target.effective,
+            requested_bitrate: target.requested,
+            server_bandwidth: target.budget,
+            bitrate_limit: target.limit,
         });
     }
 
@@ -123,15 +147,26 @@ impl Route {
         }
     }
 
-    /// Revoke queued work/readiness when the destination changes its budget.
-    /// Playback and explicit capture consent are otherwise independent.
-    pub fn set_bitrate(&mut self, bitrate: u32) {
-        if self.view.as_ref().is_some_and(|v| v.bitrate != bitrate) {
+    /// Revoke queued work/readiness when the effective target changes (a
+    /// request or the destination's budget). Playback and explicit capture
+    /// consent are otherwise independent. A request the budget still caps
+    /// at the same rate changes only what is shown.
+    pub fn set_target(&mut self, target: VoiceBitrate) {
+        if self
+            .view
+            .as_ref()
+            .is_some_and(|v| v.bitrate != target.effective)
+        {
             self.invalidate();
             if let Some(view) = &mut self.view {
-                view.bitrate = bitrate;
+                view.bitrate = target.effective;
                 view.voice_generation = self.epoch.to_string();
             }
+        }
+        if let Some(view) = &mut self.view {
+            view.requested_bitrate = target.requested;
+            view.server_bandwidth = target.budget;
+            view.bitrate_limit = target.limit;
         }
     }
 
@@ -156,8 +191,7 @@ impl Route {
     pub fn admit(&mut self, packet: &Outgoing, len: usize) -> Result<u64, String> {
         if !self.matches(&packet.context)
             || !self.view().is_some_and(|v| v.can_transmit)
-            || len == 0
-            || len > self.view.as_ref().map_or(0, |v| (v.bitrate / 400) as usize)
+            || !voice_frame_fits(self.view.as_ref().map_or(0, |v| v.bitrate), len)
         {
             return Err("Voice packet is not authorized for the active route.".into());
         }
@@ -250,7 +284,7 @@ mod tests {
         let mut route = Route::default();
         route.select("one".into(), 1, 2);
         route.policy(true, false, false);
-        route.set_bitrate(128_000);
+        route.set_target(VoiceBitrate::resolve(128_000, 558_000));
         route
             .ready(Ready {
                 context: context(&route),
@@ -276,7 +310,7 @@ mod tests {
                 )
                 .is_err()
         );
-        route.set_bitrate(24_000);
+        route.set_target(VoiceBitrate::resolve(128_000, 48_000));
         assert!(route.admit(&old, 40).is_err());
         assert!(!route.view().unwrap().can_transmit);
         route
@@ -310,7 +344,7 @@ mod tests {
                 )
                 .is_ok()
         );
-        route.set_bitrate(0);
+        route.set_target(VoiceBitrate::resolve(128_000, 29_999));
         route
             .ready(Ready {
                 context: context(&route),
@@ -320,6 +354,92 @@ mod tests {
             .unwrap();
         assert!(!route.view().unwrap().can_transmit);
         assert!(route.receive("one", 1).is_some());
+    }
+
+    #[test]
+    fn requested_targets_revoke_only_when_the_effective_rate_changes() {
+        let ready = |route: &mut Route| {
+            route
+                .ready(Ready {
+                    context: context(route),
+                    capture: true,
+                    playback: true,
+                })
+                .unwrap()
+        };
+        let mut route = Route::default();
+        assert_eq!(route.requested(), 128_000);
+        route.set_requested(256_000);
+        route.select("one".into(), 1, 2);
+        route.policy(true, false, false);
+        // Until the server's budget is known: the conservative fallback.
+        let view = route.view().unwrap();
+        assert_eq!(
+            (view.requested_bitrate, view.bitrate, view.bitrate_limit),
+            (256_000, 48_000, BitrateLimit::ServerBudget)
+        );
+        route.set_target(VoiceBitrate::resolve(route.requested(), 558_000));
+        ready(&mut route);
+        let before = context(&route);
+        assert!(
+            route
+                .admit(
+                    &Outgoing {
+                        context: context(&route),
+                        sequence: "0".into(),
+                        end: false
+                    },
+                    640
+                )
+                .is_ok()
+        );
+        // A lower request changes the encoder: earlier work is revoked and
+        // a frame over the new allowance is refused, never replayed.
+        route.set_requested(64_000);
+        route.set_target(VoiceBitrate::resolve(route.requested(), 558_000));
+        assert!(!route.view().unwrap().can_transmit);
+        let stale = Outgoing {
+            context: before,
+            sequence: "2".into(),
+            end: false,
+        };
+        assert!(route.admit(&stale, 100).is_err());
+        ready(&mut route);
+        let fresh = |sequence: &str, route: &Route| Outgoing {
+            context: context(route),
+            sequence: sequence.into(),
+            end: false,
+        };
+        assert!(route.admit(&fresh("4", &route), 161).is_err());
+        assert!(route.admit(&fresh("6", &route), 160).is_ok());
+        // Against a 72k server the budget caps both 64k and 256k at 48k:
+        // the request is shown, but nothing is revoked.
+        route.set_target(VoiceBitrate::resolve(64_000, 72_000));
+        ready(&mut route);
+        let generation = route.view().unwrap().voice_generation;
+        route.set_requested(256_000);
+        route.set_target(VoiceBitrate::resolve(route.requested(), 72_000));
+        let view = route.view().unwrap();
+        assert_eq!(view.voice_generation, generation);
+        assert!(view.can_transmit);
+        assert_eq!(
+            (
+                view.requested_bitrate,
+                view.bitrate,
+                view.server_bandwidth,
+                view.bitrate_limit
+            ),
+            (256_000, 48_000, 72_000, BitrateLimit::ServerBudget)
+        );
+        // A budget too small for voice: listen, never send.
+        route.set_target(VoiceBitrate::resolve(256_000, 20_000));
+        ready(&mut route);
+        assert!(!route.view().unwrap().can_transmit);
+        assert!(route.receive("one", 1).is_some());
+        assert_eq!(
+            route.view().unwrap().bitrate_limit,
+            BitrateLimit::NoServerBudget
+        );
     }
 
     #[test]

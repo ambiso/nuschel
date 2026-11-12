@@ -641,6 +641,21 @@ impl WebClient {
     pub fn toggle_mute(&mut self, index: usize) -> Result<(), String> {
         self.toggle_audio(index, false)
     }
+
+    /// The user's requested voice bitrate (bits per second; the page keeps
+    /// it in local storage). Each server's budget can lower it; the voice
+    /// view reports requested, effective and why.
+    pub fn set_voice_bitrate(&mut self, requested: u32) -> Result<(), String> {
+        if !(nuschl_core::bitrate::MIN_REQUESTED_VOICE_BITRATE
+            ..=nuschl_core::bitrate::MAX_VOICE_BITRATE)
+            .contains(&requested)
+        {
+            return Err("Unsupported voice bitrate.".into());
+        }
+        self.shared.voice.borrow_mut().set_requested(requested);
+        self.reconcile_voice();
+        Ok(())
+    }
     pub fn toggle_deaf(&mut self, index: usize) -> Result<(), String> {
         self.toggle_audio(index, true)
     }
@@ -1048,14 +1063,15 @@ impl WebClient {
             .get(&server.id)
             .map(|c| c.session.borrow().voice_policy())
             .unwrap_or((true, true));
-        let bitrate = self
+        let requested = self.shared.voice.borrow().requested();
+        let target = self
             .shared
             .connections
             .borrow()
             .get(&server.id)
-            .map(|connection| connection.session.borrow().voice_bitrate())
-            .unwrap_or(0);
-        self.shared.voice.borrow_mut().set_bitrate(bitrate);
+            .map(|connection| connection.session.borrow().voice_target(requested))
+            .unwrap_or_else(|| nuschl_core::bitrate::VoiceBitrate::resolve(requested, 0));
+        self.shared.voice.borrow_mut().set_target(target);
         self.shared.voice.borrow_mut().policy(
             server.voice_channel() == Some(view.channel_id),
             muted || server.muted,
