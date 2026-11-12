@@ -22,6 +22,10 @@ use nuschl_core::{
 use nuschl_session::connection::Command;
 use std::{cell::Cell, ops::Range};
 
+// Shared buttons occupy 35 logical pixels; keep their full hit/focus box inside
+// every fixed-height virtual row, including the final row at fractional zoom.
+const ROW_HEIGHT: f32 = 36.;
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct LookupSelection {
     member: bool,
@@ -412,7 +416,7 @@ fn inspect_list(
         }),
     )
     .track_scroll(&scroll)
-    .h(px(34. * count.clamp(1, 5) as f32))
+    .h(px(ROW_HEIGHT * count.clamp(1, 5) as f32))
     .w_full();
     let focus_on_key = focus.clone();
     layout::focusable_with_handle(
@@ -1030,7 +1034,7 @@ fn row_button(
 ) -> AnyElement {
     div()
         .id(SharedString::from(format!("frame-{id}")))
-        .h(px(34.))
+        .h(px(ROW_HEIGHT))
         .w_full()
         .min_w_0()
         .overflow_hidden()
@@ -1200,7 +1204,7 @@ pub fn render(view: &ServerView, editor: &Editor, cx: &mut Context<Desktop>) -> 
         }),
     )
     .track_scroll(&scroll)
-    .h(px(34. * count.clamp(1, 6) as f32))
+    .h(px(ROW_HEIGHT * count.clamp(1, 6) as f32))
     .w_full();
     body = body
         .child(note(
@@ -1702,7 +1706,7 @@ fn groups(view: &ServerView, editor: &Editor, cx: &mut Context<Desktop>) -> AnyE
         }),
     )
     .track_scroll(&editor.group_scroll)
-    .h(px(34. * count.clamp(1, 5) as f32))
+    .h(px(ROW_HEIGHT * count.clamp(1, 5) as f32))
     .w_full();
     let mut body = div()
         .min_w_0()
@@ -1948,7 +1952,7 @@ fn member_list(
         }),
     )
     .track_scroll(&editor.member_scroll[kind])
-    .h(px(34. * count.clamp(1, 4) as f32))
+    .h(px(ROW_HEIGHT * count.clamp(1, 4) as f32))
     .w_full();
     let label = match kind {
         0 => "Local group members",
