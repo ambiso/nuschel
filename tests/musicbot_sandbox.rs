@@ -5,7 +5,24 @@ use std::{ffi::OsString, path::PathBuf};
 
 fn main() {
     let args: Vec<_> = std::env::args_os().collect();
-    assert_eq!(args.len(), 4, "probe PYTHON CANARY PORT");
+    assert_eq!(
+        args.len(),
+        4,
+        "probe PYTHON CANARY PORT | --worker EXEC ROLE"
+    );
+    if args[1] == "--worker" {
+        assert!(
+            ["decode", "encode", "duck"]
+                .iter()
+                .any(|role| args[3] == *role)
+        );
+        let arguments = [OsString::from("--codec-worker"), args[3].clone()];
+        let mut command =
+            nuschl_ipc::host::musicbot_codec_sandbox_command(&PathBuf::from(&args[2]), &arguments)
+                .expect("sandbox must be available");
+        let status = command.as_std_mut().status().expect("role launch");
+        std::process::exit(status.code().unwrap_or(1));
+    }
     let script = r#"
 import json,os,socket,sys
 canary,port=sys.argv[1:]
