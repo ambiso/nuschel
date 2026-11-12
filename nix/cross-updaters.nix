@@ -35,7 +35,7 @@ let
   before = ''mv "$out_dir/$crate_name_" "$out_dir/$crate_name"'';
   after = ''mv "$out_dir/$crate_name_.exe" "$out_dir/$crate_name.exe"'';
   windowsLib =
-    assert pkgs.lib.hasInfix before originalText;
+    assert builtins.length (pkgs.lib.splitString before originalText) == 2;
     pkgs.writeText "nuschl-cross-updater-lib.sh" (
       builtins.replaceStrings [ before ] [ after ] originalText
     );

@@ -1585,12 +1585,19 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
       dependency paths and changes final products; a Windows target-flag edit
       still changes its dependency path (`tests/build_cache.py`,
       `docs/build-cache.md`). This is cache-key proof, not a new cross runtime test.
-- [ ] Build official cross updater verifier outputs with separate algorithm
-      features, matching the native per-crate policy. `crossCommon` currently
-      enables both together: actual fixed-entry-point runtime tests pass, but do
-      not establish independent feature graphs. Resolve the test-only Windows
-      crate2nix executable-suffix/import-library/static-pthread adaptations before
-      relying on that route for official products; recheck actual final helpers.
+- [x] Build official cross updater engines with separate algorithm features.
+      Windows uses separate crate2nix roots with scoped executable-suffix/static
+      pthread handling and no fixture import shim; Darwin uses separate existing
+      zigbuild roots for both architectures. All six outputs built; PE imports,
+      Mach-O minimum OS/architecture and universal helper lipo passed. Exact new
+      Windows helpers passed the full native hybrid/LPAC adversarial fixture
+      (`tests/build_cache_cross.py`, `docs/build-cache.md`). No signer/fixture
+      feature enters distributed engines; complete notice scopes stay unchanged.
+- [ ] Rebuild and validate complete current-head Windows/macOS desktop archives
+      after separate verifier wiring: all nine programs, byte-identical copied
+      helpers, exact scoped notices, macOS lipo/signing and Windows GUI
+      apply/restart/profile continuity. Existing GUI proof used the former
+      both-feature helpers; helper-only runtime tests do not prove new archives.
 - [ ] Windows installer (Start menu entry, uninstall); today the zip is portable and
       updates itself where it was unpacked.
 - Deferred (user, 2026-11-11: **no Windows or macOS code signing for now**). The
