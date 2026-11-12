@@ -631,6 +631,20 @@ listed below. Plugin data remains the explicit gap.
       in Nuschl. Fix upstream in cpal or list them through the PulseAudio API.
 - [x] Audio settings: input/output device, transmission mode, VAD threshold with meter,
       PTT key, processing toggles and per-device override.
+- [ ] Shared Opus bitrate controls in desktop, TUI and web for legacy Mumble and
+      nuschl servers. Persist the requested target; show the effective encoder
+      target and why it is limited. Respect each destination's advertised bandwidth,
+      including packet/transport overhead, and recompute on server updates/reconnect.
+      Current gap: native caps the target at 48 kb/s (`client/src/native.rs`), while
+      browser Opus is fixed at 64 kb/s (`audio-wasm`); this is not configurable parity.
+      Test low/high budgets and runtime changes against private Murmur and nuschld.
+- [ ] Design an optional music preset alongside the voice default: proposed voice
+      48 kb/s mono at 48 kHz; music 128 kb/s stereo at 48 kHz, with 96/160/192 kb/s
+      choices subject to the same server budget. Music uses `Application::Audio`,
+      an explicitly selected continuous source and speech-processing/VAD bypass
+      only for that music track. Selecting it must not unmute, acquire microphone
+      consent or alter another track's privacy/processing policy. Verify stereo
+      send/playback and voice/music isolation on every client; no preset exists yet.
 - [x] Connection status: ping, UDP/TCP indicator, packet loss.
 - [x] Error/reject dialogs from section 4.
 - [x] AT-SPI accessibility coverage through GPUI AccessKit (`tests/accessibility.py`,
