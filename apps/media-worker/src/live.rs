@@ -1379,7 +1379,9 @@ fn record_output(
         let latency = timestamp
             .callback
             .saturating_duration_since(timestamp.capture);
-        stamper.anchor(clock.now_shifted(latency, Duration::ZERO));
+        // Filtered reference samples describe earlier capture instants;
+        // unlike playback delay, compensate toward the past.
+        stamper.anchor(clock.now_shifted(latency + converter.timestamp_delay(), Duration::ZERO));
         stamper.advance(converter.push(values, &mut ring));
     };
     let stream = by_format!(

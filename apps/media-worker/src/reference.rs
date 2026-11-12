@@ -15,6 +15,7 @@
 
 use crate::dsp::{FRAME, RATE};
 use rtrb::{Consumer, Producer, RingBuffer};
+use speexdsp_resampler::State;
 use std::time::{Duration, Instant};
 
 /// Stamps per stream (one per device callback) kept for the worker.
@@ -134,22 +135,96 @@ pub fn step(reference: Option<u64>, available: bool, mic: u64) -> Step {
 /// Device-rate audio to 48 kHz with one or two channels, interleaved: two
 /// keep stereo apart for the canceller (even device channels go left, odd
 /// right). Runs on the device thread: no locks, allocation or blocking.
+const REFERENCE_INPUT: usize = 128;
+const REFERENCE_OUTPUT: usize = 6 * REFERENCE_INPUT;
+
+struct FilteredReference {
+    state: State,
+    input: [[f32; REFERENCE_INPUT]; 2],
+    output: [[f32; REFERENCE_OUTPUT]; 2],
+}
+
+impl FilteredReference {
+    fn convert(&mut self, frames: usize, channels: usize, ring: &mut Producer<f32>) -> (u64, u64) {
+        let (mut cursor, mut generated, mut buffered) = (0, 0, 0);
+        while cursor < frames {
+            let left =
+                self.state
+                    .process_float(0, &self.input[0][cursor..frames], &mut self.output[0]);
+            let right = if channels == 2 {
+                self.state
+                    .process_float(1, &self.input[1][cursor..frames], &mut self.output[1])
+            } else {
+                left
+            };
+            let (Ok((read, written)), Ok(other)) = (left, right) else {
+                break;
+            };
+            if (read, written) != other || read + written == 0 {
+                break;
+            }
+            for i in 0..written {
+                buffered += write_reference([self.output[0][i], self.output[1][i]], channels, ring);
+            }
+            generated += written as u64;
+            cursor += read;
+        }
+        (generated, buffered)
+    }
+}
+
 pub struct ReferenceConverter {
     channels: usize,
     outputs: usize,
     rate: u32,
-    previous: [f32; 2],
-    accumulator: u64,
+    filtered: Option<Box<FilteredReference>>,
+    filter_delay: Duration,
+    accepted: u64,
+    generated: u64,
+}
+
+fn write_reference(frame: [f32; 2], channels: usize, ring: &mut Producer<f32>) -> u64 {
+    if ring.slots() < channels {
+        return 0;
+    }
+    for value in frame.into_iter().take(channels) {
+        let finite = if value.is_finite() {
+            value.clamp(-1., 1.)
+        } else {
+            0.
+        };
+        let _ = ring.push(finite);
+    }
+    1
 }
 
 impl ReferenceConverter {
     pub fn new(channels: usize, rate: u32) -> Self {
+        assert!((1..=32).contains(&channels) && (8_000..=384_000).contains(&rate));
+        let outputs = channels.clamp(1, 2);
+        let (filtered, filter_delay) = if rate == RATE {
+            (None, Duration::ZERO)
+        } else {
+            let state = State::new(outputs, rate as usize, RATE as usize, 3)
+                .expect("validated reference resampling configuration");
+            let delay = Duration::from_secs_f64(state.get_input_latency() as f64 / f64::from(rate));
+            (
+                Some(Box::new(FilteredReference {
+                    state,
+                    input: [[0.; REFERENCE_INPUT]; 2],
+                    output: [[0.; REFERENCE_OUTPUT]; 2],
+                })),
+                delay,
+            )
+        };
         Self {
             channels,
-            outputs: channels.clamp(1, 2),
+            outputs,
             rate,
-            previous: [0.; 2],
-            accumulator: 0,
+            filtered,
+            filter_delay,
+            accepted: 0,
+            generated: 0,
         }
     }
 
@@ -157,11 +232,20 @@ impl ReferenceConverter {
         self.outputs
     }
 
-    /// Convert interleaved device frames; returns the 48 kHz frames pushed.
+    /// The next converted output frame represents an EARLIER captured source
+    /// time. Includes exact fractional clock phase, not rounded callback chunks.
+    pub fn timestamp_delay(&self) -> Duration {
+        let source = u128::from(self.accepted) * 1_000_000_000 / u128::from(self.rate);
+        let output = u128::from(self.generated) * 1_000_000_000 / u128::from(RATE);
+        let nanos = (self.filter_delay.as_nanos() + source).saturating_sub(output);
+        Duration::from_nanos(nanos.min(u128::from(u64::MAX)) as u64)
+    }
+
+    /// Actual captured input only: flush its final partial stage this callback.
+    /// No speculative silence, waiting, callback allocation or clock rounding.
     pub fn push(&mut self, data: impl Iterator<Item = f32>, ring: &mut Producer<f32>) -> u64 {
         let mut frame = [0_f32; 32];
-        let mut filled = 0;
-        let mut pushed = 0;
+        let (mut filled, mut staged, mut pushed) = (0, 0, 0);
         for value in data {
             frame[filled] = if value.is_finite() { value } else { 0. };
             filled += 1;
@@ -169,36 +253,50 @@ impl ReferenceConverter {
                 continue;
             }
             filled = 0;
-            let mut current = [0_f32; 2];
-            if self.outputs == 1 {
-                current[0] = frame[..self.channels].iter().sum::<f32>() / self.channels as f32;
+            let current = if self.outputs == 1 {
+                [
+                    frame[..self.channels].iter().sum::<f32>() / self.channels as f32,
+                    0.,
+                ]
             } else {
                 let (mut left, mut right) = (0., 0.);
-                for (index, sample) in frame[..self.channels].iter().enumerate() {
-                    if index % 2 == 0 {
+                for (i, sample) in frame[..self.channels].iter().enumerate() {
+                    if i % 2 == 0 {
                         left += sample;
                     } else {
                         right += sample;
                     }
                 }
-                let pairs = self.channels.div_ceil(2) as f32;
-                current = [left / pairs, right / (self.channels / 2) as f32];
+                [
+                    left / self.channels.div_ceil(2) as f32,
+                    right / (self.channels / 2) as f32,
+                ]
             }
-            self.accumulator += u64::from(RATE);
-            while self.accumulator >= u64::from(self.rate) {
-                self.accumulator -= u64::from(self.rate);
-                let fraction = 1. - self.accumulator as f32 / RATE as f32;
-                if ring.slots() < self.outputs {
-                    // The worker stalled: drop the frame whole, never half of it.
-                    continue;
+            .map(|value| if value.is_finite() { value } else { 0. });
+            self.accepted += 1;
+            if let Some(filter) = &mut self.filtered {
+                filter.input[0][staged] = current[0];
+                filter.input[1][staged] = current[1];
+                staged += 1;
+                if staged == REFERENCE_INPUT {
+                    let (generated, buffered) = filter.convert(staged, self.outputs, ring);
+                    self.generated += generated;
+                    pushed += buffered;
+                    staged = 0;
                 }
-                for (previous, current) in self.previous.iter().zip(current).take(self.outputs) {
-                    let value = previous + (current - previous) * fraction;
-                    let _ = ring.push(value.clamp(-1., 1.));
-                }
-                pushed += 1;
+            } else {
+                self.generated += 1;
+                pushed += write_reference(current, self.outputs, ring);
             }
-            self.previous = current;
+        }
+        if staged > 0 {
+            let (generated, buffered) =
+                self.filtered
+                    .as_mut()
+                    .unwrap()
+                    .convert(staged, self.outputs, ring);
+            self.generated += generated;
+            pushed += buffered;
         }
         pushed
     }
@@ -271,6 +369,49 @@ mod tests {
             (last[0] - 0.3).abs() < 1e-6 && last[1].abs() < 1e-6,
             "{last:?}"
         );
+    }
+
+    #[test]
+    fn reference_filter_delay_maps_the_impulse_to_its_original_capture_instant() {
+        let base = 1_000_000_000_u64;
+        for rate in [
+            8_000, 11_025, 22_050, 44_100, 48_000, 96_000, 192_000, 384_000,
+        ] {
+            let source_frames = rate as usize / 10 + 1;
+            let mut input = vec![0_f32; source_frames * 2];
+            input[..2].copy_from_slice(&[0.25, -0.125]);
+            let (mut ring, mut output) = RingBuffer::new(12_000);
+            let (mut stamper, mut timeline) = stamped();
+            let mut converter = ReferenceConverter::new(2, rate);
+            let (mut cursor, mut index) = (0, 0);
+            let chunks = [1, 127, 37, 480, 256];
+            while cursor < source_frames {
+                let count = chunks[index % chunks.len()].min(source_frames - cursor);
+                let capture_time = base + (cursor as u64 * 1_000_000_000 / u64::from(rate));
+                // Capture-side compensation goes BACK, unlike playback delay.
+                stamper.anchor(capture_time - converter.timestamp_delay().as_nanos() as u64);
+                let produced = converter.push(
+                    input[cursor * 2..(cursor + count) * 2].iter().copied(),
+                    &mut ring,
+                );
+                stamper.advance(produced);
+                cursor += count;
+                index += 1;
+            }
+            let samples: Vec<_> = std::iter::from_fn(|| output.pop().ok()).collect();
+            let peak = samples
+                .chunks_exact(2)
+                .enumerate()
+                .max_by(|(_, a), (_, b)| a[0].abs().total_cmp(&b[0].abs()))
+                .unwrap()
+                .0;
+            assert!(samples[peak * 2].abs() > 0.01);
+            let represented = timeline.time_of(peak as u64).unwrap();
+            assert!(
+                represented.abs_diff(base) <= 1_000_000_000 / u64::from(RATE) + 2,
+                "{rate}: reference impulse represented at {represented}, actual capture {base}"
+            );
+        }
     }
 
     #[test]

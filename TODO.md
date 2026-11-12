@@ -613,11 +613,17 @@ The media worker uses per-speaker adaptive jitter buffers and Opus loss concealm
       0.09–2.32 dB, but an unchanged-graph ABBA comparison gave old/new/new/old
       12.88/19.20/32.39/37.20 dB. This exposes baseline variability rather than a
       consistent SRC regression. Keep the 15 dB gate and investigate monitor
-      conversion/timestamps; do not claim stable non-48 kHz AEC. The untouched
-      monitor-reference 44.1→48 SRC separately loses 3.65 dB at 15.435 kHz and
-      images at -14.41 dB versus reference -94.96 dB; exact frame counts/chunks
-      pass. Filtered reference reconstruction/timestamp proof is the next slice;
-      its connection to AEC variability is not established. Integrated distribution checks,
+      conversion/timestamps; do not claim stable non-48 kHz AEC. The old
+      monitor-reference 44.1→48 SRC separately lost 3.65 dB at 15.435 kHz and
+      imaged at -14.41 dB versus reference -94.96 dB. Its filtered follow-up now
+      passes full-stereo reference PCM at ≥134.5 dB, exact chunks/clocks and
+      impulse/timeline delay-sign tests; 58 native units pass. Same-graph ABBA
+      old/new/new/old removal is 0.0/45.26/44.12/4.44 dB; a fresh session's
+      original best-of-two-on check passes at 27 dB/9% sent. Preserve all earlier
+      failures and the unchanged 15 dB gate: this supports a bounded reference
+      fix, not general AEC reliability. Microphone CaptureConverter remains linear;
+      audit its non-48 kHz passband/aliasing and exact clocks separately without
+      changing startup/consent. Integrated distribution checks,
       browser sequence-clock jitter/PLC, actual browser stereo destination capture,
       matched complete reference-Mumble multispeaker/loss playback and physical
       listening remain open. See `docs/output-quality.md`; bitrate and synthetic
@@ -628,6 +634,13 @@ The media worker uses per-speaker adaptive jitter buffers and Opus loss concealm
       Add low-bitrate intensity-stereo and mono-fold fixtures with that exact
       stock setting, then identify the smallest safe control/API change. Current
       reference fixtures use libopus defaults; they do not close this setting gap.
+
+- [ ] Preserve legitimate per-speaker decoded headroom until the final mix.
+      Native Speaker::extend and Worklet enqueue currently clip each speaker to
+      ±1: opposing 1.5 and -1.25 become zero instead of 0.25. Add independent
+      two-stream cancellation/headroom fixtures, then defer clipping until the
+      final output with finite validation and bounded wide accumulation. This is
+      separate from the corrected gain-before-clipping case.
 
 
 ### Optional local speech (requested 2026-11-11)

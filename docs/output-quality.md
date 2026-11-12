@@ -321,9 +321,10 @@ loopback, seed and timing then measured:
 This establishes substantial pre-existing variation and does not establish a
 consistent SRC regression. All these runs explicitly reported the system-recorded
 monitor, never fallback. Only the fallback anchor receives playback filter delay;
-monitor timestamps remain untouched. Keep the stricter assertion. The untouched
-monitor `ReferenceConverter` still linearly converts 44.1→48 kHz; its signal fidelity
-and timestamp relationship remain candidates, not diagnosed causes. Its new exact
+monitor timestamps were untouched in that playback-only checkpoint. Keep the
+stricter assertion. At that checkpoint the monitor `ReferenceConverter` still
+linearly converted 44.1→48 kHz; its signal fidelity and timestamp relationship
+were candidates, not diagnosed causes. Its new exact
 frame-count/chunk test passes at 11,025/22,050/44,100/96,000 Hz; that rules out those
 specific counter/boundary hypotheses but does not certify reconstruction quality. Do not substitute passing output
 spectra or 48 kHz echo tests for stable non-48 AEC. Evidence is retained in
@@ -339,7 +340,7 @@ assertion remains unchanged.
 
 ## Recorded-reference reconstruction investigation
 
-The separate standalone `tests/resample_reference.rs` includes the actual
+The separate standalone `tests/resample_reference.rs` initially included the
 unchanged `ReferenceConverter`; `tests/reference_resample.py` compares its signal
 to test-only Speex quality 3 without devices. Counts remain exactly 48,000 frames
 per second and whole/irregular callbacks are bit-identical, but reconstruction is
@@ -347,10 +348,46 @@ poor: 44.1→48 kHz loses 3.65 dB at 15.435 kHz and produces a 19.335 kHz image 
 -14.41 dB, versus reference carrier near 0 dB/image -94.96 dB. The 22.05→48 kHz
 probe likewise loses 3.65 dB at 7.7175 kHz and images at -14.41 dB.
 This is a measured reference-signal defect, not proof that it causes the runtime
-AEC variation. Evidence: `monitor-reference-spectral/proof.json`. The separately
-allocated follow-up will preserve rates/channel mapping/callback bounds and prove
-capture-side filter timestamp compensation using an impulse/timeline fixture
-before actual echo tests. It will not alter microphone capture or Step/MAX_HOLD.
+AEC variation. Evidence: `monitor-reference-spectral/proof.json`.
+The follow-up now uses the same scalar Speex quality-3 primitive, with fixed
+planar buffers and exact rational source/output frame counts. It preserves
+channel mapping, callback bounds and the 48 kHz bypass. Both source partial
+batches and complete batches are processed within the current callback; no
+future silence is reserved. Microphone capture and Step/MAX_HOLD are unchanged.
+
+The recorded-reference anchor subtracts the reconstruction filter delay, plus
+its exact source/output clock phase: reconstructed samples represent an earlier
+physical time. This is opposite to the played fallback's playback-delay addition.
+An impulse through the actual converter and Timeline maps back to its physical
+capture time within one 48 kHz sample at 8/11.025/22.05/44.1/48/96/192/384 kHz.
+That sign test ran before actual echo tests. The standalone full-stereo fixed-gain
+reference gate passes at at least 134.5 dB; whole/irregular callbacks agree
+exactly. All 58 native units pass, including zero-allocation callback checks
+(three explicit diagnostic tests remain ignored).
+
+A new same-graph ABBA comparison at 44.1 kHz render/48 kHz capture measured old
+linear-reference/new-filtered/new-filtered/old-linear reductions of
+0.0/45.26/44.12/4.44 dB, with transmitted fractions 40.8/0/0/18.6%. The original
+15 dB and 25% assertions remain unchanged. A separate fresh private session
+passed the original best-of-two-on/one-off check at 27 dB and 9% transmitted,
+versus 100% without cancellation; this does not assert both on attempts passed.
+The original 48 kHz DSP suite also passes: echo removal 46 dB, double-talk level
+change 1.1 dB, clipping detection, sound isolation and half-volume 6 dB behavior.
+Evidence: `monitor-reference-filtered-gated/proof.json`,
+`paired-reference-filter-echo/proof.json`, `reference-filter-cold-echo/proof.json`
+and `reference-filter-dsp-regressions.log` under the owned output-quality cache.
+These scoped results support the reconstruction fix; they do not erase the
+prior failed trials or establish general AEC reliability across devices/load.
+
+## Remaining per-speaker headroom defect
+
+Both native `Speaker::extend` and Worklet enqueue still clip each gain-adjusted
+speaker before summing. Opposing samples 1.5 and -1.25 consequently become zero
+instead of 0.25. Stock Mumble sums gain-adjusted contributors before its final
+output clip. The separate follow-up will retain raw finite PCM plus bounded
+per-frame gain, multiply and accumulate in f64, and apply full-scale protection
+after all voice/effect contributors. Callback storage/work must remain bounded;
+nonfinite input is never accepted as audio.
 
 ## Remaining reference decoder setting
 
@@ -379,11 +416,10 @@ codec task; no unmeasured phase-control change is hidden in the SRC adapter.
 3. Replace linear playback conversion with a reviewed filtered Rust resampler,
    initialized outside the callback, with preallocated buffers and bounded work.
    Test 44.1/48/96 kHz, passband amplitude/phase, transition/alias rejection,
-   callback chunk boundaries, underruns and reference timing. No new dependency
-   has been selected. The Rust
+   callback chunk boundaries, underruns and reference timing. The selected Rust
    [speexdsp-resampler source](https://github.com/rust-av/speexdsp-rs/tree/7c67def48fc5af526c5350915a4a1531fc1a0cfe/resampler)
-   offers a scalar path and separately enabled SIMD features; audit the published
-   version and allocation behavior before adoption. Rubato is another option,
+   offers a scalar path and separately enabled SIMD features; the audited vendor
+   patch and its allocation/channel fixes are described above. Rubato is another option,
    but [its scalar 0.16.2 path also uses unsafe unchecked indexing](https://github.com/HEnquist/rubato/blob/v0.16.2/src/sinc_interpolator/mod.rs),
    so disabling SIMD alone does not make that implementation memory safe.
 4. Build a deterministic sequence-clock browser jitter/PLC path and independent
