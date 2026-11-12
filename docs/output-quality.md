@@ -108,6 +108,33 @@ Evidence: `native-final-gain/`, `web-stereo.json`, `web-overshoot-stereo.json`,
 Filtered non-48 kHz conversion, browser loss/PLC and matched full reference-Mumble
 playback remain open; the stereo checkpoint does not certify those paths.
 
+## Legal packet durations
+
+The pinned Mumble source explicitly supports packets up to 120 ms and rejects
+packets whose decoded duration is not a multiple of its 10 ms clock tick. Its
+single Opus *frames* may be shorter, but aggregating frames into one packet is a
+separate duration bound. Nuschl now accepts 10–120 ms packets on that tick and
+rejects sub-tick durations rather than silently miscounting them.
+
+A second audited bug was a native decoded queue described as 200 ms but sized
+`10 * FRAME`, actually 100 ms. A legal 120 ms packet lost its first 20 ms.
+The queue now has a true 200 ms bound. Jitter advances from the just-pulled
+packet's origin once decoding reveals its actual duration, correcting the
+previous duration guess rather than inserting phantom PLC for variable packets.
+A native unit explicitly covers changing 120/20 ms packets and terminators.
+The browser FIFO also needs room for the 20 ms startup hold plus a complete
+120 ms packet, so its storage cap is now 200 ms without increasing that hold.
+A Node regression checks the previous packet's complete tail at the next arrival.
+
+The independent libopus repacketizer builds legal stereo 120 ms packets at a
+64 kb/s target: 956 bytes each, within the existing wire limit. The actual native
+private monitor matches complete decoded reference PCM by 77.5 dB with 65.0 dB
+LR separation at unity gain. The actual compiled browser decoder also preserves
+all 5760 stereo frames per packet. Evidence: `native-long-duration/proof.json`
+and `web-120ms.json`. Native tests pass 53 with two pre-existing ignores; browser
+audio units pass 13. This does not close browser sequence-clock PLC or prove
+identical buffering latency to Mumble.
+
 ## Source audit
 
 The local clean Mumble checkout was pinned at

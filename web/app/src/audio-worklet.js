@@ -3,7 +3,9 @@
 export const AUDIO_RATE = 48000;
 export const AUDIO_FRAME = 960;
 export const MAX_SPEAKERS = 16;
-export const MAX_QUEUED_SAMPLES = 5760;
+// Frames per channel: 200 ms leaves room for a legal 120 ms packet plus
+// the 20 ms startup hold without discarding its tail at the next arrival.
+export const MAX_QUEUED_SAMPLES = 9600;
 
 // Shared with the real processor tests: finite, bounded FIFO per speaker. An
 // overflow discards the oldest queued samples, never accumulating stale audio.
@@ -23,7 +25,7 @@ export class PcmMixer {
     let state = this.speakers.get(speaker);
     if (!state) {
       if (this.speakers.size >= MAX_SPEAKERS) return false;
-      // Size/read/hold are FRAMES, storage is interleaved LR. Same 120 ms cap.
+      // Size/read/hold are FRAMES, storage is interleaved LR; 200 ms cap.
       state = {data:new Float32Array(MAX_QUEUED_SAMPLES * 2), read:0, size:0, idle:0, hold:AUDIO_FRAME};
       this.speakers.set(speaker,state);
     }

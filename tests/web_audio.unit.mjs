@@ -166,5 +166,16 @@ test("stereo worklet retains LR, mono sinks fold deliberately, and gain precedes
   attenuated.enqueue({epoch:"gain",speaker:1,samples:new Float32Array(128).fill(2),volume:.25});
   attenuated.render(new Float32Array(960));attenuated.render(mono);assert.ok(mono.every(v=>v===.5));
   assert.equal(attenuated.enqueue({epoch:"gain",speaker:1,samples:new Float32Array(3),channels:2,frames:2}),false);
-  assert.equal(attenuated.enqueue({epoch:"gain",speaker:1,samples:new Float32Array(11522),channels:2,frames:5761}),false);
+  assert.equal(attenuated.enqueue({epoch:"gain",speaker:1,samples:new Float32Array(2*(MAX_QUEUED_SAMPLES+1)),channels:2,frames:MAX_QUEUED_SAMPLES+1}),false);
+});
+
+
+test("legal 120 ms packets keep their complete tail across the initial hold",()=>{
+  const mixer=new PcmMixer();mixer.configure("long",true);
+  assert.ok(mixer.enqueue({epoch:"long",speaker:1,samples:new Float32Array(11520).fill(.25),channels:2,frames:5760}));
+  mixer.render(new Float32Array(960));
+  mixer.render(new Float32Array(4800));
+  assert.ok(mixer.enqueue({epoch:"long",speaker:1,samples:new Float32Array(11520).fill(.5),channels:2,frames:5760}));
+  const tail=new Float32Array(960);mixer.render(tail);assert.ok(tail.every(v=>v===.25));
+  const next=new Float32Array(5760);mixer.render(next);assert.ok(next.every(v=>v===.5));
 });

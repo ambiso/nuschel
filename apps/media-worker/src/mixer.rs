@@ -22,7 +22,7 @@ use std::{
 const MAX_SPEAKERS: usize = 128;
 const MAX_PER_STREAM: usize = 64;
 /// Decoded audio kept per speaker: 200 ms.
-const MAX_DECODED: usize = 10 * FRAME;
+const MAX_DECODED: usize = 20 * FRAME;
 /// Larger than any Opus packet a client sends (Mumble limits them too).
 const MAX_OPUS_BYTES: usize = 1024;
 
@@ -133,7 +133,14 @@ impl Mixer {
             end,
             volume,
         } = voice;
-        if opus.is_empty() || opus.len() > MAX_OPUS_BYTES || !volume.is_finite() {
+        let duration = opus_pure::packet::samples_48k(&opus).ok();
+        if opus.is_empty()
+            || opus.len() > MAX_OPUS_BYTES
+            || !volume.is_finite()
+            || duration.is_none_or(|frames| {
+                frames == 0 || frames > MAX_PACKET_SAMPLES || frames % FRAME != 0
+            })
+        {
             return Ok(());
         }
         let key = (stream, sender);

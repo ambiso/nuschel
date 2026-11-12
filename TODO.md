@@ -600,6 +600,10 @@ The media worker uses per-speaker adaptive jitter buffers and Opus loss concealm
       along with actual browser voice/privacy and existing native DSP regressions.
       Filtered non-48 kHz conversion, browser jitter/PLC, actual browser stereo
       destination capture and matched complete reference-Mumble output remain open.
+      Legal 120 ms Opus packets are separately covered: corrected native decoded
+      queue from an accidental 100 ms to its documented 200 ms, corrected jitter
+      tick advancement for variable durations, and retained browser packet tails
+      across its startup hold. Independent native/WASM 120 ms stereo PCM passes.
       These scoped results do not establish absolute perceptual equivalence.
 
 ### Optional local speech (requested 2026-11-11)

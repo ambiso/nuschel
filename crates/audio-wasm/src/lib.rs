@@ -92,7 +92,7 @@ impl VoiceDecoder {
             return Err("invalid Opus packet size".into());
         }
         let expected = packet::samples_48k(encoded).map_err(|error| error.to_string())?;
-        if expected == 0 || expected > MAX_PACKET_SAMPLES {
+        if expected == 0 || expected > MAX_PACKET_SAMPLES || expected % 480 != 0 {
             return Err("invalid Opus packet duration".into());
         }
         let mut output = vec![0.; MAX_DECODED_SAMPLES];

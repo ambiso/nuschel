@@ -126,6 +126,38 @@ class Reference:
         finally:
             self.lib.opus_encoder_destroy(encoder)
 
+    def aggregate(self, packets, count):
+        """Reference-libopus repacketizer: legal120ms packets at six20ms frames."""
+        ptr, integer = ctypes.c_void_p, ctypes.c_int
+        self.lib.opus_repacketizer_create.restype = ptr
+        self.lib.opus_repacketizer_destroy.argtypes = [ptr]
+        self.lib.opus_repacketizer_init.argtypes = [ptr]
+        self.lib.opus_repacketizer_init.restype = ptr
+        self.lib.opus_repacketizer_cat.argtypes = [ptr, ptr, integer]
+        self.lib.opus_repacketizer_cat.restype = integer
+        self.lib.opus_repacketizer_out.argtypes = [ptr, ptr, integer]
+        self.lib.opus_repacketizer_out.restype = integer
+        repacketizer = self.lib.opus_repacketizer_create()
+        if not repacketizer:
+            raise RuntimeError("reference repacketizer allocation failed")
+        try:
+            result = []
+            for at in range(0, len(packets) - count + 1, count):
+                self.lib.opus_repacketizer_init(repacketizer)
+                # libopus keeps references until out(); keep original bytes alive.
+                for packet in packets[at:at + count]:
+                    status = self.lib.opus_repacketizer_cat(repacketizer, packet, len(packet))
+                    if status:
+                        raise RuntimeError(f"reference repacketizer cat {status}")
+                output = ctypes.create_string_buffer(1275)
+                length = self.lib.opus_repacketizer_out(repacketizer, output, len(output))
+                if length <= 0:
+                    raise RuntimeError(f"reference repacketizer out {length}")
+                result.append(output.raw[:length])
+            return result
+        finally:
+            self.lib.opus_repacketizer_destroy(repacketizer)
+
     def decode(self, packets, channels):
         error = ctypes.c_int()
         decoder = self.lib.opus_decoder_create(RATE, channels, ctypes.byref(error))
@@ -174,7 +206,7 @@ class PrivatePulse:
             self.process.wait(timeout=5)
 
 
-def playback(binary, pulse, packets, path, volume=1.):
+def playback(binary, pulse, packets, path, volume=1., packet_frames=FRAME):
     """Actual worker receive→jitter→mix→device→private monitor, muted microphone."""
     worker = start(binary, pulse, muted=True, settings={"echo_cancellation": "off"})
     recorder = None
@@ -191,8 +223,8 @@ def playback(binary, pulse, packets, path, volume=1.):
                 time.sleep(.02)
             at = time.monotonic()
             for index, packet in enumerate(packets):
-                time.sleep(max(0, at + index * .02 - time.monotonic()))
-                worker.send({"kind": "playback", "sender": 7, "sequence": index * 2,
+                time.sleep(max(0, at + index * packet_frames / RATE - time.monotonic()))
+                worker.send({"kind": "playback", "sender": 7, "sequence": index * (packet_frames // 480),
                              "opus": list(packet), "end": index == len(packets) - 1, "volume": volume})
             time.sleep(.5)
     finally:
@@ -222,20 +254,23 @@ def main():
     with tempfile.TemporaryDirectory(prefix="private-pulse-", dir=args.output) as temporary:
         pulse = PrivatePulse(args.pulse_bin, Path(temporary), RATE)
         try:
-            for name, channels, volume, source in [
-                ("mono", 1, 1., fixture(1)), ("stereo", 2, 1., fixture(2)),
-                ("overshoot-attenuated", 2, .25, overshoot_fixture()),
+            for name, channels, volume, source, duration in [
+                ("mono", 1, 1., fixture(1), 20), ("stereo", 2, 1., fixture(2), 20),
+                ("overshoot-attenuated", 2, .25, overshoot_fixture(), 20),
+                ("stereo-120ms", 2, 1., fixture(2), 120),
             ]:
-                packets = reference.encode(source, channels)
+                packets = reference.encode(source, channels, bitrate=64000 if duration == 120 else 128000)
+                if duration == 120:
+                    packets = reference.aggregate(packets, 6)
                 decoded = reference.decode(packets, 2)
                 expected = [value * volume for value in decoded]
                 (args.output / f"fixture-{name}.json").write_text(json.dumps({
-                    "channels": channels, "rate": RATE, "frames_per_packet": FRAME,
+                    "channels": channels, "rate": RATE, "frames_per_packet": RATE * duration // 1000,
                     "packets": [list(packet) for packet in packets],
                     "reference_stereo": decoded,
                     "reference_mono": reference.decode(packets, 1),
                 }) + "\n")
-                actual = playback(args.worker, pulse, packets, args.output / f"{name}.f32le", volume)
+                actual = playback(args.worker, pulse, packets, args.output / f"{name}.f32le", volume, RATE * duration // 1000)
                 lag = delay_only(expected[::2], actual[::2])
                 length = len(expected) // 2
                 aligned = actual[2 * lag:2 * (lag + length)]
@@ -249,7 +284,7 @@ def main():
                                  20 * math.log10(max(right2003, 1e-20) / max(left2003, 1e-20)))
                 passed = metrics["fixed_gain_snr_db"] >= 35 and (channels == 1 or separation >= 25)
                 report["cases"].append({"name": name, "source_channels": channels, "requested_volume": volume,
-                    "reference_decoder_peak": max(map(abs, decoded)), "delay_samples": lag,
+                    "reference_decoder_peak": max(map(abs, decoded)), "packet_duration_ms": duration, "delay_samples": lag,
                     "max_packet_bytes": max(map(len, packets)), "fits_current_1024_byte_receiver": all(len(p) <= 1024 for p in packets),
                     "metrics": metrics, "stereo_separation_db": separation if channels == 2 else None,
                     "parity_gate_passed": passed})

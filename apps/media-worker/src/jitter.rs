@@ -42,6 +42,8 @@ struct Packet {
 pub struct JitterBuffer {
     packets: BTreeMap<u64, Packet>,
     next: Option<u64>,
+    /// Origin of the packet just pulled, until its decoded duration is known.
+    pulled: Option<u64>,
     playing: bool,
     concealed: u32,
     frames_per_packet: u64,
@@ -54,6 +56,7 @@ impl Default for JitterBuffer {
         Self {
             packets: BTreeMap::new(),
             next: None,
+            pulled: None,
             playing: false,
             concealed: 0,
             frames_per_packet: 2,
@@ -82,8 +85,13 @@ impl JitterBuffer {
 
     /// The decoder reports how many 10 ms frames a packet really carried.
     pub fn observe_frames(&mut self, frames: u64) {
-        if (1..=6).contains(&frames) {
+        if (1..=12).contains(&frames) {
             self.frames_per_packet = frames;
+            if let Some(origin) = self.pulled.take() {
+                // pull() had to predict the next tick before decoding. Correct
+                // from the packet origin, rather than inserting phantom PLC.
+                self.next = Some(origin + frames);
+            }
         }
     }
 
@@ -111,7 +119,7 @@ impl JitterBuffer {
             .next()
             .map(|(next, _)| next - sequence);
         if let Some(spacing) = before.into_iter().chain(after).min()
-            && (1..=6).contains(&spacing)
+            && (1..=12).contains(&spacing)
             && spacing < self.frames_per_packet
         {
             self.frames_per_packet = spacing;
@@ -140,6 +148,7 @@ impl JitterBuffer {
     /// The next action for the playout clock, which asks whenever this
     /// speaker's decoded audio runs low.
     pub fn pull(&mut self) -> Pull {
+        self.pulled = None;
         if !self.playing {
             let end_seen = self.packets.values().any(|packet| packet.end);
             if self.packets.is_empty() || (self.buffered_ms() < self.target_ms() && !end_seen) {
@@ -165,9 +174,11 @@ impl JitterBuffer {
         if let Some(packet) = self.packets.remove(&next) {
             self.concealed = 0;
             self.next = Some(next + self.frames_per_packet);
+            self.pulled = Some(next);
             if packet.end {
                 self.playing = false;
                 self.next = None;
+                self.pulled = None;
             }
             return Pull::Packet {
                 opus: packet.opus,
@@ -196,6 +207,26 @@ impl JitterBuffer {
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    #[test]
+    fn decoded_long_and_changing_durations_advance_from_the_packet_origin() {
+        let mut buffer = JitterBuffer::default();
+        let now = Instant::now();
+        buffer.push(0, vec![1], false, now);
+        buffer.push(12, vec![2], false, now);
+        buffer.push(14, vec![3], true, now);
+        assert!(matches!(buffer.pull(), Pull::Packet { opus, .. } if opus == [1]));
+        buffer.observe_frames(12);
+        assert!(matches!(buffer.pull(), Pull::Packet { opus, .. } if opus == [2]));
+        buffer.observe_frames(2);
+        assert!(matches!(buffer.pull(), Pull::Packet { opus, end:true } if opus == [3]));
+        buffer.observe_frames(12);
+        assert_eq!(
+            buffer.pull(),
+            Pull::Idle,
+            "terminator must not reopen next tick"
+        );
+    }
 
     #[test]
     fn sequence_numbers_near_the_end_of_their_range_are_ignored() {
