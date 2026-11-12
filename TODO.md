@@ -926,6 +926,15 @@ listed below. Plugin data remains the explicit gap.
       menus, including administrative entries at narrow windows and 200% zoom.
       Existing max-width constraints and the shorter ordering-menu proof do not
       establish that every action in a tall menu remains reachable.
+- [ ] Bind delayed desktop menu actions and administrative prompts to their
+      original server identity, connection generation and user presence instance.
+      Source review finds `Menu`/`Prompt` retain a server vector index and
+      kick/ban actions retain only a numeric session; submission resolves the
+      current server/session. Reconnect, server removal or session reuse can
+      therefore change the target while an old prompt is open. Verify the exact
+      stale-action cases with private servers, then reject obsolete actions
+      before dispatch. Channel actions need equivalent lifecycle review. This
+      is a source-level finding; the menu geometry proof does not establish it.
 - [ ] cpal's PipeWire host skips `Audio/Source/Virtual` nodes (e.g. filter-chain or
       EasyEffects outputs), so they can be used only as the system default, not picked
       in Nuschl. Fix upstream in cpal or list them through the PulseAudio API.
