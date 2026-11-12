@@ -56,6 +56,27 @@ fn answer(renderer: &ContentRenderer, request: ContentRequest) -> Result<Content
         ContentRequest::Avatar { image: encoded } => {
             image(nuschl_content::decode_image(&base64(&encoded)?, 96, 96))
         }
+        ContentRequest::Thumbnail {
+            image: encoded,
+            max_width,
+            max_height,
+        } => {
+            if max_width == 0
+                || max_height == 0
+                || max_width > nuschl_ipc::MAX_THUMBNAIL_EDGE
+                || max_height > nuschl_ipc::MAX_THUMBNAIL_EDGE
+            {
+                return Err("thumbnail dimensions exceed their budget".to_owned());
+            }
+            if encoded.len() > nuschl_ipc::MAX_THUMBNAIL_INPUT_BYTES.div_ceil(3) * 4 {
+                return Err("thumbnail input exceeds its budget".to_owned());
+            }
+            let bytes = base64(&encoded)?;
+            if bytes.len() > nuschl_ipc::MAX_THUMBNAIL_INPUT_BYTES {
+                return Err("thumbnail input exceeds its budget".to_owned());
+            }
+            image(nuschl_content::decode_image(&bytes, max_width, max_height))
+        }
         ContentRequest::Icon { image: encoded } => {
             image(nuschl_content::decode_icon(&base64(&encoded)?))
         }

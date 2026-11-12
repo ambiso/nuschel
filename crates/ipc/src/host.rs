@@ -189,6 +189,159 @@ pub async fn decode_avatar(executable: &Path, encoded: &[u8]) -> Result<MessageD
     rendered(one(executable, ContentRequest::Avatar { image }).await?)
 }
 
+/// Decode artwork through the existing content sandbox. This future must run
+/// to completion in an owned supervisor task: caller cancellation is not exit.
+/// On any error, process capacity remains occupied until actual kill/reaping.
+/// The only returned authority is validated RGBA, never worker source/URLs.
+pub async fn thumbnail(
+    executable: &Path,
+    encoded: &[u8],
+    max_width: u32,
+    max_height: u32,
+) -> Result<nuschl_core::ContentBlock, Error> {
+    use base64::Engine as _;
+    if encoded.len() > crate::MAX_THUMBNAIL_INPUT_BYTES
+        || max_width == 0
+        || max_height == 0
+        || max_width > crate::MAX_THUMBNAIL_EDGE
+        || max_height > crate::MAX_THUMBNAIL_EDGE
+    {
+        return Err(Error::InvalidResponse);
+    }
+    let request = ContentRequest::Thumbnail {
+        image: base64::engine::general_purpose::STANDARD.encode(encoded),
+        max_width,
+        max_height,
+    };
+    let mut frame = Vec::new();
+    write_frame(&mut frame, &Envelope::new(1, request))?;
+    let mut child = spawn(executable, &[5])?;
+    let _containment = match contain(&child) {
+        Ok(guard) => guard,
+        Err(error) => {
+            reap_thumbnail(&mut child).await;
+            return Err(error);
+        }
+    };
+    let reply = match (child.stdin.take(), child.stdout.take()) {
+        (Some(mut input), Some(mut output)) => {
+            let exchange = async {
+                let write = async move {
+                    input.write_all(&frame).await?;
+                    input.shutdown().await?;
+                    io::Result::Ok(())
+                };
+                let read = async {
+                    let reply = read_reply(&mut output).await?;
+                    if reply.request_id != 1 {
+                        return Err(Error::InvalidResponse);
+                    }
+                    Ok(reply.payload)
+                };
+                let (_, response) =
+                    tokio::try_join!(async { write.await.map_err(Error::from) }, read)?;
+                Ok::<_, Error>(response)
+            };
+            let result = timeout(Duration::from_secs(5), exchange)
+                .await
+                .map_err(|_| Error::Timeout)
+                .and_then(|result| result);
+            if result.is_ok() {
+                let finish = async {
+                    let mut extra = [0];
+                    if output.read(&mut extra).await? != 0 {
+                        return Err(Error::InvalidResponse);
+                    }
+                    if !child.wait().await?.success() {
+                        return Err(Error::InvalidResponse);
+                    }
+                    Ok(())
+                };
+                match timeout(Duration::from_secs(2), finish).await {
+                    Ok(Ok(())) => result,
+                    Ok(Err(error)) => Err(error),
+                    Err(_) => Err(Error::Timeout),
+                }
+            } else {
+                result
+            }
+        }
+        _ => Err(Error::InvalidResponse),
+    };
+    // A failed wait/kill must not release a caller's process credit. Never
+    // replace this owner; a supervising HTTP task can time out independently.
+    reap_thumbnail(&mut child).await;
+    validated_thumbnail(reply?, max_width, max_height)
+}
+
+async fn reap_thumbnail(child: &mut Child) {
+    loop {
+        if matches!(child.try_wait(), Ok(Some(_))) {
+            return;
+        }
+        // Unlike start_kill, kill().await waits for the actual process exit.
+        if child.kill().await.is_ok() {
+            return;
+        }
+        if child.wait().await.is_ok() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+fn validated_thumbnail(
+    response: ContentResponse,
+    max_width: u32,
+    max_height: u32,
+) -> Result<nuschl_core::ContentBlock, Error> {
+    use base64::Engine as _;
+    let ContentResponse::Rendered(mut document) = response else {
+        return Err(Error::InvalidResponse);
+    };
+    if document.blocks.len() != 1 {
+        return Err(Error::InvalidResponse);
+    }
+    let nuschl_core::ContentBlock::Image {
+        width,
+        height,
+        rgba,
+        source: _,
+    } = document.blocks.pop().unwrap()
+    else {
+        return Err(Error::InvalidResponse);
+    };
+    if width == 0
+        || height == 0
+        || width > max_width
+        || height > max_height
+        || width > crate::MAX_THUMBNAIL_EDGE
+        || height > crate::MAX_THUMBNAIL_EDGE
+    {
+        return Err(Error::InvalidResponse);
+    }
+    let count = (width as usize)
+        .checked_mul(height as usize)
+        .and_then(|n| n.checked_mul(4))
+        .filter(|n| *n <= crate::MAX_THUMBNAIL_RGBA_BYTES)
+        .ok_or(Error::InvalidResponse)?;
+    if rgba.len() != count.div_ceil(3) * 4 {
+        return Err(Error::InvalidResponse);
+    }
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(&rgba)
+        .map_err(|_| Error::InvalidResponse)?;
+    if bytes.len() != count {
+        return Err(Error::InvalidResponse);
+    }
+    Ok(nuschl_core::ContentBlock::Image {
+        width,
+        height,
+        rgba,
+        source: None,
+    })
+}
+
 /// Decode a server's website icon in the sandboxed content worker.
 pub async fn decode_icon(executable: &Path, encoded: &[u8]) -> Result<MessageDocument, Error> {
     use base64::Engine as _;
