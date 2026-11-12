@@ -8,7 +8,7 @@ records, not remote attestation or a proof of reproducible compilation.
 """
 import argparse
 import hashlib
-import importlib.util
+import types
 import json
 import os
 from pathlib import Path
@@ -16,6 +16,7 @@ import plistlib
 import re
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import tarfile
@@ -32,9 +33,10 @@ PRODUCTS = ('windows', 'macos-app', 'default', 'server', 'web-relay', 'web-site'
 
 
 def module(path):
-    spec = importlib.util.spec_from_file_location(path.stem.replace('-', '_'), path)
-    result = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(result)
+    # Loading immutable exported policy must not create __pycache__ in its tree.
+    result = types.ModuleType(path.stem.replace('-', '_'))
+    result.__file__ = str(path)
+    exec(compile(path.read_bytes(), str(path), 'exec'), result.__dict__)
     return result
 
 
@@ -49,10 +51,19 @@ def run(args, **kwargs):
 
 
 def sha(path):
-    h = hashlib.sha256()
-    with path.open('rb') as stream:
+    h, count = hashlib.sha256(), 0
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    with os.fdopen(descriptor, 'rb') as stream:
+        before = os.fstat(stream.fileno())
+        require(stat.S_ISREG(before.st_mode) and before.st_size <= 4 * 1024**3,
+                'hash input must be a bounded regular file')
         while block := stream.read(1024 * 1024):
+            count += len(block)
+            require(count <= before.st_size, 'file grew during hashing')
             h.update(block)
+        after = os.fstat(stream.fileno())
+        require(count == before.st_size and (before.st_size, before.st_mtime_ns, before.st_ctime_ns) ==
+                (after.st_size, after.st_mtime_ns, after.st_ctime_ns), 'file changed during hashing')
     return h.hexdigest()
 
 
@@ -79,19 +90,30 @@ def write(path, value):
 def tree(root, *, files=32768, size=4 * 1024**3):
     require(root.is_dir() and not root.is_symlink(), 'regular tree required')
     result, total, names = {}, 0, set()
-    for path in sorted(root.rglob('*')):
-        require(not path.is_symlink(), 'links are not distributable')
-        if path.is_dir():
-            continue
-        require(path.is_file(), 'special file in payload')
+    pending, paths, entries = [root], [], 0
+    while pending:
+        directory = pending.pop()
+        require(len(directory.relative_to(root).parts) <= 32, 'tree depth limit exceeded')
+        with os.scandir(directory) as children:
+            for child in children:
+                entries += 1
+                require(entries <= files * 4, 'aggregate directory/file entry limit exceeded')
+                require(not child.is_symlink(), 'links are not distributable')
+                if child.is_dir(follow_symlinks=False):
+                    pending.append(Path(child.path))
+                else:
+                    require(child.is_file(follow_symlinks=False), 'special file in payload')
+                    require(len(paths) < files, 'file count limit exceeded')
+                    paths.append(Path(child.path))
+    for path in sorted(paths):
         name = path.relative_to(root).as_posix()
         require(not any(x in ('', '.', '..') for x in name.split('/')) and
                 '\\' not in name and len(name) <= 512 and name.casefold() not in names,
                 'unsafe or case-aliased payload path')
         names.add(name.casefold())
         total += path.stat().st_size
-        require(len(result) < files and path.stat().st_size <= 512 * 1024**2 and total <= size,
-                'payload count/byte budget exceeded')
+        require(path.stat().st_size <= 512 * 1024**2 and total <= size,
+                'payload byte budget exceeded')
         result[name] = {'size': path.stat().st_size, 'sha256': sha(path),
                         'executable': bool(path.stat().st_mode & 0o111)}
     require(result, 'empty payload')
@@ -197,6 +219,74 @@ def check_installs(stage, source):
             'Mac bundle metadata differs from source policy')
 
 
+def select_product(flake, name):
+    selected = json.loads(run(['nix', 'eval', '--json', flake + '#packages.x86_64-linux.' + name,
+                              '--apply', 'p: {drv=p.drvPath; output=p.outPath;}']))
+    require(re.fullmatch(r'/nix/store/[0-9a-z]{32}-[^/]+\.drv', selected['drv']) and
+            re.fullmatch(r'/nix/store/[0-9a-z]{32}-[^/]+', selected['output']),
+            'Nix selection must name exact store derivation/output')
+    raw = json.loads(run(['nix', 'path-info', '--json', selected['output']]))
+    info = raw[0] if isinstance(raw, list) else raw[selected['output']]
+    require(Path(selected['output']).is_dir() and
+            re.fullmatch(r'sha256-[A-Za-z0-9+/]{43}=', info.get('narHash', '')),
+            'selected Nix output is not built/has no NAR receipt; use --build')
+    return {**selected, 'narHash': info['narHash'], 'source_kind': 'local-nix'}
+
+
+def archive_tree(path, expected, prefix=None, *, zipped=False):
+    found, total = {}, 0
+    with (zipfile.ZipFile(path) if zipped else tarfile.open(path, 'r:')) as archive:
+        members = archive.infolist() if zipped else archive
+        for item in members:
+            name = item.filename if zipped else item.name
+            size = item.file_size if zipped else item.size
+            require(not (item.is_dir() if zipped else not item.isfile()), 'regular-only archive required')
+            require(len(found) < 32768 and name not in found and size <= 512 * 1024**2,
+                    'duplicate/oversized archive member')
+            total += size
+            require(total <= 4 * 1024**3, 'aggregate archive size exceeded')
+            if prefix:
+                require(name.startswith(prefix + '/'), 'foreign archive root')
+                name = name[len(prefix) + 1:]
+            require(name in expected and name not in found, 'foreign/duplicate archive file')
+            mode = item.external_attr >> 16 if zipped else item.mode
+            if zipped:
+                require(not item.flag_bits & 1 and mode & 0o170000 == 0o100000,
+                        'encrypted or nonregular ZIP member')
+            stream = archive.open(item) if zipped else archive.extractfile(item)
+            digest, count = hashlib.sha256(), 0
+            with stream:
+                while block := stream.read(1024 * 1024):
+                    count += len(block)
+                    require(count <= size, 'archive expanded beyond declared length')
+                    digest.update(block)
+            require(count == size, 'truncated archive member')
+            found[name] = {'size': size, 'sha256': digest.hexdigest(), 'executable': bool(mode & 0o111)}
+    require(found == expected, 'archive differs from exact selected product')
+
+
+def check_products(stage, ledger, repository):
+    flake = 'git+file://' + str(repository.resolve()) + '?rev=' + ledger['commit']
+    expected = {name: select_product(flake, name) for name in PRODUCTS}
+    require(ledger['products'] == expected, 'selected-tag derivation/output/NAR evidence changed')
+    windows = Path(expected['windows']['output'])
+    mapped = tree(windows / 'bin')
+    mapped.update({'licenses/' + name: value for name, value in
+                   tree(windows / 'share/licenses/nuschl').items()})
+    require(tree(stage / 'install/windows') == mapped, 'staged Windows files differ from selected Nix product')
+    mac = tree(Path(expected['macos-app']['output']) / 'Nuschl.app')
+    require(tree(stage / 'install/Nuschl.app') == mac, 'staged Mac files differ from selected Nix product')
+    version = ledger['version']
+    archive_tree(stage / 'macos-install.tar', mac, 'Nuschl.app')
+    archive_tree(stage / f'dist/nuschl-{version}-macos-universal.zip', mac, 'Nuschl.app', zipped=True)
+    archive_tree(stage / f'dist/nuschl-{version}-windows-x86_64.zip', mapped, zipped=True)
+    archive_tree(stage / f'dist/nuschl-{version}-web-site.tar',
+                 tree(Path(expected['web-site']['output'])))
+    require(load(stage / f'dist/nuschl-{version}-linux-nix.json') == expected,
+            'Linux build references differ from actual selected outputs')
+    require(sha(stage / 'dist/flake.lock') == sha(stage / 'source/flake.lock'), 'foreign published lockfile')
+
+
 def prepare(args):
     repository = args.source_repo.resolve(strict=True)
     commit = revision(repository, args.tag)
@@ -210,17 +300,10 @@ def prepare(args):
     flake = 'git+file://' + str(repository) + '?rev=' + commit
     products = {}
     for name in PRODUCTS:
-        expression = f'{flake}#packages.x86_64-linux.{name}'
-        selected = json.loads(run(['nix', 'eval', '--json', expression, '--apply',
-                                  'p: {drv=p.drvPath; output=p.outPath;}']))
         if args.build:
             guarded_build(['nix', 'build', '--cores', '2', '--max-jobs', '2', '--no-link',
                            flake + '#' + name], stage / (name + '-build.log'))
-        raw = json.loads(run(['nix', 'path-info', '--json', selected['output']]))
-        info = raw[0] if isinstance(raw, list) else raw[selected['output']]
-        require(Path(selected['output']).is_dir() and info.get('narHash', '').startswith('sha256-'),
-                'selected Nix output is not built/has no NAR receipt; use --build')
-        products[name] = {**selected, 'narHash': info['narHash'], 'source_kind': 'local-nix'}
+        products[name] = select_product(flake, name)
     install = stage / 'install'
     install.mkdir()
     windows = install / 'windows'
@@ -254,11 +337,13 @@ def prepare(args):
     payloads = tree(dist)
     del payloads['update.json']
     ledger = {'format': 1, 'tag': args.tag, 'version': version, 'commit': commit,
-              'repository': args.repository, 'source_repository': str(repository), 'flake': flake,
+              'repository': args.repository, 'source_kind_detail': 'exact local Git revision; no CI claim',
               'publisher_tool_sha256': sha(Path(__file__)), 'products': products,
               'source_tree': tree(source), 'installations': tree(install), 'macos_archive_sha256': sha(stage / 'macos-install.tar'),
               'assets': payloads, 'source_kind': 'local-nix; not GitHub CI provenance'}
     write(stage / 'ledger.json', ledger)
+    write(stage / 'local.json', {'source_repository': str(repository), 'flake': flake})
+    shutil.copyfile(stage / 'ledger.json', dist / 'release-ledger.json')
     raw = load(dist / 'update.json')
     raw['notes'] = f'https://github.com/{args.repository}/releases/tag/{args.tag}\nledger-sha256={sha(stage / "ledger.json")}'
     (dist / 'update.json').write_text(json.dumps(raw, indent=1) + '\n')
@@ -268,14 +353,15 @@ def prepare(args):
 def validate(stage):
     ledger = load(stage / 'ledger.json')
     require(ledger['format'] == 1 and ledger['tag'] == 'v' + ledger['version'], 'invalid ledger')
-    repo = Path(ledger['source_repository'])
+    repo = Path(load(stage / 'local.json')['source_repository'])
     require(revision(repo, ledger['tag']) == ledger['commit'], 'immutable selected tag moved')
     require(tree(stage / 'source') == ledger['source_tree'], 'source bytes differ from prepared ledger')
     snapshot(repo, ledger['commit'], stage / 'source')
     require(tree(stage / 'install') == ledger['installations'], 'installation changed after preparation')
     require(sha(stage / 'macos-install.tar') == ledger['macos_archive_sha256'], 'Mac archive changed')
     actual = tree(stage / 'dist')
-    for name in ('update.json', 'update.json.sig', 'SHA256SUMS'):
+    require(sha(stage / 'dist/release-ledger.json') == sha(stage / 'ledger.json'), 'public ledger differs')
+    for name in ('update.json', 'update.json.sig', 'SHA256SUMS', 'release-ledger.json'):
         actual.pop(name, None)
     require(actual == ledger['assets'], 'release payload changed or assets added/removed')
     manifest = load(stage / 'dist/update.json')
@@ -292,6 +378,7 @@ def validate(stage):
             require(sha(stage / 'dist' / asset) == sha(path), 'updater asset differs from installation')
     require(manifest['platforms'] == expected, 'manifest file set/hash/URLs changed')
     check_installs(stage, stage / 'source')
+    check_products(stage, ledger, repo)
     return ledger
 
 
@@ -317,6 +404,64 @@ def verify_macos(args):
         write(out / 'report.json', report)
 
 
+def ci_evidence(stage, ledger, gh, run_id, output):
+    require(re.fullmatch(r'[1-9][0-9]*', run_id), 'invalid CI run ID')
+    repo, commit = ledger['repository'], ledger['commit']
+    record = json.loads(run([gh, 'api', f'repos/{repo}/actions/runs/{run_id}']))
+    require(record.get('head_sha') == commit and record.get('status') == 'completed' and
+            record.get('conclusion') == 'success' and record.get('event') in ('push', 'workflow_dispatch') and
+            record.get('head_repository', {}).get('full_name') == repo and
+            record.get('path') in ('.github/workflows/build.yml', '.github/workflows/release.yml'),
+            'CI run must be successful trusted same-repository/same-commit build')
+    jobs = json.loads(run([gh, 'api', f'repos/{repo}/actions/runs/{run_id}/jobs?per_page=100']))['jobs']
+    require(any(j.get('name', '').split(' / ')[-1] == 'macos-native-verify' and
+                j.get('conclusion') == 'success' and j.get('head_sha') == commit for j in jobs),
+            'successful native Mac job absent')
+    report_name = 'nuschl-macos-native-verification-' + commit
+    artifact_name = 'nuschl-macos-universal-' + commit
+    artifacts = json.loads(run([gh, 'api', f'repos/{repo}/actions/runs/{run_id}/artifacts?per_page=100']))['artifacts']
+    selected = {}
+    for name in (report_name, artifact_name):
+        matches = [a for a in artifacts if a.get('name') == name and not a.get('expired')]
+        require(len(matches) == 1, 'missing/ambiguous/expired same-run Mac artifact')
+        selected[name] = matches[0]['id']
+    for name, directory in ((report_name, 'report'), (artifact_name, 'artifact')):
+        run([gh, 'run', 'download', run_id, '--repo', repo, '--name', name,
+             '--dir', output / directory], timeout=1800)
+    original = load(output / 'report/report.json')
+    require(original.get('status') == 'native_apple_static_verified' and
+            original.get('artifact_name') == artifact_name and
+            original.get('source', {}).get('commit') == commit and
+            original.get('host', {}).get('platform') == 'darwin' and original.get('commands') and
+            original.get('artifact_binaries_executed') is False,
+            'downloaded native Mac proof failed or is foreign')
+    a = authority(stage / 'source')
+    app_info = a.prepare(output / 'artifact', 'macos-universal', output / 'extracted',
+        repository=repo, commit=commit, run_id=run_id, attempt=record['run_attempt'],
+        version=ledger['version'], policy=a.load(stage / 'source/release/notice-roots.json'))
+    require(original.get('source') == app_info and
+            original.get('archive_sha256') == sha(output / 'artifact/install.tar') and
+            tree(output / 'extracted/Nuschl.app') == tree(stage / 'install/Nuschl.app'),
+            'native-verified CI artifact bytes differ from local Mac product')
+    return {'status': 'native_apple_static_verified', 'artifact_binaries_executed': False,
+            'source': 'github-native-success', 'commit': commit, 'run_id': run_id,
+            'run_attempt': record['run_attempt'], 'artifact_ids': selected,
+            'ledger_sha256': sha(stage / 'ledger.json'),
+            'archive_sha256': ledger['macos_archive_sha256'], 'host': original['host'],
+            'commands': original['commands'], 'ci_report_sha256': sha(output / 'report/report.json')}
+
+
+def import_ci_macos(args):
+    stage = args.stage.resolve(strict=True)
+    ledger = validate(stage)
+    output = stage / 'macos-ci'
+    output.mkdir(exist_ok=False)
+    report = ci_evidence(stage, ledger, args.gh, args.run_id, output)
+    (stage / 'macos-native').mkdir(exist_ok=False)
+    write(stage / 'macos-native/report.json', report)
+    print('Same-commit successful native CI proof matches every local Mac file; no signing key accessed.')
+
+
 def mac_gate(stage, ledger):
     report = load(stage / 'macos-native/report.json')
     require(report.get('status') == 'native_apple_static_verified' and
@@ -325,7 +470,8 @@ def mac_gate(stage, ledger):
             report.get('ledger_sha256') == sha(stage / 'ledger.json') and
             report.get('archive_sha256') == ledger['macos_archive_sha256'],
             'exact-stage native Apple verification is missing/failed; Linux prepare-only cannot satisfy it')
-    require(report.get('source') == 'local-native-operator-controlled', 'unknown native evidence source')
+    require(report.get('source') in ('local-native-operator-controlled', 'github-native-success'),
+            'unknown native evidence source')
     require(report.get('host', {}).get('platform') == 'darwin' and report.get('commands'),
             'native tool evidence missing')
     return sha(stage / 'macos-native/report.json')
@@ -334,6 +480,11 @@ def mac_gate(stage, ledger):
 def verify_signature(stage, signer):
     run([signer, 'verify', '--public-file', stage / 'source/crates/update/update-trust.json',
          '--manifest', stage / 'dist/update.json', '--signature-file', stage / 'dist/update.json.sig'])
+
+
+def checksum_text(dist):
+    return ''.join(sha(path) + '  ' + path.name + '\n'
+                   for path in sorted(dist.iterdir()) if path.name != 'SHA256SUMS')
 
 
 def sign(args):
@@ -349,8 +500,7 @@ def sign(args):
     run([args.signer, 'sign', '--secret-file', args.sign_key, '--public-file', public,
          '--manifest', stage / 'dist/update.json', '--signature-file', stage / 'dist/update.json.sig'])
     verify_signature(stage, args.signer)
-    (stage / 'dist/SHA256SUMS').write_text(''.join(sha(path) + '  ' + path.name + '\n'
-        for path in sorted((stage / 'dist').iterdir()) if path.name != 'SHA256SUMS'))
+    (stage / 'dist/SHA256SUMS').write_text(checksum_text(stage / 'dist'))
     print('Local hybrid signature and both-component verification passed; nothing uploaded.')
 
 
@@ -361,8 +511,15 @@ def publish(args):
     require('native-macos-report-sha256=' + native in load(stage / 'dist/update.json')['notes'].splitlines(),
             'native report differs from signed binding')
     verify_signature(stage, args.signer)
+    native_report = load(stage / 'macos-native/report.json')
+    if native_report['source'] == 'github-native-success':
+        with tempfile.TemporaryDirectory(prefix='release-ci-recheck-') as tmp:
+            fresh = ci_evidence(stage, ledger, args.gh, native_report['run_id'], Path(tmp))
+            require(fresh == native_report, 'CI evidence changed since local signing')
     expected = {p.name: {'size': p.stat().st_size, 'digest': 'sha256:' + sha(p)}
                 for p in (stage / 'dist').iterdir()}
+    require((stage / 'dist/SHA256SUMS').read_text() == checksum_text(stage / 'dist'),
+            'manual download checksums differ from final signed payload')
     # No "latest" indirection, tag creation, replacement or clobber. A failed
     # upload remains a draft; retry is deliberately manual, never destructive.
     repo, tag = ledger['repository'], ledger['tag']
@@ -378,13 +535,21 @@ def publish(args):
     run([args.gh, 'release', 'create', tag, '--repo', repo, '--verify-tag', '--draft',
          '--title', 'Nuschl ' + ledger['version'], '--notes-file', notes,
          *sorted((stage / 'dist').iterdir())], timeout=1800)
-    remote = json.loads(run([args.gh, 'api', f'repos/{repo}/releases/tags/{tag}']))
+    drafts = json.loads(run([args.gh, 'api', '--paginate', '--slurp', f'repos/{repo}/releases?per_page=100']))
+    matches = [r for page in drafts for r in page if r['tag_name'] == tag]
+    require(len(matches) == 1 and matches[0]['draft'] is True, 'created draft missing/ambiguous')
+    remote = json.loads(run([args.gh, 'api', f'repos/{repo}/releases/{matches[0]["id"]}']))
     require(remote['draft'] is True and len(remote['assets']) == len(expected), 'draft assets incomplete')
-    require({a['name']: {'size': a['size'], 'digest': a.get('digest')} for a in remote['assets']} == expected,
+    require(all(a.get('state') == 'uploaded' for a in remote['assets']) and
+            {a['name']: {'size': a['size'], 'digest': a.get('digest')} for a in remote['assets']} == expected,
             'uploaded draft bytes differ; remains unpublished')
     # Last local check before making the complete draft public.
     validate(stage)
     verify_signature(stage, args.signer)
+    require(expected == {p.name: {'size': p.stat().st_size, 'digest': 'sha256:' + sha(p)}
+                         for p in (stage / 'dist').iterdir()}, 'local bytes changed during upload')
+    final_remote = json.loads(run([args.gh, 'api', f'repos/{repo}/releases/{remote["id"]}']))
+    require(final_remote == remote, 'remote draft changed during final validation')
     run([args.gh, 'release', 'edit', tag, '--repo', repo, '--draft=false'])
     print('Published the complete pre-signed release; no key was uploaded.')
 
@@ -398,17 +563,19 @@ def main():
     p.add_argument('--repository', required=True)
     p.add_argument('--output', type=Path, required=True)
     p.add_argument('--build', action='store_true', help='build missing exact-tag outputs; may be expensive')
-    for command in ('verify-macos', 'sign', 'publish'):
+    for command in ('verify-macos', 'import-ci-macos', 'sign', 'publish'):
         p = sub.add_parser(command)
         p.add_argument('stage', type=Path)
         if command in ('sign', 'publish'):
             p.add_argument('--signer', required=True)
         if command == 'sign':
             p.add_argument('--sign-key', type=Path, required=True)
-        if command == 'publish':
+        if command in ('publish', 'import-ci-macos'):
             p.add_argument('--gh', default='gh')
+        if command == 'import-ci-macos':
+            p.add_argument('--run-id', required=True)
     args = parser.parse_args()
-    {'prepare': prepare, 'verify-macos': verify_macos, 'sign': sign, 'publish': publish}[args.command](args)
+    {'prepare': prepare, 'verify-macos': verify_macos, 'import-ci-macos': import_ci_macos, 'sign': sign, 'publish': publish}[args.command](args)
 
 
 if __name__ == '__main__':

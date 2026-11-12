@@ -100,7 +100,10 @@ Ed25519/ML-DSA-44 workers must both succeed. Trust is embedded only. On 2026-11-
 `dbc40ac478b51573eaebebb0a40532bec7cf2a87282a98ae08f1a25ee5b42535`
 was enrolled; no adjacent writable key or minisign fallback is accepted. The
 [updater boundary and proof limits](apps/update-worker/README.md#confinement-and-actual-proof)
-include shared parent/OS/compiler/hash dependencies and the CI signing authority.
+include shared parent/OS/compiler/hash dependencies and the local signing authority.
+The long-lived hybrid private pair stays local; hosted CI has no signing secret
+or publication authority. [Local release tooling](docs/local-release.md) binds
+exact tagged products and native-Mac evidence before signing and draft-first publication.
 Hybrid verifier/LPAC, library-install and desktop update/restart proof exist on
 recorded fixture sources in a private Windows 11 VM, including exact owned profile
 and persisted update-state continuity. Current-head archive checks and macOS
