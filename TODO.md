@@ -611,6 +611,15 @@ Reported while testing (2026-11-10/11):
 
 Later (reported):
 
+- [ ] Investigate laggy Windows audio (user, 2026-11-12). Clarify whether this
+      means delayed incoming speech, delayed microphone transmission or choppy
+      playback, and bind the report to an exact build/device/output route.
+      Compare Nuschl and stock Mumble using owned private servers and synthetic
+      audio. Inspect WASAPI callback/buffer sizes, sample-rate conversion, bounded
+      capture/playback queues, underruns and drift rather than guessing at buffer
+      reductions. Preserve the VAD fix, microphone consent and mute/deafen epochs;
+      VM evidence must not be presented as physical-device proof. Record latency
+      and discontinuities before/after any correction.
 - [ ] Fix the server rail's encryption badge stacking (user, 2026-11-12):
       the E2EE lock/unlocked icon renders behind the server's surrounding circle.
       Draw it in front, consistently with the mute/deafen badges. Check both
