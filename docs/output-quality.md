@@ -337,6 +337,21 @@ possible timing/reconstruction interaction open. They do not justify claiming
 stable AEC. `paired-peek-src-echo/proof.json` records every trial and the 15 dB
 assertion remains unchanged.
 
+## Recorded-reference reconstruction investigation
+
+The separate standalone `tests/resample_reference.rs` includes the actual
+unchanged `ReferenceConverter`; `tests/reference_resample.py` compares its signal
+to test-only Speex quality 3 without devices. Counts remain exactly 48,000 frames
+per second and whole/irregular callbacks are bit-identical, but reconstruction is
+poor: 44.1→48 kHz loses 3.65 dB at 15.435 kHz and produces a 19.335 kHz image at
+-14.41 dB, versus reference carrier near 0 dB/image -94.96 dB. The 22.05→48 kHz
+probe likewise loses 3.65 dB at 7.7175 kHz and images at -14.41 dB.
+This is a measured reference-signal defect, not proof that it causes the runtime
+AEC variation. Evidence: `monitor-reference-spectral/proof.json`. The separately
+allocated follow-up will preserve rates/channel mapping/callback bounds and prove
+capture-side filter timestamp compensation using an impulse/timeline fixture
+before actual echo tests. It will not alter microphone capture or Step/MAX_HOLD.
+
 ## Remaining reference decoder setting
 
 Stock Mumble sets `OPUS_SET_PHASE_INVERSION_DISABLED(1)` after decoder creation.

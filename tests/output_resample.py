@@ -44,15 +44,15 @@ class Speex:
         self.lib.speex_resampler_get_output_latency.argtypes = [ptr]
         self.lib.speex_resampler_get_output_latency.restype = ctypes.c_int
 
-    def convert(self, pcm, rate):
-        if rate == RATE:
+    def convert(self, pcm, rate, input_rate=RATE):
+        if rate == input_rate:
             return list(pcm), 0  # Mumble bypasses SRC when rates match.
         error = ctypes.c_int()
-        state = self.lib.speex_resampler_init(2, RATE, rate, 3, ctypes.byref(error))
+        state = self.lib.speex_resampler_init(2, input_rate, rate, 3, ctypes.byref(error))
         assert state and error.value == 0, error.value
         try:
             source = (ctypes.c_float * len(pcm))(*pcm)
-            capacity = len(pcm) // 2 * rate // RATE + 4096
+            capacity = len(pcm) // 2 * rate // input_rate + 4096
             output = (ctypes.c_float * (capacity * 2))()
             frames, produced = ctypes.c_uint32(len(pcm) // 2), ctypes.c_uint32(capacity)
             result = self.lib.speex_resampler_process_interleaved_float(state, source, ctypes.byref(frames),

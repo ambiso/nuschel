@@ -613,7 +613,11 @@ The media worker uses per-speaker adaptive jitter buffers and Opus loss concealm
       0.09–2.32 dB, but an unchanged-graph ABBA comparison gave old/new/new/old
       12.88/19.20/32.39/37.20 dB. This exposes baseline variability rather than a
       consistent SRC regression. Keep the 15 dB gate and investigate monitor
-      conversion/timestamps; do not claim stable non-48 kHz AEC. Integrated distribution checks,
+      conversion/timestamps; do not claim stable non-48 kHz AEC. The untouched
+      monitor-reference 44.1→48 SRC separately loses 3.65 dB at 15.435 kHz and
+      images at -14.41 dB versus reference -94.96 dB; exact frame counts/chunks
+      pass. Filtered reference reconstruction/timestamp proof is the next slice;
+      its connection to AEC variability is not established. Integrated distribution checks,
       browser sequence-clock jitter/PLC, actual browser stereo destination capture,
       matched complete reference-Mumble multispeaker/loss playback and physical
       listening remain open. See `docs/output-quality.md`; bitrate and synthetic
