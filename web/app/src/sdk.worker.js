@@ -2,6 +2,7 @@
 // The SDK/session/storage owner. Complex parsing stays in the content Worker.
 import init, { WebClient } from "./sdk/nuschl_client_wasm.js";
 import { openHistory } from "./history.js";
+import { StatePublication, stateFrame } from "./state-publication.js";
 import { createContentPublication } from "./content-publication.js";
 import { restoreOrder } from "./server-order.js";
 let client;
@@ -12,6 +13,11 @@ let started = false;
 let orderQueue = Promise.resolve();
 let orderCommitActive = false;
 function fail(reason) { postMessage({ kind: "error", message: String(reason?.message || reason) }); }
+const states=new StatePublication({
+  collect:(id,updates)=>stateFrame(id,{servers:client.servers(),timeline:client.timeline(),voice:client.voice()},updates),
+  post:packet=>postMessage(packet),
+  fatal:message=>{try{postMessage({kind:"fatal",message:String(message).slice(0,4096)});}finally{close();}},
+});
 const publication=createContentPublication(refresh);
 const wake=publication.wake;
 let audioQueued = false;
@@ -34,11 +40,12 @@ function drainContentWork() {
   if(operations.length)postMessage({kind:"content_work",operations});
 }
 function refresh() {
-  if (!client) return;
-  const updates = JSON.parse(client.poll());
+  if (!client || states.closed) return;
+  const updates = client.poll();
   // Codec credit must not wait behind a large UI snapshot/layout task.
   drainContentWork();
-  postMessage({ kind: "state", servers: JSON.parse(client.servers()), timeline: JSON.parse(client.timeline()), voice: JSON.parse(client.voice()), updates });
+  states.changed(updates);
+  if(states.closed)return;
   drainVoice();
   for (const operation of JSON.parse(client.storage_requests())) {
     // Pages cannot overtake preceding writes. Rust retains opaque navigation
@@ -89,7 +96,12 @@ async function persistServerOrder(ids) {
 const methods = new Set(["add_server", "connect", "disconnect", "accept_certificate", "open", "browse_server", "open_direct", "send_text", "older", "join", "toggle_mute", "toggle_deaf", "audio_ready", "voice_packet", "remove_server", "dismiss_notice", "dismiss_welcome", "connect_with_password", "stop_audio", "edit_server", "set_server_order", "content_complete", "content_request", "image_begin", "image_send", "image_cancel"]);
 onmessage = async ({ data }) => {
   try {
+    if(states.closed)return;
     if (!data || typeof data !== "object") throw new Error("Invalid browser command.");
+    if(data.method === "state_applied") {
+      if(data.id!==undefined||!Array.isArray(data.args)||data.args.length!==1){states.fail("Invalid browser state acknowledgment.");return;}
+      states.ack(data.args[0]);return;
+    }
     if (data.method === "init") {
       if (started) throw new Error("The browser client is already initialized.");
       started = true;

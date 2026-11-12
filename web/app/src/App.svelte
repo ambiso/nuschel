@@ -142,7 +142,8 @@
     disposeAudio = () => audio.dispose();
     ownedWorker.onmessage = async ({ data }) => {
       if (worker !== ownedWorker || rpc.closed || !data || typeof data !== "object") return;
-      if (data.kind !== "ready" && data.kind !== "error" && rpc.phase !== "ready") return;
+      if (data.kind !== "ready" && data.kind !== "error" && data.kind !== "fatal" && rpc.phase !== "ready") return;
+      if(data.kind === "fatal"){rpc.close(String(data.message||"The browser client stopped. Reload to reconnect."));return;}
       if (contentBridge.handle(data)) return;
       if (data.kind === "voice_packet") {
         // Audio packets never replace reactive chat/server state.
@@ -156,11 +157,13 @@
         loaded = true; capabilities = data.capabilities || [];
         if (link.host && link.username && !link.error) await connect();
       } else if (data.kind === "state") {
+        if(!rpc.acceptState(data.publication))return;
+        try {
         const prior = timeline, priorKey = conversationKey(timeline, selected);
         rememberDraft();
         selectedFallback = selected?.id || null;
         try { servers = serverIndices(data.servers, capabilities.includes("server_order")); }
-        catch (reason) { audio.setLocalPolicy({muted:true,deafened:true}); audio.syncVoice(null); voice = null; loaded = false; setError("The server list could not be read safely. Reload to reconnect."); return; }
+        catch (reason) { audio.setLocalPolicy({muted:true,deafened:true}); audio.syncVoice(null); voice = null; loaded = false; rpc.close("The server list could not be read safely. Reload to reconnect."); return; }
         contentBridge.state(servers,data.updates);
         welcomes = welcomeDocuments(welcomes, servers, data.updates);
         if (orderDrag && !sameOrder(orderDrag.baseline, servers.map(server => server.id))) cancelOrder();
@@ -194,6 +197,8 @@
           delete messagesElement.dataset.previousHeight; delete messagesElement.dataset.previousTop;
         } else if (messagesElement && follow && !search) messagesElement.scrollTop = messagesElement.scrollHeight;
         updateUnread();
+        rpc.ackState(data.publication);
+        } catch { rpc.close("The browser state could not be applied safely. Reload to reconnect."); }
       }
     };
     ownedWorker.onerror = event => {

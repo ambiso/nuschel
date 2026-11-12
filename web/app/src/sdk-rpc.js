@@ -9,7 +9,7 @@ export class SdkUnavailableError extends Error {
 export class SdkRpc {
   constructor(worker,{onClose=()=>{},clock=globalThis}={}) {
     this.worker=worker;this.onClose=onClose;this.clock=clock;
-    this.pending=new Map();this.next=0;this.closed=false;this.phase="starting";this.initialized=false;
+    this.pending=new Map();this.next=0;this.closed=false;this.phase="starting";this.initialized=false;this.lastState=0;this.statePending=null;
     this.startupTimer=this.clock.setTimeout(()=>this.close("The browser client did not finish starting. Reload to try again."),SDK_STARTUP_TIMEOUT);
   }
   get size(){return this.pending.size;}
@@ -23,6 +23,16 @@ export class SdkRpc {
     if(this.closed||this.phase!=="starting"||!this.initialized)return false;
     this.clock.clearTimeout(this.startupTimer);this.startupTimer=null;this.phase="ready";
     return true;
+  }
+  acceptState(id) {
+    if(this.closed||this.phase!=="ready")return false;
+    if(!Number.isSafeInteger(id)||id!==this.lastState+1||this.statePending!==null){this.close("The browser worker sent an invalid state sequence. Reload to reconnect.");return false;}
+    this.lastState=id;this.statePending=id;return true;
+  }
+  ackState(id) {
+    if(this.closed||id!==this.statePending)return false;
+    try { this.worker.postMessage({method:"state_applied",args:[id]});this.statePending=null;return true; }
+    catch { this.close("The browser worker could not accept its state acknowledgment. Reload to reconnect.");return false; }
   }
   request(method,args=[]) {
     if(this.closed)return Promise.reject(new SdkUnavailableError());
