@@ -196,6 +196,17 @@ parent environment value is admitted by the service inspection fixture.
 IPC frames are capped at 64 KiB before allocation. Encoder/duck exchanges have a
 2-second deadline; a decode operation must produce its next reply within 35 seconds
 (excluding consumer backpressure). Network reads have the existing 30-second bound.
+Before its first PCM, a decode child reports work that yields no audio in exact
+steps: each MiB of an MP4 file it reads whole, and each 250 frames (5 seconds) it
+skips towards a seek position. The parent accepts only increasing whole steps of
+the stages the request allows, never more input than it actually sent, a bounded
+number of them, and audio only after the whole skip. Progress resets only the
+35-second wait: the first PCM must arrive within 300 seconds of starting the child,
+a seek may start at most three hours (540,000 frames) into a song, an MP4 file may
+be at most 512 MiB and other input before the first PCM at most 2 GiB. Exceeding a
+limit fails the song with an explicit message, never a truncated decode, and progress
+after the first PCM is a protocol violation. The skip happens after resampling, so a
+seek plays exactly the frames an unskipped decode would play from that position.
 Cancellation closes the consumer promptly but replacement awaits actual child exit
 and the outstanding network read. Kill/reap failure retains the old process slot;
 no replacement is created. A song has no artificial total-duration limit: retained

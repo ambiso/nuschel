@@ -5,10 +5,16 @@
 //! or a network connection.
 use nuschl_ipc::{
     Envelope,
-    musicbot::{self as codec, CHANNELS, FRAME, RATE, Request, Response, Role},
+    musicbot::{
+        self as codec, CHANNELS, DecodeLimits, FRAME, RATE, Request, Response, Role,
+        SKIP_PROGRESS_FRAMES, Stage,
+    },
 };
 use opus_pure::{Application, OpusEncoder, RateControl};
-use std::io::{self, Read, Write};
+use std::{
+    cell::RefCell,
+    io::{self, Read, Write},
+};
 
 /// Run one fixed role with inherited standard input/output only. Decoder
 /// lifetimes and pipe backpressure belong to the parent supervisor: retained
@@ -47,11 +53,14 @@ fn next(input: &mut impl Read, expected: u64) -> Result<Option<Request>, String>
     Ok(Some(request.payload))
 }
 
+/// Skipping to the seek position happens after resampling, so the first
+/// frame played is exactly the one an unskipped decode would play there.
+/// Work that produces no audio is reported in exact `Progress` steps.
 fn decode(mut input: impl Read + Send + 'static, output: &mut impl Write) -> Result<(), String> {
     let Some(Request::Decode {
         mime,
         extension,
-        mut skip_frames,
+        skip_frames,
     }) = next(&mut input, 1)?
     else {
         return Err("decode role requires one decode request".into());
@@ -63,34 +72,51 @@ fn decode(mut input: impl Read + Send + 'static, output: &mut impl Write) -> Res
     {
         return reply(output, 1, error("audio format hint exceeds its budget"));
     }
-    let mut failure = None;
+    if skip_frames > DecodeLimits::DEFAULT.seek_frames {
+        return reply(output, 1, error("the seek position exceeds its budget"));
+    }
+    // Both callbacks reply on the one output, never at the same time.
+    let output = RefCell::new(output);
+    let failure = RefCell::new(None);
+    let send = |response: Response| match reply(&mut **output.borrow_mut(), 1, response) {
+        Ok(()) => true,
+        Err(error) => {
+            *failure.borrow_mut() = Some(error);
+            false
+        }
+    };
+    let mut skipped = 0u64;
     let result = crate::decode::decode_stream(
         input,
         mime.as_deref(),
         extension.as_deref(),
+        &mut |units| {
+            send(Response::Progress {
+                stage: Stage::Input,
+                units,
+            })
+        },
         &mut |samples| {
             if !codec::valid_pcm(&samples) {
-                failure = Some("decoder produced invalid PCM".to_owned());
+                *failure.borrow_mut() = Some("decoder produced invalid PCM".to_owned());
                 return false;
             }
-            if skip_frames > 0 {
-                skip_frames -= 1;
-                return true;
+            if skipped < skip_frames {
+                skipped += 1;
+                return !skipped.is_multiple_of(SKIP_PROGRESS_FRAMES)
+                    || send(Response::Progress {
+                        stage: Stage::Skip,
+                        units: skipped,
+                    });
             }
-            match reply(output, 1, Response::Pcm { samples }) {
-                Ok(()) => true,
-                Err(error) => {
-                    failure = Some(error);
-                    false
-                }
-            }
+            send(Response::Pcm { samples })
         },
     );
-    if let Some(failure) = failure {
+    if let Some(failure) = failure.into_inner() {
         return Err(failure);
     }
     reply(
-        output,
+        output.into_inner(),
         1,
         match result {
             Ok(()) => Response::Done,
@@ -310,7 +336,12 @@ mod tests {
     }
 
     fn wav() -> Vec<u8> {
-        let pcm: Vec<u8> = (0..3)
+        wav_frames(3)
+    }
+
+    /// A 48 kHz stereo WAV file of `frames` 20 ms frames of a sine.
+    fn wav_frames(frames: usize) -> Vec<u8> {
+        let pcm: Vec<u8> = (0..frames)
             .flat_map(|_| audio())
             .flat_map(|sample| ((sample * f32::from(i16::MAX)) as i16).to_le_bytes())
             .collect();
@@ -380,6 +411,105 @@ mod tests {
             unreachable!()
         };
         assert_eq!(message.len(), codec::MAX_ERROR_BYTES);
+    }
+
+    fn decode_replies(skip_frames: u64, extension: &str, media: Vec<u8>) -> Vec<Response> {
+        let mut input = messages([(
+            1,
+            Request::Decode {
+                mime: None,
+                extension: Some(extension.into()),
+                skip_frames,
+            },
+        )])
+        .into_inner();
+        input.extend(media);
+        let mut output = Vec::new();
+        decode(Cursor::new(input), &mut output).unwrap();
+        responses(output)
+            .into_iter()
+            .map(|reply| {
+                assert_eq!(reply.request_id, 1);
+                reply.payload
+            })
+            .collect()
+    }
+
+    fn pcm(replies: &[Response]) -> Vec<&Vec<f32>> {
+        replies
+            .iter()
+            .filter_map(|reply| match reply {
+                Response::Pcm { samples } => Some(samples),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_seek_reports_whole_skip_steps_then_plays_exactly_the_unskipped_frames() {
+        let song = wav_frames(1000);
+        let whole = decode_replies(0, "wav", song.clone());
+        assert!(
+            !whole
+                .iter()
+                .any(|reply| matches!(reply, Response::Progress { .. }))
+        );
+        let sought = decode_replies(600, "wav", song);
+        let progress: Vec<_> = sought
+            .iter()
+            .filter_map(|reply| match reply {
+                Response::Progress { stage, units } => Some((*stage, *units)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(progress, [(Stage::Skip, 250), (Stage::Skip, 500)]);
+        // Every progress reply precedes the first PCM, and Done ends the stream.
+        let first_pcm = sought
+            .iter()
+            .position(|reply| matches!(reply, Response::Pcm { .. }))
+            .unwrap();
+        assert_eq!(first_pcm, 2);
+        assert!(matches!(sought.last(), Some(Response::Done)));
+        let (whole, sought) = (pcm(&whole), pcm(&sought));
+        assert_eq!(whole.len(), 1000);
+        assert_eq!(sought.len(), 400);
+        assert!(whole[600..].iter().zip(&sought).all(|(a, b)| {
+            a.iter()
+                .map(|x| x.to_bits())
+                .eq(b.iter().map(|x| x.to_bits()))
+        }));
+    }
+
+    #[test]
+    fn a_short_seek_reports_no_partial_step() {
+        let replies = decode_replies(249, "wav", wav_frames(300));
+        assert!(
+            !replies
+                .iter()
+                .any(|reply| matches!(reply, Response::Progress { .. }))
+        );
+        assert_eq!(pcm(&replies).len(), 51);
+    }
+
+    #[test]
+    fn an_mp4_file_read_whole_reports_each_mebibyte_before_its_error() {
+        let replies = decode_replies(0, "m4a", vec![0; 3 * 1024 * 1024 + 512 * 1024]);
+        assert_eq!(replies.len(), 4);
+        for (index, reply) in replies[..3].iter().enumerate() {
+            let Response::Progress { stage, units } = reply else {
+                panic!("expected input progress");
+            };
+            assert_eq!(*stage, Stage::Input);
+            assert_eq!(*units, (index as u64 + 1) * 1024 * 1024);
+        }
+        assert!(matches!(&replies[3], Response::Error { .. }));
+    }
+
+    #[test]
+    fn a_seek_beyond_its_budget_is_refused_without_decoding() {
+        let replies = decode_replies(DecodeLimits::DEFAULT.seek_frames + 1, "wav", wav_frames(3));
+        assert_eq!(replies.len(), 1);
+        assert!(matches!(&replies[0], Response::Error { .. }));
     }
 
     /// Leaves 32 bytes for Mumble framing within its 1 KiB voice packet limit.

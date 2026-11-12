@@ -86,7 +86,16 @@ pub fn start(
                     mime: stream.mime,
                     extension: stream.extension,
                 };
-                codec::decode(&worker, media, start.frames, &sender, flag.clone(), signal).await
+                codec::decode(
+                    &worker,
+                    media,
+                    start.frames,
+                    &sender,
+                    flag.clone(),
+                    signal,
+                    &codec::DecodeLimits::DEFAULT,
+                )
+                .await
             }
             Ok(Ok(_)) => Ok(()),
             Ok(Err(error)) => Err(error),

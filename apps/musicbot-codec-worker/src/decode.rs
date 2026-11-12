@@ -28,8 +28,9 @@ use symphonia::core::{
 };
 
 pub use nuschl_ipc::musicbot::{CHANNELS, FRAME, RATE};
+use nuschl_ipc::musicbot::{DecodeLimits, INPUT_PROGRESS_BYTES, needs_seeking};
 /// MP4 needs a seekable source, so it is downloaded first, up to this size.
-const MAX_DOWNLOAD_BYTES: u64 = 512 * 1024 * 1024;
+const MAX_DOWNLOAD_BYTES: u64 = DecodeLimits::DEFAULT.mp4_bytes;
 /// The longest Opus packet, 120 ms, per channel.
 const MAX_OPUS_FRAME: usize = 5760;
 /// Resource admission, not a limit on the length of a song.
@@ -49,10 +50,13 @@ const CANCELLED: &str = "decoding cancelled";
 /// Decode opaque bytes, preserving the original codec/resource admission rules.
 /// Cancellation closes/kills this role through the parent supervisor; this module
 /// never opens a source, selects an executable or receives credentials.
+/// `read` hears of every whole `INPUT_PROGRESS_BYTES` of an MP4 file read
+/// before decoding; it and `emit` stop decoding by returning false.
 pub fn decode_stream(
     input: impl Read + Send + 'static,
     mime: Option<&str>,
     extension: Option<&str>,
+    read: &mut dyn FnMut(u64) -> bool,
     emit: &mut dyn FnMut(Vec<f32>) -> bool,
 ) -> Result<(), String> {
     let cancelled = AtomicBool::new(false);
@@ -64,7 +68,7 @@ pub fn decode_stream(
         hint.mime_type(mime);
     }
     let source: Box<dyn MediaSource> = if needs_seeking(mime, extension) {
-        Box::new(Cursor::new(download(input, &cancelled)?))
+        Box::new(Cursor::new(download(input, &cancelled, read)?))
     } else {
         Box::new(ReadOnlySource::new(Unshared(Mutex::new(input))))
     };
@@ -80,21 +84,26 @@ fn check_cancelled(cancelled: &AtomicBool) -> Result<(), String> {
 }
 
 /// Read in bounded chunks so cancellation works before the first decoded frame.
-fn download(mut reader: impl Read, cancelled: &AtomicBool) -> Result<Vec<u8>, String> {
+fn download(
+    mut reader: impl Read,
+    cancelled: &AtomicBool,
+    read: &mut dyn FnMut(u64) -> bool,
+) -> Result<Vec<u8>, String> {
     let mut bytes = Vec::new();
     let mut buffer = [0; 32 * 1024];
+    let mut reported = 0u64;
     loop {
         check_cancelled(cancelled)?;
-        let read = match reader.read(&mut buffer) {
-            Ok(read) => read,
+        let count = match reader.read(&mut buffer) {
+            Ok(count) => count,
             Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
             Err(_) => return Err("the music library audio download failed".into()),
         };
         check_cancelled(cancelled)?;
-        if read == 0 {
+        if count == 0 {
             return Ok(bytes);
         }
-        let needed = bytes.len() + read;
+        let needed = bytes.len() + count;
         if needed as u64 > MAX_DOWNLOAD_BYTES {
             return Err("the file is larger than 512 MiB".into());
         }
@@ -106,23 +115,14 @@ fn download(mut reader: impl Read, cancelled: &AtomicBool) -> Result<Vec<u8>, St
                 .try_reserve_exact(capacity - bytes.len())
                 .map_err(|_| "not enough memory to download the audio".to_owned())?;
         }
-        bytes.extend_from_slice(&buffer[..read]);
+        bytes.extend_from_slice(&buffer[..count]);
+        while bytes.len() as u64 >= reported + INPUT_PROGRESS_BYTES {
+            reported += INPUT_PROGRESS_BYTES;
+            if !read(reported) {
+                return Err(CANCELLED.into());
+            }
+        }
     }
-}
-
-fn needs_seeking(mime: Option<&str>, suffix: Option<&str>) -> bool {
-    let mp4_mime = mime.is_some_and(|mime| {
-        matches!(
-            mime,
-            "audio/mp4" | "audio/x-m4a" | "audio/m4a" | "audio/aac" | "video/mp4"
-        )
-    });
-    let mp4_suffix = suffix.is_some_and(|suffix| {
-        ["m4a", "m4b", "mp4", "alac"]
-            .iter()
-            .any(|known| suffix.eq_ignore_ascii_case(known))
-    });
-    mp4_mime || mp4_suffix
 }
 
 #[cfg(test)]

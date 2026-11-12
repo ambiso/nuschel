@@ -5,7 +5,11 @@
 //! or paths cross it; the bot names the worker executable, never the worker.
 //!
 //! Decode receives one framed `Decode` request (id 1), followed by opaque raw
-//! media bytes until EOF. Every PCM/Done/Error reply carries that same id.
+//! media bytes until EOF. Every Progress/PCM/Done/Error reply carries that same
+//! id. Before its first PCM, the child reports work that produces no audio
+//! (reading an MP4 file whole, skipping to a seek position) in exact `Progress`
+//! steps; the parent checks them against what it actually sent and against
+//! fixed limits (`DecodeLimits`), and never lets progress extend the total time.
 //! Encode and Duck exchange one framed request/reply at a time, retaining
 //! codec state; request ids are checked by the parent. All roles use the
 //! existing IPC envelope/version and a stricter 64 KiB allocation bound.
@@ -18,7 +22,7 @@ use std::{
     process::Stdio,
     sync::{
         Arc,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Duration,
 };
@@ -26,6 +30,7 @@ use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     process::{Child, ChildStdin, ChildStdout},
     sync::{Notify, mpsc},
+    time::Instant,
 };
 
 pub const RATE: u32 = 48_000;
@@ -35,6 +40,10 @@ pub const MAX_MESSAGE_BYTES: usize = 64 * 1024;
 pub const MAX_OPUS_BYTES: usize = 992;
 pub const MAX_VOICE_BYTES: usize = 1024;
 pub const MAX_ERROR_BYTES: usize = 512;
+/// An MP4 file is read whole before decoding; one `Progress` per MiB read.
+pub const INPUT_PROGRESS_BYTES: u64 = 1024 * 1024;
+/// One `Progress` per 250 skipped 20 ms frames (five seconds of song).
+pub const SKIP_PROGRESS_FRAMES: u64 = 250;
 
 /// The speech probability a frame of incoming voice needs, from a ducking
 /// sensitivity in percent (the mapping of the client's voice activation).
@@ -91,9 +100,20 @@ pub enum Request {
     Clear,
 }
 
+/// Work before the first PCM that produces no audio.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Stage {
+    /// Bytes of an MP4 file read, in whole `INPUT_PROGRESS_BYTES`.
+    Input,
+    /// Frames skipped towards the seek position, in whole `SKIP_PROGRESS_FRAMES`.
+    Skip,
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Response {
+    Progress { stage: Stage, units: u64 },
     Pcm { samples: Vec<f32> },
     Packet { opus: Vec<u8> },
     Speech { active: bool },
@@ -159,6 +179,142 @@ pub fn valid_pcm(samples: &[f32]) -> bool {
     samples.len() == FRAME * CHANNELS && samples.iter().all(|sample| sample.is_finite())
 }
 
+/// MP4 needs a seekable source, so the decode role reads such a file whole
+/// first. The parent and the child decide this the same way.
+pub fn needs_seeking(mime: Option<&str>, extension: Option<&str>) -> bool {
+    let mp4_mime = mime.is_some_and(|mime| {
+        matches!(
+            mime,
+            "audio/mp4" | "audio/x-m4a" | "audio/m4a" | "audio/aac" | "video/mp4"
+        )
+    });
+    let mp4_extension = extension.is_some_and(|extension| {
+        ["m4a", "m4b", "mp4", "alac"]
+            .iter()
+            .any(|known| extension.eq_ignore_ascii_case(known))
+    });
+    mp4_mime || mp4_extension
+}
+
+/// What one decode may cost before its first PCM; `DecodeLimits::DEFAULT` in
+/// production. After the first PCM only `inactivity` applies: a song has no
+/// total-duration limit, and progress is then a protocol violation.
+#[derive(Clone, Copy, Debug)]
+pub struct DecodeLimits {
+    /// The longest wait for any reply (progress, PCM or the end).
+    pub inactivity: Duration,
+    /// From starting the child to its first PCM or its end; never extended.
+    pub before_audio: Duration,
+    /// The furthest start position, in 20 ms frames.
+    pub seek_frames: u64,
+    /// The largest MP4 file, which is read whole before its first PCM.
+    pub mp4_bytes: u64,
+    /// The most other input read before the first PCM (a seek reads the
+    /// skipped part of the song).
+    pub seek_input_bytes: u64,
+}
+
+impl DecodeLimits {
+    pub const DEFAULT: Self = Self {
+        // Above the library's 30-second bound on one network read.
+        inactivity: Duration::from_secs(35),
+        before_audio: Duration::from_secs(300),
+        // Three hours.
+        seek_frames: 540_000,
+        mp4_bytes: 512 * 1024 * 1024,
+        seek_input_bytes: 2 * 1024 * 1024 * 1024,
+    };
+}
+
+/// The parent's check of one decode child's replies before its first PCM:
+/// exact, increasing steps of the stages the request allows, an input claim
+/// never above what the parent sent, a bounded number of replies, and the
+/// whole skip reported before any audio.
+#[derive(Debug)]
+pub struct ProgressCheck {
+    mp4: bool,
+    skip_frames: u64,
+    input_limit: u64,
+    input: u64,
+    skipped: u64,
+    replies: u64,
+    audio: bool,
+}
+
+impl ProgressCheck {
+    pub fn new(mp4: bool, skip_frames: u64, input_limit: u64) -> Self {
+        Self {
+            mp4,
+            skip_frames,
+            input_limit,
+            input: 0,
+            skipped: 0,
+            replies: 0,
+            audio: false,
+        }
+    }
+
+    pub fn audio_started(&self) -> bool {
+        self.audio
+    }
+
+    /// One `Progress` reply; `delivered` is how many media bytes the parent has
+    /// handed to the child so far.
+    pub fn progress(&mut self, stage: Stage, units: u64, delivered: u64) -> Result<(), String> {
+        let invalid = || "music decoder reported invalid progress".to_owned();
+        if self.audio {
+            return Err(invalid());
+        }
+        let most = (self.input_limit / INPUT_PROGRESS_BYTES)
+            .checked_add(self.skip_frames / SKIP_PROGRESS_FRAMES)
+            .ok_or_else(invalid)?;
+        self.replies = self.replies.checked_add(1).ok_or_else(invalid)?;
+        if self.replies > most {
+            return Err(invalid());
+        }
+        match stage {
+            Stage::Input => {
+                let next = self
+                    .input
+                    .checked_add(INPUT_PROGRESS_BYTES)
+                    .ok_or_else(invalid)?;
+                if !self.mp4
+                    || self.skipped != 0
+                    || units != next
+                    || units > self.input_limit
+                    || units > delivered
+                {
+                    return Err(invalid());
+                }
+                self.input = units;
+            }
+            Stage::Skip => {
+                let next = self
+                    .skipped
+                    .checked_add(SKIP_PROGRESS_FRAMES)
+                    .ok_or_else(invalid)?;
+                if units != next || units > self.skip_frames {
+                    return Err(invalid());
+                }
+                self.skipped = units;
+            }
+        }
+        Ok(())
+    }
+
+    /// A PCM reply: only after every whole skip step was reported.
+    pub fn pcm(&mut self) -> Result<(), String> {
+        if !self.audio {
+            let whole = self.skip_frames / SKIP_PROGRESS_FRAMES * SKIP_PROGRESS_FRAMES;
+            if self.skipped != whole {
+                return Err("music decoder played before reaching the seek position".into());
+            }
+            self.audio = true;
+        }
+        Ok(())
+    }
+}
+
 /// The worker in a Nix-style installation: `<prefix>/bin/<bot>` finds
 /// `<prefix>/libexec/nuschl-musicbot/nuschl-musicbot-codec-worker`. Nothing
 /// from the environment, configuration or a child selects another program.
@@ -169,7 +325,6 @@ pub fn worker_path(bot: &Path) -> Option<PathBuf> {
 }
 
 pub const RESPONSE_TIMEOUT: Duration = Duration::from_secs(2);
-pub const DECODE_TIMEOUT: Duration = Duration::from_secs(35);
 
 /// The credential-bearing parent's end of one confined codec child: only
 /// bounded IPC and opaque transport.
@@ -437,9 +592,10 @@ pub struct Media<R> {
 }
 
 /// Feed `media` to a confined decode child and pass its validated frames to
-/// `sender`, skipping `skip_frames` first. Returns only after the child has
-/// actually exited and the pending blocking read of `media` has returned;
-/// cancellation (`cancelled` then `wake`) closes promptly but keeps both.
+/// `sender`, skipping `skip_frames` first, within `limits`. Over-limit requests
+/// and files fail explicitly; they are never cut short. Returns only after the
+/// child has actually exited and the pending blocking read of `media` has
+/// returned; cancellation (`cancelled` then `wake`) closes promptly but keeps both.
 pub async fn decode(
     executable: &Path,
     media: Media<impl Read + Send + 'static>,
@@ -447,7 +603,20 @@ pub async fn decode(
     sender: &mpsc::Sender<Frame>,
     cancelled: Arc<AtomicBool>,
     wake: Arc<Notify>,
+    limits: &DecodeLimits,
 ) -> Result<(), String> {
+    if skip_frames > limits.seek_frames {
+        return Err(format!(
+            "playback cannot start more than {} minutes into a song",
+            limits.seek_frames / 3000
+        ));
+    }
+    let mp4 = needs_seeking(media.mime.as_deref(), media.extension.as_deref());
+    let input_limit = if mp4 {
+        limits.mp4_bytes
+    } else {
+        limits.seek_input_bytes
+    };
     let mut process = spawn(executable, Role::Decode).await?;
     let mut input = process.input.take().ok_or("decoder input missing")?;
     let mut output = process.output.take().ok_or("decoder output missing")?;
@@ -460,9 +629,28 @@ pub async fn decode(
     let pump_flag = cancelled.clone();
     let reader = media.reader;
     let pumping = tokio::task::spawn_blocking(move || pump(reader, chunks, &pump_flag));
+    // Counted before each write: the child cannot have read more than this.
+    let delivered = Arc::new(AtomicU64::new(0));
+    let audio = Arc::new(AtomicBool::new(false));
+    let (sent, playing) = (delivered.clone(), audio.clone());
     let mut writing = tokio::spawn(async move {
         write_request(&mut input, 1, &request).await?;
         while let Some(bytes) = incoming.recv().await {
+            let total = sent
+                .load(Ordering::Relaxed)
+                .checked_add(bytes.len() as u64)
+                .ok_or("music input size overflowed")?;
+            if !playing.load(Ordering::Relaxed) && total > input_limit {
+                return Err(if mp4 {
+                    format!("the file is larger than {} MiB", input_limit >> 20)
+                } else {
+                    format!(
+                        "playback would read more than {} MiB before it starts",
+                        input_limit >> 20
+                    )
+                });
+            }
+            sent.store(total, Ordering::Relaxed);
             input
                 .write_all(&bytes)
                 .await
@@ -473,34 +661,92 @@ pub async fn decode(
             .await
             .map_err(|_| "decoder stream close failed".to_owned())
     });
+    // Replies arrive through a channel, so selecting on cancellation or the
+    // input's end never drops a partly read frame.
+    let (replies_sender, mut replies) = mpsc::channel(1);
+    let mut reading = tokio::spawn(async move {
+        loop {
+            let reply = read_response(&mut output, 1).await;
+            let last = !matches!(reply, Ok(Response::Progress { .. } | Response::Pcm { .. }));
+            if replies_sender.send(reply).await.is_err() || last {
+                break;
+            }
+        }
+    });
+    let mut written = false;
+    let mut check = ProgressCheck::new(mp4, skip_frames, input_limit);
+    let before_audio = Instant::now() + limits.before_audio;
+    // Only replies (and the consumer taking a frame) move this; nothing else does.
+    let mut quiet_until = Instant::now() + limits.inactivity;
     let result = loop {
         if cancelled.load(Ordering::Relaxed) {
             break Ok(());
         }
+        let until = if check.audio_started() {
+            quiet_until
+        } else {
+            quiet_until.min(before_audio)
+        };
         let response = tokio::select! {
             _ = wake.notified() => { if cancelled.load(Ordering::Relaxed) { break Ok(()); } else { continue; } }
             _ = sender.closed() => { break Ok(()); }
-            response = tokio::time::timeout(DECODE_TIMEOUT, read_response(&mut output, 1)) => response,
+            finished = &mut writing, if !written => {
+                written = true;
+                match finished {
+                    Ok(Ok(())) => continue,
+                    Ok(Err(error)) => break Err(error),
+                    Err(_) => break Err("music decoder input task failed".into()),
+                }
+            }
+            response = tokio::time::timeout_at(until, replies.recv()) => response,
         };
+        quiet_until = Instant::now() + limits.inactivity;
         match response {
-            Ok(Ok(Response::Pcm { samples })) if valid_pcm(&samples) => {
+            Ok(Some(Ok(Response::Progress { stage, units }))) => {
+                if let Err(error) = check.progress(stage, units, delivered.load(Ordering::Relaxed))
+                {
+                    break Err(error);
+                }
+            }
+            Ok(Some(Ok(Response::Pcm { samples }))) if valid_pcm(&samples) => {
+                if let Err(error) = check.pcm() {
+                    break Err(error);
+                }
+                audio.store(true, Ordering::Relaxed);
                 // Consumer backpressure does not count as a decoder stall.
                 tokio::select! {
                     _ = wake.notified() => { if cancelled.load(Ordering::Relaxed) { break Ok(()); } }
                     result = sender.send(Ok(samples)) => if result.is_err() { break Ok(()); },
                 }
+                quiet_until = Instant::now() + limits.inactivity;
             }
-            Ok(Ok(Response::Done)) => break Ok(()),
-            Ok(Ok(Response::Error { message })) => break Err(message),
-            Ok(Err(error)) => break Err(error),
-            Err(_) => break Err("music decoder did not produce audio within 35 seconds".into()),
+            Ok(Some(Ok(Response::Done))) => break Ok(()),
+            Ok(Some(Ok(Response::Error { message }))) => break Err(message),
+            Ok(Some(Err(error))) => break Err(error),
+            Ok(None) => break Err("music decoder output ended".into()),
+            Err(_) if !check.audio_started() && Instant::now() >= before_audio => {
+                break Err(format!(
+                    "music decoder did not start playing within {} seconds",
+                    limits.before_audio.as_secs()
+                ));
+            }
+            Err(_) => {
+                break Err(format!(
+                    "music decoder made no progress within {} seconds",
+                    limits.inactivity.as_secs()
+                ));
+            }
             _ => break Err("music decoder returned an invalid response".into()),
         }
     };
     // Closing the bounded chunk receiver releases a blocked producer; a read
     // already submitted to the library must still finish before this slot is reusable.
-    writing.abort();
-    let _ = (&mut writing).await;
+    if !written {
+        writing.abort();
+        let _ = (&mut writing).await;
+    }
+    reading.abort();
+    let _ = (&mut reading).await;
     loop {
         match process.retire().await {
             Ok(()) => break,
@@ -578,6 +824,113 @@ mod tests {
         .err()
         .unwrap();
         assert_eq!(error, "the music codec worker is not installed");
+    }
+
+    const MIB: u64 = INPUT_PROGRESS_BYTES;
+
+    #[test]
+    fn progress_must_be_exact_ordered_steps_within_what_was_sent() {
+        // MP4 read whole, then a seek of 600 frames.
+        let mut check = ProgressCheck::new(true, 600, 512 * MIB);
+        check.progress(Stage::Input, MIB, MIB).unwrap();
+        check.progress(Stage::Input, 2 * MIB, 3 * MIB).unwrap();
+        check.progress(Stage::Skip, 250, 3 * MIB).unwrap();
+        check.progress(Stage::Skip, 500, 3 * MIB).unwrap();
+        check.pcm().unwrap();
+        check.pcm().unwrap();
+        // No progress after the first PCM.
+        assert!(check.progress(Stage::Skip, 750, 3 * MIB).is_err());
+
+        let rejected = |mp4: bool, skip: u64, steps: &[(Stage, u64, u64)]| {
+            let mut check = ProgressCheck::new(mp4, skip, 512 * MIB);
+            let (last, before) = steps.split_last().unwrap();
+            for &(stage, units, delivered) in before {
+                check.progress(stage, units, delivered).unwrap();
+            }
+            check.progress(last.0, last.1, last.2).is_err()
+        };
+        // Input more than the parent sent, a skipped or repeated step, input
+        // that is not MP4, input after skipping began.
+        assert!(rejected(true, 0, &[(Stage::Input, MIB, MIB - 1)]));
+        assert!(rejected(true, 0, &[(Stage::Input, 2 * MIB, 2 * MIB)]));
+        assert!(rejected(
+            true,
+            0,
+            &[(Stage::Input, MIB, MIB), (Stage::Input, MIB, MIB)]
+        ));
+        assert!(rejected(false, 0, &[(Stage::Input, MIB, MIB)]));
+        assert!(rejected(
+            true,
+            500,
+            &[(Stage::Skip, 250, 0), (Stage::Input, MIB, MIB)]
+        ));
+        // A skip step beyond the request, not a whole step, or decreasing.
+        assert!(rejected(false, 249, &[(Stage::Skip, 250, 0)]));
+        assert!(rejected(false, 600, &[(Stage::Skip, 200, 0)]));
+        assert!(rejected(
+            false,
+            600,
+            &[(Stage::Skip, 250, 0), (Stage::Skip, 250, 0)]
+        ));
+        // MP4 input beyond the limit.
+        let mut check = ProgressCheck::new(true, 0, 2 * MIB);
+        check.progress(Stage::Input, MIB, 3 * MIB).unwrap();
+        check.progress(Stage::Input, 2 * MIB, 3 * MIB).unwrap();
+        assert!(check.progress(Stage::Input, 3 * MIB, 3 * MIB).is_err());
+    }
+
+    #[test]
+    fn audio_before_the_whole_skip_was_reported_is_refused() {
+        let mut check = ProgressCheck::new(false, 600, 2048 * MIB);
+        check.progress(Stage::Skip, 250, 0).unwrap();
+        assert!(check.pcm().is_err());
+        let mut check = ProgressCheck::new(false, 249, 2048 * MIB);
+        check.pcm().unwrap();
+        assert!(check.audio_started());
+    }
+
+    #[test]
+    fn progress_replies_are_bounded_by_the_request() {
+        let mut check = ProgressCheck::new(false, 500, 0);
+        check.progress(Stage::Skip, 250, 0).unwrap();
+        check.progress(Stage::Skip, 500, 0).unwrap();
+        assert!(check.progress(Stage::Skip, 750, 0).is_err());
+        // Absurd values are refused, never wrapped.
+        let mut check = ProgressCheck::new(true, u64::MAX, u64::MAX);
+        assert!(check.progress(Stage::Skip, u64::MAX, u64::MAX).is_err());
+    }
+
+    #[test]
+    fn mp4_is_recognised_alike_on_both_sides() {
+        assert!(needs_seeking(Some("audio/mp4"), None));
+        assert!(needs_seeking(None, Some("M4B")));
+        assert!(!needs_seeking(Some("audio/flac"), Some("flac")));
+        assert!(!needs_seeking(None, None));
+    }
+
+    #[tokio::test]
+    async fn a_seek_beyond_the_limit_fails_before_any_launch() {
+        let (sender, _frames) = mpsc::channel(1);
+        let media = Media {
+            reader: io::empty(),
+            mime: None,
+            extension: None,
+        };
+        let error = decode(
+            Path::new("/nonexistent/nuschl-musicbot-codec-worker"),
+            media,
+            DecodeLimits::DEFAULT.seek_frames + 1,
+            &sender,
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(Notify::new()),
+            &DecodeLimits::DEFAULT,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(
+            error,
+            "playback cannot start more than 180 minutes into a song"
+        );
     }
 
     #[tokio::test]
