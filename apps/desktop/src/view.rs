@@ -349,6 +349,10 @@ fn server_rail(this: &Desktop, selected: Option<usize>, cx: &mut Context<Desktop
                                 ),
                             }
                         })
+                        .when_some(
+                            crate::voice::rail_ring(this, server, radius),
+                            |tile, ring| tile.child(ring),
+                        )
                         .child(
                             div()
                                 .absolute()
@@ -361,10 +365,6 @@ fn server_rail(this: &Desktop, selected: Option<usize>, cx: &mut Context<Desktop
                                 .items_center()
                                 .justify_center()
                                 .child(security_icon(server.security, index, 12.)),
-                        )
-                        .when_some(
-                            crate::voice::rail_ring(this, server, radius),
-                            |tile, ring| tile.child(ring),
                         )
                         .when_some(
                             crate::voice::rail_badge(this, index, server),
