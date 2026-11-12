@@ -197,7 +197,9 @@ in
           "AF_INET"
           "AF_INET6"
         ];
-        RestrictNamespaces = true;
+        # The codec children create private user/mount/network/etc namespaces.
+        # They retain no service credentials, audio devices or host networking.
+        RestrictNamespaces = [ "user" "mnt" "pid" "net" "ipc" "uts" "cgroup" ];
         RestrictRealtime = true;
         RestrictSUIDSGID = true;
         LockPersonality = true;
@@ -213,6 +215,11 @@ in
         SystemCallFilter = [
           "@system-service"
           "~@privileged"
+          # Allow namespace construction only; bwrap then drops all capabilities.
+          "@mount"
+          "unshare"
+          "setns"
+          "capset"
         ];
       };
     };

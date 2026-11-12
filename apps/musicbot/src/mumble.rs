@@ -77,12 +77,26 @@ impl Connection {
 /// Keeps the connection up, reconnecting with growing pauses.
 pub async fn run(bot: Arc<Bot>, index: usize) {
     let mut pause = Duration::from_secs(1);
+    let mut detector = crate::codec_host::Client::new(crate::codec::Role::Duck);
     loop {
         let started = Instant::now();
-        let error = match session(&bot, index).await {
+        let error = match session(&bot, index, &mut detector).await {
             Ok(()) => "disconnected".to_owned(),
             Err(error) => error,
         };
+        if let Err(error) = detector.close().await {
+            bot.connections[index].update(&bot.changes, |status| {
+                *status = Status {
+                    error: Some(error),
+                    ..Status::default()
+                };
+            });
+            // A child whose exit is unconfirmed still owns this connection's
+            // process credit: never reconnect with a second detector owner.
+            loop {
+                sleep(Duration::from_secs(60)).await;
+            }
+        }
         let connection = &bot.connections[index];
         tracing::warn!(
             "{}: {error}; connecting again in {}s",
@@ -189,7 +203,19 @@ impl View {
     }
 }
 
-async fn session(bot: &Arc<Bot>, index: usize) -> Result<(), String> {
+/// Codec failures must not leave the session actor detached and reconnectable.
+struct AbortSession(tokio::task::AbortHandle);
+impl Drop for AbortSession {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+async fn session(
+    bot: &Arc<Bot>,
+    index: usize,
+    detector: &mut crate::codec_host::Client,
+) -> Result<(), String> {
     let config = &bot.config.channels[index];
     let connection = &bot.connections[index];
     let profile = Profile::open(Some(
@@ -228,11 +254,11 @@ async fn session(bot: &Arc<Bot>, index: usize) -> Result<(), String> {
     let (commands, receiver) = mpsc::channel(64);
     let (events_sender, mut events) = mpsc::channel(256);
     let mut running = tokio::spawn(connection::run(options, receiver, events_sender));
+    let _abort_on_exit = AbortSession(running.abort_handle());
     let mut attached = connection.player.subscribe();
     let mut view = View::default();
     let mut subscription: Option<Subscription> = None;
     let mut sequence = 0u64;
-    let mut detector = vad::Detector::default();
     loop {
         let wanted = (view.own.is_some()
             && view.listeners() > 0
@@ -273,17 +299,17 @@ async fn session(bot: &Arc<Bot>, index: usize) -> Result<(), String> {
                         .filter(|(_, ducking)| ducking.enabled);
                     match ducking {
                         Some((player, ducking)) => {
-                            if detector.hear(packet.sender, &packet.opus, vad::threshold(ducking.sensitivity)) {
+                            if detector.hear(packet.sender, packet.opus.clone(), vad::threshold(ducking.sensitivity)).await? {
                                 bot.players[player].heard_speech();
                             }
                         }
                         // Nothing to duck: nothing to decode.
-                        None => detector.clear(),
+                        None => detector.clear().await?,
                     }
                     continue;
                 }
                 if let SessionEvent::UserRemoved(session) = &event {
-                    detector.forget(*session);
+                    detector.forget(*session).await?;
                 }
                 let previous_bandwidth = view.max_bandwidth;
                 handle(bot, index, &commands, &mut view, event);

@@ -230,7 +230,10 @@ impl Config {
         let mut names = HashSet::new();
         for channel in &self.channels {
             if channel.tokens_file.is_some() && !channel.tokens.is_empty() {
-                return Err(format!("channel {}: set tokens or tokens_file, not both", channel.name));
+                return Err(format!(
+                    "channel {}: set tokens or tokens_file, not both",
+                    channel.name
+                ));
             }
             validate_tokens(&channel.tokens)?;
             let valid = !channel.name.is_empty()
@@ -272,11 +275,14 @@ impl Channel {
     pub fn access_tokens(&self) -> Result<Vec<String>, String> {
         use std::io::Read;
         const MAX_FILE: u64 = 128 * 1024;
-        let Some(path) = &self.tokens_file else { return Ok(self.tokens.clone()) };
+        let Some(path) = &self.tokens_file else {
+            return Ok(self.tokens.clone());
+        };
         let file = std::fs::File::open(path)
             .map_err(|_| format!("channel {}: could not read tokens_file", self.name))?;
         let mut bytes = Vec::new();
-        file.take(MAX_FILE + 1).read_to_end(&mut bytes)
+        file.take(MAX_FILE + 1)
+            .read_to_end(&mut bytes)
             .map_err(|_| format!("channel {}: could not read tokens_file", self.name))?;
         if bytes.len() as u64 > MAX_FILE {
             return Err("tokens_file exceeds 128 KiB".into());
@@ -335,13 +341,19 @@ mod tests {
     fn file_backed_acl_tokens_resolve_without_reading_during_validation() {
         let text = format!("{MINIMAL}\ntokens_file = \"acl\"\n");
         let mut config = parse(&text).unwrap();
-        assert_eq!(config.channels[0].tokens_file.as_deref(), Some(Path::new("/run/credentials/musicbot/acl")));
+        assert_eq!(
+            config.channels[0].tokens_file.as_deref(),
+            Some(Path::new("/run/credentials/musicbot/acl"))
+        );
         assert!(config.channels[0].access_tokens().is_err());
         let directory = tempfile::tempdir().unwrap();
         let file = directory.path().join("acl");
         std::fs::write(&file, br#"["first", "second"]"#).unwrap();
         config.channels[0].tokens_file = Some(file.clone());
-        assert_eq!(config.channels[0].access_tokens().unwrap(), ["first", "second"]);
+        assert_eq!(
+            config.channels[0].access_tokens().unwrap(),
+            ["first", "second"]
+        );
         std::fs::write(&file, br#"{"private":"must not enter an error"}"#).unwrap();
         let error = config.channels[0].access_tokens().unwrap_err();
         assert!(!error.contains("private"));

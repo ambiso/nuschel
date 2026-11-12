@@ -1,10 +1,13 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! A queue and its playback. Each player encodes once and sends the same Opus
 //! packets to every channel attached to it; with nobody attached it waits.
+#[cfg(test)]
+use crate::decode::RATE;
 use crate::{
-    decode::{self, CHANNELS, Decoding, FRAME, RATE},
+    decode::{self, CHANNELS, Decoding, FRAME},
     subsonic::{Library, LibraryIdentity, Track},
 };
+#[cfg(test)]
 use opus_pure::{Application, OpusEncoder, RateControl};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -19,6 +22,7 @@ use tokio::{
 
 const TICK: Duration = Duration::from_millis(20);
 /// Leave 32 bytes for Mumble framing within its 1 KiB voice packet limit.
+#[cfg(test)]
 const MUMBLE_OPUS_PACKET_BYTES: usize = 992;
 /// Mumble's per-packet overhead (IP, UDP, encryption, voice header), rounded
 /// up, at 50 packets per second.
@@ -584,15 +588,10 @@ impl Player {
 
     /// Plays the queue for as long as the program runs.
     pub async fn run(self: Arc<Self>, libraries: Arc<Vec<Library>>, configured_bitrate: u32) {
-        let mut encoder = match OpusEncoder::new(RATE as i32, CHANNELS, Application::Audio) {
-            Ok(encoder) => encoder,
-            Err(error) => {
-                tracing::error!("{}: no Opus encoder: {error}", self.name);
-                return;
-            }
-        };
-        encoder.rate_control = RateControl::ConstrainedVbr;
-        let mut output = [0u8; MUMBLE_OPUS_PACKET_BYTES];
+        let mut encoder = crate::codec_host::Client::new(crate::codec::Role::Encode);
+        // At most one raw frame survives an asynchronous encode. A pause or
+        // temporarily absent listener cannot consume it without advancing time.
+        let mut held: Option<Vec<f32>> = None;
         let mut decoding: Option<Decoding> = None;
         let mut talking = false;
         let mut underrun = 0;
@@ -615,10 +614,11 @@ impl Player {
                 }
             };
             if replace {
+                held = None;
                 if let Some(previous) = decoding.take() {
                     let finished = previous.frames.is_closed() && previous.frames.is_empty();
                     if talking && !finished {
-                        self.end(&mut encoder, &mut output);
+                        self.end(&mut encoder).await;
                         talking = false;
                     }
                     previous.cancel().await;
@@ -653,7 +653,7 @@ impl Player {
                 !paused && self.listeners() > 0 && self.bitrate(configured_bitrate) > 0
             }) else {
                 if talking {
-                    self.end(&mut encoder, &mut output);
+                    self.end(&mut encoder).await;
                     talking = false;
                 }
                 deadline = None;
@@ -677,58 +677,72 @@ impl Player {
                 was_ducked = ducked;
                 self.changes.notify();
             }
-            // Keep validation, broadcast and accounting under the same lock:
-            // skip/seek cannot archive this play and then emit stale audio.
-            let mut state = self.state();
             let bitrate = self.bitrate(configured_bitrate);
-            if state.paused
-                || self.listeners() == 0
-                || bitrate == 0
-                || !state.matches(running.entry, running.generation)
-            {
-                continue;
-            }
-            match running.frames.try_recv() {
-                Ok(Ok(mut frame)) => {
-                    let playing = state.current.as_mut().unwrap();
+            let receive = {
+                let state = self.state();
+                if state.paused
+                    || self.listeners() == 0
+                    || bitrate == 0
+                    || !state.matches(running.entry, running.generation)
+                {
+                    continue;
+                }
+                held.take()
+                    .map(|frame| Ok(Ok(frame)))
+                    .unwrap_or_else(|| running.frames.try_recv())
+            };
+            match receive {
+                Ok(Ok(frame)) => {
                     let target = target_gain(volume, &ducking, ducked);
                     let next = next_gain(gain, target);
-                    apply_gain(&mut frame, gain, next);
-                    gain = next;
-                    encoder.bitrate_bps = bitrate as i32;
-                    match encoder.encode(&frame, FRAME, &mut output) {
-                        Ok(length) => {
-                            talking |=
-                                self.broadcast_audio(playing, &output[..length], wall_clock_ms);
+                    let mut samples = frame.clone();
+                    apply_gain(&mut samples, gain, next);
+                    let encoded = encoder.encode(samples, bitrate).await;
+                    // Revalidate after IPC, before any broadcast/accounting.
+                    // Seek, skip, pause and destination changes remain immediate
+                    // while the unique encoder owns its one outstanding request.
+                    let mut state = self.state();
+                    if !state.matches(running.entry, running.generation) {
+                        continue;
+                    }
+                    if state.paused
+                        || self.listeners() == 0
+                        || self.bitrate(configured_bitrate) < bitrate
+                    {
+                        held = Some(frame);
+                        continue;
+                    }
+                    match encoded {
+                        Ok(opus) => {
+                            gain = next;
+                            let playing = state.current.as_mut().unwrap();
+                            talking |= self.broadcast_audio(playing, &opus, wall_clock_ms);
+                            if std::mem::take(&mut playing.buffering) {
+                                self.changes.notify();
+                            }
                         }
                         Err(error) => {
-                            playing.frames = playing.frames.saturating_add(1);
-                            tracing::warn!("{}: encoding failed: {error}", self.name);
+                            state.fail(running.entry, running.generation, error, wall_clock_ms);
+                            self.changes.notify();
                         }
                     }
                     underrun = 0;
-                    if std::mem::take(&mut playing.buffering) {
-                        self.changes.notify();
-                    }
                 }
                 Ok(Err(error)) => {
-                    let playing = state.current.as_ref().unwrap();
-                    tracing::warn!(
-                        "{}: cannot play {}: {error}",
-                        self.name,
-                        playing.entry.track.title
-                    );
-                    state.fail(running.entry, running.generation, error, wall_clock_ms);
-                    self.changes.notify();
+                    let mut state = self.state();
+                    if state.fail(running.entry, running.generation, error, wall_clock_ms) {
+                        self.changes.notify();
+                    }
                 }
                 Err(TryRecvError::Empty) => {
                     underrun += 1;
                     if underrun == UNDERRUN_END && talking {
-                        self.end(&mut encoder, &mut output);
+                        self.end(&mut encoder).await;
                         talking = false;
                     }
-                    // A short hiccup is not worth telling; a pause of 100 ms is.
-                    if underrun >= UNDERRUN_SHOWN
+                    let mut state = self.state();
+                    if state.matches(running.entry, running.generation)
+                        && underrun >= UNDERRUN_SHOWN
                         && let Some(playing) = state.current.as_mut()
                         && !std::mem::replace(&mut playing.buffering, true)
                     {
@@ -736,6 +750,7 @@ impl Player {
                     }
                 }
                 Err(TryRecvError::Disconnected) => {
+                    let mut state = self.state();
                     if state.finish(
                         running.entry,
                         running.generation,
@@ -752,13 +767,12 @@ impl Player {
 
     /// A frame of silence that closes the transmission, so clients stop
     /// showing the bot as talking.
-    fn end(&self, encoder: &mut OpusEncoder, output: &mut [u8]) {
-        let silence = [0.0; FRAME * CHANNELS];
-        if let Ok(length) = encoder.encode(&silence, FRAME, output) {
-            let _ = self.packets.send(Arc::new(Packet {
-                opus: output[..length].to_vec(),
-                end: true,
-            }));
+    async fn end(&self, encoder: &mut crate::codec_host::Client) {
+        if let Ok(opus) = encoder
+            .encode(vec![0.; FRAME * CHANNELS], MIN_BITRATE)
+            .await
+        {
+            let _ = self.packets.send(Arc::new(Packet { opus, end: true }));
         }
     }
 }

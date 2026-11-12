@@ -974,7 +974,11 @@ mod tests {
     #[tokio::test]
     async fn token_redirect_is_canonical_and_cannot_escape_the_origin() {
         for token in ["//evil.example", "/evil", "https://evil.example", "bad"] {
-            let response = slash(Path(token.into())).await.err().unwrap().into_response();
+            let response = slash(Path(token.into()))
+                .await
+                .err()
+                .unwrap()
+                .into_response();
             assert_eq!(response.status(), StatusCode::NOT_FOUND);
             assert!(!response.headers().contains_key(header::LOCATION));
         }

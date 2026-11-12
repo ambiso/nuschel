@@ -152,35 +152,54 @@ find is reported on the web page, with the full paths of channels of that name i
 there are any, and the bot stays in the root channel. When a connection drops, the
 bot reconnects with growing pauses up to a minute.
 
-## Security
+## Security and codec roles
 
-The bot decodes the songs in its own process (SECURITY.md lists it among the
-exceptions). The songs come from libraries the operator configured. For ducking it
-also decodes the voice packets of people in its channels, which are untrusted: with
-opus-pure (Rust) and RNNoise (`nnnoiseless`, Rust), packets bounded by the session
-(1 KiB), at most 64 talkers at a time. The process holds the bot's own client
-certificates, library credentials, access links, and queue/history metadata. The
-page sends `Referrer-Policy: no-referrer` and a strict content security policy and loads
-nothing from elsewhere. Pages are not cached; covers are cached privately by the
-browser, since their addresses contain the link.
+The parent owns Mumble TLS, Subsonic credentials, bearer links and queue metadata.
+It transports opaque library bytes; it does not call a decoder, resampler, voice
+classifier or encoder. Before configuration or credentials load, the same trusted
+executable can enter one fixed child role through versioned, size-capped IPC:
 
-Standalone state is owner-only as well: the configured directory is made `0700`
-and token/queue files, including temporary and existing files, are made `0600` on
-Unix. Ancestor directories are left unchanged.
+- Decode: one child for the current track of each active player. The parent streams
+  bounded opaque chunks; the child returns exactly 20 ms of finite stereo PCM per
+  reply. The retained parent queue is 250 frames (5 seconds, 1.92 MiB), plus two
+  32 KiB input chunks, one 64 KiB response and bounded pipe storage.
+- Encode: one lazy persistent child per player, one 20 ms request at a time.
+  It uses Opus Audio, constrained VBR, and at most 992 encoded bytes per reply.
+- Duck: one lazy persistent child per Mumble connection, one packet at a time,
+  at most 1 KiB per packet and 64 retained speaker states.
 
-Library metadata, artwork and transcode-decision calls have a 30-second total
-deadline. At most eight web library calls run or wait in the blocking pool;
-overload returns 503 immediately. A search walks larger library lists with that
-same concurrency bound. Song streams have no total-song deadline, but stalled
-reads fail after 30 seconds. Authenticated requests never follow redirects; use
-the service's canonical endpoint. Remote error diagnostics are not sent to viewers.
+These are process costs, not additional user audio streams. Children have no audio
+socket or device access. The Linux launcher clears the environment, exposes only
+read-only runtime files and private temporary storage, unshares networking and other
+namespaces, and limits address space to 1 GiB per child. It fails closed if required
+sandbox tools are unavailable. Windows launch is unsupported and fails closed;
+macOS uses the existing content Seatbelt policy but runtime validation is pending.
 
-Only one decoder worker per queue may remain active. A seek or skip cancels
-download/probe/demux work and waits for its actual exit before replacing it.
-Decoded input is admitted at 8–384 kHz and up to eight channels (Opus: mono/stereo).
-Real FFT plans are capped at 16,384 samples; each probe/packet operation may read
-at most 4 MiB. These bounds apply to streamed metadata as well as downloaded MP4,
-without imposing a duration cap on ordinary streaming songs.
+IPC frames are capped at 64 KiB before allocation. Encoder/duck exchanges have a
+2-second deadline; a decode operation must produce its next reply within 35 seconds
+(excluding consumer backpressure). Network reads have the existing 30-second bound.
+Cancellation closes the consumer promptly but replacement awaits actual child exit
+and the outstanding network read. Kill/reap failure retains the old process slot;
+no replacement is created. A song has no artificial total-duration limit: retained
+queues and each operation are bounded. An HTTP sender can stream indefinitely only
+while bounded decoding continues and the configured queue retains that track.
+
+MP4 downloads are confined to the child and capped at 512 MiB. Decoder input rates
+are 8–384 kHz with at most eight channels (Opus: one or two). Real FFT lengths are
+capped at 16,384 samples; each probe/packet operation may read at most 4 MiB.
+Replies are validated before use, and a seek/skip/pause/destination change is checked
+again after asynchronous encoding, before broadcasting or advancing playback.
+The NixOS service keeps its outer filesystem, device and privilege restrictions,
+allowing only the namespace/mount setup required for the restricted children.
+Actual confinement and service integration checks remain required for this source
+checkpoint; separate executables alone do not establish those guarantees.
+
+Use `tokens_file = "channel-tokens"` for private Mumble ACL tokens; its contents
+are a JSON array of token strings supplied through `credentials.channel-tokens`.
+The NixOS module rejects inline `channel.tokens`, which would otherwise enter the
+world-readable Nix store. Standalone inline tokens remain supported, so protect
+that configuration file like the other credentials. API keys/passwords retain
+existing credential-file handling. Never put secret values directly in Nix settings.
 
 ## Tests
 

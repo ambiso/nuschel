@@ -235,7 +235,8 @@
               install -Dm644 ${./crates/protocol/proto/LICENSE.mumble} "$out/share/licenses/nuschl/Mumble-BSD"
               mkdir -p "$out/share/licenses/nuschl"
               cp -R ${musicbotNotices.bundle}/share/licenses/nuschl/. "$out/share/licenses/nuschl/"
-              wrapProgram "$out/bin/nuschl-musicbot" --set-default NUSCHL_MUSICBOT_WEB ${musicbotWeb}
+              wrapProgram "$out/bin/nuschl-musicbot" --set-default NUSCHL_MUSICBOT_WEB ${musicbotWeb} \
+                ${lib.optionalString pkgs.stdenv.hostPlatform.isLinux "--prefix PATH : ${lib.makeBinPath [ pkgs.bubblewrap pkgs.util-linux ]}"}
             '';
         rtcNoticeScope = "rtc-probe-${pkgs.stdenv.hostPlatform.rust.rustcTarget}";
         rtcNotices = releaseNotices.forScope rtcNoticeScope;

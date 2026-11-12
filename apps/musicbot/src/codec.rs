@@ -61,7 +61,9 @@ pub enum Request {
         opus: Vec<u8>,
         threshold: f32,
     },
-    Forget { sender: u32 },
+    Forget {
+        sender: u32,
+    },
     Clear,
 }
 
@@ -116,7 +118,9 @@ pub fn write_message<T: Serialize>(
             self.0.extend_from_slice(bytes);
             Ok(bytes.len())
         }
-        fn flush(&mut self) -> io::Result<()> { Ok(()) }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
     }
     let mut bytes = Capped(Vec::new());
     serde_json::to_writer(&mut bytes, envelope).map_err(|_| "codec IPC serialization failed")?;

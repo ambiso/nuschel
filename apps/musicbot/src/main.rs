@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! A Mumble music bot: plays songs from Subsonic servers in one or more
 //! channels; people control the queues on a web page they get a link to.
-mod config;
 mod codec;
 mod codec_host;
 mod codec_worker;
-mod decode_worker;
+mod config;
 mod decode;
+mod decode_worker;
 mod mumble;
 mod persist;
 mod player;
@@ -66,11 +66,16 @@ pub struct Bot {
 
 fn main() -> ExitCode {
     let arguments: Vec<_> = std::env::args_os().collect();
-    if arguments.get(1).is_some_and(|argument| argument == "--codec-worker") {
+    if arguments
+        .get(1)
+        .is_some_and(|argument| argument == "--codec-worker")
+    {
         let role = (arguments.len() == 3)
             .then(|| arguments[2].to_str().and_then(codec::Role::parse))
             .flatten();
-        let Some(role) = role else { return ExitCode::FAILURE };
+        let Some(role) = role else {
+            return ExitCode::FAILURE;
+        };
         // No logger, Tokio runtime, configuration, credentials, profile or
         // listener is initialized in a restricted child role.
         return match codec_worker::run(role) {
@@ -78,7 +83,10 @@ fn main() -> ExitCode {
             Err(_) => ExitCode::FAILURE,
         };
     }
-    let runtime = match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
+    let runtime = match tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+    {
         Ok(runtime) => runtime,
         Err(_) => return ExitCode::FAILURE,
     };

@@ -22,10 +22,21 @@ impl Process {
     /// A kill request is not a released slot: callers retain this object until
     /// the OS has confirmed exit. Errors leave ownership with the caller.
     pub async fn retire(&mut self) -> Result<(), String> {
-        if self.child.try_wait().map_err(|_| "cannot inspect codec worker")?.is_none() {
-            self.child.kill().await.map_err(|_| "cannot stop codec worker")?;
+        if self
+            .child
+            .try_wait()
+            .map_err(|_| "cannot inspect codec worker")?
+            .is_none()
+        {
+            self.child
+                .kill()
+                .await
+                .map_err(|_| "cannot stop codec worker")?;
         }
-        self.child.wait().await.map_err(|_| "cannot reap codec worker")?;
+        self.child
+            .wait()
+            .await
+            .map_err(|_| "cannot reap codec worker")?;
         self.input.take();
         self.output.take();
         Ok(())
@@ -34,22 +45,37 @@ impl Process {
 
 pub async fn spawn(role: Role) -> Result<Process, String> {
     let executable = std::env::current_exe().map_err(|_| "cannot locate musicbot executable")?;
-    let arguments = [OsString::from("--codec-worker"), OsString::from(role.argument())];
+    let arguments = [
+        OsString::from("--codec-worker"),
+        OsString::from(role.argument()),
+    ];
     let mut command = nuschl_ipc::host::musicbot_codec_sandbox_command(&executable, &arguments)
         .map_err(|_| "secure music codec sandbox is unavailable")?;
-    let mut child = command.stdin(Stdio::piped()).stdout(Stdio::piped())
-        .stderr(Stdio::null()).kill_on_drop(true).spawn()
+    let mut child = command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
         .map_err(|_| "cannot start isolated music codec worker")?;
     let containment = match nuschl_ipc::host::contain(&child) {
         Ok(containment) => containment,
         Err(_) => {
-            child.kill().await.map_err(|_| "cannot stop uncontained codec worker")?;
+            child
+                .kill()
+                .await
+                .map_err(|_| "cannot stop uncontained codec worker")?;
             return Err("cannot contain music codec worker".into());
         }
     };
     let input = child.stdin.take();
     let output = child.stdout.take();
-    let mut process = Process { child, input, output, _containment: containment };
+    let mut process = Process {
+        child,
+        input,
+        output,
+        _containment: containment,
+    };
     if process.input.is_none() || process.output.is_none() {
         process.retire().await?;
         return Err("codec worker pipes are unavailable".into());
@@ -57,22 +83,38 @@ pub async fn spawn(role: Role) -> Result<Process, String> {
     Ok(process)
 }
 
-pub async fn write_request(input: &mut ChildStdin, id: u64, request: &Request) -> Result<(), String> {
+pub async fn write_request(
+    input: &mut ChildStdin,
+    id: u64,
+    request: &Request,
+) -> Result<(), String> {
     let mut bytes = Vec::new();
     codec::write_message(&mut bytes, &Envelope::new(id, request))?;
-    input.write_all(&bytes).await.map_err(|_| "codec request write failed")?;
-    input.flush().await.map_err(|_| "codec request flush failed".into())
+    input
+        .write_all(&bytes)
+        .await
+        .map_err(|_| "codec request write failed")?;
+    input
+        .flush()
+        .await
+        .map_err(|_| "codec request flush failed".into())
 }
 
 pub async fn read_response(output: &mut ChildStdout, id: u64) -> Result<Response, String> {
-    let size = output.read_u32().await.map_err(|_| "codec response header missing")? as usize;
+    let size = output
+        .read_u32()
+        .await
+        .map_err(|_| "codec response header missing")? as usize;
     if size == 0 || size > codec::MAX_MESSAGE_BYTES {
         return Err("codec response exceeds its budget".into());
     }
     let mut bytes = vec![0; size];
-    output.read_exact(&mut bytes).await.map_err(|_| "codec response truncated")?;
-    let reply: Envelope<Response> = serde_json::from_slice(&bytes)
-        .map_err(|_| "codec response is invalid")?;
+    output
+        .read_exact(&mut bytes)
+        .await
+        .map_err(|_| "codec response truncated")?;
+    let reply: Envelope<Response> =
+        serde_json::from_slice(&bytes).map_err(|_| "codec response is invalid")?;
     if reply.version != PROTOCOL_VERSION || reply.request_id != id {
         return Err("codec response belongs to another request or protocol".into());
     }
@@ -96,7 +138,12 @@ pub struct Client {
 
 impl Client {
     pub fn new(role: Role) -> Self {
-        Self { role, process: None, next: 1, busy: false }
+        Self {
+            role,
+            process: None,
+            next: 1,
+            busy: false,
+        }
     }
     pub async fn close(&mut self) -> Result<(), String> {
         if let Some(process) = self.process.as_mut() {
@@ -106,16 +153,23 @@ impl Client {
         self.busy = false;
         Ok(())
     }
-    pub fn started(&self) -> bool { self.process.is_some() }
+    pub fn started(&self) -> bool {
+        self.process.is_some()
+    }
 
     async fn request(&mut self, request: Request) -> Result<Response, String> {
-        if self.busy { self.close().await?; }
+        if self.busy {
+            self.close().await?;
+        }
         if self.process.is_none() {
             self.process = Some(spawn(self.role).await?);
             self.next = 1;
         }
         let id = self.next;
-        self.next = self.next.checked_add(1).ok_or("codec request ids exhausted")?;
+        self.next = self
+            .next
+            .checked_add(1)
+            .ok_or("codec request ids exhausted")?;
         self.busy = true;
         let process = self.process.as_mut().unwrap();
         let exchange = async {
@@ -123,7 +177,10 @@ impl Client {
             read_response(process.output.as_mut().unwrap(), id).await
         };
         match tokio::time::timeout(RESPONSE_TIMEOUT, exchange).await {
-            Ok(Ok(response)) => { self.busy = false; Ok(response) }
+            Ok(Ok(response)) => {
+                self.busy = false;
+                Ok(response)
+            }
             result => {
                 // Keep process/credit if this cannot confirm termination.
                 self.close().await?;
@@ -145,27 +202,50 @@ impl Client {
             return Err("invalid encoder PCM".into());
         }
         match self.request(Request::Encode { samples, bitrate }).await? {
-            Response::Packet { opus } if !opus.is_empty() && opus.len() <= codec::MAX_OPUS_BYTES => Ok(opus),
+            Response::Packet { opus }
+                if !opus.is_empty() && opus.len() <= codec::MAX_OPUS_BYTES =>
+            {
+                Ok(opus)
+            }
             Response::Error { message } => Err(message),
-            _ => self.unexpected().await
+            _ => self.unexpected().await,
         }
     }
-    pub async fn hear(&mut self, sender: u32, opus: Vec<u8>, threshold: f32) -> Result<bool, String> {
-        if opus.len() > codec::MAX_VOICE_BYTES || !threshold.is_finite() || !(0.0..=1.0).contains(&threshold) {
+    pub async fn hear(
+        &mut self,
+        sender: u32,
+        opus: Vec<u8>,
+        threshold: f32,
+    ) -> Result<bool, String> {
+        if opus.len() > codec::MAX_VOICE_BYTES
+            || !threshold.is_finite()
+            || !(0.0..=1.0).contains(&threshold)
+        {
             return Err("invalid ducking input".into());
         }
-        match self.request(Request::Hear { sender, opus, threshold }).await? {
+        match self
+            .request(Request::Hear {
+                sender,
+                opus,
+                threshold,
+            })
+            .await?
+        {
             Response::Speech { active } => Ok(active),
             Response::Error { message } => Err(message),
-            _ => self.unexpected().await
+            _ => self.unexpected().await,
         }
     }
     pub async fn forget(&mut self, sender: u32) -> Result<(), String> {
-        if !self.started() { return Ok(()); }
+        if !self.started() {
+            return Ok(());
+        }
         self.ack(Request::Forget { sender }).await
     }
     pub async fn clear(&mut self) -> Result<(), String> {
-        if !self.started() { return Ok(()); }
+        if !self.started() {
+            return Ok(());
+        }
         self.ack(Request::Clear).await
     }
     async fn ack(&mut self, request: Request) -> Result<(), String> {
