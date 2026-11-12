@@ -394,9 +394,7 @@
           ];
         };
         mingw = pkgs.pkgsCross.mingwW64;
-        windowsVerifiers = import ./nix/cross-updaters.nix {
-          inherit pkgs crossToolchain;
-        };
+        windowsVerifiers = import ./nix/cross-updaters.nix { inherit pkgs; };
         windowsPackage = buildCrossPackage ((crane.mkLib mingw).overrideToolchain crossToolchain) (
           crossCommon
           // {

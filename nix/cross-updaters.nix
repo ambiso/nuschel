@@ -1,10 +1,14 @@
 # SPDX-License-Identifier: EUPL-1.2
 # Production Windows verification engines have independent Cargo feature roots.
 # No fixture-only import-library workaround or signing/runtime-fixture feature.
-{ pkgs, crossToolchain }:
+{ pkgs }:
 let
   cross = pkgs.pkgsCross.mingwW64;
-  toolchain = crossToolchain cross;
+  # Keep this target-only compiler closure identical to the proven narrow
+  # Windows route; adding Darwin stdlib components must not evict this cache.
+  toolchain = pkgs.rust-bin.stable.latest.default.override {
+    targets = [ "x86_64-pc-windows-gnu" ];
+  };
   graph = import ./crate2nix/Cargo.nix {
     pkgs = cross;
     defaultCrateOverrides = cross.defaultCrateOverrides // {
