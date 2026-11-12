@@ -33,10 +33,16 @@ Current integration checkpoint (2026-11-12):
   and deafen zero. Browser component/controller/worker proofs remain scoped below.
   Complete frozen Windows/macOS archives at the same source tree also pass
   scoped archive checks and actual Windows GUI update/profile continuity. Native
-  Apple signature/runtime acceptance remains open. Later menu, SDK-RPC and native
-  gain changes require their own combined distribution check; this checkpoint
-  does not cover later source revisions.
-  No push, release, production trust enrollment or macOS native-runtime claim.
+  Apple signature/runtime acceptance remains open. The later combined Linux/web
+  checkpoint `a5ff76cd` includes bounded menus, SDK-RPC retirement and native
+  encoded-packet gain ownership: all seven build/check outputs and both actual
+  bundled notice readers pass. Nine independent native gain fixtures pass on
+  the combined mixer source; its packaged worker matches the private DSP/SRC
+  tested product byte for byte. All ten web runtime files match the actual
+  confined-App-tested SDK-RPC package. This reuses exact-byte evidence; it does
+  not claim new physical-device or native Windows/macOS execution tests.
+  Source/proof details: `~/.cache/nuschl-integration-20261112/menus-native-gain/handoff.json`.
+  No push, release or production trust enrollment.
 - **Desktop layout foundation is integrated through `12d6695c`.** Shared finite
   text/action lanes, one bounded notice stack, restored connection indicator,
   wrapped headers/footers, keyboard/pointer dismissal and nested focus reveal
