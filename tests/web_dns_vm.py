@@ -40,9 +40,26 @@ for machine in machines:  # noqa: F821
     assert "connected session=" in connected and "udp_answered=true" in connected, connected
     # A resolver exception permits kernel traffic to another port, but never
     # grants the application a private-address tunnel allowance.
-    for target in ["resolver.dns.test:64738", expected_resolver + ":64738", "127.0.0.1:64738", "denied.dns.test:64738"]:
+    for target in ["resolver.dns.test:64738", expected_resolver + ":64738", "127.0.0.1:64738"]:
         refused = machine.fail(base + shlex.quote(target))
         assert "AddressRefused" in refused, (target, refused)
+    denied_address = machine.succeed("getent ahostsv4 denied.dns.test | head -n1 | cut -d' ' -f1").strip()
+    machine.succeed("mkdir -p /run/dns-packet-proof")
+    captures = {}
+    for label in ["control", "denied"]:
+        output = f"/run/dns-packet-proof/{label}.json"
+        ready = f"/run/dns-packet-proof/{label}.ready"
+        machine.succeed(f"python3 /etc/nuschl-dns-capture.py {denied_address} {output} {ready} >/run/dns-packet-proof/{label}.log 2>&1 &")
+        machine.wait_for_file(ready, timeout=5)
+        if label == "control":
+            machine.succeed("python3 -c " + shlex.quote(f"import socket; socket.create_connection(('{denied_address}',64738),timeout=2).close()"))
+        else:
+            refused = machine.fail(base + "denied.dns.test:64738")
+            assert "AddressRefused" in refused, refused
+        machine.wait_for_file(output, timeout=5)
+        captures[label] = json.loads(machine.succeed("cat " + output))
+    assert captures["control"]["TCP_UDP_packets"] > 0, captures
+    assert captures["denied"]["TCP_UDP_packets"] == 0, captures
     denied = machine.succeed("systemctl show nuschl-web-relay.service -p IPAddressDeny")
     assert "127.0.0.0/8" in denied and "10.0.0.0/8" in denied, denied
     accounting = {}
@@ -68,6 +85,7 @@ for machine in machines:  # noqa: F821
     assert "connected session=" in recovered, recovered
     reports.append({"machine":machine.name,"resolver_config":resolv,"route":route,"cgroup_probe":initial,
                     "BPF_IPAccounting":accounting,
+                    "denied_endpoint_header_counts":captures,
                     "DNS_dependent_private_Murmur":True,"resolver_tunnel_refused":True,"explicit_deny_overrides_LAN_allow":True,
                     "without_DNS_exception_fails":True,"restored_original_module_recovers":True})
 Path(os.environ["NUSCHL_VM_SCRATCH_ROOT"], "dns-proof.json").write_text(json.dumps({
