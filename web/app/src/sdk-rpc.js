@@ -2,18 +2,31 @@
 // An RPC timeout is not a worker acknowledgment. Retire the entire owned lane
 // before settling timed-out requests. A closed owner never posts new work
 // while the browser finishes its asynchronous native shutdown.
-export const SDK_RPC_LIMIT=128, SDK_RPC_TIMEOUT=15000;
+export const SDK_RPC_LIMIT=128, SDK_RPC_TIMEOUT=15000, SDK_STARTUP_TIMEOUT=30000;
 export class SdkUnavailableError extends Error {
   constructor(message="The client is unavailable. Reload to reconnect.") {super(message);this.name="SdkUnavailableError";this.code="SDK_UNAVAILABLE";}
 }
 export class SdkRpc {
   constructor(worker,{onClose=()=>{},clock=globalThis}={}) {
     this.worker=worker;this.onClose=onClose;this.clock=clock;
-    this.pending=new Map();this.next=0;this.closed=false;
+    this.pending=new Map();this.next=0;this.closed=false;this.phase="starting";this.initialized=false;
+    this.startupTimer=this.clock.setTimeout(()=>this.close("The browser client did not finish starting. Reload to try again."),SDK_STARTUP_TIMEOUT);
   }
   get size(){return this.pending.size;}
+  initialize(relay) {
+    if(this.closed||this.initialized)return false;
+    this.initialized=true;
+    try {this.worker.postMessage({method:"init",relay});return true;}
+    catch {this.close("The browser client could not start. Reload to try again.");return false;}
+  }
+  acceptReady() {
+    if(this.closed||this.phase!=="starting"||!this.initialized)return false;
+    this.clock.clearTimeout(this.startupTimer);this.startupTimer=null;this.phase="ready";
+    return true;
+  }
   request(method,args=[]) {
     if(this.closed)return Promise.reject(new SdkUnavailableError());
+    if(this.phase!=="ready")return Promise.reject(new Error("The client is still starting."));
     if(this.pending.size>=SDK_RPC_LIMIT)return Promise.reject(new Error("The client is busy. Try again shortly."));
     if(!Number.isSafeInteger(this.next+1)) {
       this.close("The client request counter is exhausted. Reload to reconnect.");
@@ -37,7 +50,8 @@ export class SdkRpc {
   }
   close(reason="The browser worker stopped. Reload to reconnect.",{notify=true}={}) {
     if(this.closed)return;
-    this.closed=true;
+    this.closed=true;this.phase="closed";
+    this.clock.clearTimeout(this.startupTimer);this.startupTimer=null;
     for(const entry of this.pending.values())this.clock.clearTimeout(entry.timer);
     try {this.worker.terminate();}
     catch {

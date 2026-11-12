@@ -102,7 +102,19 @@
     const viewport = window.visualViewport;
     const resizeViewport = () => { if (orderDrag) cancelOrder(); document.documentElement.style.setProperty("--app-height", `${viewport?.height || window.innerHeight}px`); };
     resizeViewport(); viewport?.addEventListener("resize", resizeViewport);
-    worker = new Worker(new URL("./sdk.worker.js", import.meta.url), { type:"module" });
+    const cleanup = () => { cancelOrder(); window.removeEventListener("keydown", escapeOrder, true); window.removeEventListener("resize", cancelOrder); motion.removeEventListener("change", updateMotion); media.removeEventListener("change", updateMobile); viewport?.removeEventListener("resize", resizeViewport); rpc?.close("Client closed.",{notify:false}); worker = null; disposeAudio(); };
+    const unavailable = reason => {
+      worker = null; clientUnavailable = true; loaded = false; cancelOrder(); arrangeServers = false;
+      // Keep conversation text, unsent drafts, bookmarks and history. Only
+      // transport-derived presence is invalid once its owner is retired.
+      audio?.syncVoice(null); voice = null; audioActionPending = null;
+      servers = servers.map(server => ({...server,status:"unavailable",muted:true,deafened:true,
+        users:server.users.map(user => ({...user,talking:false}))}));
+      if (timeline?.sending) timeline = {...timeline,sending:false};
+      error = reason;
+    };
+    try { worker = new Worker(new URL("./sdk.worker.js", import.meta.url), { type:"module" }); }
+    catch { unavailable("The browser client could not be created. Reload to try again."); return cleanup; }
     audio = new BrowserAudio({
       onPacket: packet => command("voice_packet",packet),
       onReady: ready => command("audio_ready",ready),
@@ -110,20 +122,13 @@
     });
     const ownedWorker = worker;
     rpc = new SdkRpc(ownedWorker,{onClose:reason => {
-      if (worker !== ownedWorker) return;
-      worker = null; clientUnavailable = true; loaded = false; cancelOrder(); arrangeServers = false;
-      // Keep conversation text, unsent drafts, bookmarks and history. Only
-      // transport-derived presence is invalid once its owner has terminated.
-      audio.syncVoice(null); voice = null; audioActionPending = null;
-      servers = servers.map(server => ({...server,status:"unavailable",muted:true,deafened:true,
-        users:server.users.map(user => ({...user,talking:false}))}));
-      if (timeline?.sending) timeline = {...timeline,sending:false};
-      error = reason;
+      if (worker === ownedWorker) unavailable(reason);
     }});
     activateAudio = options => audio.activateGesture(options);
     disposeAudio = () => audio.dispose();
     ownedWorker.onmessage = async ({ data }) => {
       if (worker !== ownedWorker || rpc.closed || !data || typeof data !== "object") return;
+      if (data.kind !== "ready" && data.kind !== "error" && rpc.phase !== "ready") return;
       if (data.kind === "voice_packet") {
         // Audio packets never replace reactive chat/server state.
         audio.receive(data.packet); return;
@@ -132,6 +137,7 @@
         rpc.accept(data);
       } else if (data.kind === "error") error = data.message;
       else if (data.kind === "ready") {
+        if (!rpc.acceptReady()) return;
         loaded = true; capabilities = data.capabilities || [];
         if (link.host && link.username && !link.error) await connect();
       } else if (data.kind === "state") {
@@ -180,8 +186,8 @@
     ownedWorker.onmessageerror = () => {
       if (worker === ownedWorker) rpc.close("The browser worker sent an unreadable response. Reload to reconnect.");
     };
-    ownedWorker.postMessage({ method:"init", relay });
-    return () => { cancelOrder(); window.removeEventListener("keydown", escapeOrder, true); window.removeEventListener("resize", cancelOrder); motion.removeEventListener("change", updateMotion); media.removeEventListener("change", updateMobile); viewport?.removeEventListener("resize", resizeViewport); rpc.close("Client closed.",{notify:false}); worker = null; disposeAudio(); };
+    rpc.initialize(relay);
+    return cleanup;
 
   });
   async function connect(event) {
@@ -365,7 +371,7 @@
   <aside class="channels" aria-label="Server and channels">
     <header class="server-header"><div><span class="eyebrow">YOUR SERVER</span><h1>{selected?.name || "Nuschl"}</h1></div>{#if mobile}<button class="icon-button" aria-label="Close navigation" onclick={closeDrawer}>{@render icon("close")}</button>{:else}<button class="icon-button" aria-label="Server settings" title="Server settings" disabled={!selected} onclick={editServer}>{@render icon("settings")}</button>{/if}</header>
     {#if selected}
-      <div class="server-connection"><span class:connected={selected.status === "connected"} class="connection-dot"></span><span class="status" role="status">{labels[selected.status]}</span>{#if clientUnavailable}<button class="text-button" onclick={() => location.reload()}>Reload client</button>{:else}<button class="text-button" disabled={!loaded} onclick={() => act(selected.status === "disconnected" ? "connect" : "disconnect", selectedIndex)}>{selected.status === "disconnected" ? "Connect" : "Disconnect"}</button>{/if}</div>
+      <div class="server-connection"><span class:connected={selected.status === "connected"} class="connection-dot"></span><span class="status" role="status">{labels[selected.status]}</span>{#if !clientUnavailable}<button class="text-button" disabled={!loaded} onclick={() => act(selected.status === "disconnected" ? "connect" : "disconnect", selectedIndex)}>{selected.status === "disconnected" ? "Connect" : "Disconnect"}</button>{/if}</div>
       <p class="security" title="TLS protects the connection; this server can read legacy chat.">{@render icon("unlock")}<span>Server can read chat</span><span class="transport">TLS</span></p>
       {#if selected.notice}<div class="notice" role="status"><span>{selected.notice}</span>{#if capabilities.includes("dismiss_notice")}<button class="icon-button" aria-label="Dismiss notice" onclick={() => act("dismiss_notice",selectedIndex)}>{@render icon("close")}</button>{/if}</div>{/if}
       {#if selected.certificate}<div class="certificate" role="alert"><strong>{selected.pin ? "Certificate changed" : "Verify server identity"}</strong><p>Compare this fingerprint with the server owner before trusting it.</p><code>{selected.certificate}</code><button class="primary" onclick={() => act("accept_certificate",selectedIndex,selected.certificate)}>Trust this certificate</button></div>{/if}
@@ -401,7 +407,7 @@
       </div>
     </header>
     {#if showSearch}<form class="search-bar" onsubmit={(event) => event.preventDefault()}><label for="search-messages">Search this loaded history</label><input id="search-messages" bind:this={searchElement} bind:value={search} type="search" placeholder="Message text or person…" onkeydown={(event) => { if (event.key === "Escape") { showSearch = false; search = ""; } }}><small>{displayedMessages.length} results</small><button class="icon-button" aria-label="Close search" onclick={() => { showSearch = false; search = ""; }}>{@render icon("close")}</button></form>{/if}
-    {#if error}<div class="error" role="alert"><span>{error}</span><button class="icon-button" aria-label="Dismiss error" onclick={() => error = ""}>{@render icon("close")}</button></div>{/if}
+    {#if clientUnavailable}<div class="error" role="alert"><span>{error || "The client is unavailable. Reload to reconnect."}</span><button class="text-button" onclick={() => location.reload()}>Reload client</button></div>{:else if error}<div class="error" role="alert"><span>{error}</span><button class="icon-button" aria-label="Dismiss error" onclick={() => error = ""}>{@render icon("close")}</button></div>{/if}
     <div class="conversation">
       <div class="messages" bind:this={messagesElement} onscroll={() => { if (messagesElement) follow = messagesElement.scrollHeight - messagesElement.scrollTop - messagesElement.clientHeight < 80; }}>
         {#if timeline?.has_older}<div class="history-start"><button class="text-button" disabled={timeline.loading} onclick={older}>{timeline.loading ? "Loading history…" : "Load older messages"}</button></div>{/if}

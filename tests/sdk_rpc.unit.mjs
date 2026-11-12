@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: EUPL-1.2
 import test from "node:test";
 import assert from "node:assert/strict";
-import {SdkRpc,SdkUnavailableError,SDK_RPC_LIMIT,SDK_RPC_TIMEOUT} from "../web/app/src/sdk-rpc.js";
+import {SdkRpc,SdkUnavailableError,SDK_RPC_LIMIT,SDK_RPC_TIMEOUT,SDK_STARTUP_TIMEOUT} from "../web/app/src/sdk-rpc.js";
 import {BrowserAudio} from "../web/app/src/audio.js";
 const turn=()=>new Promise(resolve=>setImmediate(resolve));
 class Clock {
   constructor(){this.jobs=new Map();this.next=0;}
-  setTimeout(callback,delay){assert.equal(delay,SDK_RPC_TIMEOUT);const id=++this.next;this.jobs.set(id,callback);return id;}
+  setTimeout(callback,delay){assert.ok([SDK_RPC_TIMEOUT,SDK_STARTUP_TIMEOUT].includes(delay));const id=++this.next;this.jobs.set(id,callback);return id;}
   clearTimeout(id){this.jobs.delete(id);}
   expire(){for(const [id,callback] of [...this.jobs])if(this.jobs.delete(id))callback();}
 }
@@ -18,6 +18,7 @@ class Worker {
 function fixture(onClose=()=>{}) {
   const worker=new Worker(),clock=new Clock();
   const rpc=new SdkRpc(worker,{clock,onClose:reason=>{assert.equal(worker.terminated,1,"termination precedes audio revocation");onClose(reason);}});
+  rpc.initialize("ws://127.0.0.1/relay");assert.equal(rpc.acceptReady(),true);worker.messages.length=0;
   return {worker,clock,rpc};
 }
 test("128 unresolved commands remain globally bounded until real ACK or owned worker death",async()=>{
