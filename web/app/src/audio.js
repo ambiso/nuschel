@@ -105,7 +105,7 @@ export class BrowserAudio {
     const old=this.voice;
     const incoming=next?{...next,joined:value.joined===true,muted:value.muted!==false,
       deafened:value.deafened!==false,can_transmit:value.can_transmit===true,
-      bitrate:Number.isInteger(value.bitrate)&&value.bitrate>=6000&&value.bitrate<=128000?value.bitrate:0}:null;
+      bitrate:Number.isInteger(value.bitrate)&&value.bitrate>=6000&&value.bitrate<=256000?value.bitrate:0}:null;
     if(!sameDestination(old,incoming)) {
       this.stopCapture(true);this.localBlocked=false;this.localDeaf=false;this.sequence=0n;this.transportStalled=false;
     }
