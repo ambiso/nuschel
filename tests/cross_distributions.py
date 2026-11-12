@@ -7,6 +7,7 @@ build-info records are explicitly local evidence, never GitHub workflow proof.
 """
 import argparse
 import hashlib
+import io
 import json
 from pathlib import Path
 import plistlib
@@ -14,7 +15,9 @@ import re
 import runpy
 import shutil
 import subprocess
+import tarfile
 import tomllib
+from urllib.parse import parse_qs, unquote, urlsplit
 
 PROGRAMS = ["nuschl", "nuschl-content-worker", "nuschl-crypto-worker",
             "nuschl-math-worker", "nuschl-media-worker", "nuschl-storage-worker",
@@ -37,6 +40,38 @@ def sha(path):
     return digest.hexdigest()
 
 
+def verify_snapshot(flake, source):
+    """Bind every exported path, byte and executable bit to the exact flake Git tree."""
+    url = urlsplit(flake)
+    query = parse_qs(url.query, strict_parsing=True)
+    if (url.scheme != "git+file" or url.netloc not in ("", "localhost") or url.fragment or
+            set(query) != {"rev"} or len(query["rev"]) != 1 or
+            not re.fullmatch(r"[0-9a-f]{40}", query["rev"][0])):
+        raise ValueError("an exact local Git flake revision is required")
+    revision = query["rev"][0]
+    repository = Path(unquote(url.path)).resolve(strict=True)
+    archive_bytes = subprocess.run(["git", "-C", str(repository), "archive", "--format=tar", revision],
+                                   capture_output=True, check=True).stdout
+    expected = set()
+    with tarfile.open(fileobj=io.BytesIO(archive_bytes)) as archive:
+        for member in archive:
+            if member.isdir():
+                continue
+            expected.add(member.name)
+            path = source / member.name
+            if member.issym():
+                assert path.is_symlink() and str(path.readlink()) == member.linkname, member.name
+            else:
+                assert member.isfile() and path.is_file() and not path.is_symlink(), member.name
+                assert hashlib.sha256(archive.extractfile(member).read()).hexdigest() == sha(path), member.name
+                assert bool(path.stat().st_mode & 0o111) == bool(member.mode & 0o111), member.name
+    actual = {path.relative_to(source).as_posix() for path in source.rglob("*")
+              if path.is_symlink() or not path.is_dir()}
+    assert actual == expected, "snapshot has extra or missing exported paths"
+    return {"revision": revision, "git_archive_sha256": hashlib.sha256(archive_bytes).hexdigest(),
+            "exported_files": len(expected), "all_path_bytes_and_executable_bits_verified": True}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--flake", required=True, help="exact frozen Git revision flake ref")
@@ -47,6 +82,7 @@ def main():
     if not match:
         raise ValueError("an exact full Git revision is required")
     source = args.source.resolve(strict=True)
+    source_evidence = verify_snapshot(args.flake, source)
     out = args.output.resolve()
     out.mkdir(parents=True, exist_ok=False)
     expression = '''let f=builtins.getFlake %s; p=f.packages.x86_64-linux;
@@ -64,7 +100,7 @@ def main():
     products = json.loads(run(["nix", "eval", "--impure", "--json", "--expr",
                                expression % json.dumps(args.flake)]))
     windows, macos = Path(products["windows"]), Path(products["macos"]) / "Nuschl.app"
-    proof = {"source_revision": match[1], "flake": args.flake,
+    proof = {"source_revision": match[1], "flake": args.flake, "source_binding": source_evidence,
              "proof_scope": "local frozen-source production products; no CI or native macOS claim",
              "products": products, "files": {}}
     for root in (windows, macos):
@@ -72,6 +108,17 @@ def main():
         assert not any(path.is_symlink() for path in root.rglob("*"))
     assert {p.name for p in (windows / "bin").iterdir()} == {p + ".exe" for p in PROGRAMS}
     assert {p.name for p in (macos / "Contents/MacOS").iterdir()} == set(PROGRAMS)
+    version = tomllib.loads((source / "Cargo.toml").read_text())["workspace"]["package"]["version"]
+    plist = plistlib.loads((macos / "Contents/Info.plist").read_bytes())
+    expected_plist = {"CFBundleExecutable": "nuschl", "CFBundleIdentifier": "org.nuschl.Nuschl",
+                      "CFBundleName": "Nuschl", "CFBundleDisplayName": "Nuschl",
+                      "CFBundlePackageType": "APPL", "CFBundleIconFile": "Nuschl",
+                      "CFBundleShortVersionString": version, "CFBundleVersion": version,
+                      "LSMinimumSystemVersion": "14.2", "NSHighResolutionCapable": True,
+                      "NSMicrophoneUsageDescription": "Nuschl sends your voice to the people in your channel.",
+                      "NSAudioCaptureUsageDescription": "Nuschl removes what your speakers play from your microphone, so others do not hear it. The sound stays on this Mac."}
+    assert all(plist.get(key) == value for key, value in expected_plist.items())
+    proof["macos_bundle_metadata"] = expected_plist
     for program in PROGRAMS:
         binary = windows / "bin" / (program + ".exe")
         report = run([products["objdump"], "-p", str(binary)])
@@ -127,7 +174,7 @@ def main():
             assert path.is_file() and hashlib.sha256(path.read_bytes()).digest() == entry["hash2"]
             checked_resources.add(name)
     assert all(path.relative_to(macos / "Contents").as_posix() in checked_resources
-               for path in (macos / "Contents/Resources/licenses").rglob("*") if path.is_file())
+               for path in (macos / "Contents/Resources").rglob("*") if path.is_file())
     # Mirror the checked-in build.yml tree and tar steps exactly. These are real
     # production outputs, with local metadata clearly distinguished from CI.
     install = out / "install"
@@ -138,7 +185,6 @@ def main():
     shutil.copytree(macos, install / "Nuschl.app")
     authority = runpy.run_path(str(source / "release/prepare-artifacts.py"))
     policy = authority["load"](source / "release/notice-roots.json")
-    version = tomllib.loads((source / "Cargo.toml").read_text())["workspace"]["package"]["version"]
     for platform, root_name, notices in (
         ("windows-x86_64", "windows", "licenses"),
         ("macos-universal", "Nuschl.app", "Contents/Resources/licenses"),
