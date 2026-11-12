@@ -502,8 +502,12 @@ in
     };
     systemd.services.nuschl-tls-refresh = lib.mkIf useACME {
       description = "Validate and privately publish Nuschl's selected ACME TLS pair";
-      after = [ "acme-finished-${acmeHost}.target" ];
-      requires = [ "acme-finished-${acmeHost}.target" ];
+      # This unit exists before and after NixOS split issuance into a separate
+      # acme-order-renew service. Newer releases removed acme-finished targets.
+      # A bootstrap pair is still refused by the publisher's trust validation;
+      # the actual issuance post-run hook and timer retry publication later.
+      after = [ "acme-${acmeHost}.service" ];
+      requires = [ "acme-${acmeHost}.service" ];
       serviceConfig = {
         Type = "oneshot";
         TimeoutStartSec = "30s";

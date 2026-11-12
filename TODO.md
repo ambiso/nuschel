@@ -940,9 +940,9 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
          Current pinned nixpkgs (`4fe25e12`, 2026-11-12) no longer generates
          `acme-finished-<host>.target`: `acme-<host>.service` now provides the
          bootstrap pair and `acme-order-renew-<host>.service` performs issuance
-         and the post-run hook. The publisher still requires the removed target;
-         the standalone cached-package VM test is preparing actual failure and
-         recovery evidence before changing that dependency.
+         and the post-run hook. The standalone cached-package VM reproduced
+         the missing-target failure. The publisher now depends on the generated
+         `acme-<host>.service`; the unchanged lifecycle test is being repeated.
    - [x] IP obfuscation in logs (2026-11-11): `obfuscate = true`, HMAC-SHA256 tokens
          under a per-start key (Murmur's 32-bit key is reversible).
    - [x] CA-verified ("strong") certificates (2026-11-11):

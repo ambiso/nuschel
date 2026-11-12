@@ -76,6 +76,19 @@ in
         cfg.systemd.services.nuschl-tls-refresh.serviceConfig
       else
         null;
+    helperDependencies =
+      if acme && variant != "missing-host" then
+        let
+          helper = cfg.systemd.services.nuschl-tls-refresh;
+        in
+        {
+          inherit (helper) after requires;
+          allDefined = lib.all (
+            unit: builtins.hasAttr (lib.removeSuffix ".service" unit) cfg.systemd.services
+          ) helper.requires;
+        }
+      else
+        null;
     acmeHook =
       if acme && variant != "missing-host" then
         cfg.security.acme.certs.${if variant == "reuse" then "shared.test" else "voice.test"}.postRun

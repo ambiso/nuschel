@@ -339,6 +339,11 @@ def main():
             "acme-finished-voice.test.target" not in states["acme"]["after"]
         )  # helper orders provisioning
         assert "nuschl-tls-refresh.service" in states["acme"]["after"]
+        for variant, host in [("acme", "voice.test"), ("reuse", "shared.test")]:
+            dependencies = states[variant]["helperDependencies"]
+            assert dependencies["allDefined"]
+            assert f"acme-{host}.service" in dependencies["after"]
+            assert f"acme-{host}.service" in dependencies["requires"]
         assert "nuschl-tls-refresh.service" in states["acme"]["wants"]
         assert "nuschl-tls-refresh.service" not in states["acme"]["requires"]
         assert states["acme"]["unit"]["StartLimitIntervalSec"] == 0
