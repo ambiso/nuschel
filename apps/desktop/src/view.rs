@@ -178,7 +178,9 @@ fn server_rail(this: &Desktop, selected: Option<usize>, cx: &mut Context<Desktop
         .filter_map(|(slot, server)| {
             let first = server.channels.iter().find(|channel| channel.unread > 0)?;
             Some(unread::Candidate {
-                slot,
+                // scrollable's first child establishes the autoscroll scope;
+                // unread positions refer to actual ScrollHandle child slots.
+                slot: slot + 1,
                 target: unread::Target {
                     server: server.id.clone(),
                     channel: first.id,
@@ -201,6 +203,8 @@ fn server_rail(this: &Desktop, selected: Option<usize>, cx: &mut Context<Desktop
         .map(|(index, server)| {
             let active = Some(index) == selected;
             let online = server.status == Status::Connected;
+            let radius = this.voice_motion.radius(&server.id, active);
+            let hover_id = server.id.clone();
             // Discord-like: the pill marks unread conversations; a red count
             // marks mentions and direct messages.
             let unread = server.channels.iter().any(|channel| channel.unread > 0);
@@ -210,10 +214,8 @@ fn server_rail(this: &Desktop, selected: Option<usize>, cx: &mut Context<Desktop
                 .filter(|channel| channel.unread_mention)
                 .map(|channel| channel.unread)
                 .sum();
-            div()
+            layout::decorated_slot(px(crate::voice::RAIL_DECORATION_OUTSET))
                 .id(("server-slot", index))
-                .flex_shrink_0()
-                .relative()
                 .w_full()
                 .flex()
                 .justify_center()
@@ -221,7 +223,9 @@ fn server_rail(this: &Desktop, selected: Option<usize>, cx: &mut Context<Desktop
                     div()
                         .absolute()
                         .left_0()
-                        .top(px(if active { 6. } else { 19. }))
+                        .top(px(crate::voice::RAIL_DECORATION_OUTSET
+                            + 2.
+                            + if active { 6. } else { 19. }))
                         .w(px(4.))
                         .h(px(if active { 36. } else { 10. }))
                         .rounded_r(px(4.))
@@ -255,14 +259,18 @@ fn server_rail(this: &Desktop, selected: Option<usize>, cx: &mut Context<Desktop
                         .flex()
                         .items_center()
                         .justify_center()
-                        .rounded(px(if active { 16. } else { 24. }))
+                        .rounded(px(radius))
                         .bg(if active {
                             color(ACCENT).into()
                         } else {
                             theme::avatar(&server.name)
                         })
                         .when(!active && !online, |icon| icon.opacity(0.6))
-                        .hover(|style| style.rounded(px(16.)).opacity(1.))
+                        .hover(|style| style.opacity(1.))
+                        .on_hover(cx.listener(move |this, hovered, _, cx| {
+                            this.voice_motion.hover(&hover_id, *hovered);
+                            cx.notify();
+                        }))
                         .cursor_pointer()
                         .text_color(color(WHITE))
                         .font_weight(FontWeight::BOLD)
@@ -288,11 +296,7 @@ fn server_rail(this: &Desktop, selected: Option<usize>, cx: &mut Context<Desktop
                             let icon = this.ui.get(&server.id).and_then(|ui| ui.icon.clone());
                             match icon.filter(|_| this.settings.server_icons) {
                                 Some(icon) => {
-                                    tile.child(img(icon).size(px(48.)).rounded(px(if active {
-                                        16.
-                                    } else {
-                                        24.
-                                    })))
+                                    tile.child(img(icon).size(px(48.)).rounded(px(radius)))
                                 }
                                 None => tile.child(
                                     text!(theme::initials(&server.name))
@@ -314,7 +318,7 @@ fn server_rail(this: &Desktop, selected: Option<usize>, cx: &mut Context<Desktop
                                 .child(security_icon(server.security, index, 12.)),
                         )
                         .when_some(
-                            crate::voice::rail_ring(this, server, if active { 16. } else { 24. }),
+                            crate::voice::rail_ring(this, server, radius),
                             |tile, ring| tile.child(ring),
                         )
                         .when_some(
@@ -325,8 +329,8 @@ fn server_rail(this: &Desktop, selected: Option<usize>, cx: &mut Context<Desktop
                             tile.child(
                                 div()
                                     .absolute()
-                                    .right(px(-6.))
-                                    .top(px(-6.))
+                                    .right(px(-crate::voice::RAIL_DECORATION_OUTSET))
+                                    .top(px(-crate::voice::RAIL_DECORATION_OUTSET))
                                     .min_w(px(20.))
                                     .h(px(20.))
                                     .px(px(4.))
@@ -345,6 +349,13 @@ fn server_rail(this: &Desktop, selected: Option<usize>, cx: &mut Context<Desktop
                                     } else {
                                         mentions.to_string()
                                     }),
+                            )
+                        })
+                        .map(|tile| {
+                            layout::focusable_with_outset(
+                                ("server", index),
+                                tile,
+                                px(crate::voice::RAIL_DECORATION_OUTSET + 2.),
                             )
                         }),
                 )
@@ -367,14 +378,12 @@ fn server_rail(this: &Desktop, selected: Option<usize>, cx: &mut Context<Desktop
                 .w_full()
                 .relative()
                 .child(
-                    div()
-                        .id("server-list")
+                    layout::scrollable("server-list", "Servers", this.server_scroll.clone())
                         .role(Role::List)
                         .aria_label("Servers")
                         .size_full()
                         .flex()
                         .flex_col()
-                        .gap_2()
                         .overflow_y_scroll()
                         .track_scroll(&this.server_scroll)
                         .on_scroll(cx.listener(|this, event, window, cx| {

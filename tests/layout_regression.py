@@ -195,6 +195,21 @@ def run(args, root, shell, registry, bots, profile, port, pin, shot):
         records.append({"modal":"Server form","width":width,"zoom":percent,"cancel":cancel.extents(),"dialog":dialog.extents()})
         cancel.press()
         eventually(lambda:named("dialog","Add or connect to a Mumble server") is None,"Cancel did not close server form")
+        rail=eventually(lambda:named("push button",SERVER_NAME,True),"server rail action absent")
+        geometry=json.loads(shell.eval("JSON.stringify((()=>{const w=global.get_window_actors().map(a=>a.meta_window).find(w=>w.get_title().startsWith('Nuschl'));const b=w.get_buffer_rect();return {x:b.x,y:b.y};})())"))
+        x,y=rail.centre();shell.click(geometry["x"]+x,geometry["y"]+y,button=3)
+        edit=eventually(lambda:named("menu item","Edit server…"),"server context edit absent")
+        edit.press()
+        dialog=eventually(lambda:named("dialog","Add or connect to a Mumble server"),"edit form absent")
+        save_label="Save" if named("push button","Save") else "Save and connect"
+        for label in ["Remove saved server","Cancel",save_label]:
+            action=eventually(lambda:named("push button",label),f"edit form action {label} absent")
+            action.call("Component","GrabFocus")
+            eventually(lambda:inside(action.extents(),dialog.extents()),f"edit form action {label} escaped")
+            records.append({"edit_action":label,"width":width,"zoom":percent,"bounds":action.extents(),"dialog":dialog.extents()})
+        shot(f"edit-form-{width}-{percent}")
+        named("push button","Cancel").press()
+        eventually(lambda:named("dialog","Add or connect to a Mumble server") is None,"edit Cancel did not close")
     shell.chord("Control_L","0");shell.place("Nuschl",40,40,1280,800)
     # Reuse compositor timing sweeps, without custom production measurement.
     window=shell.window("Nuschl");w,h=window["width"],window["height"]

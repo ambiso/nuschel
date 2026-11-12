@@ -16,6 +16,10 @@ use gpui_kit::{Role as Role_, prelude::*, *};
 use nuschl_client::{Client, SecondServer, model::TextTarget, voice::Role};
 use std::{collections::BTreeMap, time::Duration};
 
+/// Largest rail decoration extension (mention badges). Layout reserves this
+/// plus an antialiasing gutter for every tile, not just the first/last item.
+pub const RAIL_DECORATION_OUTSET: f32 = 6.;
+
 /// Half a breath of a listening badge's pulse.
 const PULSE: Duration = Duration::from_millis(700);
 /// How often a breathing badge is drawn: smooth enough for a slow pulse,
@@ -27,11 +31,14 @@ const BREATH_FRAME: Duration = Duration::from_millis(40);
 #[derive(Default)]
 pub struct Motion {
     servers: BTreeMap<String, Rings>,
+    hovered: Option<String>,
     /// A timer redraws breathing badges (see `BREATH_FRAME`).
     breathing: bool,
 }
 
 struct Rings {
+    /// Shared roundedness for tile, image clipping and its outline.
+    rounded: Ease,
     /// The talk ring's presence, and its colour (green while you are live).
     ring: Ease,
     live: Ease,
@@ -47,6 +54,11 @@ impl Motion {
             .retain(|id, _| client.servers.iter().any(|server| &server.id == id));
         let (mut moving, mut breathing) = (false, false);
         for (index, server) in client.servers.iter().enumerate() {
+            let rounded = self.hovered.as_deref() == Some(server.id.as_str())
+                || client
+                    .navigation
+                    .selection()
+                    .is_some_and(|selected| selected.server == server.id);
             let role = client.voice_role(index);
             let talk = matches!(role, Role::Talking | Role::Muted);
             let live = role == Role::Talking;
@@ -55,11 +67,13 @@ impl Motion {
                 .servers
                 .entry(server.id.clone())
                 .or_insert_with(|| Rings {
+                    rounded: Ease::new(rounded),
                     ring: Ease::new(talk),
                     live: Ease::new(live),
                     pulse: Ease::taking(false, PULSE),
                 });
             rings.ring.set(talk, reduce);
+            rings.rounded.set(rounded, reduce);
             rings.live.set(live, reduce);
             if busy && !reduce {
                 // Back and forth for as long as someone talks.
@@ -71,10 +85,26 @@ impl Motion {
                 // Without motion, the badge just lights up.
                 rings.pulse.set(busy, reduce);
             }
-            moving |= rings.ring.moving() || rings.live.moving();
+            moving |= rings.rounded.moving() || rings.ring.moving() || rings.live.moving();
             breathing |= rings.pulse.moving();
         }
         (moving, breathing)
+    }
+
+    pub fn hover(&mut self, server: &str, hovered: bool) {
+        if hovered {
+            self.hovered = Some(server.into());
+        } else if self.hovered.as_deref() == Some(server) {
+            self.hovered = None;
+        }
+    }
+
+    pub fn radius(&self, server: &str, selected: bool) -> f32 {
+        self.servers
+            .get(server)
+            .map_or(if selected { 16. } else { 24. }, |motion| {
+                24. - 8. * motion.rounded.value()
+            })
     }
 
     fn values(&self, server: &str) -> (f32, f32, f32) {

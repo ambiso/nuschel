@@ -20,6 +20,7 @@ struct FocusState {
 struct Focusable {
     id: ElementId,
     child: Stateful<Div>,
+    outset: Pixels,
 }
 
 impl RenderOnce for Focusable {
@@ -54,12 +55,13 @@ impl RenderOnce for Focusable {
         let observed = state.handle.clone();
         let reveal = state.reveal.clone();
         let trace = self.id.clone();
+        let outset = self.outset;
         self.child.track_focus(&handle).relative().child(
             canvas(
                 move |bounds, window, _| {
                     if reveal.replace(false) && observed.is_focused(window) {
                         tracing::debug!(control = %trace, ?bounds, "layout control requested reveal");
-                        window.request_autoscroll(bounds);
+                        window.request_autoscroll(bounds.dilate(outset));
                     }
                 },
                 |_, _, _, _| {},
@@ -75,11 +77,28 @@ impl RenderOnce for Focusable {
 /// Newly focused controls ask their nearest supporting scroll region to reveal
 /// them. Keeping focus in place never fights intentional wheel/keyboard reading.
 pub fn focusable(id: impl Into<ElementId>, child: Stateful<Div>) -> AnyElement {
+    focusable_with_outset(id, child, px(0.))
+}
+
+/// Reveal a control's paint decorations as well as its layout box.
+pub fn focusable_with_outset(
+    id: impl Into<ElementId>,
+    child: Stateful<Div>,
+    outset: Pixels,
+) -> AnyElement {
     Focusable {
         id: id.into(),
         child,
+        outset,
     }
     .into_any_element()
+}
+
+/// Reserve paint space inside scroll content for rings/badges extending beyond
+/// the control's layout box. Every slot gets the same gutter, including both
+/// endpoints; two logical pixels protect antialiased edges at fractional zoom.
+pub fn decorated_slot(outset: Pixels) -> Div {
+    div().relative().flex_shrink_0().p(outset + px(2.))
 }
 
 /// The shrinking lane of a row. `min_w_0` alone does not override flex-basis

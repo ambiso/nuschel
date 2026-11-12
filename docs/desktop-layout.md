@@ -58,6 +58,29 @@ measured connection quality. Destination links are separate compact rows in a
 bounded region and expose their full names. Transport and latency details remain
 in the server's connection status and Connection panel.
 
+## Painted decorations and animation
+
+`decorated_slot()` reserves the declared largest paint outset plus two logical
+pixels of antialiasing clearance around every scroll item. Rail icons remain
+48 logical pixels; each slot owns the space for its ring and badges, including
+first and last items. Scroll limits therefore include the decoration gutter,
+without special margins for particular indexes. Focus reveal includes the same
+outset. Unread indicators still index the actual retained scroll child slots.
+
+A single per-server `Ease` value drives roundedness for the tile, custom icon
+clipping and voice outline; the outline radius adds its four-pixel extension to
+the same radius snapshot. Selection/hover retarget this state, rapid reversals
+continue from its current value, and GPUI's reduced-motion setting skips the
+transition. There is no separate instantaneous hover-radius style. Animation
+frames stop when the transition settles; listening pulses retain their existing
+bounded timer.
+
+`--scenes rail-layout` adds a long list of offline local bookmarks and a second
+independent loopback Mumble server. It checks the first/last live endpoint at
+Home/End and after opposite-end scroll/focus reveal at 100/125/150/200% zoom. PNG
+contours independently compare the tile and outline in the same intermediate,
+hovered and resting frames. No host microphone is used.
+
 ## Scope of the audit
 
 Migrated surfaces include the conversation header and user footer; voice status,

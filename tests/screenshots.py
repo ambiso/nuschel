@@ -348,6 +348,7 @@ def main():
             murmur.ini.write_text(murmur.ini.read_text() + "messagelimit=1000\nmessageburst=1000\n")
             bot_options = ["--message-limit", "1000", "--message-burst", "1000"]
         murmur.seed()
+        rail_scene = "rail-layout" in args.scenes.split(",")
         layout_scene = bool({"layout", "layout-controls", "layout-performance"} & set(args.scenes.split(",")))
         if layout_scene:
             murmur.ini.write_text(murmur.ini.read_text() + "suggestPushToTalk=true\n")
@@ -361,6 +362,12 @@ def main():
                     "INSERT OR IGNORE INTO channels (server_id, channel_id, parent_id, name, inheritacl)"
                     " VALUES (1, ?, 6, ?, 1)", [(100 + n, f"Room {n:02}") for n in range(40)])
         murmur.start()
+        rail_murmur = None
+        if rail_scene:
+            (root / "rail-server").mkdir()
+            rail_port = free_port()
+            rail_murmur = Murmur(args.murmur, root / "rail-server", rail_port)
+            rail_murmur.seed(); rail_murmur.start()
         bots = []
         app = None
         wormhole = None
@@ -431,7 +438,11 @@ def main():
                 bookmark["name"] = SERVER_NAME
             second = {"id": str(uuid.uuid4()), "name": "Friends", "host": "127.0.0.1",
                       "port": 1, "username": "Andi", "certificate_sha256": None}
-            (profile / "config/servers.json").write_text(json.dumps([bookmark, second]))
+            bookmarks = [bookmark, second]
+            if rail_scene:
+                rail_pin = certificate_pin(args.binaries, "127.0.0.1", rail_port, root / "rail-probe")
+                bookmarks = [bookmark] + [dict(second, id=str(uuid.uuid4()), name=f"Rail filler {n:02}") for n in range(18)] + [dict(bookmark, id=str(uuid.uuid4()), name="Rail last", username="Rail Last", port=rail_port, certificate_sha256=rail_pin)]
+            (profile / "config/servers.json").write_text(json.dumps(bookmarks))
             # The web host share links point at (docs/web.md); nothing is fetched from it.
             (profile / "config/settings.json").write_text(json.dumps({"appearance": {"theme": args.theme, "zoom": args.zoom},
                                                                       "share_web_host": "web.example.org"}))
@@ -535,6 +546,9 @@ def main():
             if {"layout", "layout-controls"} & scenes:
                 from layout_regression import run as run_layout
                 run_layout(args, root, shell, registry, bots, profile, port, pin, shot)
+            if "rail-layout" in scenes:
+                from rail_layout import run as run_rail
+                run_rail(args, shell, registry, profile, shot)
             if "layout-performance" in scenes:
                 from layout_regression import performance
                 performance(args, shell, profile, shot)
@@ -1649,6 +1663,8 @@ def main():
                     os.killpg(helper.pid, signal.SIGTERM)
             shell.stop()
             murmur.stop()
+            if rail_murmur:
+                rail_murmur.stop()
             if wormhole:
                 wormhole.stop()
 
