@@ -19,6 +19,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         Ok(bytes)
     };
+    let mut authentication = None;
     let key = match args.as_slice() {
         [command, a, secret, b, public, c, manifest, d, signature]
             if command == "sign" && a == "--secret-file" && b == "--public-file"
@@ -32,7 +33,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 key
             }
         [command, a, public, b, manifest, c, signature]
-            if command == "verify" && a == "--public-file" && b == "--manifest" && c == "--signature-file" => {
+            if (command == "verify" || command == "authenticate") && a == "--public-file" && b == "--manifest" && c == "--signature-file" => {
                 let keys = nuschl_update::trust::parse(&bounded(Path::new(public), nuschl_update::trust::MAX_TRUST_BYTES)?)?;
                 let bytes = bounded(Path::new(manifest), nuschl_update::auth_format::MAX_MANIFEST_BYTES)?;
                 let signed = nuschl_update::auth_format::Signature::from_bytes(&bounded(Path::new(signature), nuschl_update::auth_format::SIGNATURE_BYTES)?)?;
@@ -40,7 +41,21 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 nuschl_update_worker::verify_ed25519(&key, &signed, &bytes)?;
                 nuschl_update_worker::verify_mldsa44(&key, &signed, &bytes)?;
                 let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_secs();
-                nuschl_update::manifest::parse(&bytes, now)?;
+                if command == "authenticate" {
+                    // Operator audit only: validate all normal v2 structural
+                    // and interval limits at the signed issuance instant. This
+                    // does not change runtime/current-time acceptance or the
+                    // ordinary verify command. Both raw signatures were already
+                    // checked above, including the full public-pair binding.
+                    let candidate: nuschl_update::Manifest = serde_json::from_slice(&bytes)?;
+                    let checked = nuschl_update::manifest::parse(&bytes, candidate.released)?;
+                    let status = if checked.expires <= now { "expired" }
+                        else if checked.released > now.saturating_add(nuschl_update::manifest::FUTURE_SKEW_SECONDS) { "not-yet-valid" }
+                        else { "current" };
+                    authentication = Some((status, checked.released, checked.expires));
+                } else {
+                    nuschl_update::manifest::parse(&bytes, now)?;
+                }
                 key
             }
         [command, a, secret, b, public] if a == "--secret-file" && b == "--public-file" => {
@@ -51,7 +66,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 _ => return Err("unknown key operation".into()),
             }
         },
-        _ => return Err("usage: nuschl-update-sign {keygen|public-key|key-status|sign|verify} --secret-file PRIVATE_PATH --public-file PUBLIC_PATH".into()),
+        _ => return Err("usage: nuschl-update-sign {keygen|public-key|key-status|sign|verify|authenticate} --secret-file PRIVATE_PATH --public-file PUBLIC_PATH".into()),
     };
     // Only public identifiers. Never print, debug-format or send seeds through
     // arguments, environment variables, stdout, diagnostics or log metadata.
@@ -59,6 +74,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         "format=2 algorithm=ed25519+mldsa44 key_id={}",
         hex::encode(key.id())
     );
+    if let Some((status, released, expires)) = authentication {
+        println!(
+            "authentication_only=true status={status} current_time_accepted={} released={released} expires={expires}",
+            status == "current"
+        );
+    }
     Ok(())
 }
 fn main() {
