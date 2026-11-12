@@ -2,9 +2,12 @@
 
 Current focus (user, 2026-11-12): **unmute-to-first-speech latency, stereo receive
 and output fidelity, and hybrid update readiness**. Independent owners now cover
-stale menu target/focus guards, content-worker retry bounds and the standalone
-server/RTC per-crate build migration. Browser initialization recovery is
-integrated. Native macOS static CI verification is prepared; its actual execution
+receive clipping/reference correspondence, transmit quality evidence and legacy
+welcome rendering. Native action authority, content/math worker retirement and
+the standalone server/RTC per-crate build migration are integrated with scoped
+proofs. Native and browser transmit encoders now use Audio; RestrictedLowDelay
+quality equivalence remains open. Browser initialization recovery is integrated.
+Native macOS static CI verification is prepared; its actual execution
 remains open. SDK request retirement, bounded menus, native packet-gain
 ownership and frozen cross archives have scoped proofs integrated. Browser playout, hash-only document delivery, CELT concealment,
 Windows profile-preserving updater relaunch and the metadata-refresh procedure
@@ -23,6 +26,20 @@ outside the current task's scope.
 
 Current integration checkpoint (2026-11-12):
 
+- **Native action authority and the Audio transmit profile are integrated through
+  `95a1a27f`.** All 17 authority production files match the reviewed private-server
+  source exactly. Its 87 desktop, 107 client and 79 session tests and real permission
+  shifts, session reuse and stale reconnect prompt proofs pass. The unchanged
+  geometry matrix also passes against that authority package. Native encoder
+  tests pass 71 with five existing ignored; audio-WASM passes eight and the real
+  wasm-bindgen artifact builds. Combined desktop/web/server/signer packages,
+  formatting, deny, audit and generated-graph checks pass, as do actual Linux/web
+  bundled notice readers. The independent receive spectral artifacts and five
+  measurement controls are integrated: nominal component agreement is close,
+  while the overload 44.1 kHz stock-order gate deliberately remains failing.
+  See `docs/context-menus.md`, `docs/opus-encoding-quality.md` and
+  `docs/output-quality.md`. This does not establish complete input/output or
+  physical Windows/macOS fidelity. Combined runtime proof is recorded separately.
 - **Combined Linux/web distributions passed at `39ea7132`.** Actual packages
   include clocked browser playout with both reviewed cross-port fixes, hash-only
   document delivery, loss/CELT/DTX/FEC/framing corrections, stereo/headroom/mono
@@ -52,8 +69,8 @@ Current integration checkpoint (2026-11-12):
   WASM loader with zero ordinary requests/microphone access, retained draft/cache
   and first-ready-only invite connection pass. Actual calling/text/order/privacy
   checks remain green. Scheduled deadlines do not prove synchronous thread exit.
-  See `docs/sdk-rpc.md`; content-worker retirement and the attachment broker
-  remain independent open work.
+  See `docs/sdk-rpc.md`; content-worker retirement is now integrated separately,
+  while the attachment broker remains open.
 - **Desktop layout foundation is integrated through `12d6695c`.** Shared finite
   text/action lanes, one bounded notice stack, restored connection indicator,
   wrapped headers/footers, keyboard/pointer dismissal and nested focus reveal
@@ -1022,27 +1039,25 @@ listed below. Plugin data remains the explicit gap.
       menu idle proof has two transport-driven draws and no new focus reveals;
       Root integration preserves the exact tested menu source bytes; native
       Windows/macOS execution remains open. See `docs/context-menus.md`.
-- [ ] Keep menu focus attached to a semantic action when permissions or server
-      context actions change while the menu is open. Current item/focus keys use
-      vector indexes; inserting/removing entries can reuse an index for a different
-      label/action (source-level finding, not a runtime wrong-action proof).
-      Verify permission changes with a private server and bind retained focus to
-      stable action identity. This is separate from popup geometry and from
-      server/generation/session target-authority guards.
-- [ ] Bind delayed desktop menu actions and administrative prompts to their
+- [x] Keep menu focus attached to a semantic action when permissions or server
+      context actions change while the menu is open. Semantic keys now retain
+      the original action through row insertion/removal. Real private-Murmur
+      permission changes move Kick from row 12 to 11 while it stays focused;
+      removing the focused Register action does not activate its replacement,
+      and Tab recovers inside the menu. Integrated source matches the tested
+      package; source and proof details are in `docs/context-menus.md`.
+- [x] Bind delayed desktop menu actions and administrative prompts to their
       original server identity, connection generation and user presence instance.
-      Source review finds `Menu`/`Prompt` retain a server vector index and
-      kick/ban actions retain only a numeric session; submission resolves the
-      current server/session. Reconnect, server removal or session reuse can
-      therefore change the target while an old prompt is open. Verify the exact
-      stale-action cases with private servers, then reject obsolete actions
-      before dispatch. Channel actions need equivalent lifecycle review. This
-      is a source-level finding; the menu geometry proof does not establish it.
-      Authority/focus implementation and private proof are ready for root review:
+      Menus/prompts/panels now retain saved endpoint, connection generation,
+      own presence and primary user/channel lifetime instead of resolving a
+      retained vector slot or numeric session alone. Root integrated and reviewed
+      the authority/focus implementation and independent private proof:
       87 desktop, 107 client and 79 session units pass; real stock Murmur changes
       permission row positions, reuses a session for another certificate, and
       reconnects with a retained harmless prompt. Fresh controls succeed while
-      stale actions refuse. Keep these rows open until integrated source review.
+      stale actions refuse. All 17 production source hashes match the tested
+      authority source; combined package/notice checks also pass. Separate
+      non-menu controls and mutable panel-row findings remain open below.
 - [ ] Audit retained non-menu controls for original saved-server binding.
       Source review still finds the whisper Stop banner in `view.rs` captures a
       server vector index; `stop_whisper` resolves the current slot. Removing an
@@ -1065,7 +1080,7 @@ listed below. Plugin data remains the explicit gap.
       online sessions; review response replacement separately from user-presence
       leases. This is a separate source finding, not covered by menu geometry,
       semantic context-menu focus, or original server/connection target guards.
-- [ ] Close the enqueue-to-consume authority gap for delayed native actions.
+- [x] Close the enqueue-to-consume authority gap for delayed native actions.
       Source review finds that the native command queue survives automatic
       reconnects, while numeric user/channel targets are checked only for current
       existence. UI-only generation checks cannot prevent queued work reaching a
@@ -1075,8 +1090,8 @@ listed below. Plugin data remains the explicit gap.
       installed whisper targets must remain bound for subsequent voice packets.
       If a whisper target expires, drop voice until an explicit new selection;
       never fall back to normal channel broadcast. These are source findings,
-      now covered by the authority lane's focused regressions and private proof,
-      pending reviewed root integration. Known cached numeric permissions are
+      now covered by the integrated authority lane's focused regressions and
+      private proof. Known cached numeric permissions are
       rechecked locally; Nuschl edit/delete ownership and moderator authorization
       remain authoritative server decisions, with exact conversation coverage.
       No local message-ownership cache is required or claimed.
