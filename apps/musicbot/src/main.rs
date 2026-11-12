@@ -3,6 +3,7 @@
 //! channels; people control the queues on a web page they get a link to.
 mod config;
 mod codec;
+mod codec_host;
 mod decode;
 mod mumble;
 mod persist;
@@ -61,8 +62,28 @@ pub struct Bot {
     pub persistence: Mutex<()>,
 }
 
-#[tokio::main]
-async fn main() -> ExitCode {
+fn main() -> ExitCode {
+    let arguments: Vec<_> = std::env::args_os().collect();
+    if arguments.get(1).is_some_and(|argument| argument == "--codec-worker") {
+        let role = (arguments.len() == 3)
+            .then(|| arguments[2].to_str().and_then(codec::Role::parse))
+            .flatten();
+        let Some(role) = role else { return ExitCode::FAILURE };
+        // No logger, Tokio runtime, configuration, credentials, profile or
+        // listener is initialized in a restricted child role.
+        return match codec_worker::run(role) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(_) => ExitCode::FAILURE,
+        };
+    }
+    let runtime = match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
+        Ok(runtime) => runtime,
+        Err(_) => return ExitCode::FAILURE,
+    };
+    runtime.block_on(application())
+}
+
+async fn application() -> ExitCode {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()

@@ -86,6 +86,34 @@ pub fn math_sandbox_command(executable: &Path) -> Result<Command, Error> {
     Ok(windows_worker(executable, &windows_policies::math()))
 }
 
+/// Musicbot codec roles have no audio-service, state-directory or network
+/// capabilities. They are persistent; their owner applies operation-specific
+/// deadlines and reaps a failed child before admitting a replacement.
+#[cfg(target_os = "linux")]
+pub fn musicbot_codec_sandbox_command(
+    executable: &Path,
+    arguments: &[OsString],
+) -> Result<Command, Error> {
+    Ok(Sandbox::new(executable, &[PERSISTENT_MEMORY.into()])?.run(arguments))
+}
+
+#[cfg(target_os = "macos")]
+pub fn musicbot_codec_sandbox_command(
+    executable: &Path,
+    arguments: &[OsString],
+) -> Result<Command, Error> {
+    sandbox_exec(seatbelt::CONTENT, executable, arguments)
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+pub fn musicbot_codec_sandbox_command(
+    _: &Path,
+    _: &[OsString],
+) -> Result<Command, Error> {
+    // Keep cross compilation working, but never run an unrestricted fallback.
+    Err(Error::MissingSandboxHelper("musicbot codec containment on this platform"))
+}
+
 /// Seconds of wall-clock time, and on Linux of CPU time, a request may take.
 fn budget(request: &ContentRequest) -> u64 {
     match request {
