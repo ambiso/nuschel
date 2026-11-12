@@ -247,7 +247,8 @@ def main():
             src_reference = np.asarray(src_reference, dtype=np.float32).reshape(-1, 2)[:len(actual)]
             src_reference = np.clip(src_reference, -1, 1)
             src_metrics = metrics(src_reference, actual, rate)
-            # Source-matched component reference: same mix-before-SRC clip as Nuschl.
+            # Source-matched component reference: follow the explicitly selected
+            # wide-ring path or retain the frozen historical clipped-ring path.
             expected, _ = speex.convert((wide if args.wide_mixer else expected48).reshape(-1).tolist(), rate)
             expected = np.clip(np.asarray(expected, dtype=np.float32).reshape(-1, 2)[:len(actual)], -1, 1)
             pipeline_metrics = metrics(expected, actual, rate)
@@ -286,7 +287,7 @@ def main():
         "cases": rows, "artifacts": artifacts,
         "all_component_gates_passed": all(r["component_gate_passed"] for row in rows for r in row["rates"]),
         "all_stock_order_gates_passed": all(r["stock_order_gate_passed"] for row in rows for r in row["rates"]),
-        "limits": ["No native encoder/input/DSP/capture/network exercised", "No hardware/listening/perceptual parity established", "WAVs retain IEEEfloat32 samples without normalization/clipping; float PCM drives all metrics", "Overload clip/SRC ordering is a separately reported existing gap; lossy source/codec error is not an RX defect"]}
+        "limits": ["No native encoder/input/DSP/capture/network exercised", "No hardware/listening/perceptual parity established", "WAVs retain IEEEfloat32 samples without normalization/clipping; float PCM drives all metrics", "Stock-order overload gate remains strict; source/codec lossy error is not an RX defect"]}
     (args.output/"proof.json").write_text(json.dumps(report, indent=2)+"\n")
     if not report["all_component_gates_passed"] or not report["all_stock_order_gates_passed"]:
         raise SystemExit(1)
