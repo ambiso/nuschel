@@ -70,15 +70,25 @@ try {
   Get-NuschlTestFile -Name '__FIXTURE__' -OutFile "$dir\nuschl-update-runtime-fixture.exe"
   $program = "$dir\nuschl-update-runtime-fixture.exe"
   $arguments = @('"' + "$dir\nuschl-update-verify-ed25519.exe" + '"', '"' + "$dir\nuschl-update-verify-mldsa44.exe" + '"')
-  $p = Start-Process -FilePath $program -ArgumentList $arguments -PassThru -RedirectStandardOutput "$dir\stdout.txt" -RedirectStandardError "$dir\stderr.txt"
+  $info = New-Object Diagnostics.ProcessStartInfo
+  $info.FileName = $program
+  $info.Arguments = $arguments -join ' '
+  $info.UseShellExecute = $false
+  $info.CreateNoWindow = $true
+  $info.RedirectStandardOutput = $true
+  $info.RedirectStandardError = $true
+  $p = New-Object Diagnostics.Process
+  $p.StartInfo = $info
+  [void]$p.Start()
+  $stdout = $p.StandardOutput.ReadToEndAsync()
+  $stderr = $p.StandardError.ReadToEndAsync()
   if (-not $p.WaitForExit(180000)) {
     Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
     throw 'native hybrid fixture exceeded 180 second outer deadline'
   }
-  $p.Refresh()
   $code = $p.ExitCode
-  Get-Content -LiteralPath "$dir\stdout.txt"
-  Get-Content -LiteralPath "$dir\stderr.txt"
+  $stdout.Result
+  $stderr.Result
   "FIXTURE_EXIT_CODE=$code"
   if ($code -ne 0) { throw "native hybrid fixture rejected ($code)" }
 } finally {

@@ -3,7 +3,7 @@
 //! solely into runtime-fixture, never either distributed verifier or signer.
 use nuschl_update::{
     VerifierPaths,
-    auth_format::{PublicKey, Signature},
+    auth_format::{PublicKey, Signature, signed_bytes},
     verifier_wire::{Algorithm, MAX_REQUEST_BYTES, Request},
 };
 use std::{
@@ -11,6 +11,7 @@ use std::{
     io::{Read, Write},
     net::{SocketAddr, TcpStream},
     path::Path,
+    process::{Command, Stdio},
     time::{Duration, Instant},
 };
 
@@ -104,7 +105,10 @@ pub fn exercise(
     let spoof = fault("spoof")?;
     let mut compromised = workers.clone();
     compromised.ed25519 = spoof.clone();
-    verify(signed, &compromised)?;
+    if let Err(error) = verify(signed, &compromised) {
+        diagnostic(&spoof, raw, signed, key)?;
+        return Err(error.into());
+    }
     assert!(verify(bad_ml, &compromised).is_err());
     compromised = workers.clone();
     compromised.mldsa44 = spoof;
@@ -131,5 +135,68 @@ pub fn exercise(
             fs::remove_file(executable)?;
         }
     }
+    Ok(())
+}
+
+// Failure diagnostics only, never acceptance evidence: the real test above
+// always uses verify_hybrid's production launcher, containment and strict reply.
+// This bounded extra launch exposes native errors without changing production
+// stderr suppression or granting the worker any additional authority.
+fn diagnostic(executable: &Path, raw: &[u8], signature: &Signature, key: &PublicKey) -> Result<()> {
+    let request = Request::new(
+        Algorithm::Ed25519,
+        key.ed25519(),
+        signature.ed25519(),
+        &signed_bytes(key, raw)?,
+    )?;
+    let bytes = request.encode();
+    assert!(bytes.len() < 4096);
+    let mut command = Command::new(executable);
+    command.env_clear();
+    for name in ["SystemRoot", "WINDIR", "TEMP", "TMP"] {
+        if let Some(value) = std::env::var_os(name) {
+            command.env(name, value);
+        }
+    }
+    command.args([
+        "--nuschl-sandbox",
+        "--profile",
+        "nuschl.update.ed25519",
+        "--memory",
+        "268435456",
+        "--cpu",
+        "5",
+        "--less-privileged",
+        "--",
+    ]);
+    let mut child = command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    child
+        .stdin
+        .take()
+        .ok_or("diagnostic stdin absent")?
+        .write_all(&bytes)?;
+    let deadline = Instant::now() + Duration::from_secs(6);
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            child.kill()?;
+            break child.wait()?;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    let mut stderr = String::new();
+    child
+        .stderr
+        .take()
+        .ok_or("diagnostic stderr absent")?
+        .take(4096)
+        .read_to_string(&mut stderr)?;
+    eprintln!("Non-accepting fault diagnostic {status}: {stderr}");
     Ok(())
 }
