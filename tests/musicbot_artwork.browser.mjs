@@ -47,6 +47,14 @@ try {
     const { context, page, failures } = await setup({ width, height: 800 });
     await page.goto(link + '#/albums?library=0&list=newest');
     await pixel(page, [200, 80, 40, 255]);
+    await page.waitForFunction(() => {
+      const viewport = document.querySelector('#main-content').getBoundingClientRect();
+      return [...document.querySelectorAll('.media-grid canvas')].every(canvas => {
+        const r = canvas.getBoundingClientRect();
+        const visible = r.bottom > viewport.top && r.top < viewport.bottom && r.right > viewport.left && r.left < viewport.right;
+        return !visible || canvas.classList.contains('ready');
+      });
+    });
     const before = await page.evaluate(() => ({
       total: document.querySelectorAll('.media-grid canvas').length,
       live: [...document.querySelectorAll('canvas')].filter(c => c.width > 0).length,
