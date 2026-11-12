@@ -495,6 +495,7 @@ pub fn section(
     server: usize,
     user_id: u32,
     own: bool,
+    origin: &crate::menus::ActionOrigin,
     cx: &mut Context<Desktop>,
 ) -> AnyElement {
     let none = IdentityState::default();
@@ -637,12 +638,20 @@ pub fn section(
                 "kt-accept",
                 "Accept new identity",
                 Tone::Danger,
-                move |this, _, cx| {
-                    this.run(
-                        server,
-                        Command::Identity(IdentityCommand::AcceptKeyChange { account }),
-                    );
-                    cx.notify();
+                {
+                    let origin = origin.with_account(account);
+                    move |this, _, cx| {
+                        let Some(server) = origin.live_index(this) else {
+                            return;
+                        };
+                        origin.with_scope(this, |this| {
+                            this.run(
+                                server,
+                                Command::Identity(IdentityCommand::AcceptKeyChange { account }),
+                            );
+                            cx.notify();
+                        });
+                    }
                 },
                 cx,
             ));
@@ -652,12 +661,20 @@ pub fn section(
                 "kt-unverify",
                 "Remove verification",
                 Tone::Secondary,
-                move |this, _, cx| {
-                    this.run(
-                        server,
-                        Command::Identity(IdentityCommand::UnmarkVerified { account }),
-                    );
-                    cx.notify();
+                {
+                    let origin = origin.with_account(account);
+                    move |this, _, cx| {
+                        let Some(server) = origin.live_index(this) else {
+                            return;
+                        };
+                        origin.with_scope(this, |this| {
+                            this.run(
+                                server,
+                                Command::Identity(IdentityCommand::UnmarkVerified { account }),
+                            );
+                            cx.notify();
+                        });
+                    }
                 },
                 cx,
             ));
@@ -673,12 +690,20 @@ pub fn section(
                 "kt-verify",
                 "Mark as verified",
                 Tone::Primary,
-                move |this, _, cx| {
-                    this.run(
-                        server,
-                        Command::Identity(IdentityCommand::MarkVerified { account }),
-                    );
-                    cx.notify();
+                {
+                    let origin = origin.with_account(account);
+                    move |this, _, cx| {
+                        let Some(server) = origin.live_index(this) else {
+                            return;
+                        };
+                        origin.with_scope(this, |this| {
+                            this.run(
+                                server,
+                                Command::Identity(IdentityCommand::MarkVerified { account }),
+                            );
+                            cx.notify();
+                        });
+                    }
                 },
                 cx,
             ));
@@ -689,9 +714,17 @@ pub fn section(
         "kt-recheck",
         "Check again",
         Tone::Ghost,
-        move |this, _, cx| {
-            check(this, server, user_id, false);
-            cx.notify();
+        {
+            let origin = origin.clone();
+            move |this, _, cx| {
+                let Some(server) = origin.live_index(this) else {
+                    return;
+                };
+                origin.with_scope(this, |this| {
+                    check(this, server, user_id, false);
+                    cx.notify();
+                });
+            }
         },
         cx,
     ));

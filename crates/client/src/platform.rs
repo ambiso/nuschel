@@ -136,6 +136,18 @@ pub trait Platform {
     ) -> Result<u64, String>;
     fn disconnect(&self, server: &str);
     fn request(&self, server: &str, request: Request) -> Result<(), String>;
+    /// Automatic metadata: native implementations bind at enqueue/consume;
+    /// source-ticket-only platforms retain their existing rendering guards.
+    fn request_metadata(
+        &self,
+        server: &str,
+        authority: nuschl_core::model::MetadataAuthority,
+        request: Request,
+    ) -> Result<(), String> {
+        let _ = authority;
+        self.request(server, request)
+    }
+
     /// A page of a conversation's local history (`channel` is its storage key).
     fn local_history(
         &self,

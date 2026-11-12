@@ -345,6 +345,25 @@ impl Platform for BrowserPlatform {
         }
     }
 
+    fn request_metadata(
+        &self,
+        server: &str,
+        authority: nuschl_core::model::MetadataAuthority,
+        request: Request,
+    ) -> Result<(), String> {
+        // Browser transport keeps its current source-ticket model; this check
+        // rejects a replaced connection without claiming native actor parity.
+        if self
+            .0
+            .connections
+            .borrow()
+            .get(server)
+            .is_none_or(|connection| connection.generation != authority.generation)
+        {
+            return Err("Metadata belongs to an older connection.".into());
+        }
+        self.request(server, request)
+    }
     fn request(&self, server: &str, request: Request) -> Result<(), String> {
         let connections = self.0.connections.borrow();
         let connection = connections.get(server).ok_or("Not connected.")?;

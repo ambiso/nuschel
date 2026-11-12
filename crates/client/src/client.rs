@@ -26,6 +26,70 @@ use nuschl_core::{
 use nuschl_protocol::nuschl::{self, v1};
 use std::collections::BTreeMap;
 
+fn metadata_authority(
+    server: &ServerState,
+    users: Vec<(u32, u64)>,
+    channels: Vec<(u32, u64)>,
+) -> nuschl_core::model::MetadataAuthority {
+    let own = server
+        .own_session
+        .and_then(|id| server.users.get(&id))
+        .map(|user| (user.session, user.instance))
+        .unwrap_or((0, 0));
+    nuschl_core::model::MetadataAuthority {
+        generation: server.generation,
+        own,
+        users,
+        channels,
+    }
+}
+
+/// One login-time pass for hashes received before our own presence was known.
+/// Ordinary subsequent User events keep their existing incremental path.
+fn fetch_pending_avatars(platform: &dyn Platform, server: &mut ServerState) {
+    let Some(own) = server
+        .own_session
+        .and_then(|id| server.users.get(&id))
+        .filter(|own| own.instance != 0)
+        .map(|own| (own.session, own.instance))
+    else {
+        return;
+    };
+    let channel = server.voice_channel();
+    for user in server.users.values() {
+        if channel != Some(user.channel) || user.texture.is_some() {
+            continue;
+        }
+        let Some(hash) = user
+            .texture_hash
+            .as_ref()
+            .filter(|hash| !server.avatars.contains(*hash))
+        else {
+            continue;
+        };
+        if !server.avatar_requests.insert(hash.clone()) {
+            continue;
+        }
+        let result = platform.request_metadata(
+            &server.id,
+            nuschl_core::model::MetadataAuthority {
+                generation: server.generation,
+                own,
+                users: vec![(user.session, user.instance)],
+                channels: vec![],
+            },
+            Request::RequestBlobs {
+                textures: vec![user.session],
+                comments: vec![],
+                descriptions: vec![],
+            },
+        );
+        if result.is_err() {
+            server.avatar_requests.remove(hash);
+        }
+    }
+}
+
 mod order;
 
 /// How often we say we are typing: the server's limit per conversation.
@@ -175,6 +239,7 @@ struct DescriptionRequests {
 }
 
 struct DescriptionRequest {
+    instance: u64,
     hash: String,
     sent: bool,
 }
@@ -771,14 +836,15 @@ impl Client {
         let Some(request) = requests
             .channels
             .get_mut(&id)
-            .filter(|request| !request.sent)
+            .filter(|request| !request.sent && request.instance == channel.instance)
         else {
             return;
         };
         if self
             .platform
-            .request(
+            .request_metadata(
                 &server.id,
+                metadata_authority(server, vec![], vec![(id, request.instance)]),
                 Request::RequestBlobs {
                     textures: vec![],
                     comments: vec![],
@@ -882,8 +948,9 @@ impl Client {
             && !interest.sent
             && self
                 .platform
-                .request(
+                .request_metadata(
                     &server.id,
+                    metadata_authority(server, vec![(interest.session, interest.instance)], vec![]),
                     Request::RequestBlobs {
                         textures: vec![],
                         comments: vec![user.session],
@@ -2131,6 +2198,7 @@ impl Client {
                 server.status = Status::Connected;
                 server.reconnecting = None;
                 server.own_session = Some(session);
+                fetch_pending_avatars(self.platform.as_ref(), server);
                 server.expand_occupied();
                 self.passwords.remove(&server.id);
                 // A share link's token decides first; its path is the fallback.
@@ -2153,14 +2221,13 @@ impl Client {
                     };
                 }
                 if let Some(hash) = blob_hash(&update.description_hash) {
-                    if requests
-                        .channels
-                        .get(&update.id)
-                        .is_none_or(|request| request.hash != *hash)
-                    {
+                    if requests.channels.get(&update.id).is_none_or(|request| {
+                        request.hash != *hash || request.instance != update.instance
+                    }) {
                         requests.channels.insert(
                             update.id,
                             DescriptionRequest {
+                                instance: update.instance,
                                 hash: hash.clone(),
                                 sent: false,
                             },
@@ -2368,10 +2435,15 @@ impl Client {
                             );
                         }
                     } else if server.voice_channel() == Some(user.channel)
+                        && server
+                            .own_session
+                            .and_then(|id| server.users.get(&id))
+                            .is_some_and(|own| own.instance != 0)
                         && server.avatar_requests.insert(hash)
                     {
-                        let _ = self.platform.request(
+                        let _ = self.platform.request_metadata(
                             &server.id,
+                            metadata_authority(server, vec![(user.session, user.instance)], vec![]),
                             Request::RequestBlobs {
                                 textures: vec![user.session],
                                 comments: vec![],
@@ -2406,8 +2478,16 @@ impl Client {
                         channel: user.channel,
                     }));
                 }
+                let own_arrived = Some(user.session) == server.own_session
+                    && server
+                        .users
+                        .get(&user.session)
+                        .is_none_or(|own| own.instance == 0);
                 let arrived = user.clone();
                 server.users.insert(user.session, user);
+                if own_arrived {
+                    fetch_pending_avatars(self.platform.as_ref(), server);
+                }
                 for position in 0..server.channels.len() {
                     let channel = &server.channels[position];
                     let same = channel.direct_peer.as_ref().is_some_and(|old| {
@@ -2625,6 +2705,7 @@ mod tests {
     /// A platform that records what the client asked of it.
     #[derive(Default)]
     struct Recorder {
+        metadata: Mutex<Vec<nuschl_core::model::MetadataAuthority>>,
         requests: Mutex<Vec<(String, Request)>>,
         pages: Mutex<Vec<(String, HistoryTicket, Page)>>,
         sounds: Mutex<Vec<Sound>>,
@@ -2642,6 +2723,15 @@ mod tests {
                 .unwrap()
                 .push((server.to_owned(), request));
             Ok(())
+        }
+        fn request_metadata(
+            &self,
+            server: &str,
+            authority: nuschl_core::model::MetadataAuthority,
+            request: Request,
+        ) -> Result<(), String> {
+            self.metadata.lock().unwrap().push(authority);
+            self.request(server, request)
         }
         fn local_history(
             &self,
@@ -3972,5 +4062,53 @@ mod tests {
             .map(|(_, request)| request)
             .collect();
         assert!(matches!(&requests[..], [Request::Join(3)]), "{requests:?}");
+    }
+    #[test]
+    fn automatic_hash_refresh_carries_original_comment_interest_and_channel_lifetimes() {
+        let (mut client, recorder, id) = connected();
+        client.servers[0].users.get_mut(&1).unwrap().instance = 11;
+        client.handle(document_event(
+            &id,
+            ServerEvent::User(comment_user(7, 70, &"ab".repeat(20), None)),
+        ));
+        client.open_comment(0, 7, None);
+        let first = recorder.metadata.lock().unwrap().last().unwrap().clone();
+        assert_eq!(first.own, (1, 11));
+        assert_eq!(first.users, vec![(7, 70)]);
+        client.handle(document_event(
+            &id,
+            ServerEvent::User(comment_user(7, 70, &"cd".repeat(20), None)),
+        ));
+        assert_eq!(
+            recorder.metadata.lock().unwrap().last().unwrap().users,
+            vec![(7, 70)]
+        );
+        let count = recorder.metadata.lock().unwrap().len();
+        client.handle(document_event(
+            &id,
+            ServerEvent::User(comment_user(7, 700, &"ef".repeat(20), None)),
+        ));
+        assert_eq!(
+            recorder.metadata.lock().unwrap().len(),
+            count,
+            "replacement presence cannot inherit profile interest"
+        );
+        client.open(0, 2).unwrap();
+        let mut channel = description(2, &"aa".repeat(20), "");
+        channel.instance = 25;
+        client.handle(document_event(&id, ServerEvent::Channel(channel)));
+        assert_eq!(
+            recorder.metadata.lock().unwrap().last().unwrap().channels,
+            vec![(2, 25)]
+        );
+        assert_eq!(
+            client.servers[0]
+                .channels
+                .iter()
+                .find(|channel| channel.id == 2)
+                .unwrap()
+                .instance,
+            25
+        );
     }
 }

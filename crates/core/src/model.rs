@@ -134,6 +134,17 @@ impl Channel {
     }
 }
 
+/// Native enqueue authority for automatic metadata work. The SDK supplies
+/// original interest lifetimes, never just reusable numeric wire IDs. Browser
+/// platforms keep their existing source-ticket checks; this is not a wire type.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MetadataAuthority {
+    pub generation: u64,
+    pub own: (u32, u64),
+    pub users: Vec<(u32, u64)>,
+    pub channels: Vec<(u32, u64)>,
+}
+
 /// Why the server refused a login (`Reject.RejectType`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]

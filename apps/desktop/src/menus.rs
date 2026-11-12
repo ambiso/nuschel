@@ -87,6 +87,7 @@ impl ActionOrigin {
             ),
             generation: view.generation,
             authority: CommandAuthority {
+                accounts: Vec::new(),
                 subject: match primary {
                     MenuTarget::User(id) => view
                         .users
@@ -133,7 +134,10 @@ impl ActionOrigin {
         }
     }
     pub fn local_index(&self, this: &Desktop) -> Option<usize> {
-        this.client.servers.iter().position(|view| {
+        self.local_index_in(&this.client.servers)
+    }
+    fn local_index_in(&self, servers: &[crate::state::ServerView]) -> Option<usize> {
+        servers.iter().position(|view| {
             view.id == self.server
                 && view.bookmark.host == self.endpoint.0
                 && view.bookmark.port == self.endpoint.1
@@ -142,8 +146,15 @@ impl ActionOrigin {
         })
     }
     pub fn live_index(&self, this: &Desktop) -> Option<usize> {
-        let index = self.local_index(this)?;
-        let view = &this.client.servers[index];
+        self.live_index_in(&this.client.servers, this.client.navigation.selection())
+    }
+    fn live_index_in(
+        &self,
+        servers: &[crate::state::ServerView],
+        selection: Option<&nuschl_client::Conversation>,
+    ) -> Option<usize> {
+        let index = self.local_index_in(servers)?;
+        let view = &servers[index];
         if view.status != Status::Connected
             || view.generation != self.generation
             || view.own_session != Some(self.authority.own.0)
@@ -179,10 +190,16 @@ impl ActionOrigin {
             _ => true,
         };
         (valid
-            && self.conversation.as_ref().is_none_or(|conversation| {
-                this.client.navigation.selection() == Some(conversation)
-            }))
+            && self
+                .conversation
+                .as_ref()
+                .is_none_or(|conversation| selection == Some(conversation)))
         .then_some(index)
+    }
+    pub(crate) fn with_account(&self, account: [u8; 16]) -> Self {
+        let mut origin = self.clone();
+        origin.authority.accounts = vec![account];
+        origin
     }
     pub fn with_scope<R>(&self, this: &mut Desktop, callback: impl FnOnce(&mut Desktop) -> R) -> R {
         let driver = this.driver.clone();
@@ -205,9 +222,11 @@ impl ActionOrigin {
 pub struct Menu {
     pub origin: ActionOrigin,
     pub invocation: u64,
-    pub user: Option<User>,
+    pub user: Option<Rc<User>>,
     pub image: Option<crate::viewer::ViewerImage>,
     pub message: Option<crate::selection::MessageMenu>,
+    pub channel_url: Option<String>,
+    pub local_share_url: Option<String>,
     pub target: MenuTarget,
     pub position: Point<Pixels>,
 }
@@ -415,18 +434,36 @@ impl Desktop {
             }
             origin.conversation = self.client.navigation.selection().cloned();
         }
-        self.menu = Some(Menu {
+        let local_share = matches!(target, MenuTarget::Channel(_))
+            && !(view.status == Status::Connected
+                && view.has("share/1")
+                && view.own_user_id().is_some());
+        let mut menu = Menu {
             origin,
             invocation: NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             user: match target {
-                MenuTarget::User(id) => view.users.get(&id).cloned(),
+                MenuTarget::User(id) => view.users.get(&id).cloned().map(Rc::new),
                 _ => None,
             },
             image: self.menu_image.clone(),
             message: self.text.menu.clone(),
+            channel_url: None,
+            local_share_url: None,
             target,
             position,
-        });
+        };
+        if let MenuTarget::Channel(channel) = target {
+            menu.channel_url = self.channel_url(server, channel);
+            if local_share {
+                menu.local_share_url = self
+                    .client
+                    .share_link(server, channel)
+                    .ok()
+                    .flatten()
+                    .map(|link| self.share_url(&link, None));
+            }
+        }
+        self.menu = Some(menu);
     }
 
     pub fn run(&mut self, server: usize, command: Command) {
@@ -711,25 +748,35 @@ impl Desktop {
         let Some(view) = self.client.servers.get_mut(server) else {
             return;
         };
-        // A failed enqueue leaves the old route and label intact. Once accepted
-        // by the actor, installation and selection are one transaction; a
-        // rejected replacement suspends outgoing voice instead of retaining it.
-        match self.driver.command(
+        match self.driver.voice_command(
             &view.id,
+            view.generation,
             Command::Whisper {
+                revision: 0,
                 id: WHISPER_TARGET,
                 targets: vec![target],
             },
         ) {
             Ok(()) => view.whisper = Some(label),
-            Err(error) => view.notice = Some(error),
+            Err(error) => {
+                view.whisper = Some("Voice suspended; select a target again".into());
+                view.notice = Some(error);
+            }
         }
     }
-
     pub fn stop_whisper(&mut self, server: usize) {
-        self.run(server, Command::SelectVoiceTarget(0));
-        if let Some(view) = self.client.servers.get_mut(server) {
-            view.whisper = None;
+        let Some(view) = self.client.servers.get_mut(server) else {
+            return;
+        };
+        match self
+            .driver
+            .voice_command(&view.id, view.generation, Command::SelectVoiceTarget(0))
+        {
+            Ok(()) => view.whisper = None,
+            Err(error) => {
+                view.whisper = Some("Voice suspended; select normal talking again".into());
+                view.notice = Some(error);
+            }
         }
     }
 
@@ -855,7 +902,7 @@ impl Desktop {
                             .users
                             .get(&session)
                             .filter(|current| current.instance == original.instance)
-                            .unwrap_or(original)
+                            .unwrap_or(original.as_ref())
                     })
                     .cloned()
                 else {
@@ -1234,7 +1281,13 @@ impl Desktop {
                         .key(format!("link:{channel}:{mine}:{linked}")),
                     );
                 }
-                if !links.is_empty() && server.may(channel, perm::LINK_CHANNEL) {
+                if links.len() >= nuschl_session::connection::MAX_ACTION_TARGETS
+                    && server.may(channel, perm::LINK_CHANNEL)
+                {
+                    entries.push(Entry::Note(
+                        "Too many links for one delayed action; unlink individual channels.",
+                    ));
+                } else if !links.is_empty() && server.may(channel, perm::LINK_CHANNEL) {
                     let links_key = format!("{links:?}");
                     entries.push(
                         item("Unlink all", "link", move |this, index, _, _| {
@@ -1250,20 +1303,24 @@ impl Desktop {
                         .key(format!("unlink-all:{channel}:{links_key}")),
                     );
                 }
-                entries.push(item("Copy link", "link", move |this, index, _, cx| {
-                    if let Some(url) = this.channel_url(index, channel) {
-                        cx.write_to_clipboard(ClipboardItem::new_string(url));
-                    }
-                }));
-                // A link that opens Nuschl, or the channel in a browser
-                // (docs/web.md, "Share links").
-                entries.push(item(
-                    "Copy share link",
-                    "link",
-                    move |this, index, _, cx| {
-                        this.copy_share_link(index, channel, cx);
-                    },
-                ));
+                if let Some(url) = menu.channel_url.clone() {
+                    entries.push(local_item("Copy link", "link", move |_, _, _, cx| {
+                        cx.write_to_clipboard(ClipboardItem::new_string(url.clone()));
+                    }));
+                }
+                if let Some(url) = menu.local_share_url.clone() {
+                    entries.push(local_item("Copy share link", "link", move |_, _, _, cx| {
+                        cx.write_to_clipboard(ClipboardItem::new_string(url.clone()));
+                    }));
+                } else {
+                    entries.push(item(
+                        "Copy share link",
+                        "link",
+                        move |this, index, _, cx| {
+                            this.copy_share_link(index, channel, cx);
+                        },
+                    ));
+                }
                 let write = server.may(channel, perm::WRITE);
                 let create = server.may(channel, perm::MAKE_CHANNEL)
                     || server.may(channel, perm::MAKE_TEMP_CHANNEL);
@@ -1521,7 +1578,7 @@ impl Desktop {
                 None => return,
             },
         };
-        let activate = |this: &mut Self| {
+        let mut activate = |this: &mut Self| {
             this.menu = None;
             window.focus(&this.window_focus, cx);
             action(this, index, window, cx);
@@ -1685,7 +1742,7 @@ impl Desktop {
 fn push_context_actions(
     entries: &mut Vec<Entry>,
     server: &crate::state::ServerView,
-    index: usize,
+    _index: usize,
     applies: impl Fn(&nuschl_session::model::ContextAction) -> bool,
     session: Option<u32>,
     channel: Option<u32>,
@@ -1935,6 +1992,7 @@ pub fn menu(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement> {
     if entries.is_empty() {
         return None;
     }
+    let snapshot = Rc::new(menu.clone());
     let rows = entries
         .into_iter()
         .enumerate()
@@ -1966,14 +2024,15 @@ pub fn menu(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement> {
                 action,
             } => {
                 let _ = action;
+                let element_key = format!("{}:{key}", menu.invocation);
                 let pointer_key = key.clone();
                 let keyboard_key = key.clone();
-                let origin_menu = menu.clone();
-                let key_menu = menu.clone();
+                let origin_menu = snapshot.clone();
+                let key_menu = snapshot.clone();
                 let foreground = if danger { DANGER_HOVER } else { TEXT };
                 let control = div()
-                    .id(SharedString::from(format!("menu-item:{key}")))
-                    .group(SharedString::from(format!("menu-item:{key}")))
+                    .id(SharedString::from(format!("menu-item:{element_key}")))
+                    .group(SharedString::from(format!("menu-item:{element_key}")))
                     .role(Role::MenuItem)
                     .aria_label(label.clone())
                     .tab_index(0)
@@ -2018,16 +2077,20 @@ pub fn menu(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement> {
                             15.,
                             color(if danger { DANGER_HOVER } else { TEXT_MUTED }),
                         )
-                        .group_hover(SharedString::from(format!("menu-item:{key}")), |style| {
-                            style.text_color(color(WHITE))
-                        }),
+                        .group_hover(
+                            SharedString::from(format!("menu-item:{element_key}")),
+                            |style| style.text_color(color(WHITE)),
+                        ),
                     )
                     .child(
                         crate::layout::flexible()
                             .whitespace_normal()
                             .child(text!(label).with_id(("menu-label", index))),
                     );
-                crate::layout::focusable(SharedString::from(format!("menu-focus:{key}")), control)
+                crate::layout::focusable(
+                    SharedString::from(format!("menu-focus:{element_key}")),
+                    control,
+                )
             }
             Entry::Volume { of, volume } => {
                 let what = match &of {
@@ -2229,5 +2292,141 @@ mod tests {
     #[test]
     fn encodes_url_path_segments() {
         assert_eq!(percent_encode("Dev Talk/ü"), "Dev%20Talk%2F%C3%BC");
+    }
+}
+
+#[cfg(test)]
+mod target_and_focus_tests {
+    use super::{ActionOrigin, Entry, MenuTarget, item, push_context_actions};
+    use crate::state::{ServerView, Status};
+    use nuschl_client::conversation::ConversationState;
+    use nuschl_session::{config::ServerBookmark, connection::User, model::ContextAction};
+
+    fn server(id: &str) -> ServerView {
+        let mut bookmark = ServerBookmark::new(id, "localhost", 64738, "reader").unwrap();
+        bookmark.id = id.into();
+        let mut server = ServerView::new(bookmark);
+        server.status = Status::Connected;
+        server.generation = 7;
+        server.own_session = Some(1);
+        for (session, instance) in [(1, 11), (2, 22)] {
+            server.users.insert(
+                session,
+                User {
+                    session,
+                    instance,
+                    channel: 5,
+                    ..User::default()
+                },
+            );
+        }
+        server.channels = [(0, 40), (5, 45), (6, 46)]
+            .into_iter()
+            .map(|(id, instance)| ConversationState {
+                instance,
+                ..ConversationState::channel(id, None, format!("Channel {id}"), 0)
+            })
+            .collect();
+        server
+    }
+    #[test]
+    fn original_server_resolves_after_reordering_but_never_to_a_replacement_slot() {
+        let mut servers = vec![server("a"), server("b")];
+        let origin = ActionOrigin::capture(&servers[1], MenuTarget::User(2));
+        assert_eq!(origin.live_index_in(&servers, None), Some(1));
+        servers.remove(0);
+        assert_eq!(origin.live_index_in(&servers, None), Some(0));
+        servers[0] = server("replacement");
+        assert_eq!(origin.local_index_in(&servers), None);
+        assert_eq!(origin.live_index_in(&servers, None), None);
+    }
+    #[test]
+    fn reconnect_session_and_channel_reuse_revoke_while_harmless_updates_do_not() {
+        let mut servers = vec![server("a")];
+        let user = ActionOrigin::capture(&servers[0], MenuTarget::User(2));
+        let channel = ActionOrigin::capture(&servers[0], MenuTarget::Channel(5));
+        servers[0].users.get_mut(&2).unwrap().name = "renamed".into();
+        servers[0].users.get_mut(&2).unwrap().channel = 6;
+        servers[0].channels.retain(|channel| channel.id != 6);
+        assert_eq!(user.live_index_in(&servers, None), Some(0));
+        assert_eq!(channel.live_index_in(&servers, None), Some(0));
+        servers[0].users.get_mut(&2).unwrap().instance = 222;
+        assert_eq!(user.live_index_in(&servers, None), None);
+        servers[0]
+            .channels
+            .iter_mut()
+            .find(|channel| channel.id == 5)
+            .unwrap()
+            .instance = 450;
+        assert_eq!(channel.live_index_in(&servers, None), None);
+        servers[0].users.get_mut(&1).unwrap().instance = 111;
+        let mut plain = ActionOrigin::capture(&server("a"), MenuTarget::Server);
+        assert_eq!(plain.live_index_in(&servers, None), None);
+        servers[0].users.get_mut(&1).unwrap().instance = 11;
+        servers[0].generation = 8;
+        assert_eq!(plain.live_index_in(&servers, None), None);
+        plain.generation = 8;
+        assert_eq!(plain.live_index_in(&servers, None), Some(0));
+    }
+    #[test]
+    fn local_bookmark_configuration_survives_disconnect_without_retargeting_endpoint() {
+        let mut servers = vec![server("a")];
+        let origin = ActionOrigin::capture(&servers[0], MenuTarget::Server);
+        servers[0].status = Status::Disconnected;
+        servers[0].users.clear();
+        assert_eq!(origin.local_index_in(&servers), Some(0));
+        assert_eq!(origin.live_index_in(&servers, None), None);
+        servers[0].bookmark.name = "renamed bookmark".into();
+        assert_eq!(origin.local_index_in(&servers), Some(0));
+        servers[0].bookmark.host = "different.invalid".into();
+        assert_eq!(origin.local_index_in(&servers), None);
+    }
+    fn profile(label: &str) -> Entry {
+        item(label, "info", |_, _, _, _| {})
+    }
+    fn key(entry: &Entry) -> &str {
+        match entry {
+            Entry::Item { key, .. } => key,
+            _ => panic!("expected action"),
+        }
+    }
+    #[test]
+    fn builtin_focus_identity_survives_label_and_permission_row_changes() {
+        let before = vec![Entry::Separator, profile("Profile old name")];
+        let after = vec![profile("Profile renamed"), Entry::Separator];
+        assert_eq!(key(&before[1]), key(&after[0]));
+    }
+    #[test]
+    fn duplicate_context_labels_keep_distinct_protocol_action_keys_when_reordered() {
+        let mut server = server("a");
+        server.context_actions = vec!["first", "second"]
+            .into_iter()
+            .map(|id| ContextAction {
+                action: id.into(),
+                text: "Same label".into(),
+                user: true,
+                channel: false,
+                server: false,
+            })
+            .collect();
+        let mut before = vec![];
+        push_context_actions(&mut before, &server, 0, |action| action.user, Some(2), None);
+        server.context_actions.reverse();
+        let mut after = vec![];
+        push_context_actions(&mut after, &server, 0, |action| action.user, Some(2), None);
+        let keys = |entries: &[Entry]| {
+            entries
+                .iter()
+                .filter_map(|entry| match entry {
+                    Entry::Item { key, .. } => Some(key.clone()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        let before = keys(&before);
+        let after = keys(&after);
+        assert_ne!(before[0], before[1]);
+        assert_eq!(before[0], after[1]);
+        assert_eq!(before[1], after[0]);
     }
 }

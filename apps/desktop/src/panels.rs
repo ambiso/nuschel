@@ -342,7 +342,9 @@ pub fn panel(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement> {
                 // Who they are comes first: the identity, then what they say.
                 .when_some(user.user_id, |column, user_id| {
                     let own = server_view.own_session == Some(*session);
-                    column.child(crate::identity::section(this, *server, user_id, own, cx))
+                    column.child(crate::identity::section(
+                        this, *server, user_id, own, origin, cx,
+                    ))
                 })
                 .when_some(comment, |column, blocks| {
                     column.child(

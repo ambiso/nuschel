@@ -320,6 +320,7 @@ pub enum Event {
 }
 struct Connection {
     generation: u64,
+    voice_route: std::sync::Arc<nuschl_session::connection::VoiceRoute>,
     commands: mpsc::Sender<Command>,
     sounds: mpsc::Sender<Sound>,
     task: tokio::task::JoinHandle<()>,
@@ -430,6 +431,117 @@ fn scoped_command(
             },
         )))
     })
+}
+
+fn metadata_command(
+    driver: usize,
+    server: &str,
+    metadata: nuschl_core::model::MetadataAuthority,
+    request: Request,
+) -> Result<(u64, Command), String> {
+    use nuschl_session::connection::{CommandAuthority, MAX_ACTION_TARGETS};
+    if !matches!(request, Request::RequestBlobs { .. })
+        || metadata.users.len().saturating_add(metadata.channels.len()) > MAX_ACTION_TARGETS
+    {
+        return Err("Invalid metadata authority.".into());
+    }
+    let authority = CommandAuthority {
+        own: metadata.own,
+        subject: None,
+        users: metadata.users,
+        channels: metadata.channels,
+        conversations: vec![],
+        accounts: vec![],
+    };
+    let mut command = Some(request_command(request));
+    let minimal = authority
+        .for_command(command.as_ref().unwrap())
+        .ok_or("Incomplete metadata authority.")?;
+    let mut authority = minimal;
+    if let Some((generation, scoped)) = scoped_command(driver, server, &mut command)? {
+        let Command::Scoped {
+            authority: callback,
+            command: inner,
+        } = scoped
+        else {
+            return Err("Missing callback authority.".into());
+        };
+        if generation != metadata.generation
+            || callback.own != authority.own
+            || callback.users != authority.users
+            || callback.channels != authority.channels
+        {
+            return Err("Metadata and callback authority disagree.".into());
+        }
+        authority.subject = callback.subject;
+        command = Some(*inner);
+    }
+    Ok((
+        metadata.generation,
+        Command::Scoped {
+            authority,
+            command: Box::new(command.unwrap()),
+        },
+    ))
+}
+
+fn with_action_scope<R>(
+    driver: usize,
+    server: String,
+    generation: u64,
+    authority: nuschl_session::connection::CommandAuthority,
+    callback: impl FnOnce() -> R,
+) -> R {
+    let _scope = action_scope(driver, server, generation, authority);
+    callback()
+}
+fn voice_intent(
+    connections: &BTreeMap<String, Connection>,
+    server: &str,
+    generation: u64,
+    command: Command,
+) -> Result<Command, String> {
+    let route = &connections
+        .get(server)
+        .filter(|connection| connection.generation == generation)
+        .ok_or("Voice target belongs to an older connection.")?
+        .voice_route;
+    match command {
+        Command::Whisper { id, targets, .. } => Ok(Command::Whisper {
+            id,
+            targets,
+            revision: route.suspend(),
+        }),
+        Command::SelectVoiceTarget(id) => Ok(Command::SelectVoiceTargetAt {
+            id,
+            revision: route.suspend(),
+        }),
+        _ => Err("Expected an explicit voice selection.".into()),
+    }
+}
+fn enqueue_scoped(
+    connections: &BTreeMap<String, Connection>,
+    server: &str,
+    generation: u64,
+    command: Command,
+) -> Result<(), String> {
+    let connection = connections
+        .get(server)
+        .filter(|connection| connection.generation == generation)
+        .ok_or("This action belongs to an older connection.")?;
+    if !matches!(command, Command::Scoped { .. }) {
+        return Err("Missing action authority.".into());
+    }
+    if matches!(&command,Command::Scoped { command,.. } if matches!(command.as_ref(),
+        Command::SetVoiceTarget { .. } | Command::SelectVoiceTarget(_) | Command::Whisper { revision:0,.. }))
+    {
+        return Err("Voice selection requires a current local intent revision.".into());
+    }
+
+    connection
+        .commands
+        .try_send(command)
+        .map_err(|_| "Connection is busy or has ended; reconnect to try again.".into())
 }
 
 pub struct Driver {
@@ -600,11 +712,13 @@ impl Driver {
         let (commands, receiver) = mpsc::channel(32);
         let (sounds, sound_requests) = mpsc::channel(8);
         let id = server.id.clone();
+        let voice_route = std::sync::Arc::new(nuschl_session::connection::VoiceRoute::default());
         let task = self.handle.spawn(connection_loop(
             (self.profile.clone(), self.crypto.clone()),
             server,
             (password, deafened),
             generation,
+            voice_route.clone(),
             (receiver, sound_requests),
             (self.sender.clone(), self.media.clone()),
             (self.content.clone(), self.storage.clone()),
@@ -614,6 +728,7 @@ impl Driver {
             id,
             Connection {
                 generation,
+                voice_route,
                 commands,
                 sounds,
                 task,
@@ -720,12 +835,53 @@ impl Driver {
             return self.command_scoped(server, generation, command);
         }
         let command = command.expect("unscoped command retained");
+        if matches!(
+            command,
+            Command::Whisper { .. }
+                | Command::SetVoiceTarget { .. }
+                | Command::SelectVoiceTarget(_)
+                | Command::SelectVoiceTargetAt { .. }
+        ) {
+            return Err("Use an explicit generation-bound voice selection.".into());
+        }
+
         self.connections()
             .get(server)
             .ok_or("Server is not connected.")?
             .commands
             .try_send(command)
             .map_err(|_| "Connection is busy or has ended; reconnect to try again.".into())
+    }
+    /// A new explicit local voice intent suspends before trying the bounded
+    /// queue. Its revision prevents an older queued action from resuming audio.
+    pub fn voice_command(
+        &self,
+        server: &str,
+        generation: u64,
+        command: Command,
+    ) -> Result<(), String> {
+        let command = voice_intent(&self.connections(), server, generation, command)?;
+        let mut command = Some(command);
+        if let Some((expected, command)) =
+            scoped_command(self as *const Self as usize, server, &mut command)?
+        {
+            if expected != generation {
+                return Err("Voice action belongs to an older connection.".into());
+            }
+            return self.command_scoped(server, generation, command);
+        }
+        let command = command.unwrap();
+        if !matches!(command, Command::SelectVoiceTargetAt { id: 0, .. }) {
+            return Err("Whisper requires original target authority.".into());
+        }
+        let connections = self.connections();
+        connections
+            .get(server)
+            .filter(|connection| connection.generation == generation)
+            .ok_or("Voice connection changed.")?
+            .commands
+            .try_send(command)
+            .map_err(|_| "Connection is busy; voice is suspended. Select a target again.".into())
     }
     /// Restrict synchronous SDK/platform requests made by one UI callback.
     /// The envelope is copied before enqueue, never retained as ambient worker authority.
@@ -736,8 +892,13 @@ impl Driver {
         authority: nuschl_session::connection::CommandAuthority,
         callback: impl FnOnce() -> R,
     ) -> R {
-        let _scope = action_scope(self as *const Self as usize, server, generation, authority);
-        callback()
+        with_action_scope(
+            self as *const Self as usize,
+            server,
+            generation,
+            authority,
+            callback,
+        )
     }
     /// Enqueue only on the original explicit driver connection. The actor also
     /// checks observed presence lifetimes across automatic reconnects.
@@ -747,18 +908,7 @@ impl Driver {
         generation: u64,
         command: Command,
     ) -> Result<(), String> {
-        let connections = self.connections();
-        let connection = connections
-            .get(server)
-            .filter(|connection| connection.generation == generation)
-            .ok_or("This action belongs to an older connection.")?;
-        if !matches!(command, Command::Scoped { .. }) {
-            return Err("Missing action authority.".into());
-        }
-        connection
-            .commands
-            .try_send(command)
-            .map_err(|_| "Connection is busy or has ended; reconnect to try again.".into())
+        enqueue_scoped(&self.connections(), server, generation, command)
     }
     /// Render untrusted Mumble HTML in the sandboxed content worker.
     pub fn render_html(&self, server: String, generation: u64, key: RenderKey, source: String) {
@@ -892,6 +1042,91 @@ impl Driver {
             .map_err(|_| "History is busy; try again shortly.".into())
     }
 }
+fn request_command(request: Request) -> Command {
+    match request {
+        Request::Join(channel) => Command::Join(channel),
+        Request::OpenEncrypted {
+            conversation,
+            channel,
+            peer,
+        } => Command::Mls(match (channel, peer) {
+            (true, _) => nuschl_session::mls::MlsCommand::OpenChannel { conversation },
+            (false, Some(user_id)) => nuschl_session::mls::MlsCommand::OpenDirect { user_id },
+            _ => nuschl_session::mls::MlsCommand::Sync { conversation },
+        }),
+        Request::SendEncrypted { conversation, text } => {
+            Command::Mls(nuschl_session::mls::MlsCommand::SendText { conversation, text })
+        }
+        Request::SendText {
+            target,
+            body,
+            expected_peer,
+        } => Command::SendText {
+            target,
+            body,
+            expected_peer,
+        },
+        Request::SendHtml {
+            target,
+            html,
+            expected_peer,
+        } => Command::SendHtml {
+            target,
+            html,
+            expected_peer,
+        },
+        Request::SetSelf { muted, deafened } => Command::SetSelf { muted, deafened },
+        Request::RequestPermissions(channel) => Command::RequestPermissions(channel),
+        Request::RequestBlobs {
+            textures,
+            comments,
+            descriptions,
+        } => Command::RequestBlobs {
+            textures,
+            comments,
+            descriptions,
+        },
+        Request::QueryUserNames(ids) => Command::QueryUserNames(ids),
+        Request::RegisterSelf => Command::RegisterSelf,
+        Request::MarkRead { channel, seq } => Command::MarkRead { channel, seq },
+        Request::ReadMarker { conversation, seq } => {
+            Command::Nuschl(NuschlRequest::ReadMarker(v1::ReadMarker {
+                conversation: conversation.to_vec(),
+                seq,
+            }))
+        }
+        Request::Typing { conversation } => Command::Nuschl(NuschlRequest::Typing(v1::Typing {
+            conversation: conversation.to_vec(),
+            session: 0,
+        })),
+        Request::OpenDirect {
+            request_id,
+            user_id,
+        } => Command::Nuschl(NuschlRequest::OpenDirect(v1::OpenDirect {
+            request_id,
+            user_id,
+        })),
+        Request::SetTokens(tokens) => Command::SetTokens(tokens),
+        Request::CreateShareLink {
+            request_id,
+            channel,
+            expires_at,
+            access_token,
+        } => Command::Nuschl(NuschlRequest::ShareLinkCreate(v1::ShareLinkCreate {
+            request_id,
+            channel,
+            expires_at,
+            access_token,
+        })),
+        Request::ResolveShareLink { request_id, token } => {
+            Command::Nuschl(NuschlRequest::ShareLinkResolve(v1::ShareLinkResolve {
+                request_id,
+                token: token.to_vec(),
+            }))
+        }
+    }
+}
+
 impl Drop for Driver {
     fn drop(&mut self) {
         for connection in self.connections().values() {
@@ -906,7 +1141,7 @@ impl Drop for Driver {
 /// What to restore when a dropped connection is re-established.
 #[derive(Default)]
 struct Restore {
-    voice_route: std::sync::Arc<std::sync::atomic::AtomicU32>,
+    voice_route: std::sync::Arc<nuschl_session::connection::VoiceRoute>,
     channel: Option<u32>,
     muted: bool,
     deafened: bool,
@@ -933,6 +1168,7 @@ async fn connection_loop(
     server: ServerBookmark,
     (password, deafened): (Option<String>, bool),
     generation: u64,
+    voice_route: std::sync::Arc<nuschl_session::connection::VoiceRoute>,
     (mut commands, mut sounds): (mpsc::Receiver<Command>, mpsc::Receiver<Sound>),
     (events, hub): (mpsc::Sender<Event>, media::Hub),
     (content, storage): (mpsc::Sender<ContentWork>, mpsc::Sender<StorageCommand>),
@@ -941,6 +1177,7 @@ async fn connection_loop(
     let id = server.id.clone();
     // A fresh connection rejoins the channel you were last in, like a reconnect.
     let mut restore = Restore {
+        voice_route,
         channel: server.last_channel,
         muted: true,
         deafened,
@@ -2203,91 +2440,17 @@ impl Platform for Driver {
         Driver::disconnect(self, server)
     }
     fn request(&self, server: &str, request: Request) -> Result<(), String> {
-        let command = match request {
-            Request::Join(channel) => Command::Join(channel),
-            Request::OpenEncrypted {
-                conversation,
-                channel,
-                peer,
-            } => Command::Mls(match (channel, peer) {
-                (true, _) => nuschl_session::mls::MlsCommand::OpenChannel { conversation },
-                (false, Some(user_id)) => nuschl_session::mls::MlsCommand::OpenDirect { user_id },
-                _ => nuschl_session::mls::MlsCommand::Sync { conversation },
-            }),
-            Request::SendEncrypted { conversation, text } => {
-                Command::Mls(nuschl_session::mls::MlsCommand::SendText { conversation, text })
-            }
-            Request::SendText {
-                target,
-                body,
-                expected_peer,
-            } => Command::SendText {
-                target,
-                body,
-                expected_peer,
-            },
-            Request::SendHtml {
-                target,
-                html,
-                expected_peer,
-            } => Command::SendHtml {
-                target,
-                html,
-                expected_peer,
-            },
-            Request::SetSelf { muted, deafened } => Command::SetSelf { muted, deafened },
-            Request::RequestPermissions(channel) => Command::RequestPermissions(channel),
-            Request::RequestBlobs {
-                textures,
-                comments,
-                descriptions,
-            } => Command::RequestBlobs {
-                textures,
-                comments,
-                descriptions,
-            },
-            Request::QueryUserNames(ids) => Command::QueryUserNames(ids),
-            Request::RegisterSelf => Command::RegisterSelf,
-            Request::MarkRead { channel, seq } => Command::MarkRead { channel, seq },
-            Request::ReadMarker { conversation, seq } => {
-                Command::Nuschl(NuschlRequest::ReadMarker(v1::ReadMarker {
-                    conversation: conversation.to_vec(),
-                    seq,
-                }))
-            }
-            Request::Typing { conversation } => {
-                Command::Nuschl(NuschlRequest::Typing(v1::Typing {
-                    conversation: conversation.to_vec(),
-                    session: 0,
-                }))
-            }
-            Request::OpenDirect {
-                request_id,
-                user_id,
-            } => Command::Nuschl(NuschlRequest::OpenDirect(v1::OpenDirect {
-                request_id,
-                user_id,
-            })),
-            Request::SetTokens(tokens) => Command::SetTokens(tokens),
-            Request::CreateShareLink {
-                request_id,
-                channel,
-                expires_at,
-                access_token,
-            } => Command::Nuschl(NuschlRequest::ShareLinkCreate(v1::ShareLinkCreate {
-                request_id,
-                channel,
-                expires_at,
-                access_token,
-            })),
-            Request::ResolveShareLink { request_id, token } => {
-                Command::Nuschl(NuschlRequest::ShareLinkResolve(v1::ShareLinkResolve {
-                    request_id,
-                    token: token.to_vec(),
-                }))
-            }
-        };
-        self.command(server, command)
+        self.command(server, request_command(request))
+    }
+    fn request_metadata(
+        &self,
+        server: &str,
+        authority: nuschl_core::model::MetadataAuthority,
+        request: Request,
+    ) -> Result<(), String> {
+        let (generation, command) =
+            metadata_command(self as *const Self as usize, server, authority, request)?;
+        self.command_scoped(server, generation, command)
     }
     fn local_history(
         &self,
@@ -2912,5 +3075,200 @@ mod encrypted_history_tests {
             records.is_empty(),
             "local verified plaintext must not be overwritten by a remote failure"
         );
+    }
+}
+
+#[cfg(test)]
+mod action_scope_tests {
+    use super::*;
+    use nuschl_session::connection::{ActionSubject, CommandAuthority};
+
+    fn lease() -> CommandAuthority {
+        CommandAuthority {
+            own: (1, 11),
+            subject: Some(ActionSubject::User(2, 22)),
+            users: vec![(2, 22)],
+            channels: vec![(5, 45)],
+            conversations: vec![[5; 16]],
+            accounts: vec![],
+        }
+    }
+    fn wrap(
+        driver: usize,
+        server: &str,
+        command: Command,
+    ) -> Result<Option<(u64, Command)>, String> {
+        scoped_command(driver, server, &mut Some(command))
+    }
+    #[test]
+    fn distinct_drivers_nested_origins_and_explicit_guard_drop_never_widen_scope() {
+        let a = action_scope(10, "a".into(), 7, lease());
+        let b = action_scope(20, "b".into(), 8, lease());
+        assert!(wrap(10, "b", Command::RequestStats(2)).is_err());
+        assert!(wrap(10, "a", Command::RequestStats(2)).unwrap().is_some());
+        assert!(wrap(20, "b", Command::RequestStats(2)).unwrap().is_some());
+        let nested = action_scope(10, "changed".into(), 7, lease());
+        assert!(wrap(10, "changed", Command::RequestStats(2)).is_err());
+        assert!(wrap(10, "a", Command::RequestStats(2)).is_err());
+        drop(a); // Out-of-order release removes this exact guard, not the innermost.
+        assert!(
+            wrap(10, "changed", Command::RequestStats(2))
+                .unwrap()
+                .is_some()
+        );
+        drop(nested);
+        assert!(wrap(10, "a", Command::RequestStats(2)).unwrap().is_none());
+        assert!(wrap(20, "b", Command::RequestStats(2)).unwrap().is_some());
+        drop(b);
+        assert!(wrap(20, "b", Command::RequestStats(2)).unwrap().is_none());
+    }
+    #[test]
+    fn scope_restores_after_early_return_unwind_and_future_creation() {
+        let result = with_action_scope(10, "a".into(), 7, lease(), || {
+            assert!(wrap(10, "a", Command::RequestStats(2)).unwrap().is_some());
+            9
+        });
+        assert_eq!(result, 9);
+        assert!(wrap(10, "a", Command::RequestStats(2)).unwrap().is_none());
+        assert!(
+            std::panic::catch_unwind(|| with_action_scope(10, "a".into(), 7, lease(), || panic!(
+                "expected unwind"
+            )))
+            .is_err()
+        );
+        assert!(wrap(10, "a", Command::RequestStats(2)).unwrap().is_none());
+        let future = with_action_scope(10, "a".into(), 7, lease(), || async { 9 });
+        assert!(wrap(10, "a", Command::RequestStats(2)).unwrap().is_none());
+        drop(future);
+    }
+    #[test]
+    fn actual_sdk_mapping_inherits_only_covered_concrete_and_semantic_targets() {
+        with_action_scope(10, "a".into(), 7, lease(), || {
+            for request in [
+                Request::RequestBlobs {
+                    textures: vec![],
+                    comments: vec![2],
+                    descriptions: vec![],
+                },
+                Request::ReadMarker {
+                    conversation: [5; 16],
+                    seq: 4,
+                },
+                Request::OpenDirect {
+                    request_id: 1,
+                    user_id: 202,
+                },
+                Request::CreateShareLink {
+                    request_id: 2,
+                    channel: 5,
+                    expires_at: 0,
+                    access_token: String::new(),
+                },
+            ] {
+                assert!(wrap(10, "a", request_command(request)).unwrap().is_some());
+            }
+            assert!(
+                wrap(
+                    10,
+                    "a",
+                    request_command(Request::CreateShareLink {
+                        request_id: 3,
+                        channel: 6,
+                        expires_at: 0,
+                        access_token: String::new()
+                    })
+                )
+                .is_err()
+            );
+            assert!(
+                wrap(
+                    10,
+                    "a",
+                    request_command(Request::ReadMarker {
+                        conversation: [6; 16],
+                        seq: 4
+                    })
+                )
+                .is_err()
+            );
+            assert!(wrap(10, "a", Command::SetTokens(vec!["local config".into()])).is_err());
+            for command in [
+                Command::Nuschl(NuschlRequest::History(v1::HistoryRequest {
+                    conversation: vec![5; 16],
+                    ..Default::default()
+                })),
+                Command::Nuschl(NuschlRequest::Delete(v1::ChatDelete {
+                    conversation: vec![5; 16],
+                    ..Default::default()
+                })),
+            ] {
+                assert!(wrap(10, "a", command).unwrap().is_some());
+            }
+        });
+        assert!(wrap(10, "a", Command::SetTokens(vec![])).unwrap().is_none());
+    }
+    #[tokio::test]
+    async fn native_enqueue_rejects_replaced_generation_full_closed_and_removed_connections() {
+        let (commands, mut queued) = mpsc::channel(1);
+        let (sounds, _) = mpsc::channel(1);
+        let connection = Connection {
+            generation: 7,
+            voice_route: Default::default(),
+            commands,
+            sounds,
+            task: tokio::spawn(async {}),
+        };
+        let mut connections = BTreeMap::from([("a".into(), connection)]);
+        let command = || Command::Scoped {
+            authority: lease(),
+            command: Box::new(Command::RequestStats(2)),
+        };
+        assert!(enqueue_scoped(&connections, "a", 6, command()).is_err());
+        assert!(enqueue_scoped(&connections, "a", 7, command()).is_ok());
+        assert!(enqueue_scoped(&connections, "a", 7, command()).is_err());
+        assert!(matches!(queued.recv().await, Some(Command::Scoped { .. })));
+        connections.get_mut("a").unwrap().generation = 8;
+        assert!(enqueue_scoped(&connections, "a", 7, command()).is_err());
+        drop(queued);
+        assert!(enqueue_scoped(&connections, "a", 8, command()).is_err());
+        connections.clear();
+        assert!(enqueue_scoped(&connections, "a", 8, command()).is_err());
+    }
+    #[test]
+    fn automatic_metadata_keeps_original_tokens_and_intersects_callback_restrictions() {
+        let original = nuschl_core::model::MetadataAuthority {
+            generation: 7,
+            own: (1, 11),
+            users: vec![(2, 22)],
+            channels: vec![],
+        };
+        let request = || Request::RequestBlobs {
+            textures: vec![],
+            comments: vec![2],
+            descriptions: vec![],
+        };
+        let (generation, command) = metadata_command(10, "a", original.clone(), request()).unwrap();
+        assert_eq!(generation, 7);
+        let Command::Scoped { authority, .. } = command else {
+            panic!("metadata must be scoped");
+        };
+        assert_eq!(authority.own, (1, 11));
+        assert_eq!(authority.users, vec![(2, 22)]);
+        with_action_scope(10, "a".into(), 7, lease(), || {
+            assert!(metadata_command(10, "a", original.clone(), request()).is_ok());
+            let mut changed = original.clone();
+            changed.users[0].1 = 222;
+            assert!(metadata_command(10, "a", changed, request()).is_err());
+            let mut changed = original.clone();
+            changed.own.1 = 111;
+            assert!(metadata_command(10, "a", changed, request()).is_err());
+            let mut changed = original.clone();
+            changed.generation = 8;
+            assert!(metadata_command(10, "a", changed, request()).is_err());
+            assert!(metadata_command(10, "b", original.clone(), request()).is_err());
+        });
+        let mut missing = original;
+        missing.users.clear();
+        assert!(metadata_command(10, "a", missing, request()).is_err());
     }
 }
