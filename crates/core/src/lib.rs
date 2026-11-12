@@ -88,6 +88,13 @@ pub struct MessageDocument {
 }
 
 impl MessageDocument {
+    /// Whether a worker's document is within every budget its consumers rely
+    /// on; one that is not is malformed and refused before anything converts,
+    /// copies or lays it out.
+    pub fn within_limits(&self) -> bool {
+        self.breaks_valid()
+    }
+
     /// Whether the document's [`ContentBlock::Break`]s are within their
     /// budget: at most [`MAX_BREAKS`], never two in a row, and all of them
     /// together at most [`MAX_BREAK_LINES`] line breaks, as many as the

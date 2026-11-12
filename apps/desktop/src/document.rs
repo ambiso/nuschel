@@ -226,7 +226,12 @@ pub fn render_image(width: u32, height: u32, rgba: &str) -> Option<Arc<RenderIma
 }
 
 impl From<MessageDocument> for Document {
-    fn from(document: MessageDocument) -> Self {
+    fn from(mut document: MessageDocument) -> Self {
+        // Breaks asking for more line breaks than a message holds are
+        // malformed: dropped before anything copies or lays them out.
+        if !document.breaks_valid() {
+            document.blocks.retain(|block| !block.is_break());
+        }
         // Whether each block is written on the line of the block before it,
         // and the block after it on its line: a break of 0 between them.
         let zero = |index: Option<usize>| {
@@ -668,6 +673,38 @@ mod tests {
             }],
         });
         assert!(matches!(&document.blocks[0], Block::Code { text, .. } if text == "a\n"));
+    }
+
+    /// A document whose breaks ask for more line breaks than a message holds
+    /// (prepared replies reach the desktop without the host's check) loses
+    /// its breaks here, before anything copies or lays them out.
+    #[test]
+    fn breaks_over_their_budget_are_dropped_before_conversion() {
+        for blocks in [
+            vec![
+                ContentBlock::text("a"),
+                ContentBlock::Break { count: u32::MAX },
+                ContentBlock::text("b"),
+            ],
+            (0..512)
+                .flat_map(|_| {
+                    [
+                        ContentBlock::Break { count: 262_144 },
+                        ContentBlock::text("x"),
+                    ]
+                })
+                .collect(),
+        ] {
+            let document = Document::from(MessageDocument { blocks });
+            assert!(
+                !document
+                    .blocks
+                    .iter()
+                    .any(|block| matches!(block, Block::Break(_))),
+                "breaks kept"
+            );
+            assert!(document.plain_text().len() < 2048);
+        }
     }
 
     #[test]

@@ -52,7 +52,20 @@ pub fn lines(
             .map(|line| Line::from(line.to_string()))
             .collect();
     }
-    let blocks = &document.blocks;
+    // Breaks asking for more line breaks than a message holds are malformed:
+    // not drawn.
+    let valid;
+    let blocks = if document.breaks_valid() {
+        &document.blocks
+    } else {
+        valid = document
+            .blocks
+            .iter()
+            .filter(|block| !block.is_break())
+            .cloned()
+            .collect::<Vec<_>>();
+        &valid
+    };
     let content = |index: &usize| !blocks[*index].is_break();
     let first = (0..blocks.len()).find(content);
     let last = (0..blocks.len()).rev().find(content);
@@ -546,6 +559,21 @@ mod tests {
             ]),
             ["• a", "", "  c"]
         );
+    }
+
+    /// Breaks asking for more line breaks than a message holds are not drawn.
+    #[test]
+    fn breaks_over_their_budget_are_not_drawn() {
+        let breaks = |count| ContentBlock::Break { count };
+        let shown = shown(vec![
+            ContentBlock::text("a"),
+            breaks(262_144),
+            ContentBlock::text("b"),
+            breaks(262_144),
+            ContentBlock::text("c"),
+            breaks(u32::MAX),
+        ]);
+        assert_eq!(shown, ["a", "b", "c"]);
     }
 
     #[test]

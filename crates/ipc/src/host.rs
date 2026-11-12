@@ -210,10 +210,52 @@ pub async fn prepare_content(
     }
 }
 
+/// A worker's document, refused unless within its budgets (line breaks
+/// between blocks among them) before anything converts, copies or lays it out.
 fn rendered(response: ContentResponse) -> Result<MessageDocument, Error> {
     match response {
-        ContentResponse::Rendered(document) => Ok(document),
+        ContentResponse::Rendered(document) if document.within_limits() => Ok(document),
         _ => Err(Error::InvalidResponse),
+    }
+}
+
+/// A worker's document over its budgets is refused here, before anything
+/// converts, copies or lays it out.
+#[cfg(test)]
+mod rendered_tests {
+    use super::{Error, rendered};
+    use crate::ContentResponse;
+    use nuschl_core::{ContentBlock, MAX_CONTENT_BYTES, MessageDocument};
+
+    fn reply(blocks: Vec<ContentBlock>) -> Result<MessageDocument, Error> {
+        rendered(ContentResponse::Rendered(MessageDocument { blocks }))
+    }
+
+    #[test]
+    fn malformed_documents_from_the_worker_are_refused() {
+        let text = || ContentBlock::text("x");
+        let lines = |count| ContentBlock::Break { count };
+        // One huge gap, u32::MAX, and one just over a whole message.
+        for count in [u32::MAX, MAX_CONTENT_BYTES as u32 + 1] {
+            assert!(matches!(
+                reply(vec![text(), lines(count), text()]),
+                Err(Error::InvalidResponse)
+            ));
+        }
+        // Each gap a whole message, 511 of them.
+        let mut blocks = vec![text()];
+        for _ in 0..511 {
+            blocks.extend([lines(MAX_CONTENT_BYTES as u32), text()]);
+        }
+        assert!(matches!(reply(blocks), Err(Error::InvalidResponse)));
+        // Two breaks in a row.
+        assert!(matches!(
+            reply(vec![text(), lines(2), lines(2), text()]),
+            Err(Error::InvalidResponse)
+        ));
+        // An honest document passes unchanged.
+        let honest = vec![lines(2), text(), lines(0), text(), lines(1)];
+        assert_eq!(reply(honest.clone()).unwrap().blocks, honest);
     }
 }
 
