@@ -2,6 +2,7 @@
 //! Test-only access to the real converter for independent reference comparisons.
 //! No device/context is constructed; explicit ignored-test invocation only.
 use super::*;
+use crate::dsp::RATE;
 
 #[test]
 #[ignore = "explicit disk-backed PCM fixture; invoked by tests/output_resample.py"]

@@ -22,8 +22,6 @@ use cpal::{
 };
 use nuschl_core::audio::{AudioDevice, AudioSettings, EchoMode, EchoSource};
 use nuschl_ipc::{Envelope, LiveMediaEvent, LiveMediaRequest, read_frame, write_frame};
-#[cfg(test)]
-use opus_pure::Application;
 use opus_pure::{MAX_PACKET_BYTES, OpusEncoder};
 use rtrb::{Consumer, Producer, RingBuffer};
 use std::{
