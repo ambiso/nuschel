@@ -353,7 +353,7 @@ fn inspect_list(
                     continue;
                 };
                 rows.push(row_button(
-                    format!("acl-inspect-row-{token}-{rows_key}-{id}"),
+                    format!("acl-inspect-row-{token}-{rows_key}-{id}-{index}"),
                     label,
                     selected,
                     move |this, _, cx| {
@@ -1727,7 +1727,10 @@ fn member_list(
                     continue;
                 };
                 rows.push(row_button(
-                    format!("acl-member-{token}-{}-{kind}-{account}", group_key.1),
+                    format!(
+                        "acl-member-{token}-{}-{kind}-{account}-{index}",
+                        group_key.1
+                    ),
                     label,
                     selected,
                     move |this, _, cx| {

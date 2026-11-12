@@ -1322,9 +1322,10 @@ impl Desktop {
                     ));
                 }
                 let write = server.may(channel, perm::WRITE);
+                let edit_acl = write || server.may(0, perm::WRITE);
                 let create = server.may(channel, perm::MAKE_CHANNEL)
                     || server.may(channel, perm::MAKE_TEMP_CHANNEL);
-                if connected && (write || create) {
+                if connected && (write || create || edit_acl) {
                     entries.push(Entry::Separator);
                 }
                 if connected && create {
@@ -1349,22 +1350,22 @@ impl Desktop {
                             this.open_channel_editor(index, channel, window, cx)
                         },
                     ));
+                }
+                if connected && edit_acl {
                     entries.push(item(
                         "Edit permissions…",
                         "shield",
                         move |this, index, window, cx| {
-                            crate::acl_editor::open(this, index, channel, window, cx);
+                            crate::acl_editor::open(this, index, channel, window, cx)
                         },
                     ));
-                    if channel != 0 {
-                        entries.push(danger(
-                            "Remove channel",
-                            "window-close",
-                            move |this, index, _, _| {
-                                this.run(index, Command::RemoveChannel(channel))
-                            },
-                        ));
-                    }
+                }
+                if connected && write && channel != 0 {
+                    entries.push(danger(
+                        "Remove channel",
+                        "window-close",
+                        move |this, index, _, _| this.run(index, Command::RemoveChannel(channel)),
+                    ));
                 }
                 push_context_actions(
                     &mut entries,

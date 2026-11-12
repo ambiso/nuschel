@@ -26,6 +26,10 @@ class OwnedMurmur(Murmur):
     def __init__(self, *args):
         global SERVER
         super().__init__(*args)
+        if ARGS.high_admin_limit:
+            self.ini.write_text(
+                self.ini.read_text() + "messagelimit=100\nmessageburst=100\n"
+            )
         SERVER = self
 
 
@@ -166,6 +170,11 @@ def actions(args, root, shell, application, bot, murmur):
     shell.key("Shift_L")
     shell.place("Nuschl", 40, 40, 1100, 800)
     pin = bot.process.args[bot.process.args.index("--certificate-sha256") + 1]
+    cases = []
+
+    def mark(name):
+        cases.append(name)
+        (args.output / "cases.json").write_text(json.dumps(cases, indent=2) + "\n")
 
     def named(name, role=None):
         return next(
@@ -281,6 +290,7 @@ def actions(args, root, shell, application, bot, murmur):
     except RuntimeError:
         accepted = False
     assert accepted is False, "closed/reopened editor reused an old Save action"
+    mark("close_reopen_stale_save_refused")
     type_field("New group name", "native-team")
     activate("Create group")
     type_field("Registered group member", "Offline member")
@@ -301,6 +311,7 @@ def actions(args, root, shell, application, bot, murmur):
         assert group.get(3, [1]) == [1] and group.get(4, [1]) == [1], group
     finally:
         admin.close()
+    mark("native_root_group_and_offline_member_saved")
     shell.screenshot(args.output / "native-root-group.png")
     activate("Done")
     open_acl("Lobby")
@@ -347,6 +358,7 @@ def actions(args, root, shell, application, bot, murmur):
         assert rules[1].get(1, [1]) == [1] and rules[1].get(2, [1]) == [0], rules
     finally:
         admin.close()
+    mark("inherited_group_override_and_ordered_rules_saved")
     observer = Client(
         args.binaries, "127.0.0.1", SERVER.port, pin, "Offline member", root / "offline"
     )
@@ -366,6 +378,7 @@ def actions(args, root, shell, application, bot, murmur):
         assert control["permissions"] & 8 != 0, control
     finally:
         observer.close()
+    mark("deny_and_subchannel_inheritance_with_unrelated_control")
     activate("Done")
     open_acl()
     type_field("New group name", "unsaved-draft")
@@ -394,6 +407,7 @@ def actions(args, root, shell, application, bot, murmur):
     except RuntimeError:
         accepted = False
     assert accepted is False, "old Save became active on replacement connection"
+    mark("dirty_draft_retained_and_stale_reconnect_save_refused")
     shell.screenshot(args.output / "native-stale-draft.png")
     admin = operator(root, pin)
     try:
@@ -407,9 +421,13 @@ def actions(args, root, shell, application, bot, murmur):
         )
     finally:
         admin.close()
+    mark("rules_persist_and_unsent_draft_absent_after_restart")
+    if args.reconnect_settle:
+        time.sleep(args.reconnect_settle)
     activate("Done")
     open_acl()
     save()
+    mark("fresh_editor_after_reconnect")
     return {
         "fresh_offline_lookup": True,
         "unknown_account_refused": True,
@@ -425,6 +443,8 @@ def actions(args, root, shell, application, bot, murmur):
         "fresh_editor_after_reconnect": True,
         "registered_ids": IDS.copy(),
         "server": args.server,
+        "diagnostic_rate_override": args.high_admin_limit,
+        "diagnostic_reconnect_settle_seconds": args.reconnect_settle,
     }
 
 
@@ -433,6 +453,10 @@ def checked_actions(*args):
         return actions(*args)
     except BaseException:
         options, _root, shell, application, _bot, _server = args
+        for log in ("murmur.log", "nuschld.log"):
+            source = _root / log
+            if source.exists():
+                (options.output / log).write_text(source.read_text())
         try:
             shell.screenshot(options.output / "failed-editor.png")
             (options.output / "failed-accessible.json").write_text(
@@ -457,6 +481,17 @@ def main():
     parser.add_argument("--pulse-bin", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--server", choices=("stock", "nuschld"), default="stock")
+    parser.add_argument(
+        "--high-admin-limit",
+        action="store_true",
+        help="Diagnostic only: raise the owned Murmur control bucket",
+    )
+    parser.add_argument(
+        "--reconnect-settle",
+        type=float,
+        default=0,
+        help="Diagnostic only: wait before the final fresh editor",
+    )
     ARGS = parser.parse_args()
     ARGS.document_links, ARGS.expect_markers = True, False
     fixture.WELCOME_EXTRA = ""
