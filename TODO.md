@@ -543,6 +543,22 @@ Reported while testing (2026-11-10/11):
 
 Later (reported):
 
+- [ ] Add a compact draggable **Talking UI** window (user, 2026-11-12), like
+      Mumble's: show current speakers with clear server/channel context using
+      the existing actual speech events; retain mute/deafen semantics, stable
+      identities, bounded rows and event-driven updates. Support independent
+      placement and accessible keyboard controls without stealing game focus.
+      Queue after the current voice-status/chat-scrollbar work; no slot free yet.
+- [ ] Add a game overlay showing who is talking (user, 2026-11-12), with the
+      explicit requirement that it must not trigger VAC. Investigate ordinary
+      OS/compositor surfaces first, sharing the Talking UI model. Exclude game
+      injection, DLL/graphics hooks, game-process memory access and anti-cheat
+      bypasses; do not request insecure/trust-disabling launch options. Verify
+      platform/fullscreen/compositor support and performance, and document that
+      external anti-cheat compatibility cannot be guaranteed by our own tests.
+      Do not label an unverified implementation VAC-safe. Keep the full overlay
+      request open if only the separate Talking UI is available. Use private
+      window/compositor fixtures rather than protected/live games for development.
 - [ ] Fix chat Markdown rendering (user, 2026-11-12; possibly an earlier
       regression). Diagnose typed, received and history-restored messages, their
       legacy HTML/Markdown classification, worker document delivery and actual
