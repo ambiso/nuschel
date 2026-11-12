@@ -42,6 +42,7 @@ impl Render for Desktop {
         self.mark_read();
         self.present_selected();
         let selected = self.selected_indices();
+        let voice_places = crate::voice::places(self);
         let title = selected
             .map(|(server, channel)| {
                 let server = &self.client.servers[server];
@@ -57,7 +58,7 @@ impl Render for Desktop {
             .child(server_rail(self, selected.map(|(server, _)| server), cx))
             .map(|body| match selected {
                 Some((server, channel)) => body
-                    .child(sidebar(self, server, channel, window, cx))
+                    .child(sidebar(self, server, channel, &voice_places, window, cx))
                     .child(sidebar_handle(self, cx))
                     .child(conversation(self, server, channel, window, cx)),
                 None => body.child(dialogs::empty(self, cx)),
@@ -247,9 +248,12 @@ fn server_rail(this: &Desktop, selected: Option<usize>, cx: &mut Context<Desktop
                         .role(Role::Button)
                         .tab_index(0)
                         .aria_label({
-                            let role = this.client.voice_role(index);
-                            let voice =
-                                crate::voice::rail_label(role, crate::voice::someone_talks(server));
+                            let state =
+                                crate::voice::projected(&this.client, server, this.push_muted);
+                            let voice = crate::voice::rail_label(
+                                state,
+                                crate::voice::someone_talks(server),
+                            );
                             let mut label = format!(
                                 "{}; {}; {}",
                                 server.name,
@@ -531,6 +535,7 @@ fn sidebar(
     this: &Desktop,
     server_index: usize,
     selected_channel: usize,
+    voice_places: &[crate::voice::Place],
     window: &mut Window,
     cx: &mut Context<Desktop>,
 ) -> AnyElement {
@@ -776,10 +781,10 @@ fn sidebar(
                 )),
         )
         .when_some(
-            crate::voice::card(this, server_index, window, cx),
+            crate::voice::card(this, voice_places, window, cx),
             |sidebar, card| sidebar.child(card),
         )
-        .child(user_panel(this, server, cx))
+        .child(user_panel(this, server, voice_places, cx))
         .into_any_element()
 }
 
@@ -1211,53 +1216,25 @@ pub fn avatar(
         .into_any_element()
 }
 
-fn user_panel(this: &Desktop, server: &ServerView, cx: &mut Context<Desktop>) -> AnyElement {
-    let transmit = this.settings.audio.transmit;
+fn user_panel(
+    this: &Desktop,
+    server: &ServerView,
+    voice_places: &[crate::voice::Place],
+    cx: &mut Context<Desktop>,
+) -> AnyElement {
     let own = server
         .own_session
         .and_then(|session| server.users.get(&session));
     let name = own
         .map(|user| user.name.clone())
         .unwrap_or_else(|| server.bookmark.username.clone());
-    let talking = server
-        .own_session
-        .is_some_and(|session| server.talking.contains(&session));
+    let projected = crate::voice::projected(&this.client, server, this.push_muted);
+    let talking = projected.speaking();
     let connected = server.status == Status::Connected;
-    // A short state fits beside the controls; the full audio message is the tooltip.
-    let detail = server.audio_status.clone();
-    let listening = this.client.server_index(&server.id).is_some_and(|index| {
-        this.client.voice_role(index) == nuschl_client::voice::Role::Listening
-    });
-    let status = if !connected {
-        server.status_label().to_string()
-    } else if !server.has_mumble_voice() {
-        "Voice unavailable".into()
-    } else if server.deafened {
-        "Deafened".into()
-    } else if listening {
-        // Your voice goes to another server; this one only plays.
-        "Listening".into()
-    } else if server.muted {
-        "Muted".into()
-    } else if this.push_muted {
-        "Push to mute".into()
-    } else if talking {
-        "Talking".into()
-    } else if detail.starts_with("Audio ready") {
-        match transmit {
-            nuschl_core::audio::TransmitMode::VoiceActivity => "Voice activity",
-            nuschl_core::audio::TransmitMode::PushToTalk => "Push to talk",
-            nuschl_core::audio::TransmitMode::Continuous => "Transmitting",
-        }
-        .into()
-    } else {
-        detail
-            .split([':', '·'])
-            .next()
-            .unwrap_or_default()
-            .trim()
-            .to_string()
-    };
+    let status = projected.label();
+    let detail = format!("{}: {}\n{}", server.name, status, server.audio_status);
+    let mute_target = crate::voice::target(voice_places, &server.id);
+    let deaf_target = mute_target.clone();
     div()
         .min_h(px(56.))
         .py_2()
@@ -1304,6 +1281,8 @@ fn user_panel(this: &Desktop, server: &ServerView, cx: &mut Context<Desktop>) ->
                         .child(
                             div()
                                 .id("audio-status-line")
+                                .role(Role::Status)
+                                .aria_label(format!("Audio status for {}: {}", server.name, status))
                                 .text_xs()
                                 .truncate()
                                 .text_color(color(TEXT_MUTED))
@@ -1341,8 +1320,10 @@ fn user_panel(this: &Desktop, server: &ServerView, cx: &mut Context<Desktop>) ->
                             "mic",
                             if server.muted { "Unmute" } else { "Mute" },
                             eased(&this.mute_ease, server.muted),
-                            |this, _, cx| {
-                                this.set_mute(false);
+                            move |this, _, cx| {
+                                if let Some(target) = &mute_target {
+                                    this.set_mute_target(target, false);
+                                }
                                 cx.notify();
                             },
                             cx,
@@ -1356,8 +1337,10 @@ fn user_panel(this: &Desktop, server: &ServerView, cx: &mut Context<Desktop>) ->
                                 "Deafen"
                             },
                             eased(&this.deafen_ease, server.deafened),
-                            |this, _, cx| {
-                                this.set_mute(true);
+                            move |this, _, cx| {
+                                if let Some(target) = &deaf_target {
+                                    this.set_mute_target(target, true);
+                                }
                                 cx.notify();
                             },
                             cx,

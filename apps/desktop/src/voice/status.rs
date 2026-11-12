@@ -154,22 +154,86 @@ mod tests {
     fn microphone_intent_is_not_speech() {
         assert_eq!(live().state(), State::MicrophoneEnabled);
         assert!(!live().state().speaking());
-        assert_eq!(Facts { sending: true, ..live() }.state(), State::Speaking);
+        assert_eq!(
+            Facts {
+                sending: true,
+                ..live()
+            }
+            .state(),
+            State::Speaking
+        );
     }
 
     #[test]
     fn privacy_and_server_blocks_override_stale_sending() {
-        let active = Facts { sending: true, ..live() };
+        let active = Facts {
+            sending: true,
+            ..live()
+        };
         for (facts, expected) in [
-            (Facts { muted: true, ..active }, State::Muted),
-            (Facts { deafened: true, ..active }, State::Deafened),
-            (Facts { server_muted: true, ..active }, State::ServerMuted),
-            (Facts { server_deafened: true, ..active }, State::ServerDeafened),
-            (Facts { suppressed: true, ..active }, State::Suppressed),
-            (Facts { transmit_budget: false, ..active }, State::NoTransmitBudget),
-            (Facts { acknowledged: false, ..active }, State::AwaitingAcknowledgement),
-            (Facts { push_muted: true, ..active }, State::PushMuted),
-            (Facts { destination: false, ..active }, State::Listening),
+            (
+                Facts {
+                    muted: true,
+                    ..active
+                },
+                State::Muted,
+            ),
+            (
+                Facts {
+                    deafened: true,
+                    ..active
+                },
+                State::Deafened,
+            ),
+            (
+                Facts {
+                    server_muted: true,
+                    ..active
+                },
+                State::ServerMuted,
+            ),
+            (
+                Facts {
+                    server_deafened: true,
+                    ..active
+                },
+                State::ServerDeafened,
+            ),
+            (
+                Facts {
+                    suppressed: true,
+                    ..active
+                },
+                State::Suppressed,
+            ),
+            (
+                Facts {
+                    transmit_budget: false,
+                    ..active
+                },
+                State::NoTransmitBudget,
+            ),
+            (
+                Facts {
+                    acknowledged: false,
+                    ..active
+                },
+                State::AwaitingAcknowledgement,
+            ),
+            (
+                Facts {
+                    push_muted: true,
+                    ..active
+                },
+                State::PushMuted,
+            ),
+            (
+                Facts {
+                    destination: false,
+                    ..active
+                },
+                State::Listening,
+            ),
         ] {
             assert_eq!(facts.state(), expected);
             assert!(!facts.state().microphone_enabled());
@@ -179,26 +243,59 @@ mod tests {
 
     #[test]
     fn reconnect_and_codec_negotiation_override_old_channel_and_activity() {
-        let active = Facts { sending: true, ..live() };
+        let active = Facts {
+            sending: true,
+            ..live()
+        };
         for (connection, expected) in [
             (Connection::Offline, State::Offline),
             (Connection::Connecting, State::Connecting),
             (Connection::Reconnecting, State::Reconnecting),
         ] {
-            assert_eq!(Facts { connection, ..active }.state(), expected);
+            assert_eq!(
+                Facts {
+                    connection,
+                    ..active
+                }
+                .state(),
+                expected
+            );
         }
         for (availability, expected) in [
             (Availability::Negotiating, State::Negotiating),
             (Availability::Unsupported, State::Unsupported),
             (Availability::EndToEnd, State::EndToEnd),
         ] {
-            assert_eq!(Facts { availability, ..active }.state(), expected);
+            assert_eq!(
+                Facts {
+                    availability,
+                    ..active
+                }
+                .state(),
+                expected
+            );
         }
     }
 
     #[test]
     fn secondary_deafened_context_remains_visible_and_never_enabled() {
-        assert_eq!(Facts { destination: false, deafened: true, ..live() }.state(), State::Deafened);
-        assert_eq!(Facts { destination: false, transmit_budget: false, ..live() }.state(), State::Listening);
+        assert_eq!(
+            Facts {
+                destination: false,
+                deafened: true,
+                ..live()
+            }
+            .state(),
+            State::Deafened
+        );
+        assert_eq!(
+            Facts {
+                destination: false,
+                transmit_budget: false,
+                ..live()
+            }
+            .state(),
+            State::Listening
+        );
     }
 }

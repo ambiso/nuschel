@@ -2,8 +2,8 @@
 //! Your voice across servers (docs/clients.md, "Voice on several servers"):
 //! a green microphone ring on the talk server in the rail and a headphone
 //! badge on each server you listen to, pulsing while someone talks there;
-//! the voice card's "Talking on … · listening to …", whose parts take you
-//! there; and the question before your voice goes to a second server.
+//! a server-scoped voice card distinguishing destination intent from observed
+//! speech, whose rows take you there; and the question before your voice goes to a second server.
 use crate::{
     assets::icon,
     dialogs::{Tone, mix, modal, styled_button},
@@ -13,8 +13,11 @@ use crate::{
     theme::*,
 };
 use gpui_kit::{Role as Role_, prelude::*, *};
-use nuschl_client::{Client, SecondServer, model::TextTarget, voice::Role};
+use nuschl_client::{Client, SecondServer, model::TextTarget};
 use std::{collections::BTreeMap, time::Duration};
+
+mod status;
+use status::{Availability, Connection, Facts, State};
 
 /// Largest rail decoration extension (mention badges). Layout reserves this
 /// plus an antialiasing gutter for every tile, not just the first/last item.
@@ -50,21 +53,21 @@ struct Rings {
 impl Motion {
     /// Retarget every server's ring and badge: whether rings move (every
     /// frame), and whether badges breathe (at `BREATH_FRAME`).
-    pub fn animate(&mut self, client: &Client, reduce: bool) -> (bool, bool) {
+    pub fn animate(&mut self, client: &Client, push_muted: bool, reduce: bool) -> (bool, bool) {
         self.servers
             .retain(|id, _| client.servers.iter().any(|server| &server.id == id));
         let (mut moving, mut breathing) = (false, false);
-        for (index, server) in client.servers.iter().enumerate() {
+        for server in &client.servers {
             let rounded = self.dragged.as_deref() == Some(server.id.as_str())
                 || self.hovered.as_deref() == Some(server.id.as_str())
                 || client
                     .navigation
                     .selection()
                     .is_some_and(|selected| selected.server == server.id);
-            let role = client.voice_role(index);
-            let talk = matches!(role, Role::Talking | Role::Muted);
-            let live = role == Role::Talking;
-            let busy = role == Role::Listening && someone_talks(server);
+            let state = projected(client, server, push_muted);
+            let talk = client.voice.is_talk(&server.id) && server.status == Status::Connected;
+            let live = state.microphone_enabled();
+            let busy = state == State::Listening && someone_talks(server);
             let rings = self
                 .servers
                 .entry(server.id.clone())
@@ -130,15 +133,55 @@ pub fn someone_talks(server: &ServerView) -> bool {
         .any(|session| Some(*session) != server.own_session)
 }
 
-/// How a server's rail button names its part in your voice.
-pub fn rail_label(role: Role, busy: bool) -> &'static str {
-    match (role, busy) {
-        (Role::Talking, _) => "talking here",
-        (Role::Muted, _) => "voice here, muted",
-        (Role::Listening, true) => "listening, someone is talking",
-        (Role::Listening, false) => "listening",
-        (Role::Deafened, _) => "deafened",
-        (Role::Offline, _) => "",
+/// One current-state projection for card, rail and selected-server footer.
+/// This reads bounded model facts; channel labels are resolved only by `places`.
+pub fn projected(client: &Client, server: &ServerView, push_muted: bool) -> State {
+    let own = server.own_session.and_then(|id| server.users.get(&id));
+    Facts {
+        connection: match server.status {
+            Status::Disconnected => Connection::Offline,
+            Status::Connecting if server.reconnecting.is_some() => Connection::Reconnecting,
+            Status::Connecting => Connection::Connecting,
+            Status::Connected => Connection::Connected,
+        },
+        availability: if !server.has_mumble_voice() {
+            Availability::EndToEnd
+        } else {
+            match server.opus_available {
+                None => Availability::Negotiating,
+                Some(true) => Availability::Available,
+                Some(false) => Availability::Unsupported,
+            }
+        },
+        destination: client.voice.is_talk(&server.id),
+        muted: server.muted,
+        deafened: server.deafened,
+        server_muted: own.is_some_and(|user| user.muted),
+        server_deafened: own.is_some_and(|user| user.deafened),
+        suppressed: own.is_some_and(|user| user.suppressed),
+        acknowledged: own.is_some_and(|user| !user.self_muted && !user.self_deafened),
+        transmit_budget: server
+            .limits
+            .as_ref()
+            .and_then(|limits| limits.max_bandwidth)
+            .is_none_or(|bandwidth| nuschl_core::audio::voice_bitrate(bandwidth) != 0),
+        push_muted,
+        sending: server
+            .own_session
+            .is_some_and(|id| server.talking.contains(&id)),
+    }
+    .state()
+}
+
+pub fn rail_label(state: State, busy: bool) -> String {
+    if state == State::Speaking {
+        "Microphone destination · enabled · Speaking".into()
+    } else if state == State::Listening && busy {
+        "Listening · someone is speaking".into()
+    } else if state == State::Offline {
+        String::new()
+    } else {
+        state.label().into()
     }
 }
 
@@ -163,18 +206,29 @@ pub fn rail_ring(this: &Desktop, server: &ServerView, radius: f32) -> Option<Any
 /// headphones where you listen, breathing while someone talks there.
 pub fn rail_badge(this: &Desktop, index: usize, server: &ServerView) -> Option<AnyElement> {
     let (_, live, pulse) = this.voice_motion.values(&server.id);
-    let (name, foreground, background) = match this.client.voice_role(index) {
-        Role::Talking | Role::Muted => (
+    let state = projected(&this.client, server, this.push_muted);
+    let (name, foreground, background) = match state {
+        State::MicrophoneEnabled
+        | State::Speaking
+        | State::Muted
+        | State::ServerMuted
+        | State::Suppressed
+        | State::NoTransmitBudget
+        | State::AwaitingAcknowledgement
+        | State::PushMuted => (
             if live > 0.5 { "mic" } else { "mic-off" },
             mix(TEXT_MUTED, WHITE, live),
             mix(ELEVATED, SUCCESS, live),
         ),
-        Role::Listening => (
+        State::Listening => (
             "headphones",
             mix(TEXT_MUTED, WHITE, pulse),
             mix(ELEVATED, SUCCESS, pulse * 0.85),
         ),
-        Role::Deafened | Role::Offline => return None,
+        State::Deafened | State::ServerDeafened => {
+            ("headphones-off", color(TEXT_MUTED), color(ELEVATED))
+        }
+        _ => return None,
     };
     Some(
         div()
@@ -206,107 +260,177 @@ pub fn rail_badge(this: &Desktop, index: usize, server: &ServerView) -> Option<A
     )
 }
 
-/// One server in the voice card: where you are on it.
-struct Place {
-    server: usize,
-    channel: Option<u32>,
-    label: String,
-    role: Role,
+/// Bind delayed UI actions to the server and connection they name, never a
+/// runtime Vec position that removing an earlier bookmark can reuse.
+#[derive(Clone)]
+pub(crate) struct Target {
+    server: String,
+    generation: u64,
+    own: Option<(u32, u64)>,
+    channel: Option<(u32, u64)>,
 }
 
-/// Every connected server's place, the talk servers first.
-fn places(this: &Desktop) -> (Vec<Place>, Vec<Place>) {
-    let (mut talk, mut listen) = (Vec::new(), Vec::new());
-    for (index, server) in this.client.servers.iter().enumerate() {
-        if server.status != Status::Connected {
-            continue;
-        }
-        let role = this.client.voice_role(index);
-        let channel = server.voice_channel();
-        let label = match channel.and_then(|id| {
+impl Target {
+    fn capture(server: &ServerView) -> Self {
+        let own = server.own_session.and_then(|id| server.users.get(&id));
+        let channel = own.and_then(|user| {
             server
                 .channels
                 .iter()
-                .find(|channel| channel.target == TextTarget::Channel(id))
-        }) {
-            Some(channel) if channel.id != 0 => format!("{} #{}", server.name, channel.name),
-            _ => server.name.clone(),
-        };
-        let place = Place {
-            server: index,
-            channel,
-            label,
-            role,
-        };
-        match role {
-            Role::Talking | Role::Muted => talk.push(place),
-            Role::Deafened if this.client.voice.is_talk(&server.id) => talk.push(place),
-            Role::Listening => listen.push(place),
-            Role::Deafened | Role::Offline => {}
+                .find(|channel| channel.target == TextTarget::Channel(user.channel))
+        });
+        Self {
+            server: server.id.clone(),
+            generation: server.generation,
+            own: own.map(|user| (user.session, user.instance)),
+            channel: channel.map(|channel| (channel.id, channel.instance)),
         }
     }
-    (talk, listen)
-}
 
-/// "Talking on Alpha #Lobby · listening to Beta #Music", as it is read out.
-fn summary(talk: &[Place], listen: &[Place]) -> String {
-    let names = |places: &[&Place]| {
-        places
+    fn resolve(&self, client: &Client) -> Option<usize> {
+        self.resolve_in(&client.servers)
+    }
+
+    fn resolve_in(&self, servers: &[ServerView]) -> Option<usize> {
+        servers
             .iter()
-            .map(|place| place.label.as_str())
-            .collect::<Vec<_>>()
-            .join(", ")
-    };
-    let mut parts = Vec::new();
-    for (role, verb) in [
-        (Role::Talking, "talking on"),
-        (Role::Muted, "muted on"),
-        (Role::Deafened, "deafened on"),
-    ] {
-        let these: Vec<&Place> = talk.iter().filter(|place| place.role == role).collect();
-        if !these.is_empty() {
-            parts.push(format!("{verb} {}", names(&these)));
+            .position(|server| server.id == self.server)
+            .filter(|index| {
+                let server = &servers[*index];
+                server.generation == self.generation
+                    && self.own
+                        == server
+                            .own_session
+                            .and_then(|id| server.users.get(&id))
+                            .map(|user| (user.session, user.instance))
+            })
+    }
+
+    fn resolve_place(&self, client: &Client) -> Option<usize> {
+        self.resolve_place_in(&client.servers)
+    }
+
+    fn resolve_place_in(&self, servers: &[ServerView]) -> Option<usize> {
+        self.resolve_in(servers).filter(|index| {
+            let server = &servers[*index];
+            server.status == Status::Connected
+                && self.channel.is_some_and(|(id, instance)| {
+                    server.voice_channel() == Some(id)
+                        && server.channels.iter().any(|channel| {
+                            channel.target == TextTarget::Channel(id)
+                                && channel.instance == instance
+                        })
+                })
+        })
+    }
+
+    fn browse(&self, this: &mut Desktop, window: &mut Window, cx: &mut Context<Desktop>) {
+        if let Some(index) = self.resolve(&this.client) {
+            let server = &this.client.servers[index];
+            let channel = (server.status == Status::Connected)
+                .then(|| server.voice_channel())
+                .flatten();
+            match channel {
+                Some(channel) => this.browse_channel(index, channel, window, cx),
+                None => this.browse_server(index, window, cx),
+            }
+            cx.notify();
         }
     }
-    if !listen.is_empty() {
-        let these: Vec<&Place> = listen.iter().collect();
-        parts.push(format!("listening to {}", names(&these)));
-    }
-    let mut text = parts.join(" · ");
-    if let Some(first) = text.get(..1) {
-        let upper = first.to_uppercase();
-        text.replace_range(..1, &upper);
-    }
-    text
 }
 
-/// A place in the voice card that takes you to its channel.
-fn place_link(
-    id: (&'static str, usize),
-    place: &Place,
-    accent: Token,
-    cx: &mut Context<Desktop>,
-) -> AnyElement {
-    let (server, channel) = (place.server, place.channel);
-    let go = move |this: &mut Desktop, window: &mut Window, cx: &mut Context<Desktop>| {
-        match channel {
-            Some(channel) => this.browse_channel(server, channel, window, cx),
-            None => this.browse_server(server, window, cx),
+pub(crate) struct Place {
+    pub(crate) target: Target,
+    label: String,
+    name: String,
+    state: State,
+    connected: bool,
+    issue: Option<String>,
+}
+
+pub(crate) fn places(this: &Desktop) -> Vec<Place> {
+    let mut places = Vec::new();
+    // Destination rows first, preserving stable IDs without moving live state.
+    for destination in [true, false] {
+        for server in &this.client.servers {
+            if server.status == Status::Disconnected
+                || this.client.voice.is_talk(&server.id) != destination
+            {
+                continue;
+            }
+            let connected = server.status == Status::Connected;
+            let channel = connected
+                .then(|| server.voice_channel())
+                .flatten()
+                .and_then(|id| {
+                    server
+                        .channels
+                        .iter()
+                        .find(|channel| channel.target == TextTarget::Channel(id))
+                });
+            let label = channel.map_or_else(
+                || server.name.clone(),
+                |channel| format!("{} #{}", server.name, channel.name),
+            );
+            places.push(Place {
+                target: Target {
+                    server: server.id.clone(),
+                    generation: server.generation,
+                    own: server
+                        .own_session
+                        .and_then(|id| server.users.get(&id))
+                        .map(|user| (user.session, user.instance)),
+                    channel: channel.map(|channel| (channel.id, channel.instance)),
+                },
+                label,
+                name: server.name.clone(),
+                state: projected(&this.client, server, this.push_muted),
+                connected,
+                issue: server
+                    .audio
+                    .health
+                    .issues()
+                    .first()
+                    .map(|issue| issue.0.to_owned()),
+            });
         }
-        cx.notify();
-    };
-    let key = go;
+    }
+    places
+}
+
+pub(crate) fn target(places: &[Place], server: &str) -> Option<Target> {
+    places
+        .iter()
+        .find(|place| place.target.server == server)
+        .map(|place| place.target.clone())
+}
+
+fn summary(places: &[Place]) -> String {
+    places
+        .iter()
+        .map(|place| format!("{}: {}", place.label, place.state.label()))
+        .collect::<Vec<_>>()
+        .join(" · ")
+}
+
+fn place_link(place: &Place, cx: &mut Context<Desktop>) -> AnyElement {
+    let id = ElementId::from(format!(
+        "voice-place-{}-{}-{}",
+        place.target.server,
+        place.target.generation,
+        place.target.own.map_or(0, |(_, instance)| instance)
+    ));
+    let click = place.target.clone();
+    let key = place.target.clone();
+    let full = place.label.clone();
     let control = div()
-        .id(id)
+        .id(id.clone())
         .role(Role_::Button)
         .tab_index(0)
         .aria_label(format!("Go to {}", place.label))
-        .tooltip({
-            let full = place.label.clone();
-            move |_, cx| {
-                cx.new(|_| crate::dialogs::Tooltip(full.clone().into()))
-                    .into()
-            }
+        .tooltip(move |_, cx| {
+            cx.new(|_| crate::dialogs::Tooltip(full.clone().into()))
+                .into()
         })
         .w_full()
         .min_w_0()
@@ -315,70 +439,110 @@ fn place_link(
         .truncate()
         .cursor_pointer()
         .rounded(px(4.))
-        .text_color(color(accent))
+        .text_color(color(if place.state.speaking() {
+            SUCCESS
+        } else {
+            TEXT
+        }))
         .hover(|style| style.bg(color(HOVER)))
-        .on_click(cx.listener(move |this, _, window, cx| go(this, window, cx)))
+        .on_click(cx.listener(move |this, _, window, cx| click.browse(this, window, cx)))
         .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
             if matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                key(this, window, cx);
+                key.browse(this, window, cx);
                 cx.stop_propagation();
             }
         }))
-        .child(text!(place.label.clone()).with_id(("voice-place-label", id.1)));
+        .child(text!(place.label.clone()).with_id((id.clone(), "label")));
     layout::focusable(id, control)
 }
 
-/// The voice card above the user panel: where your voice goes, on every
-/// server; each place takes you there. `selected` is the server in front,
-/// which the hang-up button disconnects.
+/// Every connected/pending voice context, independent of text navigation.
+/// Each hang-up names and targets its own connection (voice AND chat).
 pub fn card(
-    this: &Desktop,
-    selected: usize,
+    _this: &Desktop,
+    places: &[Place],
     window: &mut Window,
     cx: &mut Context<Desktop>,
 ) -> Option<AnyElement> {
-    let (talk, listen) = places(this);
-    if talk.is_empty() && listen.is_empty() {
+    if places.is_empty() {
         return None;
     }
-    let text = summary(&talk, &listen);
-    let mut rows = Vec::new();
-    for (index, place) in talk.iter().chain(listen.iter()).enumerate() {
-        let (verb, accent) = match place.role {
-            Role::Talking => ("Talking on", SUCCESS),
-            Role::Muted => ("Muted on", TEXT),
-            Role::Deafened => ("Deafened on", TEXT_MUTED),
-            _ => ("Listening to", TEXT_MUTED),
-        };
-        rows.push(
-            div()
-                .w_full()
-                .min_w_0()
+    let text = summary(places);
+    let connected = places.iter().any(|place| place.connected);
+    let rows = places
+        .iter()
+        .map(|place| {
+            let id = ElementId::from(format!(
+                "voice-route-{}-{}-{}",
+                place.target.server,
+                place.target.generation,
+                place.target.own.map_or(0, |(_, instance)| instance)
+            ));
+            let target = place.target.clone();
+            let status = place.state.label();
+            let issue_target = place.target.clone();
+            let label = format!("Disconnect from {} (voice and chat)", place.name);
+            let action = crate::dialogs::icon_button(
+                (id.clone(), "disconnect"),
+                "hang-up",
+                label,
+                TEXT_MUTED,
+                None,
+                move |this, _, cx| {
+                    if let Some(index) = target.resolve(&this.client) {
+                        this.disconnect(index);
+                        cx.notify();
+                    }
+                },
+                cx,
+            );
+            layout::row()
+                .id(id.clone())
+                .role(Role_::Group)
+                .aria_label(format!("{}: {}", place.label, status))
+                .items_start()
                 .flex_shrink_0()
-                .flex()
-                .flex_col()
-                .gap(px(1.))
                 .child(
                     div()
-                        .text_color(color(TEXT_FAINT))
-                        .text_xs()
-                        .child(text!(verb).with_id(("voice-route-role", index))),
+                        .min_w_0()
+                        .flex_1()
+                        .flex_basis(px(0.))
+                        .flex()
+                        .flex_col()
+                        .gap(px(2.))
+                        .child(place_link(place, cx))
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(color(if place.state.speaking() {
+                                    SUCCESS
+                                } else {
+                                    TEXT_MUTED
+                                }))
+                                .child(layout::text((id.clone(), "status"), status)),
+                        ),
                 )
-                .child(layout::row().child(place_link(("voice-place", index), place, accent, cx)))
-                .into_any_element(),
-        );
-    }
-    let issue = this
-        .client
-        .servers
-        .iter()
-        .find(|server| server.status == Status::Connected)
-        .and_then(|server| server.audio.health.issues().first().map(|issue| issue.0));
-    let connected = this
-        .client
-        .servers
-        .get(selected)
-        .is_some_and(|server| server.status == Status::Connected);
+                .child(layout::fixed().child(action))
+                .when_some(place.issue.as_ref(), |row, issue| {
+                    row.child(layout::fixed().child(crate::dialogs::icon_button(
+                        (id.clone(), "audio-issue"),
+                        "alert",
+                        format!("{}: {issue}; open audio settings", place.name),
+                        WARNING,
+                        None,
+                        move |this, window, cx| {
+                            if issue_target.resolve(&this.client).is_some() {
+                                issue_target.browse(this, window, cx);
+                                this.open_settings();
+                                cx.notify();
+                            }
+                        },
+                        cx,
+                    )))
+                })
+                .into_any_element()
+        })
+        .collect::<Vec<_>>();
     Some(
         div()
             .id("voice-card")
@@ -398,7 +562,11 @@ pub fn card(
             .child(
                 layout::row()
                     .items_center()
-                    .child(layout::fixed().child(icon("signal", 18., color(SUCCESS))))
+                    .child(layout::fixed().child(icon(
+                        "signal",
+                        18.,
+                        color(if connected { SUCCESS } else { TEXT_MUTED }),
+                    )))
                     .child(
                         div()
                             .min_w_0()
@@ -406,22 +574,15 @@ pub fn card(
                             .flex_basis(px(0.))
                             .font_weight(FontWeight::BOLD)
                             .text_sm()
-                            .child(layout::label("voice-connection-status", "Voice connected")),
-                    )
-                    .when(connected, |row| {
-                        row.child(layout::fixed().child(crate::dialogs::icon_button(
-                            "disconnect",
-                            "hang-up",
-                            "Disconnect",
-                            TEXT_MUTED,
-                            None,
-                            move |this, _, cx| {
-                                this.disconnect(selected);
-                                cx.notify();
-                            },
-                            cx,
-                        )))
-                    }),
+                            .child(layout::label(
+                                "voice-connection-status",
+                                if connected {
+                                    "Voice connected"
+                                } else {
+                                    "Connecting voice"
+                                },
+                            )),
+                    ),
             )
             .child(
                 layout::scroll_region(
@@ -437,53 +598,78 @@ pub fn card(
                 .text_sm()
                 .children(rows),
             )
-            .when_some(issue, |card, issue| {
-                card.child(
-                    layout::row()
-                        .id("audio-issue")
-                        .role(Role_::Button)
-                        .aria_label(format!("{issue}; open audio settings"))
-                        .tab_index(0)
-                        .cursor_pointer()
-                        .text_xs()
-                        .text_color(color(WARNING))
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.open_settings();
-                            cx.notify();
-                        }))
-                        .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
-                            if matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                                this.open_settings();
-                                cx.stop_propagation();
-                                cx.notify();
-                            }
-                        }))
-                        .child(layout::fixed().child(icon("alert", 12., color(WARNING))))
-                        .child(layout::label("audio-issue-label", issue)),
-                )
-            })
             .into_any_element(),
     )
+}
+
+/// An explicit answer is valid only for the named places that were shown.
+/// It holds facts, not mutable routing policy; cancellation never sends audio.
+pub(crate) struct SecondServerPrompt {
+    target: Target,
+    target_name: String,
+    others: Vec<Target>,
+    other_names: Vec<String>,
+    destinations: Vec<String>,
+}
+
+impl SecondServerPrompt {
+    fn capture(client: &Client, ask: SecondServer) -> Option<Self> {
+        let server = client.servers.get(ask.server)?;
+        let others = ask
+            .talking
+            .iter()
+            .map(|index| client.servers.get(*index))
+            .collect::<Option<Vec<_>>>()?;
+        Some(Self {
+            target: Target::capture(server),
+            target_name: server.name.clone(),
+            other_names: others.iter().map(|server| server.name.clone()).collect(),
+            others: others.into_iter().map(Target::capture).collect(),
+            destinations: client.voice.talk().to_vec(),
+        })
+    }
+
+    fn resolve(&self, client: &Client) -> Option<usize> {
+        let mut enabled = client
+            .servers
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| client.voice_role(*index) == nuschl_client::voice::Role::Talking)
+            .map(|(_, server)| server.id.as_str())
+            .collect::<Vec<_>>();
+        let mut shown = self
+            .others
+            .iter()
+            .map(|target| target.server.as_str())
+            .collect::<Vec<_>>();
+        enabled.sort_unstable();
+        shown.sort_unstable();
+        if enabled != shown {
+            return None;
+        }
+        self.resolve_in(&client.servers, client.voice.talk())
+    }
+
+    fn resolve_in(&self, servers: &[ServerView], destinations: &[String]) -> Option<usize> {
+        if destinations != self.destinations
+            || self
+                .others
+                .iter()
+                .any(|target| target.resolve_place_in(servers).is_none())
+        {
+            return None;
+        }
+        self.target.resolve_place_in(servers)
+    }
 }
 
 /// "Speak on two servers?": unmuting here while your voice goes elsewhere.
 pub fn second_server_dialog(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement> {
     let ask = this.second_server.as_ref()?;
-    let name = |index: usize| {
-        this.client
-            .servers
-            .get(index)
-            .map_or_else(String::new, |server| server.name.clone())
-    };
-    let here = name(ask.server);
-    let elsewhere = ask
-        .talking
-        .iter()
-        .map(|index| name(*index))
-        .collect::<Vec<_>>()
-        .join(" and ");
+    let here = ask.target_name.clone();
+    let elsewhere = ask.other_names.join(" and ");
     let detail = format!(
-        "You are talking on {elsewhere}. Your voice can go to {here} as well, or only to {here}."
+        "Your microphone is enabled for {elsewhere}. Enable it for {here} as well, or only for {here}."
     );
     let content = div()
         .flex()
@@ -562,8 +748,17 @@ pub fn second_server_dialog(this: &Desktop, cx: &mut Context<Desktop>) -> Option
 
 impl Desktop {
     /// The footer's microphone or headphones button, on the server in front.
-    pub fn set_mute(&mut self, deafen: bool) {
-        if let Some((index, _)) = self.selected_indices() {
+    pub(crate) fn set_mute_target(&mut self, target: &Target, deafen: bool) {
+        if let Some(index) = target.resolve(&self.client) {
+            let server = &self.client.servers[index];
+            let enabling = if deafen {
+                server.deafened
+            } else {
+                server.muted || server.deafened
+            };
+            if enabling && target.resolve_place(&self.client).is_none() {
+                return;
+            }
             let question = self.client.set_mute(index, deafen);
             self.ask(question);
         }
@@ -579,12 +774,15 @@ impl Desktop {
         if question.is_some() {
             self.menu = None;
         }
-        self.second_server = question;
+        self.second_server =
+            question.and_then(|question| SecondServerPrompt::capture(&self.client, question));
     }
 
     pub fn answer_second_server(&mut self, both: bool) {
         if let Some(ask) = self.second_server.take() {
-            self.client.speak_here(ask.server, both);
+            if let Some(index) = ask.resolve(&self.client) {
+                self.client.speak_here(index, both);
+            }
         }
     }
 
@@ -594,7 +792,9 @@ impl Desktop {
 
     /// Keep the rail's rings and badges moving toward the voice state.
     pub fn animate_voice(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let (moving, breathing) = self.voice_motion.animate(&self.client, cx.reduce_motion());
+        let (moving, breathing) =
+            self.voice_motion
+                .animate(&self.client, self.push_muted, cx.reduce_motion());
         if moving {
             window.request_animation_frame();
         } else if breathing && !self.voice_motion.breathing {
@@ -613,36 +813,104 @@ impl Desktop {
 
 #[cfg(test)]
 mod tests {
-    use super::{Place, Role, summary};
+    use super::{Place, SecondServerPrompt, ServerView, State, Status, Target, summary};
+    use nuschl_client::conversation::ConversationState;
+    use nuschl_core::{bookmark::ServerBookmark, model::User};
 
-    fn place(label: &str, role: Role) -> Place {
-        Place {
-            server: 0,
-            channel: None,
-            label: label.into(),
-            role,
-        }
+    #[test]
+    fn summary_keeps_each_context_and_never_calls_idle_eligibility_speech() {
+        let places = vec![
+            Place {
+                target: Target {
+                    server: "a".into(),
+                    generation: 3,
+                    own: None,
+                    channel: None,
+                },
+                name: "Alpha".into(),
+                label: "Alpha #Lobby".into(),
+                state: State::MicrophoneEnabled,
+                connected: true,
+                issue: None,
+            },
+            Place {
+                target: Target {
+                    server: "b".into(),
+                    generation: 7,
+                    own: None,
+                    channel: None,
+                },
+                name: "Beta".into(),
+                label: "Beta #Root".into(),
+                state: State::Deafened,
+                connected: true,
+                issue: None,
+            },
+        ];
+        assert_eq!(
+            summary(&places),
+            "Alpha #Lobby: Microphone destination · enabled · Beta #Root: Deafened"
+        );
+    }
+    fn server(id: &str) -> ServerView {
+        let mut bookmark = ServerBookmark::new(id, "127.0.0.1", 64738, "test").unwrap();
+        bookmark.id = id.into();
+        let mut server = ServerView::new(bookmark);
+        server.status = Status::Connected;
+        server.generation = 7;
+        server.own_session = Some(1);
+        server.users.insert(
+            1,
+            User {
+                session: 1,
+                instance: 11,
+                channel: 2,
+                ..User::default()
+            },
+        );
+        let mut channel = ConversationState::channel(2, Some(0), "Lobby".into(), 0);
+        channel.instance = 22;
+        server.channels = vec![channel];
+        server
     }
 
     #[test]
-    fn the_summary_says_where_you_talk_and_listen() {
-        let talk = [place("Alpha #Lobby", Role::Talking)];
-        let listen = [
-            place("Beta #Music", Role::Listening),
-            place("Gamma", Role::Listening),
-        ];
-        assert_eq!(
-            summary(&talk, &listen),
-            "Talking on Alpha #Lobby · listening to Beta #Music, Gamma"
-        );
-        assert_eq!(summary(&[], &listen), "Listening to Beta #Music, Gamma");
-        let both = [
-            place("Alpha #Lobby", Role::Talking),
-            place("Beta", Role::Muted),
-        ];
-        assert_eq!(
-            summary(&both, &[]),
-            "Talking on Alpha #Lobby · muted on Beta"
-        );
+    fn targets_survive_index_shift_but_reject_reconnect_and_channel_reuse() {
+        let mut servers = vec![server("a"), server("b")];
+        let target = Target::capture(&servers[1]);
+        assert_eq!(target.resolve_place_in(&servers), Some(1));
+        servers.remove(0);
+        assert_eq!(target.resolve_place_in(&servers), Some(0));
+        servers[0].name = "renamed".into();
+        servers[0].channels[0].name = "renamed channel".into();
+        assert_eq!(target.resolve_place_in(&servers), Some(0));
+        servers[0].channels[0].instance += 1;
+        assert_eq!(target.resolve_place_in(&servers), None);
+        // Hanging up/navigation is connection-scoped, not a stale channel action.
+        assert_eq!(target.resolve_in(&servers), Some(0));
+        servers[0].users.get_mut(&1).unwrap().instance += 1;
+        assert_eq!(target.resolve_in(&servers), None);
+        servers[0] = server("replacement");
+        assert_eq!(target.resolve_in(&servers), None);
+    }
+
+    #[test]
+    fn consent_rejects_a_changed_route_set_or_either_place_lifetime() {
+        let mut servers = vec![server("a"), server("b")];
+        let routes = vec!["a".into()];
+        let prompt = SecondServerPrompt {
+            target: Target::capture(&servers[1]),
+            target_name: "b".into(),
+            others: vec![Target::capture(&servers[0])],
+            other_names: vec!["a".into()],
+            destinations: routes.clone(),
+        };
+        assert_eq!(prompt.resolve_in(&servers, &routes), Some(1));
+        assert_eq!(prompt.resolve_in(&servers, &["a".into(), "c".into()]), None);
+        servers[0].users.get_mut(&1).unwrap().channel = 3;
+        assert_eq!(prompt.resolve_in(&servers, &routes), None);
+        servers[0] = server("a");
+        servers[1].generation += 1;
+        assert_eq!(prompt.resolve_in(&servers, &routes), None);
     }
 }

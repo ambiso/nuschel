@@ -272,7 +272,7 @@ pub struct Desktop {
     /// The rail's talk rings and listening badges (voice.rs).
     pub voice_motion: crate::voice::Motion,
     /// "Speak on two servers?" is being asked.
-    pub second_server: Option<nuschl_client::SecondServer>,
+    pub second_server: Option<crate::voice::SecondServerPrompt>,
     pub menu: Option<crate::menus::Menu>,
     /// Message text: its selection, the message a menu is for, copy feedback.
     pub text: crate::selection::TextState,
