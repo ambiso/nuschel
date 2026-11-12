@@ -1,12 +1,15 @@
 # Nuschl TODO
 
-Current focus (user, 2026-11-12): **voice-host ACME setup, desktop rail/footer
-spacing and status, and the native ACL/group editor**. Continuous volume controls
-and a VAD activity meter are in a separate implementation lane. Browser
-configuration/send-limit follow-ups remain below. The retained iOS installer now
-passes signed-entry acquisition verification; installed macOS/Xcode and Simulator
-remain open. Audio fidelity, unmute latency and hybrid
-update readiness retain their remaining gates below.
+Current focus (user, 2026-11-12): **fix the extremely disruptive long-idle
+VAD false triggering first**. Unmute onset delay and the brief playback gap on
+every mute/unmute remain active but lower priority. The DSP owner is moving from
+matched-worker diagnostics to a bounded production correction with quiet-speech
+and immediate-onset controls; the independent startup owner reviews and validates
+that correction before a playback-lifetime rewrite. Native volume sliders/meter,
+image quality and font rendering have separate reviewable checkpoints; their
+integration follows the urgent VAD fix. Voice-host ACME, rail/footer spacing,
+native voice status and the native ACL/group editor are integrated with the
+remaining gates below. Installed macOS/Xcode and Simulator remain open.
 The relay DNS/kernel checks and explicit-deny correction are integrated.
 The measured playback clipping correction and SuperUser bootstrap guide
 are integrated. Transmit quality evidence and the exact native welcome-domain
@@ -1056,7 +1059,8 @@ The media worker uses per-speaker adaptive jitter buffers and Opus loss concealm
       compensating gain or change defaults without a targeted explanation.
 - [ ] Fix VAD becoming increasingly trigger-happy after a long period without
       speech, eventually transmitting background noise (user, 2026-11-12;
-      mechanism unconfirmed; user says it may be a regression). Compare cached
+      **highest user priority: extremely annoying**; regression remains unconfirmed).
+      Compare cached
       older/current workers with identical frozen inputs, settings and time
       windows; distinguish changed gate/packet decisions from gain/encoding
       changes that make the same admitted noise more audible. Reproduce with
@@ -1067,9 +1071,18 @@ The media worker uses per-speaker adaptive jitter buffers and Opus loss concealm
       gain adaptation, noise-estimator drift and stale gate state. Preserve
       immediate first-speech admission, quiet-speaker audibility and explicit
       microphone privacy; do not mask it by raising every user's threshold.
-      Assigned to the shared owner after the current send-limit handoff in a new
-      audio workspace; Claude's separate slider/threshold-helper edits must stay
-      disjoint. Existing short DSP checks do not establish long-idle stability.
+      Active DSP owner has reproduced adaptive-gain amplification crossing the
+      post-gain gate floor for a quiet, high-confidence harmonic surrogate, and
+      medium-confidence frames can refresh an already-open gate indefinitely.
+      The exact ci7/xvrd/current workers share that controlled behavior; this is
+      not a claim that the synthetic surrogate is labeled room noise or that the
+      user's physical-input mechanism is fully identified. Implement a minimal
+      correction that prevents gain-induced admission and sustained false holds
+      without dropping quiet speech; validate against frozen genuine speech,
+      silence-to-speech recovery and long-idle controls. Earshot comparison/report
+      polish and playback-lifetime work are secondary to this production fix.
+      Claude's separate slider/threshold-helper edits must stay disjoint. Existing
+      short DSP checks do not establish long-idle stability.
       User later confirms the symptom and correlation with not speaking, with
       both UI and worker running from
       `/nix/store/ci7hdskm7ja8mg45xc9ihws7ddq8adiw-nuschl-0.1.0` (worker SHA-256
