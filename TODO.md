@@ -1045,6 +1045,19 @@ listed below. Plugin data remains the explicit gap.
       browser route epochs also revoke prior queued media.
       Persistent controls/effective-rate UI and the full private-server matrix
       remain open; synthetic codec/budget regressions cover the default slice.
+- [ ] Verify and adopt the input-fidelity encoder profile (user, 2026-11-12).
+      Current production native/browser TX both select VoIP unconditionally;
+      Mumble uses Audio or RestrictedLowDelay at higher rates. The requested
+      direction is Audio, preferring RestrictedLowDelay at 64/128 kbit/s only
+      when measured quality is equivalent and latency improves. Keep 128 kbit/s
+      requested; go below 64 only when the server budget requires it. Compare
+      real native/WASM encodes, lookahead, speech/music/transients/high-band
+      spectra and packet-loss behavior against independent libopus. Existing
+      receive/decoder/SRC tests do not establish input-to-output transparency;
+      add spectrograms, spectral residuals and listening artifacts, separating
+      codec loss, intentional capture processing and playback implementation
+      errors. Browser complexity 5 versus native 9 and differing FEC/loss hints
+      also need measured review. Do not equate lossy Opus with identical PCM.
 - [ ] Design an optional music preset alongside the voice default: proposed voice
       128 kb/s mono at 48 kHz; music 128 kb/s stereo at 48 kHz, with 96/160/192 kb/s
       choices subject to the same server budget. Music uses `Application::Audio`,
