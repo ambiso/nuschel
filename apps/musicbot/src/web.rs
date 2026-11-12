@@ -346,12 +346,6 @@ async fn art(
             "the artwork worker is unavailable".to_owned(),
         )
     })?)?;
-    if !worker.is_file() {
-        return Err(ApiError(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "the artwork worker is unavailable".to_owned(),
-        ));
-    }
     let owned = bot.clone();
     let task = tokio::spawn(async move {
         let _permit = permit;
@@ -361,6 +355,12 @@ async fn art(
                 StatusCode::SERVICE_UNAVAILABLE => error,
                 _ => ApiError(StatusCode::NOT_FOUND, error.1),
             })?;
+        if !worker.is_file() {
+            return Err(ApiError(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "the artwork worker is unavailable".to_owned(),
+            ));
+        }
         let block = nuschl_ipc::host::thumbnail(&worker, &image.bytes, size, size)
             .await
             .map_err(|_| {
