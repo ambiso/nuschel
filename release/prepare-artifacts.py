@@ -50,12 +50,46 @@ def checked_relative(value):
 
 def verify_notices(root, policy):
     report = load(root / "THIRD-PARTY.json", 8 * 1024 * 1024)
-    if (report.get("format") != 1 or report.get("unresolved") != [] or
+    if (report.get("format") not in (1, 2) or report.get("unresolved") != [] or
             report.get("roots_by_target") != policy):
         raise ValueError("missing/incomplete/mismatched runtime attribution scope")
     source = Path(__file__).resolve().parents[1]
     workspace = {tomllib.loads(path.read_text())["package"]["name"]
                  for directory in ("crates", "apps") for path in (source / directory).glob("*/Cargo.toml")}
+    compact = report.get("format") == 2
+    index = report.get("notice_files", {})
+    if compact:
+        payload = report.get("notice_payload", {})
+        file = root / "THIRD-PARTY.txt"
+        if (payload.get("path") != "THIRD-PARTY.txt" or not file.is_file() or file.is_symlink() or
+                type(payload.get("size")) is not int or not 1 <= payload["size"] <= 128 * 1024**2 or
+                file.stat().st_size != payload["size"] or digest(file) != payload.get("sha256") or
+                not isinstance(index, dict) or not 1 <= len(index) <= 16384):
+            raise ValueError("invalid compact notice payload/index")
+        previous_end, aliases = 0, set()
+        with file.open("rb") as stream:
+            for name, item in sorted(index.items(), key=lambda pair: pair[1].get("offset", -1)):
+                checked_relative(name)
+                if (name.casefold() in aliases or type(item.get("offset")) is not int or
+                        type(item.get("size")) is not int or not 1 <= item["size"] <= 4 * 1024**2 or
+                        item["offset"] < previous_end or item["offset"] + item["size"] > payload["size"]):
+                    raise ValueError("overlapping/invalid compact notice byte range")
+                aliases.add(name.casefold())
+                stream.seek(item["offset"])
+                if hashlib.sha256(stream.read(item["size"])).hexdigest() != item.get("sha256"):
+                    raise ValueError("compact notice byte-range hash mismatch")
+                previous_end = item["offset"] + item["size"]
+    def notice_hash(path):
+        if compact:
+            name = path.relative_to(root).as_posix()
+            if name not in index:
+                raise ValueError("missing compact notice reference")
+            return index[name]["sha256"]
+        return digest(path)
+    for bundled, original in (("EUPL-1.2", "LICENSE"), ("Mumble-BSD", "crates/protocol/proto/LICENSE.mumble"),
+                              ("NewCMMath-GUST-Font-License", "crates/math/fonts/GUST-FONT-LICENSE.txt")):
+        if notice_hash(root / bundled) != digest(source / original):
+            raise ValueError("first-party/protocol/font notice differs from the source")
     packages = report.get("packages")
     if not isinstance(packages, list) or not 1 <= len(packages) <= 8192:
         raise ValueError("missing bounded runtime package inventory")
@@ -73,7 +107,7 @@ def verify_notices(root, policy):
             path = directory / relative
             if len(references) >= 16384 or path in references:
                 raise ValueError("duplicate or excessive notice references")
-            if not re.fullmatch(r"[0-9a-f]{64}", entry["sha256"]) or digest(path) != entry["sha256"]:
+            if not re.fullmatch(r"[0-9a-f]{64}", entry["sha256"]) or notice_hash(path) != entry["sha256"]:
                 raise ValueError("bundled notice digest mismatch")
             references.add(path)
     for package in packages:

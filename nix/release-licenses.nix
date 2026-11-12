@@ -260,11 +260,24 @@ let
     PY
     touch "$out"
   '';
+  # Inspectable even while upstream evidence remains unresolved. This never
+  # turns compaction into a license fallback; strict bundles still require check.
+  compactInventory =
+    pkgs.runCommand "nuschl-compact-license-inventory" { nativeBuildInputs = [ pkgs.python3 ]; }
+      ''
+        mkdir -p "$out/share/licenses"
+        python3 ${../release/compact-notices.py} ${inventory}/share/licenses/nuschl "$out/share/licenses/nuschl"
+      '';
   bundle = pkgs.runCommand "nuschl-release-licenses" { } ''
     test -e ${check}
-    cp -R ${inventory} "$out"
+    cp -R ${compactInventory} "$out"
   '';
 in
 {
-  inherit inventory check bundle;
+  inherit
+    inventory
+    compactInventory
+    check
+    bundle
+    ;
 }

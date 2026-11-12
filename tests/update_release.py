@@ -56,6 +56,9 @@ class ReleaseGates(unittest.TestCase):
             (binaries / (name + suffix)).write_bytes(b"synthetic binary; never executed")
         notices = install / "licenses" if platform == "windows-x86_64" else install / "Contents/Resources/licenses"
         notices.mkdir(parents=True)
+        for bundled, original in (("EUPL-1.2", "LICENSE"), ("Mumble-BSD", "crates/protocol/proto/LICENSE.mumble"),
+                                  ("NewCMMath-GUST-Font-License", "crates/math/fonts/GUST-FONT-LICENSE.txt")):
+            shutil.copyfile(REPO / original, notices / bundled)
         # Synthetic inventory: validates gate mechanics only, never attribution
         # completeness for the real app or any upstream license choice.
         targets = {}
