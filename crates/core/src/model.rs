@@ -653,7 +653,7 @@ mod tests {
             image_message_length: 256,
             ..Default::default()
         };
-        let image = format!("<img src="data:image/png;base64,{}"/>","A".repeat(100));
+        let image = format!(r#"<img src="data:image/png;base64,{}"/>"#, "A".repeat(100));
         assert!(image.len() > limits.message_length);
         assert_eq!(
             limits.check_html_total(&image),
