@@ -44,6 +44,7 @@ def main():
         assert process.returncode == 0, process.stderr
         result = json.loads(process.stdout)
         results.append(result)
+        (args.output / 'attempt.json').write_text(json.dumps(results, indent=2) + '\n')
         return result
 
     assert run('valid')['kind'] == 'accepted'

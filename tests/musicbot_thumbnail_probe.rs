@@ -24,7 +24,7 @@ fn fault_worker() {
         "ZHVwbGljYXRl" => "duplicate",
         "d3JvbmctaWQ=" => "wrong-id",
         "ZGltZW5zaW9ucw==" => "dimensions",
-        "YnltZXM=" => "bytes",
+        "Ynl0ZXM=" => "bytes",
         "dHJhaWxpbmctYml0cw==" => "trailing-bits",
         "dHdv" => "two",
         _ => "hang",

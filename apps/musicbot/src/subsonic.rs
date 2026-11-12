@@ -161,7 +161,7 @@ impl AlbumList {
     }
 }
 
-/// An image from `getCoverArt`, passed on to the browser as it is.
+/// Encoded library artwork; only the isolated content worker decodes it.
 pub struct Image {
     pub bytes: Vec<u8>,
 }
