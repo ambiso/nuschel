@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: EUPL-1.2
 // An RPC timeout is not a worker acknowledgment. Retire the entire owned lane
-// before settling timed-out requests, so its inbox cannot outlive its credits.
+// before settling timed-out requests. A closed owner never posts new work
+// while the browser finishes its asynchronous native shutdown.
 export const SDK_RPC_LIMIT=128, SDK_RPC_TIMEOUT=15000;
 export class SdkUnavailableError extends Error {
   constructor(message="The client is unavailable. Reload to reconnect.") {super(message);this.name="SdkUnavailableError";this.code="SDK_UNAVAILABLE";}

@@ -160,12 +160,23 @@ try {
  const afterTail=await page.evaluate(()=>({commands:__voiceProof.commands.length,messagesAfterRetirement:__voiceProof.messagesAfterRetirement,inbox:__voiceProof.pendingRpc.size}));
  assert.equal(afterTail.commands,terminal.commands);assert.equal(afterTail.messagesAfterRetirement,0);
  assert.equal(afterTail.inbox,128,"an old tail cannot return results to the retired owner");
+ // Also deliver already-queued stale callbacks explicitly: browser disposal
+ // dropping messages alone does not prove App's owned-worker identity guard.
+ await page.evaluate(()=>{
+  __voiceProof.sdk.dispatchEvent(new MessageEvent("message",{data:{kind:"ready",capabilities:["voice"]}}));
+  __voiceProof.sdk.dispatchEvent(new MessageEvent("message",{data:{kind:"state",servers:__voiceProof.servers,timeline:__voiceProof.timeline,voice:__voiceProof.voice,updates:[]}}));
+  __voiceProof.sdk.dispatchEvent(new MessageEvent("message",{data:{kind:"result",id:1,value:true}}));
+ });
+ assert.equal(await page.locator(".server-connection .status").textContent(),"Unavailable");
+ assert.equal(await page.getByRole("region",{name:"Voice controls"}).count(),0);
+ assert.equal(await editor.inputValue(),draft);assert.equal(await page.getByRole("button",{name:"Send",exact:true}).isDisabled(),true);
+ assert.equal(await page.evaluate(()=>__voiceProof.commands.length),terminal.commands);
  assert.deepEqual(errors,[]);assert.deepEqual(remote,[]);assert.deepEqual(terminal.violations,[]);
  await page.screenshot({path:resolve(out,"unavailable-draft.png")});
  const report={passed:true,site,csp,actual_stall_ms:17000,rpc_deadline_ms:15000,observed_retirement_ms:elapsed,observed_native_close_ms:nativeClosedAt-start,audio_rpc_inbox:audioInbox,sdk_rpc_inbox:fullInbox,
-  messages_after_retirement:afterTail.messagesAfterRetirement,worker_closed:closed,worker_stall_completed:finished,worker_events:workerEvents,terminations:terminal.terminations,microphone_tracks:terminal.tracks,
+  messages_after_retirement:afterTail.messagesAfterRetirement,three_explicit_stale_callbacks_ignored:true,worker_closed:closed,worker_stall_completed:finished,worker_events:workerEvents,terminations:terminal.terminations,microphone_tracks:terminal.tracks,
   draft_retained_and_selectable:true,cache_unchanged:true,new_send_denied:true,
-  checks:["actual packaged App and owned SDK worker","fixture-appended ordinary-message17s block (packaged SDK code unchanged)","15s logical retirement/termination request before synthetic rejection","physical shutdown timing recorded separately","no auto restart/consent","tracks stopped","Unavailable status/no voice controls","read-only selectable draft","bookmarks/certificate/history unchanged","new command denied","production CSP/no foreign requests"]};
+  checks:["actual packaged App and owned SDK worker","fixture-appended ordinary-message17s block; original packaged SDK prefix unmodified","15s logical retirement/termination request before synthetic rejection","physical shutdown timing recorded separately","no auto restart/consent","tracks stopped","Unavailable status/no voice controls","read-only selectable draft","bookmarks/certificate/history unchanged","new command denied","stale ready/state/result callbacks cannot revive old owner","production CSP/no foreign requests"]};
  await writeFile(resolve(out,"proof.json"),JSON.stringify(report,null,2));console.log(JSON.stringify(report));
 }catch(error){
  await writeFile(resolve(out,"failure.json"),JSON.stringify({error:String(error),errors,remote,workerEvents,states:await Promise.all(contexts.map(async context=>context.pages()[0]?.evaluate(()=>({text:document.body.textContent,terminations:__voiceProof.terminations,commands:__voiceProof.commands,commandTimes:__voiceProof.commandTimes,terminatedWall:__voiceProof.terminatedWall,tracks:__voiceProof.tracks.map(t=>t.readyState)})).catch(()=>null)))},null,2));throw error;
