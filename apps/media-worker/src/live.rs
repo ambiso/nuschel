@@ -1556,6 +1556,10 @@ fn device_buffer(supported: &cpal::SupportedBufferSize) -> cpal::BufferSize {
 mod output_fixture;
 
 #[cfg(test)]
+#[path = "capture_fixture.rs"]
+mod capture_fixture;
+
+#[cfg(test)]
 mod tests {
     #[test]
     fn real_mono_packets_fit_default_and_reduced_live_targets_without_devices() {
