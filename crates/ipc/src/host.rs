@@ -232,7 +232,9 @@ pub async fn thumbnail(
                     io::Result::Ok(())
                 };
                 let read = async {
-                    let reply = read_reply(&mut output).await?;
+                    let maximum =
+                        (max_width as usize * max_height as usize * 4).div_ceil(3) * 4 + 4096;
+                    let reply = read_thumbnail_reply(&mut output, maximum).await?;
                     if reply.request_id != 1 {
                         return Err(Error::InvalidResponse);
                     }
@@ -272,6 +274,23 @@ pub async fn thumbnail(
     // replace this owner; a supervising HTTP task can time out independently.
     reap_thumbnail(&mut child).await;
     validated_thumbnail(reply?, max_width, max_height)
+}
+
+async fn read_thumbnail_reply(
+    output: &mut tokio::process::ChildStdout,
+    maximum: usize,
+) -> Result<Envelope<ContentResponse>, Error> {
+    let size = output.read_u32().await? as usize;
+    if size == 0 || size > maximum {
+        return Err(Error::Frame(crate::Error::TooLarge));
+    }
+    let mut bytes = vec![0; size];
+    output.read_exact(&mut bytes).await?;
+    let response: Envelope<ContentResponse> = serde_json::from_slice(&bytes)?;
+    if response.version != PROTOCOL_VERSION {
+        return Err(Error::InvalidResponse);
+    }
+    Ok(response)
 }
 
 async fn reap_thumbnail(child: &mut Child) {
