@@ -914,6 +914,14 @@ The media worker uses per-speaker adaptive jitter buffers and Opus loss concealm
       sensitivity. Input/codec lossy error is separate; no native TX/network/device
       listening or full executed-Mumble/perceptual equivalence follows. Actual
       plots/WAV provenance: docs/reviews/2026-11-12-output-spectral.json.
+- [ ] Replace the measured native linear capture SRC gap with filtered mono
+      conversion, preserving exact channel-average/phase/timestamps and callback
+      allocation/privacy semantics. Actual untouched converter fails21/26 C Speex
+      quality3 cases: upper passband−3.65dB, images−14.4dB versus C−76.84…−94.96dB;
+      96k→48k aliases36k→12k near0dB versus C−96.56dB and loses the tested impulse.
+      Freeze baseline before changes: docs/reviews/2026-11-12-capture-baseline.json.
+      Preserve no whole-callback prefill/activation delay, exact capture clock and
+      recorded/fallback AEC correspondence; private DSP/unmute proofs required.
 - [x] Correct the measured native non-48 kHz clipping/SRC defect together with
       fallback correspondence. Keep f64 mix/mono/FX headroom through the 200 ms
       ring, fixed bounded binary scaling around f32 SRC, then map/clip the device.
