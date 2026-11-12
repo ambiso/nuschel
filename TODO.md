@@ -781,11 +781,22 @@ The media worker uses per-speaker adaptive jitter buffers and Opus loss concealm
       `Worker.terminate()` has no physical-exit acknowledgment; a future retry
       must not multiply still-retiring workers/inboxes or restore old consent.
       No guarantee is made about previously submitted network traffic delivery.
-- [ ] Add a bounded SDK initialization watchdog. The initial `init`/`ready`
-      handshake currently has no request ID, so a worker stuck before ready
-      without an RPC cannot trigger the per-command 15 s retirement timer.
-      Preserve saved data/consent and distinguish startup failure from a transient
-      command error; do not treat a timeout as physical exit acknowledgment.
+- [ ] Integrate the verified browser SDK startup watchdog (`8a235afe`,
+      `40bd8a5c`; browser owner). An explicit starting/ready/closed owner has a
+      separate 30 s initialization deadline even with zero RPCs. Only its first
+      ready after one init clears that deadline/autoconnects; duplicate/late
+      ready cannot bootstrap again. Constructor/init-post failures and loader
+      stalls expose a global persistent Unavailable/Reload action with no
+      selected or saved server. Existing permanent retirement, failed-terminate
+      credits, cache/draft and microphone-consent rules are preserved.
+      All 44 scoped Node checks pass; actual packaged/CSP Chromium covers the
+      held WASM loader with zero ordinary RPC/mic, true zero-server 320 px
+      recovery, unchanged saved pin/history, pending setup draft and exactly one
+      private invite connect despite three duplicate ready events. Constructor/
+      post draft checks are N/A because those failures are synchronous. Normal
+      App/voice/text/order/privacy regression passes separately. See
+      `docs/sdk-rpc.md` and `~/.cache/nuschl-sdk-startup/handoff.json`; no physical
+      thread-exit or real-time deadline guarantee and no auto replacement.
 - [ ] Complete browser scheduling/device/reference receive parity beyond the
       scoped clocked pipeline fixtures: suspended/background tabs, Safari and
       Firefox, physical device latency/AEC, hostile entropy decode failures,

@@ -74,3 +74,54 @@ The accepted logical-retirement scope does not overwrite them or relabel them as
 passing. Final proofs and source/artifact hashes are recorded in
 `~/.cache/nuschl-sdk-rpc/handoff.json`; ordinary calling/text/order/privacy and
 production-CSP regressions are separate from this injected-stall fixture.
+
+## Initialization is a separate owned phase
+
+The same SDK owner now has explicit `starting`, `ready` and `closed` phases.
+A fixed 30-second startup watchdog starts when the adapter is constructed, even
+when there are no ordinary RPC entries. `initialize(relay)` posts at most one
+init control. While starting, ordinary requests reject without posting or
+extending the startup deadline. `acceptReady()` clears that deadline only for
+the first owned ready after initialization; later/duplicate/premature ready
+signals cannot reinitialize, reset a timer or repeat invite auto-connect.
+Ordinary RPC deadlines remain 15 seconds after readiness.
+
+Worker construction and initial-post failures take the same persistent
+Unavailable recovery path, including when no servers are loaded or saved.
+Reload is a global action rather than a button hidden inside a selected-server
+sidebar. The existing private-history warning can still be shown during startup;
+state/audio messages do not activate a half-initialized client. Disposal closes
+the timer and callbacks follow the same permanent owner/consent rules. Startup
+retirement still requests termination rather than claiming synchronous physical
+thread death, and no replacement worker is automatically created.
+
+The focused invocation is:
+
+```sh
+node --test tests/sdk_rpc_startup.unit.mjs tests/sdk_rpc.unit.mjs tests/web_audio.unit.mjs tests/web_playout_clock.mjs
+```
+
+All 44 tests pass, including eight new startup checks. These cover no-RPC timeout,
+ready just before deadline, ordinary deadlines after ready, premature/duplicate/
+late ready, request attempts that cannot extend startup, failed initialization
+post/termination and disposal. Construction failures are additionally exercised
+through the actual packaged App rather than a mock adapter constructor.
+
+`tests/sdk_rpc_startup.browser.mjs APP RELAY_URL MURMUR_PORT WRAPPER OUTPUT`
+serves the exact packaged App/SDK under production CSP on owned loopback services.
+It holds the SDK's actual WASM fetch unresolved, without changing SDK code: the
+client posts one init control, sends zero ordinary RPCs, requests no microphone,
+and retires after the scheduled 30-second watchdog. A pending server-setup draft
+and byte-identical owned bookmarks/pin/history survive. Separate synchronous
+constructor/post failures reach global recovery, with a true zero-saved-server
+case at 320 pixels. Draft preservation is not applicable in those synchronous
+cases because failure precedes entering a draft. The successful-ready/private
+Murmur case injects three duplicate ready events and observes exactly one invite
+connect with no microphone request or repeat initialization.
+
+Final source/artifact hashes and exact invocations are in
+`~/.cache/nuschl-sdk-startup/handoff.json`. Screenshots are
+`browser-final/{constructor,post,blocked}-recovery.png`; the ordinary App call,
+text, live server-order, privacy and CSP regression has its own proof. These are
+confined Chromium tests, not Safari/background scheduling or physical audio
+claims; 30/15 seconds are scheduled deadlines rather than hard real-time bounds.
