@@ -211,10 +211,12 @@ def actions(args, root, shell, application, bot, murmur):
             # The menu acquires its own focus scope on open. Tab reaches the
             # first action; reverse traversal wraps to the final admin action.
             shell.key("Tab")
-            eventually(lambda: first.focused, "Tab did not enter first menu action")
+            eventually(
+                lambda first=first: first.focused, "Tab did not enter first menu action"
+            )
             shell.chord("Shift_L", "Tab")
             eventually(
-                lambda: last.focused,
+                lambda last=last: last.focused,
                 "reverse Tab escaped rather than reaching last action",
             )
             assert_visible(last, current, "keyboard-focused last action")
@@ -251,7 +253,7 @@ def actions(args, root, shell, application, bot, murmur):
             first = control("Profile and connection", current)
             shell.key("Tab")
             eventually(
-                lambda: first.focused,
+                lambda first=first: first.focused,
                 "first action not keyboard focused after reopening",
             )
             assert_visible(first, current, "keyboard first action")
@@ -263,7 +265,7 @@ def actions(args, root, shell, application, bot, murmur):
             assert region
             # Test the shared region's explicit reading shortcuts independently
             # of action focus: these scroll only, never activate moderation.
-            current.call("Component", "GrabFocus")
+            region.call("Component", "GrabFocus")
             shell.key("End")
             assert_visible(
                 control("Ban…", current), current, "End scrolled last action"

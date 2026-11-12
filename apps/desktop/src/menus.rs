@@ -1312,8 +1312,6 @@ impl RenderOnce for MenuSurface {
                         .id("context-menu")
                         .role(Role::Menu)
                         .aria_label("Context menu")
-                        .track_focus(&state.focus)
-                        .tab_stop(false)
                         .w(width)
                         .max_h(height)
                         .p_1()
@@ -1329,6 +1327,7 @@ impl RenderOnce for MenuSurface {
                                 "Context menu actions",
                                 state.scroll.clone(),
                             )
+                            .track_focus(&state.focus)
                             .tab_stop(false)
                             .max_h(content_height)
                             .child(
