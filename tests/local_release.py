@@ -100,6 +100,25 @@ class LocalRelease(unittest.TestCase):
     def sign(self):
         local.sign(argparse.Namespace(stage=self.stage, signer=SIGNER, sign_key=self.secret))
 
+    def test_readonly_nix_bin_stages_notices_without_changing_source_or_programs(self):
+        windows = Path(self.products['windows']['output'])
+        source_bin = windows / 'bin'
+        programs = {name + '.exe': local.sha(source_bin / (name + '.exe'))
+                    for name in local.PROGRAMS}
+        notices = local.tree(windows / 'share/licenses/nuschl')
+        source_bin.chmod(0o555)
+        self.stage = self.root / 'readonly-bin-stage'
+        local.prepare(argparse.Namespace(source_repo=self.repo, tag='v0.1.0',
+            repository='fixture/project', output=self.stage, build=False))
+        staged = self.stage / 'install/windows'
+        self.assertEqual(local.tree(staged / 'licenses'), notices)
+        self.assertEqual({name: local.sha(staged / name) for name in programs}, programs)
+        local.validate(self.stage)
+        self.sign()
+        local.verify_signature(self.stage, SIGNER)
+        self.assertEqual(source_bin.stat().st_mode & 0o777, 0o555)
+        self.assertEqual({name: local.sha(source_bin / name) for name in programs}, programs)
+
     def test_real_fixture_hybrid_signatures_bind_ledger_and_exact_assets(self):
         self.sign()
         local.validate(self.stage)
