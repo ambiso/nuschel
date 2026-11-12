@@ -1,0 +1,327 @@
+{
+  "syntect_package": "5.3.0",
+  "syntect_revision": "e4670846ecf16d8832db6c43d531bec466214e27",
+  "packed_assets_sha256": {
+    "default.themedump": "8b57a2118224993360b6fc5fc2fa2e9872a827f00f9c57d43da08fa42c892399",
+    "default_metadata.packdump": "b1df0402dfdb84b9826b206bffafb35553c46530afcbb3c929147760056766f3",
+    "default_newlines.packdump": "d740b20c12e40b678b9f1012401e1969aaa5cd55f1ab329ffeb94d746b06a5c0",
+    "default_nonewlines.packdump": "b61623ff9b5c36e60666d637076697ad8234116b2d53ad2ee9e3908df1c2461d"
+  },
+  "submodules": [
+    {
+      "repository": "https://github.com/sublimehq/Packages",
+      "revision": "fa6b8629c95041bf262d4c1dab95c456a0530122"
+    },
+    {
+      "repository": "https://github.com/sethlopezme/InspiredGitHub.tmtheme",
+      "revision": "18ddb271179e118cfc2dd83abf88b915b7328a25"
+    },
+    {
+      "repository": "https://github.com/braver/Solarized",
+      "revision": "bcd6234b4f5f96d3fd27db079268b5757053072a"
+    },
+    {
+      "repository": "https://github.com/kkga/spacegray",
+      "revision": "2703e93f559e212ef3895edd10d861a4383ce93d"
+    }
+  ],
+  "syntax_source_files": [
+    {
+      "path": "ASP/ASP.sublime-syntax",
+      "sha256": "0d034cc6888cb2bda32f2ca42c5782f0b2f6c4c54a54872a635919750b851633"
+    },
+    {
+      "path": "ASP/HTML-ASP.sublime-syntax",
+      "sha256": "6a9f79faf40f381504e77595958e5c8924fd15ef3101232f04a1bc28c54ec6c4"
+    },
+    {
+      "path": "ActionScript/ActionScript.sublime-syntax",
+      "sha256": "aedfbf6adfa1fb4aef135b6fd6868e75b2f3e555ac78568e72702e24974d46f6"
+    },
+    {
+      "path": "AppleScript/AppleScript.sublime-syntax",
+      "sha256": "1e359982098bbd9ad728fa92d8220a9ff74c7f241e24e6d71322f1d326dbe31c"
+    },
+    {
+      "path": "Batch File/Batch File.sublime-syntax",
+      "sha256": "80f1329db9c054c325714cb5b4bed90cc6bc1e7b8f3183bdaefe92f7595365f4"
+    },
+    {
+      "path": "C#/Build.sublime-syntax",
+      "sha256": "6cda0be3d861b20763e2b12c2d8f1fca630f0e89ac08e58c6d957e5afb0c062b"
+    },
+    {
+      "path": "C#/C#.sublime-syntax",
+      "sha256": "bb90b04635aa1fba64642abb4ea2a4b0a66b561fbaca90a72fe73f4246b79724"
+    },
+    {
+      "path": "C++/C++.sublime-syntax",
+      "sha256": "3d3a1980be730b0330854943dcc9858bb7c870351d427769dd874df4c9eb9d2c"
+    },
+    {
+      "path": "C++/C.sublime-syntax",
+      "sha256": "e2a2ce9125b89321cb5d4efd962eb9e11e00748c80bc2ea2ce595ef626ac299f"
+    },
+    {
+      "path": "CSS/CSS.sublime-syntax",
+      "sha256": "377cf1623784e1896c1359d87de4167bd74ae62356a987c8d326fcaf551107e7"
+    },
+    {
+      "path": "Clojure/Clojure.sublime-syntax",
+      "sha256": "248c089c27897db325b7d9f52585048e89deacdf22093da0439927806116747e"
+    },
+    {
+      "path": "D/D.sublime-syntax",
+      "sha256": "8caaa2870a2fdcd3563950dc650e8515acd52c5f92e2820ad0026be7ba160946"
+    },
+    {
+      "path": "Diff/Diff.sublime-syntax",
+      "sha256": "d99f2d03c1edfa8ab8b0a7dd5922fd7a250347800c821fd6ada1f3cd116c5d8c"
+    },
+    {
+      "path": "Erlang/Erlang.sublime-syntax",
+      "sha256": "d162295d7b3d46c7026798c83950301a8b5d17e725eb49d12a92327d710f9218"
+    },
+    {
+      "path": "Erlang/HTML (Erlang).sublime-syntax",
+      "sha256": "f1ea44937ac511279f2dac5b6f2d449f52121aa5c03beab9e4d9d0bc44df01e3"
+    },
+    {
+      "path": "Go/Go.sublime-syntax",
+      "sha256": "a9969e22e544eb2732a8e34eac63cba1876c2718c55a9fb5810a45724c5c2ec5"
+    },
+    {
+      "path": "Graphviz/DOT.sublime-syntax",
+      "sha256": "327ba933916f2fecfa0871b71e7402c4e50cfa9c9c0ffdf12e9fe6592c3d6ab4"
+    },
+    {
+      "path": "Groovy/Groovy.sublime-syntax",
+      "sha256": "ab9b1eb0d0e6b7526e580628659a08b0c673f0830b30896a5c18af19b33f3808"
+    },
+    {
+      "path": "HTML/HTML.sublime-syntax",
+      "sha256": "8422f400e06b4c1054627c60a4f1109682a8aa2deadc2576004cb802e5b4b3eb"
+    },
+    {
+      "path": "Haskell/Haskell.sublime-syntax",
+      "sha256": "2e01d04b4b85ae85109ff19fa2b65cad169271607ceef7b03b2a0d7a62b63915"
+    },
+    {
+      "path": "Haskell/Literate Haskell.sublime-syntax",
+      "sha256": "0a363a9316d55ad4f45cc16d474f829aab293bd97cf3028a3930e735d270077a"
+    },
+    {
+      "path": "Java/Java Server Pages (JSP).sublime-syntax",
+      "sha256": "2ccdc240abbe832740e8bbf7dbce391f58647ac7234f9418adb0f067fd801dc2"
+    },
+    {
+      "path": "Java/Java.sublime-syntax",
+      "sha256": "7f4ba287955d428567dbb71a925ce79f0311897ad1efe6541f9568a6ccbb9bb6"
+    },
+    {
+      "path": "Java/JavaDoc.sublime-syntax",
+      "sha256": "42b1bde52d0ea887b633fc2d471d6c6b0c80765a4179d1c3347e4aaf83ff5706"
+    },
+    {
+      "path": "Java/JavaProperties.sublime-syntax",
+      "sha256": "eae7aa2faffa8e52c3a1ce2cb0288c60ee7f7c484121bedb8a071c57168009f4"
+    },
+    {
+      "path": "JavaScript/JSON.sublime-syntax",
+      "sha256": "319197e580e2f60baac84e3a7e48b876e7b3ff35b816378aa400189fd053ec82"
+    },
+    {
+      "path": "JavaScript/JavaScript.sublime-syntax",
+      "sha256": "e1d6826882c3298f64066c928fe06b46a001fa623ff94cd0d0243a95e6883fc5"
+    },
+    {
+      "path": "JavaScript/Regular Expressions (JavaScript).sublime-syntax",
+      "sha256": "2395dd3e2a0dfbc1115bbde1d1a8efed31347b8b3c9b5e77b22abefba0050ca6"
+    },
+    {
+      "path": "LaTeX/Bibtex.sublime-syntax",
+      "sha256": "8d5a2339c94b727ad1a185274b58871d7ec9df5ca617227792e55c7fae6025da"
+    },
+    {
+      "path": "LaTeX/LaTeX Log.sublime-syntax",
+      "sha256": "13b12a570a1e8e52127bd43ef3cc5fab40d3f3c03c525ea66357cf2397904b0c"
+    },
+    {
+      "path": "LaTeX/LaTeX.sublime-syntax",
+      "sha256": "5cf083ee29fbf20273faeeb83182553135700f18d131334151c6f26cd6a52bc7"
+    },
+    {
+      "path": "LaTeX/TeX.sublime-syntax",
+      "sha256": "8cb31f7680e9d6f7fbf4cad62c7906aea3a3e0a1c639128c793b1921c7c4d090"
+    },
+    {
+      "path": "Lisp/Lisp.sublime-syntax",
+      "sha256": "b6c927bc50a2ced04f8f847b4861650ba0368407ca0baf1a8b39b1a7e9bd40d3"
+    },
+    {
+      "path": "Lua/Lua.sublime-syntax",
+      "sha256": "0d275c18936c48c292915b4d94e33f903e7be0f23327a5a86b5a167fbf38ebd9"
+    },
+    {
+      "path": "Makefile/Make Output.sublime-syntax",
+      "sha256": "1afc0d9d889304a2b8ef9484bf4fb7515289a6245873e086edd17bfae5e48be5"
+    },
+    {
+      "path": "Makefile/Makefile.sublime-syntax",
+      "sha256": "fe639beefb70306bd189289bf686be969cd0479a1f9c52bce34ec408f531f2b3"
+    },
+    {
+      "path": "Markdown/Markdown.sublime-syntax",
+      "sha256": "fe045101a3be4d2ce2773095a323da4296950826e6fa4129ca34f4c7e5c58967"
+    },
+    {
+      "path": "Markdown/MultiMarkdown.sublime-syntax",
+      "sha256": "f12b047c44f3dfbe8411b82e016d3c87e5ddfb903d9e02e3efb5c3cb3bce8064"
+    },
+    {
+      "path": "Matlab/Matlab.sublime-syntax",
+      "sha256": "87a9ffcb5a16af225ab3dfa158ff5f48b3a90fc8b309a322a63d9fb2985bef5a"
+    },
+    {
+      "path": "OCaml/OCaml.sublime-syntax",
+      "sha256": "8f89dc4f2f6fc544caa2b2491f94084fc05c4afed72226eef8eb8401ccfcc7a8"
+    },
+    {
+      "path": "OCaml/OCamllex.sublime-syntax",
+      "sha256": "b3b32395f9777910e095fd663b4cb04a4443889c358ebd5fed759f62776e34cb"
+    },
+    {
+      "path": "OCaml/OCamlyacc.sublime-syntax",
+      "sha256": "4eef597e8d6b970be865c0b785258b5dcc83daf4f30e13b76ee2f6971ce229a2"
+    },
+    {
+      "path": "OCaml/camlp4.sublime-syntax",
+      "sha256": "6bd5edf9d81bf30c2419a774ea6b661c38d5f57632bf45f09020857a6374a2cc"
+    },
+    {
+      "path": "Objective-C/Objective-C++.sublime-syntax",
+      "sha256": "4acbd0c4124b7e3e7ec68998e8050ae297a02b03f88f346f3684dcf17929ff49"
+    },
+    {
+      "path": "Objective-C/Objective-C.sublime-syntax",
+      "sha256": "3a407f79bbebb600987917b7bd81c11eee50c8a4d89da77c6e3286b2fc21e76e"
+    },
+    {
+      "path": "PHP/PHP Source.sublime-syntax",
+      "sha256": "1e0d02957197bba1983b997759059ce9cea75eba4527aa9b6ddf4324066dbc78"
+    },
+    {
+      "path": "PHP/PHP.sublime-syntax",
+      "sha256": "d0a25b581392c8fb44b5911e9731c2155621276c7f74b56baa45358d2bc99b7b"
+    },
+    {
+      "path": "Pascal/Pascal.sublime-syntax",
+      "sha256": "01448353a244398674aac8d2e1540e02d9d262eb7f6ba087de0c2973049981d0"
+    },
+    {
+      "path": "Perl/Perl.sublime-syntax",
+      "sha256": "6bec2ffe5d9b92c39ca514347a710780d21cd0083ad06194683aa35aeb89a58f"
+    },
+    {
+      "path": "Python/Python.sublime-syntax",
+      "sha256": "6a39dbeb6f4711167cf00e387b50c88428cedc746f2b0126d696b6dab4333342"
+    },
+    {
+      "path": "Python/Regular Expressions (Python).sublime-syntax",
+      "sha256": "19f050b61462603f1cf35abd971d0c4b47d5c58cff21c44466e75e896045f6ed"
+    },
+    {
+      "path": "R/R Console.sublime-syntax",
+      "sha256": "37dfbd515d0e7287e0be9c5e3e6989b64d300dd6c8c633ada998e4cfe25c918b"
+    },
+    {
+      "path": "R/R.sublime-syntax",
+      "sha256": "b889ac826ecd2d281de3dedef5ba022e8e1d6e1cff86e944f9f9cfcfaaa30def"
+    },
+    {
+      "path": "R/Rd (R Documentation).sublime-syntax",
+      "sha256": "a9d6e7905c530832675e34d3081f9deaf89c10a5dcf7371a1fa57f4f1699304c"
+    },
+    {
+      "path": "Rails/HTML (Rails).sublime-syntax",
+      "sha256": "06dc7f50fac151f36eef5882167869e436a474846a2a090745e83c972f223357"
+    },
+    {
+      "path": "Rails/JavaScript (Rails).sublime-syntax",
+      "sha256": "81b8949135ff3959dced4dcbb15f88b95322afc398b99ff41ff2584e217b0800"
+    },
+    {
+      "path": "Rails/Ruby Haml.sublime-syntax",
+      "sha256": "095fd549c9b80658f737ca60c17c88d9eb001ecb4242182beed89a3d9c378801"
+    },
+    {
+      "path": "Rails/Ruby on Rails.sublime-syntax",
+      "sha256": "fba9872b725fad643615546a2d2b542397674225ad161c4283849dd193b738f1"
+    },
+    {
+      "path": "Rails/SQL (Rails).sublime-syntax",
+      "sha256": "348dfdd583d2715ca03a8da399a9e4397b50d9fe60617297aace78bd1b4cbd19"
+    },
+    {
+      "path": "Regular Expressions/RegExp.sublime-syntax",
+      "sha256": "6a5d4067ea7997b79b925dd201c1e0f00c630675825e2c27921958e4c34e1338"
+    },
+    {
+      "path": "RestructuredText/reStructuredText.sublime-syntax",
+      "sha256": "e2c25ad040b86092cd6cf18f7b20cc5d8773c35138ec7906ef41757da3c8418d"
+    },
+    {
+      "path": "Ruby/Ruby.sublime-syntax",
+      "sha256": "999b1326de24d82918b2ee02eaba4808860fe8853ba9e87174613ced43dc3c5d"
+    },
+    {
+      "path": "Rust/Cargo.sublime-syntax",
+      "sha256": "37647f073050257d24e627c83df180f9e72431d3d3890345710c827bdd32653b"
+    },
+    {
+      "path": "Rust/Rust.sublime-syntax",
+      "sha256": "586805ace8352f932a04b3b79f9eff4e2487e9e3e4baadf0d191ff155ce73c42"
+    },
+    {
+      "path": "SQL/SQL.sublime-syntax",
+      "sha256": "4fa4fcf076a547c9cf8d704e9f1e81db67ec2875677e36a09f30153ca5fe30b2"
+    },
+    {
+      "path": "Scala/Scala.sublime-syntax",
+      "sha256": "ea238d075f17fc1546a3efa3782143e88ea9d9e6600fb5a82f4a3589c2c30322"
+    },
+    {
+      "path": "ShellScript/Bash.sublime-syntax",
+      "sha256": "aee7f4688f8d3bea30cbf69a82d04afd629062e573c2b68d35b31172b9e917c9"
+    },
+    {
+      "path": "ShellScript/Shell-Unix-Generic.sublime-syntax",
+      "sha256": "3b84296b3ab6e47b8aa9146ba1927911653f8874f08a6fc0720260466f21e6ac"
+    },
+    {
+      "path": "ShellScript/commands-builtin-shell-bash.sublime-syntax",
+      "sha256": "7d1ce3326d3feab9cd4db0e2a8ebbcef5ae8aee99b90c0eda2bd6c3ad18cb8e8"
+    },
+    {
+      "path": "TCL/HTML (Tcl).sublime-syntax",
+      "sha256": "bc18ee4da309652823f94f05fd80acd4214effb266c411c4e596dad607e70f38"
+    },
+    {
+      "path": "TCL/Tcl.sublime-syntax",
+      "sha256": "05e79b29b6389ababe3f8d0f2c0a49f7a2e6d8a1b9ca1f43affdfec039f36e52"
+    },
+    {
+      "path": "Textile/Textile.sublime-syntax",
+      "sha256": "ea98ee917f2745690080d32adfc388c907a1355d209a800712369a3f09b59896"
+    },
+    {
+      "path": "XML/XML.sublime-syntax",
+      "sha256": "1b9647233d8ab1366c7db478d866f13343f9ffb17413bb69e4a0aaf76a2142c4"
+    },
+    {
+      "path": "YAML/YAML.sublime-syntax",
+      "sha256": "a3c24b41132deeff6ac505913f11b7abf8d0f875b0eb96346ef5ba0f40e5e3f7"
+    }
+  ],
+  "scope": "Default syntax/theme assets associated with the exact syntect package and its pinned Makefile/submodules. Actual custom permissive/individual terms retained; no generic MIT claim for all syntax data. Seven theme sources preserve their own embedded attribution. Build-only utilities, icons, samples and test input code are excluded. No claim of byte-for-byte dump regeneration."
+}

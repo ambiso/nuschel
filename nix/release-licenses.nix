@@ -216,6 +216,15 @@ let
         if not re.fullmatch(r'[a-zA-Z0-9_.-]{1,100}', name) or name in external_names:
             raise SystemExit('invalid or duplicate external component')
         external_names.add(name)
+        for asset in component.get('assets', []):
+            asset_identity = (asset['package'], asset['version'])
+            relative = pathlib.PurePosixPath(asset['path'])
+            if asset_identity not in selected or relative.is_absolute() or '..' in relative.parts:
+                issue(identity, 'external asset is not in the selected pinned runtime graph')
+                continue
+            asset_root = pathlib.Path(packages[asset_identity]['manifest_path']).parent
+            if hashlib.sha256((asset_root / relative).read_bytes()).hexdigest() != asset['sha256']:
+                issue(identity, 'external asset bytes differ from their notice provenance')
         files = []
         for file in component['files']:
             relative = pathlib.PurePosixPath(file['name'])
@@ -224,6 +233,8 @@ let
                 continue
             try:
                 digest = copy_text(pathlib.Path(file['path']).resolve(), out / 'external' / name / relative)
+                if file.get('sha256') and digest != file['sha256']:
+                    issue(identity, 'external source evidence hash mismatch: ' + str(relative))
                 files.append({'path': str(relative), 'sha256': digest})
             except ValueError as error:
                 issue(identity, str(error))

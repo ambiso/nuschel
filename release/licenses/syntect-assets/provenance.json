@@ -1,0 +1,176 @@
+{
+  "packages": [],
+  "external_components": [
+    {
+      "name": "syntect-default-assets",
+      "version": "5.3.0",
+      "repository": "https://github.com/trishume/syntect",
+      "revision": "e4670846ecf16d8832db6c43d531bec466214e27",
+      "files": [
+        {
+          "local": "syntect/LICENSE.txt",
+          "url": "https://raw.githubusercontent.com/trishume/syntect/e4670846ecf16d8832db6c43d531bec466214e27/LICENSE.txt",
+          "description": "Syntect actual code license or immutable default-asset generation recipe",
+          "sha256": "c695a20d7feb2463ecc9f0a966c88ed1581e364e1e22796e0ded020b571fa43b"
+        },
+        {
+          "local": "syntect/Makefile",
+          "url": "https://raw.githubusercontent.com/trishume/syntect/e4670846ecf16d8832db6c43d531bec466214e27/Makefile",
+          "description": "Syntect actual code license or immutable default-asset generation recipe",
+          "sha256": "38428851157383df235f37f05555fdaed90f7c4f318b789a15a2f6e56939a2ca"
+        },
+        {
+          "local": "syntect/.gitmodules",
+          "url": "https://raw.githubusercontent.com/trishume/syntect/e4670846ecf16d8832db6c43d531bec466214e27/.gitmodules",
+          "description": "Syntect actual code license or immutable default-asset generation recipe",
+          "sha256": "0e48d82bcae2b953886aa517715efb994733b336e32ff1bfe52bb0c6784d4718"
+        },
+        {
+          "local": "sublimehq/Packages/LICENSE",
+          "url": "https://raw.githubusercontent.com/sublimehq/Packages/fa6b8629c95041bf262d4c1dab95c456a0530122/LICENSE",
+          "description": "Exact pinned upstream text",
+          "sha256": "6aa3901416905d6ed0fc6b0fcca75e6649f4066db3f610e9653d0e0049e139e7"
+        },
+        {
+          "local": "sublimehq/Packages/Rust/LICENSE.txt",
+          "url": "https://raw.githubusercontent.com/sublimehq/Packages/fa6b8629c95041bf262d4c1dab95c456a0530122/Rust/LICENSE.txt",
+          "description": "Exact pinned upstream text",
+          "sha256": "89807acf2309bd285f033404ee78581602f3cd9b819a16ac2f0e5f60ff4a473e"
+        },
+        {
+          "local": "sethlopezme/InspiredGitHub.tmtheme/InspiredGitHub.tmTheme",
+          "url": "https://raw.githubusercontent.com/sethlopezme/InspiredGitHub.tmtheme/18ddb271179e118cfc2dd83abf88b915b7328a25/InspiredGitHub.tmTheme",
+          "description": "Complete shipped theme source, preserving embedded author/trademark/copyright metadata without inventing an attribution",
+          "sha256": "8fb8aeb8a444c20efe5b1a71c17dba57f06b17366947417682ff2b701c8e9316"
+        },
+        {
+          "local": "sethlopezme/InspiredGitHub.tmtheme/LICENSE",
+          "url": "https://raw.githubusercontent.com/sethlopezme/InspiredGitHub.tmtheme/18ddb271179e118cfc2dd83abf88b915b7328a25/LICENSE",
+          "description": "Exact pinned upstream text",
+          "sha256": "64f9ec83cd852c2e9ae9c63cab529b48919427445de3c38af7683bcfcf8e5c5a"
+        },
+        {
+          "local": "braver/Solarized/LICENSE",
+          "url": "https://raw.githubusercontent.com/braver/Solarized/bcd6234b4f5f96d3fd27db079268b5757053072a/LICENSE",
+          "description": "Exact pinned upstream text",
+          "sha256": "5dc2079d54e3f8f30fa8c1bec303bddc84da7776b677700ef083252835c0f77c"
+        },
+        {
+          "local": "braver/Solarized/Solarized (dark).tmTheme",
+          "url": "https://raw.githubusercontent.com/braver/Solarized/bcd6234b4f5f96d3fd27db079268b5757053072a/Solarized%20%28dark%29.tmTheme",
+          "description": "Complete shipped theme source, preserving embedded author/trademark/copyright metadata without inventing an attribution",
+          "sha256": "5b9984e9d6ea4b350211ba147c005fccc2845bd0c0ed20e60875f8dfcfddec5c"
+        },
+        {
+          "local": "braver/Solarized/Solarized (light).tmTheme",
+          "url": "https://raw.githubusercontent.com/braver/Solarized/bcd6234b4f5f96d3fd27db079268b5757053072a/Solarized%20%28light%29.tmTheme",
+          "description": "Complete shipped theme source, preserving embedded author/trademark/copyright metadata without inventing an attribution",
+          "sha256": "bae2eec6fa6e71150c41626e22ccb82a142ab3ac0ef83868e951dbfe79d3928e"
+        },
+        {
+          "local": "kkga/spacegray/LICENSE",
+          "url": "https://raw.githubusercontent.com/kkga/spacegray/2703e93f559e212ef3895edd10d861a4383ce93d/LICENSE",
+          "description": "Exact pinned upstream text",
+          "sha256": "f7f5760fa33782054db76bf6b3df7f6b8a08de5fe92dbb435d758ab637cc6e9f"
+        },
+        {
+          "local": "kkga/spacegray/base16-eighties.dark.tmTheme",
+          "url": "https://raw.githubusercontent.com/kkga/spacegray/2703e93f559e212ef3895edd10d861a4383ce93d/base16-eighties.dark.tmTheme",
+          "description": "Complete shipped theme source, preserving embedded author/trademark/copyright metadata without inventing an attribution",
+          "sha256": "0f971343489a8ffc2006f74ab3a81f6a93a53c80e64509c29e9e09a80c133969"
+        },
+        {
+          "local": "kkga/spacegray/base16-mocha.dark.tmTheme",
+          "url": "https://raw.githubusercontent.com/kkga/spacegray/2703e93f559e212ef3895edd10d861a4383ce93d/base16-mocha.dark.tmTheme",
+          "description": "Complete shipped theme source, preserving embedded author/trademark/copyright metadata without inventing an attribution",
+          "sha256": "6725ba8eae5fabc6ead61771e83eacade44c887bef430d859683b0cc6301c43e"
+        },
+        {
+          "local": "kkga/spacegray/base16-ocean.dark.tmTheme",
+          "url": "https://raw.githubusercontent.com/kkga/spacegray/2703e93f559e212ef3895edd10d861a4383ce93d/base16-ocean.dark.tmTheme",
+          "description": "Complete shipped theme source, preserving embedded author/trademark/copyright metadata without inventing an attribution",
+          "sha256": "62af89c8c07e6143ec65759ad70416862e4d312f0f2194a902a71356ed616c0c"
+        },
+        {
+          "local": "kkga/spacegray/base16-ocean.light.tmTheme",
+          "url": "https://raw.githubusercontent.com/kkga/spacegray/2703e93f559e212ef3895edd10d861a4383ce93d/base16-ocean.light.tmTheme",
+          "description": "Complete shipped theme source, preserving embedded author/trademark/copyright metadata without inventing an attribution",
+          "sha256": "0c524959d9178cdc9f6c125779d8610879cf27f1b8dfe31d84bd28d40da81f7f"
+        },
+        {
+          "local": "sublimehq/Packages/source-with-notice-markers/C#/C#.sublime-syntax",
+          "url": "https://raw.githubusercontent.com/sublimehq/Packages/fa6b8629c95041bf262d4c1dab95c456a0530122/C%23/C%23.sublime-syntax",
+          "description": "Verbatim syntax source containing notice/author/license markers; retain inline exceptions to the repository-wide custom permissive grant",
+          "sha256": "bb90b04635aa1fba64642abb4ea2a4b0a66b561fbaca90a72fe73f4246b79724"
+        },
+        {
+          "local": "sublimehq/Packages/source-with-notice-markers/D/D.sublime-syntax",
+          "url": "https://raw.githubusercontent.com/sublimehq/Packages/fa6b8629c95041bf262d4c1dab95c456a0530122/D/D.sublime-syntax",
+          "description": "Verbatim syntax source containing notice/author/license markers; retain inline exceptions to the repository-wide custom permissive grant",
+          "sha256": "8caaa2870a2fdcd3563950dc650e8515acd52c5f92e2820ad0026be7ba160946"
+        },
+        {
+          "local": "sublimehq/Packages/source-with-notice-markers/Java/JavaDoc.sublime-syntax",
+          "url": "https://raw.githubusercontent.com/sublimehq/Packages/fa6b8629c95041bf262d4c1dab95c456a0530122/Java/JavaDoc.sublime-syntax",
+          "description": "Verbatim syntax source containing notice/author/license markers; retain inline exceptions to the repository-wide custom permissive grant",
+          "sha256": "42b1bde52d0ea887b633fc2d471d6c6b0c80765a4179d1c3347e4aaf83ff5706"
+        },
+        {
+          "local": "sublimehq/Packages/source-with-notice-markers/LaTeX/LaTeX.sublime-syntax",
+          "url": "https://raw.githubusercontent.com/sublimehq/Packages/fa6b8629c95041bf262d4c1dab95c456a0530122/LaTeX/LaTeX.sublime-syntax",
+          "description": "Verbatim syntax source containing notice/author/license markers; retain inline exceptions to the repository-wide custom permissive grant",
+          "sha256": "5cf083ee29fbf20273faeeb83182553135700f18d131334151c6f26cd6a52bc7"
+        },
+        {
+          "local": "sublimehq/Packages/source-with-notice-markers/Lisp/Lisp.sublime-syntax",
+          "url": "https://raw.githubusercontent.com/sublimehq/Packages/fa6b8629c95041bf262d4c1dab95c456a0530122/Lisp/Lisp.sublime-syntax",
+          "description": "Verbatim syntax source containing notice/author/license markers; retain inline exceptions to the repository-wide custom permissive grant",
+          "sha256": "b6c927bc50a2ced04f8f847b4861650ba0368407ca0baf1a8b39b1a7e9bd40d3"
+        },
+        {
+          "local": "sublimehq/Packages/source-with-notice-markers/Matlab/Matlab.sublime-syntax",
+          "url": "https://raw.githubusercontent.com/sublimehq/Packages/fa6b8629c95041bf262d4c1dab95c456a0530122/Matlab/Matlab.sublime-syntax",
+          "description": "Verbatim syntax source containing notice/author/license markers; retain inline exceptions to the repository-wide custom permissive grant",
+          "sha256": "87a9ffcb5a16af225ab3dfa158ff5f48b3a90fc8b309a322a63d9fb2985bef5a"
+        },
+        {
+          "local": "sublimehq/Packages/source-with-notice-markers/PHP/PHP Source.sublime-syntax",
+          "url": "https://raw.githubusercontent.com/sublimehq/Packages/fa6b8629c95041bf262d4c1dab95c456a0530122/PHP/PHP%20Source.sublime-syntax",
+          "description": "Verbatim syntax source containing notice/author/license markers; retain inline exceptions to the repository-wide custom permissive grant",
+          "sha256": "1e0d02957197bba1983b997759059ce9cea75eba4527aa9b6ddf4324066dbc78"
+        },
+        {
+          "local": "sublimehq/Packages/source-with-notice-markers/R/R.sublime-syntax",
+          "url": "https://raw.githubusercontent.com/sublimehq/Packages/fa6b8629c95041bf262d4c1dab95c456a0530122/R/R.sublime-syntax",
+          "description": "Verbatim syntax source containing notice/author/license markers; retain inline exceptions to the repository-wide custom permissive grant",
+          "sha256": "b889ac826ecd2d281de3dedef5ba022e8e1d6e1cff86e944f9f9cfcfaaa30def"
+        },
+        {
+          "local": "sublimehq/Packages/source-with-notice-markers/SQL/SQL.sublime-syntax",
+          "url": "https://raw.githubusercontent.com/sublimehq/Packages/fa6b8629c95041bf262d4c1dab95c456a0530122/SQL/SQL.sublime-syntax",
+          "description": "Verbatim syntax source containing notice/author/license markers; retain inline exceptions to the repository-wide custom permissive grant",
+          "sha256": "4fa4fcf076a547c9cf8d704e9f1e81db67ec2875677e36a09f30153ca5fe30b2"
+        },
+        {
+          "local": "sublimehq/Packages/source-with-notice-markers/TCL/HTML (Tcl).sublime-syntax",
+          "url": "https://raw.githubusercontent.com/sublimehq/Packages/fa6b8629c95041bf262d4c1dab95c456a0530122/TCL/HTML%20%28Tcl%29.sublime-syntax",
+          "description": "Verbatim syntax source containing notice/author/license markers; retain inline exceptions to the repository-wide custom permissive grant",
+          "sha256": "bc18ee4da309652823f94f05fd80acd4214effb266c411c4e596dad607e70f38"
+        },
+        {
+          "local": "sublimehq/Packages/source-with-notice-markers/YAML/YAML.sublime-syntax",
+          "url": "https://raw.githubusercontent.com/sublimehq/Packages/fa6b8629c95041bf262d4c1dab95c456a0530122/YAML/YAML.sublime-syntax",
+          "description": "Verbatim syntax source containing notice/author/license markers; retain inline exceptions to the repository-wide custom permissive grant",
+          "sha256": "a3c24b41132deeff6ac505913f11b7abf8d0f875b0eb96346ef5ba0f40e5e3f7"
+        },
+        {
+          "local": "ASSET-PROVENANCE.json",
+          "url": "https://github.com/trishume/syntect/tree/e4670846ecf16d8832db6c43d531bec466214e27",
+          "description": "Exact package asset hashes, default generation recipe and pinned submodule/source identities",
+          "sha256": "0a56883a92ca20d8634811541398196688e3e59b53de0217e91470f2e2116107"
+        }
+      ]
+    }
+  ],
+  "unresolved": []
+}
