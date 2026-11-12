@@ -194,10 +194,6 @@ pub fn toggle(
     crate::layout::focusable(id, control)
 }
 
-/// The voice gate's level floor in the media worker (`SILENCE_DB` in
-/// apps/media-worker/src/dsp.rs): quieter input never opens it. Only shown
-/// here; tests/slider_scenes.py checks that the two agree.
-const GATE_FLOOR_DB: f32 = -60.;
 /// The level bar's range, dBFS.
 const METER_MIN_DB: f32 = -70.;
 
@@ -298,6 +294,7 @@ fn meter(preview: &PreviewView, sensitivity: f32, transmit: TransmitMode) -> Any
     let reading = preview.reading;
     let voice_activity = transmit == TransmitMode::VoiceActivity;
     let thresholds = nuschl_core::audio::gate_thresholds(sensitivity);
+    let floor = nuschl_core::audio::GATE_FLOOR_DB;
     let level_at = |db: f32| (db - METER_MIN_DB) / -METER_MIN_DB;
     let level = meter_row(
         "input-level",
@@ -314,17 +311,17 @@ fn meter(preview: &PreviewView, sensitivity: f32, transmit: TransmitMode) -> Any
         ),
         meter_bar(
             reading.map(|reading| {
-                let tone = if reading.level_db > GATE_FLOOR_DB {
+                let tone = if reading.level_db > floor {
                     ACCENT
                 } else {
                     TEXT_FAINT
                 };
                 (level_at(reading.level_db), tone)
             }),
-            &[(level_at(GATE_FLOOR_DB), TEXT)],
+            &[(level_at(floor), TEXT)],
         ),
         format!(
-            "Marked: {GATE_FLOOR_DB:.0} dBFS, below which the voice gate stays closed however speech-like it sounds."
+            "Marked: {floor:.0} dBFS, below which the voice gate stays closed however speech-like it sounds."
         ),
         reading.map(|reading| {
             (

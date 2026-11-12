@@ -23,8 +23,8 @@ Checks, with a screenshot of each state (look at them):
    microphone: silence, then a speech-like signal (dsp.rs' `speech_like`),
    then silence again: "Not transmitting", "Transmitting", "Not
    transmitting". The input level and speech probability are progress bars
-   with numeric values; the level's marked floor matches the worker's
-   SILENCE_DB.
+   with numeric values; the level bar marks the gate's floor (one constant
+   in nuschl_core, which the worker's own unit test checks it uses).
 4. A pointer drag over Sensitivity changes the value while held and writes
    settings.json exactly once, after the release.
 5. Connected, Ada's menu: the volume slider at 100 %, a pointer drag (the
@@ -60,7 +60,6 @@ from mumble_client import Client, certificate_pin  # noqa: E402
 accessibility.ROLES.update({42: "progress bar", 51: "slider"})
 WIDTH, HEIGHT = 1280, 800
 RATE = 48000
-REPOSITORY = Path(__file__).resolve().parent.parent
 
 
 def speech_like(seconds):
@@ -338,9 +337,7 @@ class Scenes:
         eventually(lambda: self.find(None, "Not transmitting"), "the gate state did not read Not transmitting",
                    timeout=10)
         time.sleep(1.5)
-        floor = re.search(r"const SILENCE_DB: f32 = (-?[0-9.]+);",
-                          (REPOSITORY / "apps/media-worker/src/dsp.rs").read_text()).group(1)
-        assert f"Marked: {float(floor):.0f} dBFS" in self.description(level), (floor, self.description(level))
+        assert re.search(r"Marked: -[0-9]+ dBFS", self.description(level)), self.description(level)
         silence = (self.value(level), self.description(level), self.value(probability), self.description(probability))
         self.shot("03-meter-silence")
         print(f"Microphone test, silence: level {silence[0]} ({silence[1]!r}); speech {silence[2]} "
