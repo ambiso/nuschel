@@ -270,13 +270,17 @@ keys or roll a witness behind published state merely to silence consistency
 errors. Preserve the newest recoverable directory/checkpoint state and assess
 rollback before exposing a restored service.
 
-For the existing compatible deployment, follow
-[Bootstrap a named administrator](server.md#bootstrap-a-named-administrator): set
-the SuperUser secret, register the normal client identity, use stock Mumble's
-group editor as SuperUser to add that registered account to root `admin`, then
-disconnect SuperUser. Keep group flags/ACLs intact; never grant Write to `all`.
-The current Nuschl group editor is incomplete. Offline admin commands must use
-the same state/database/service identity and cannot run alongside the live server.
+Follow [Bootstrap a named administrator](server.md#bootstrap-a-named-administrator):
+set the SuperUser secret, register the normal client identity, then connect as
+SuperUser in Nuschl's desktop client. Open the root channel's ACL/group editor,
+add the registered account to the root `admin` group and save. Disconnect
+SuperUser and verify the normal account can perform the intended administrative
+actions. Keep unrelated group flags/ACLs intact; never grant Write to `all`.
+This native route also works on E2EE-only servers. Stock Mumble's group editor
+is an alternative on compatible servers. Web/TUI editing parity remains open;
+see [the native editor's transaction limits](acl-editor.md).
+Offline admin commands must use the same state/database/service identity and
+cannot run alongside the live server.
 
 `security = "e2ee"` is a separate policy: stock Mumble is refused, registered
 Nuschl devices use MLS text, and voice is disabled until end-to-end media exists.

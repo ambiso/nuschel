@@ -2,9 +2,10 @@
 
 Current focus (user, 2026-11-12): **voice-host ACME setup, desktop rail/footer
 spacing and status, and the native ACL/group editor**. Continuous volume controls
-and a VAD activity meter are queued. Browser configuration/send-limit fixes
-are integrated and verified; the iOS installer remains quarantined
-after a whole-file checksum mismatch. Audio fidelity, unmute latency and hybrid
+and a VAD activity meter are in a separate implementation lane. Browser
+configuration/send-limit follow-ups remain below. The retained iOS installer now
+passes signed-entry acquisition verification; installed macOS/Xcode and Simulator
+remain open. Audio fidelity, unmute latency and hybrid
 update readiness retain their remaining gates below.
 The relay DNS/kernel checks and explicit-deny correction are integrated.
 The measured playback clipping correction and SuperUser bootstrap guide
@@ -38,10 +39,14 @@ Concurrent coordination (user, 2026-11-12): Claude Code session `nuschel-8e`
 works alongside Codex through `~/.cache/nuschl-coordination/to-claude.md` and
 `to-codex.md`, with an active reply-file watcher. Claude owns the received-audio
 attenuation audit, an independent read-only simplification/correctness review,
-and the separate volume-slider/VAD-meter design lane. Codex owners retain ACLs,
-native spacing/status, NixOS ACME/operator work and queue/integration. Implement
+the separate volume-slider/VAD-meter implementation, installer authentication
+and poll-design lanes. Codex owners retain ACLs, native spacing/status,
+image quality, NixOS ACME/operator work and queue/integration. Implement
 in isolated jj workspaces with explicit file/function ownership; exchange frozen
 revisions and evidence before integration. This is collaboration, not a handover.
+The watcher maintains `codex-pending.json`, revisioned message acknowledgements
+and a five-second heartbeat; the coordinator consumes pending messages at work
+checkpoints. A background filesystem watcher alone does not advance a session.
 
 Current integration checkpoint (2026-11-12):
 
@@ -354,14 +359,21 @@ installed macOS guest, Xcode execution and Simulator graphics remain unproven.
          all five masks zero, NoNewPrivs=1, KVM enabled; existing Recovery booted,
          then stopped cleanly. Both host qcow2 hashes unchanged; target disk1 is
          blank 80 GiB, persistent (only Recovery/OpenCore use temporary snapshots).
-   - [ ] Acquire/authenticate the exact candidate Sonoma 14.8.9/23J631 installer:
+   - [x] Acquire/authenticate the exact candidate Sonoma 14.8.9/23J631 installer
+         for acquisition integrity:
          official Apple product 140-88558 metadata identifies a 13,654,790,295-byte
-         package. Exact-size download is quarantined after whole-file SHA-1
-         differs from the catalog Digest; local SHA-256 and original failure are
-         recorded in docs/ios-vm.md. Resolve the discrepancy and verify signed
-         payload/chunk integrity before use; no retry, extraction or guest copy.
-         Full artifact authentication remains open. Exact profile
+         package. The catalog Digest matches its compressed XAR TOC, not the
+         whole-file hash; the original mistaken-check failure is retained.
+         Exact Apple SoftwareUpdate chain/current CRLs and TOC signature,
+         all five signed-entry checksums and 1,303 chunk cross-checks pass.
+         The unsigned 32-byte gap/1,024-byte trailer are separately pinned and
+         explicitly reported, never labelled signed. Claude's real tamper suite
+         passes; root independently verifies the retained whole package, signed
+         prefix/corruption controls and exact parser-source hashes. The original
+         `.partial` remains untouched; no extraction, mount, execution or guest
+         copy. See docs/ios-vm.md. Exact profile
          repinned from 14.5; Recovery 14.6.1 is explicitly rejected as that candidate.
+   - [ ] Review the next installed-macOS/Xcode/Simulator feasibility slice.
          Review target disk/APFS and installation before destructive steps. Recovery
          exposes a basic IONDRV framebuffer, no IOAccelerator; Metal, installed-OS
          graphics, Xcode execution and Simulator remain unproven.
@@ -900,7 +912,19 @@ The media worker uses per-speaker adaptive jitter buffers and Opus loss concealm
       a complete-device regression. Keep this separate from the new slider
       taper, preserve existing gain semantics, and do not compensate blindly.
       Claude Code owns the independent history audit and matched private worker
-      comparison. Source-only findings do not close the reported regression.
+      comparison. Frozen old/new Opus receive packets at 44.1/48/96 kHz and
+      native capture/encode at 44.1/48 kHz show no material volume drop in the
+      measured synthetic cases. Stereo receive is about 3 dB louder after the
+      previous channel correction; ordinary mono is unchanged. Two interleaved
+      transmit trials per case differ by about -0.10 to +0.32 dB steady RMS.
+      These worker-level results do not close physical-device, PipeWire policy,
+      browser receive, other-sender or saved-gain explanations. Collectors are
+      integrated; evidence: `~/.cache/claude-nuschl/attenuation/`.
+- [ ] Investigate AGC start-gain settling separately: matched private old/new
+      workers both produce about 11 dB higher RMS in the first second than at
+      3–6 seconds for the normal synthetic source. This is not established as a
+      new regression; preserve measured onset/steady windows and do not add
+      compensating gain or change defaults without a targeted explanation.
 - [ ] Complete receive/output parity against stock Mumble with independent PCM
       and device proofs before claiming 1:1 quality. The stereo/gain source
       checkpoint preserves native/browser LR and volume; independent native
@@ -1235,6 +1259,27 @@ listed below. Plugin data remains the explicit gap.
       Client::connect keeps the prior snapshot although each adapter correctly
       resets its enforcement defaults. Add a generation/stale-event model
       regression; this is distinct from the verified adapter sparse-field fix.
+- [ ] Complete the shared server-limit/refusal follow-up from independent review:
+      enforce HTML total `image_message_length` even when text length is zero;
+      count advertised legacy text caps in UTF-16 units while retaining separate
+      hard application byte ceilings. Centralize defaults/sparse updates in the
+      shared core and use the same legacy text formatter on native/browser.
+      Preserve absent/zero/false fields, reset current-connection snapshots and
+      show negotiated Opus as unknown until CodecVersion actually arrives.
+      Expire and clear only the send-owned refusal after a matching success;
+      newer unrelated or identical-text notices must survive. Hash owner has
+      frozen setter/typed-refusal checkpoints and is implementing the remaining
+      limit/formatter changes; compiled App raised-cap retry proof is still due.
+- [ ] Match the remaining legacy rich-HTML text budget, including XML
+      normalization and counting text after stripping image `src` values.
+      Enforcing the total image cap alone does not establish full Murmur parity;
+      retain the native 256 KiB hard SendHtml envelope separately.
+- [ ] Attribute native asynchronous send refusals to the original pending send.
+      Generic unrelated Notice/PermissionDenied events currently retire any
+      pending send in `Client::server_event`; direct typed precheck refusals do
+      not resolve this actor-race gap. Design a bounded target/body-correlated
+      refusal event and test unrelated codec/admin notices, stale generations
+      and genuine authority denial without falsely reporting delivery.
 - [x] Integrate the separate central browser text-size correction: Settings
       previously changed body font size while rem-sized text kept the root's
       16px. `html` now uses the same preference variable; actual compiled App
@@ -1311,6 +1356,17 @@ listed below. Plugin data remains the explicit gap.
       unambiguous disconnect targets; bounded long-name layout must preserve
       useful status. Preserve explicit multi-server transmit consent and capture
       epochs. Assigned to the web owner after the spacing proof.
+- [ ] Reconcile rapid self mute/deafen intent with server acknowledgements at
+      stock Mumble's default control bucket. The private status baseline hit a
+      dropped-control case; a test-only larger bucket isolates UI projection but
+      does not fix default-rate convergence. Keep local privacy stops immediate,
+      show pending acknowledgement honestly, and bound/coalesce enabling sends.
+- [ ] Fence native `SetSelf` enabling at dispatch against the original server,
+      generation, own presence/channel and consented microphone destination set.
+      UI prompt/retained-control validation does not remove the enqueue-to-actor
+      race. Current `ActionOrigin`/scoped command rejects SetSelf; extend shared
+      authority deliberately without allowing an unrelated server scope to
+      reject cross-server mute/deafen privacy stops.
 - [ ] Preserve native bad-password rejection/retry diagnostics reliably. The ACL
       E2EE bootstrap fixture sometimes gets the correct password retry form and
       sometimes a generic Broken pipe for the same rejected credentials, while
