@@ -43,6 +43,18 @@ Additional bounded receive fixes match libopus 1.6.1 `opus_decoder.c`:
   of retaining the previous packet's public final range. The CELT accessor is
   crate-private; no public codec API is added.
 
+A separate admission follow-up exposes `packet::validate(&[u8]) -> Result<()>`.
+It reuses the decoder's complete ordinary-packet framing parser without
+allocation or state mutation. Header-only duration helpers retain their existing
+semantics; callers can validate before changing jitter/sequence/gain state, then
+read the duration. All valid Opus durations and zero/one-byte DTX remain accepted;
+this adds no Mumble duration policy or compressed-entropy validity claim. Three
+unit regressions cover valid DTX/padding/all packing codes, malformed framing and
+the difference from TOC-only duration inspection. An independent libopus 1.6.1
+`opus_packet_parse` audit matched all 74,019 cases (all zero/one/two-byte packets,
+seeded longer packets, frame-size limits and explicit padded/multiframe cases);
+evidence is at `~/.cache/nuschl-output-quality/framing-api/proof.json`.
+
 The phase setting is unchanged. There are no new dependencies, unsafe code,
 encoder changes or backend replacements. Original provenance bytes above remain
 unchanged. Independent synthetic checks, evidence and known direct 8/12 kHz API

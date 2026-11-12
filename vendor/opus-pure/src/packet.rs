@@ -58,6 +58,20 @@ fn max_samples(sample_rate: i32) -> usize {
     MAX_PACKET_SAMPLES * sample_rate as usize / 48_000
 }
 
+/// Validate the complete framing of one ordinary Opus packet.
+///
+/// Checks frame counts, lengths, padding and the format's 120 ms limit using
+/// the same parser as the decoder. This accepts valid zero/one-byte DTX frames
+/// and all Opus durations, including 2.5 and 5 ms. It does not decode or validate
+/// the compressed audio's entropy content, allocate, or change decoder state.
+///
+/// Call this before admitting untrusted packets to a jitter buffer or advancing
+/// its clock. The TOC-only helpers such as [`samples`] and [`frame_count`] do
+/// not validate the complete framing.
+pub fn validate(packet: &[u8]) -> Result<()> {
+    crate::repacketizer::parse_packet(packet, false).map(|_| ())
+}
+
 /// Reject a rate Opus cannot decode at, so a buffer is never sized from one.
 ///
 /// The set lives here rather than in each caller so that "which rates does Opus
@@ -181,6 +195,68 @@ mod tests {
     /// Build a TOC for a CELT config with the given frame-packing code.
     fn toc(config: u8, stereo: bool, code: u8) -> u8 {
         (config << 3) | ((stereo as u8) << 2) | code
+    }
+
+    #[test]
+    fn validate_accepts_dtx_padding_and_every_frame_packing_code() {
+        let packets: &[&[u8]] = &[
+            &[0x48],                      // code 0, zero-byte DTX
+            &[0x48, 0],                   // code 0, one-byte DTX
+            &[0x49],                      // code 1, two empty frames
+            &[0x49, 0, 0],                // code 1, two one-byte frames
+            &[0x4a, 0, 0, 0],             // code 2, empty then two-byte frame
+            &[0x4a, 2, 0, 0],             // code 2, two-byte then empty frame
+            &[0x4b, 0x41, 2, 0, 0, 0],    // code 3, one byte + two padding
+            &[0x4b, 0x83, 0, 1, 0, 0, 0], // code 3 VBR, lengths 0/1/2
+            &[0x4b, 6],                   // six empty 20 ms frames = 120 ms
+            &[0x83, 48],                  // 48 empty 2.5 ms frames = 120 ms
+            &[0x88],                      // legal 5 ms frame
+        ];
+        for packet in packets {
+            assert!(validate(packet).is_ok(), "{packet:02x?}");
+        }
+        // The original ordered-stream failure: one coded byte, 56 padding.
+        let mut padded_dtx = vec![0x4b, 0x41, 56];
+        padded_dtx.resize(60, 0);
+        assert!(validate(&padded_dtx).is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_incomplete_or_inconsistent_framing() {
+        let packets: &[&[u8]] = &[
+            &[],
+            &[0x09, 0],          // odd-sized two-frame CBR payload
+            &[0x99, 0],          // same invalid framing in CELT
+            &[0x4a],             // missing VBR length
+            &[0x4a, 252],        // truncated two-byte length field
+            &[0x4a, 2, 0],       // first VBR frame exceeds payload
+            &[0x4b],             // missing frame count
+            &[0x4b, 0],          // zero frames
+            &[0x4b, 7],          // more than 120 ms
+            &[0x4b, 0x41],       // missing padding length
+            &[0x4b, 0x41, 255],  // truncated continued padding
+            &[0x4b, 0x41, 2, 0], // padding exceeds packet
+            &[0x4b, 2, 0],       // code 3 CBR length not divisible by count
+            &[0x4b, 0x82, 2, 0], // code 3 VBR frame exceeds payload
+        ];
+        for packet in packets {
+            assert!(
+                matches!(validate(packet), Err(Error::InvalidPacket(_))),
+                "{packet:02x?}"
+            );
+        }
+        let mut too_large = vec![0x48];
+        too_large.resize(1277, 0); // a coded frame may not exceed 1275 bytes
+        assert!(validate(&too_large).is_err());
+    }
+
+    #[test]
+    fn duration_helpers_do_not_replace_complete_validation() {
+        let malformed = [0x09, 0];
+        assert_eq!(samples_48k(&malformed).unwrap(), 1920);
+        assert_eq!(frame_count(&malformed).unwrap(), 2);
+        assert!(validate(&malformed).is_err());
+        assert_eq!(malformed, [0x09, 0]);
     }
 
     #[test]
