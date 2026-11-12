@@ -105,6 +105,9 @@ The design and its measurements: [architecture.md](architecture.md#audio-configu
   peer to peer, with a magic-wormhole code in the message that stock Mumble users
   can use with any wormhole client, and shows offers as file cards.
 
+- Links in welcome cards, channel descriptions and user comments support clicking,
+  Tab/Shift+Tab and Enter, and screen-reader activation. They use the same URL
+  policy as message links; rendering a document does not fetch its links.
 - Long messages collapse by measured height behind **Show more**.
 - Ctrl+. or Ctrl+; opens an emoji picker.
 

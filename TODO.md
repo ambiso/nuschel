@@ -777,14 +777,18 @@ listed below. Plugin data remains the explicit gap.
       is not submitted to the content worker until the profile is opened again.
       The document-link fixture deliberately uses inline bodies below Murmur's
       128-byte hash threshold; it does not establish hash-only retrieval/rendering.
-- [ ] Activate links in shared nonselectable documents (welcome cards, channel
-      descriptions and user comments). `view::document_blocks` preserves the
-      worker's safe URL spans, styles and accessibility URLs, but does not install
-      the timeline's `SelectionArea::track_links` mouse dispatch or keyboard link
-      navigation. Share the existing layout-based hit testing and `open_link`
-      allowlist/dispatch without inventing a timeline message identity or parsing
-      HTML in the UI; include keyboard/assistive activation and private URL-handler
-      tests. The welcome document-loss fix above does not complete this interaction.
+- [x] Shared nonselectable document links (2026-11-12): welcome cards, delivered
+      channel descriptions and profile comments reuse `BlockText`'s existing
+      layout/hit testing, real retained link focus and the safe `open_link`
+      dispatch. Pointer, Tab/Shift+Tab, Enter and assistive activation share
+      server/generation/source/document-lease and visible-surface guards.
+      `tests/welcome_html.py --document-links --pulse-bin …` checks all three
+      callsites with a private stock Murmur, null audio and synthetic URL handler,
+      wrapped Unicode, width/200% zoom focus, drag rejection, stale/replaced and
+      hidden documents, reconnect and typing. Focus-only navigation reuses cached
+      geometry; an eight-second profiler observation checks quiet intervals and
+      zero idle geometry work. See `docs/desktop-document-links.md` for evidence
+      and limits. The hash-only retrieval/render follow-up above remains open.
 - [x] `UserStats` (22) for the connection-info dialog.
       Profile bandwidth units corrected (2026-11-12, `d8f5999d`): the protocol
       statistic is bytes/second, so divide by 125 for kbit/s. Server bandwidth
