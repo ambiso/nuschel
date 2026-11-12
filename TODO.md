@@ -1699,44 +1699,38 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
       manual metadata renewal, verify the downloaded pair, update the protected
       latest ledger and assign the next deadline before the maximum 30-day expiry.
       No cron/reminder service or automatic publication is implemented or implied.
-- [ ] Fix the newly exercised per-crate RTC probe build input: its workspace-
-      relative include_bytes VP8 fixture is outside an isolated crate source.
-      Declare the exact fixture in its Nix crate override and verify actual
-      encoded transport; do not silently replace the real multi-packet frame.
-- [ ] Resolve the standalone RTC probe's previously missing third-party notices:
-      its old package installed only EUPL and no inventory selected its actual
-      str0m/dimpl/RustCrypto closure. Add accurate standalone native scopes and
-      source-pinned original notice bytes; keep the bundle gate closed on any
-      unresolved upstream attribution instead of relabeling desktop notices.
-      Initial real 98-package inventory: is0.12.0, str0m-proto0.8.0 and patched
-      str0m-rust-crypto0.7.0 omit license files; recover their inherited monorepo
-      grants from exact revision
-      5f2183ce7c67117cd1960dfeb11bed11fc188b66, not generic substitute text.
+- [x] Declare the exact VP8 fixture for the isolated per-crate RTC probe using a
+      checked Nix-only compile-time path replacement. The original 4,297 bytes
+      remain embedded and actual loopback passes 50 Opus frames each direction
+      plus all 34 multi-packet VP8 frames; no runtime Rust/capture changes.
+- [x] Complete standalone RTC notice scope/original-byte coverage: four explicit
+      native scopes select only the probe's real dependency root, main desktop/
+      cross roots stay unchanged, and the all audit unions actual standalone roots.
+      The initial 98-package inventory exposed is0.12.0/str0m-proto0.8.0/
+      str0m-rust-crypto0.7.0 missing notices; exact pinned monorepo MIT terms and
+      package/author declarations now close those three gaps. Real ranges/tamper/
+      unchanged main-bundle checks pass, with zero unresolved entries; this is not
+      legal assurance or extra-platform runtime proof. See docs/build-packages.md.
 - [ ] Review the server-mode storage worker's blast-radius boundary separately:
       it is a direct child with cleared environment, with NixOS service hardening
       applied to parent and children, rather than the client storage bwrap path.
       Standalone CLI use and authorized PostgreSQL/file access need a reviewed
       narrow worker boundary; this builder migration does not redesign it.
-- [ ] Finish the per-crate build migration: the default desktop, web SDK/workers,
-      witness and updater helpers use crate2nix, but `flake.nix` still builds
-      `server`, `rtc-probe`, Windows and Darwin slices with Crane; the explicit
-      `default-crane` fallback also remains. Audit and migrate those production
-      targets without losing Linux-hosted cross builds or platform dependencies.
-      Keep notice inventory/vendoring tools distinct from compiled package
-      builders. Cache cleanup being complete does not mean this migration is done;
-      serialize flake/graph edits with the release-notice and codec owners.
-- [ ] Close the standalone RTC-probe attribution gap before distributing the
-      migrated package. Its former package installs only EUPL; desktop roots omit
-      its str0m/dimpl/RustCrypto closure. The first actual standalone inventory
-      reports 98 runtime packages and three unresolved original notices:
-      `is` 0.12.0, `str0m-proto` 0.8.0 and `str0m-rust-crypto` 0.7.0. Recover
-      inherited grants from their pinned upstream revision, with precise native
-      scopes; keep the strict bundle gate closed until evidence is verified.
-- [ ] Review the server-mode storage worker's blast-radius boundary separately.
-      It is a direct child with a cleared environment, under the server's NixOS
-      service hardening, rather than the client's restricted storage-worker
-      launcher. The build migration preserves this existing behavior; a separate
-      process alone does not prove filesystem/network/credential confinement.
+      A separate process alone does not prove filesystem/network/credential
+      confinement.
+- [x] Migrate standalone `#server` and `#rtc-probe` to existing crate2nix members:
+      regular server/storage copies preserve default helper adjacency and exact
+      cached bodies; the probe embeds the real fixture with complete scoped
+      notices. Full six-node NixOS server suite passes using the actual standalone
+      service (SQLite/Postgres/history/MLS/witness/stockvoice/import/restart), and
+      the actual private RTC transport passes. No build manifests/lock/graph or
+      runtime sandbox policy changed. Precise source/package evidence:
+      docs/reviews/2026-11-12-server-rtc-packages.json.
+- [ ] Finish the remaining per-crate build migration: Windows desktop, Darwin
+      desktop/verifier slices and the explicit `default-crane` fallback still use
+      Crane. Native desktop/server/probe/web/witness and native/Windows updater
+      engines now use crate2nix. Preserve Linux-hosted cross builds and platform
+      dependencies; keep notice metadata/vendoring distinct from Rust compilation.
 - [x] Keep source-dependent notice/runtime postInstall hooks out of Crane's
       buildDepsOnly cache key. Explicit artifact-only dependency passes exclude
       final installation hooks while final products retain notice installation.
@@ -1775,6 +1769,9 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
       unreferenced docs/reviews JSON can still change final products/notices even
       while dependency derivations stay cached. Preserve all actually included
       runtime JSON, test vectors, schemas/assets and notice authority inputs.
+      Also audit non-workspace Cargo manifests retained as attribution evidence:
+      Crane's recursive dummy-manifest search can treat them as dependency inputs;
+      keep their license bytes available without needless Rust cache invalidation.
 - [x] Prepare a required native Apple static-verification CI job after the Linux
       Mac cross-build, on officially verified `macos-26` ARM64. Same-run/source
       artifact metadata, safe extraction and notice policy precede absolute Apple

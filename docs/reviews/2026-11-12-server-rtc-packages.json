@@ -1,0 +1,143 @@
+{
+  "format": 1,
+  "source_base": "12231aca8c376de50363d6f801f570f6f895ee2e",
+  "tested_runtime_source": "caa6544dfb4079aeb6723d1c67cccd948627ac42",
+  "result": "passed",
+  "server_package": "/nix/store/zsfn808wkvm0372wziil5m327lzrxbbr-nuschld-0.1.0",
+  "server_regular_copied_bodies": {
+    "nuschld": {
+      "path": "/nix/store/zsfn808wkvm0372wziil5m327lzrxbbr-nuschld-0.1.0/bin/nuschld",
+      "sha256": "b03e5703adad38d6e900da944506a1356359ab11fc8b2af44a0ceb9141ee5eaa",
+      "baseline_crate": "/nix/store/4cg0xkc8g9difv9barbk7m6hd238s6m3-rust_nuschld-0.1.0"
+    },
+    "nuschl-storage-worker": {
+      "path": "/nix/store/zsfn808wkvm0372wziil5m327lzrxbbr-nuschld-0.1.0/bin/nuschl-storage-worker",
+      "sha256": "932d61bcfeaa85ed31573f63ff5ebcf3f8f65b5ccbc90343cddf2df4c7207908",
+      "baseline_crate": "/nix/store/7llbkgvrkac10s59rf1a5rv0fm1g8w23-rust_nuschl-storage-worker-0.1.0"
+    }
+  },
+  "rtc_package": "/nix/store/rzm0x70aiywdrqfcg1h6gh2abnxj94mv-nuschl-rtc-probe-0.1.0",
+  "rtc_sha256": "24ff95d26d45bcfeca9fdba0a93d536448acc41af7fcf8d245432df9132bc3cc",
+  "compiled_fixture": {
+    "path": "tests/fixtures/rtc-keyframe.vp8",
+    "sha256": "89975f3bca7bc678782785648ae95cc2f6807aec5bc10fdaf6213f84b88047e0",
+    "bytes": 4297,
+    "exact_bytes_found_in_executable": true
+  },
+  "rtc_real_loopback": {
+    "audio_frames_each_way": 50,
+    "video_frames_received": [
+      17,
+      17
+    ],
+    "video_frames_dropped": 0,
+    "video_frame_bytes": 4297,
+    "max_encoded_delivery_ms": 9,
+    "bandwidth_events": 2,
+    "received_opus_hex": "f8fffe"
+  },
+  "scoped_rtc_inventory": {
+    "packages": 98,
+    "unresolved": [],
+    "scope": "rtc-probe-x86_64-unknown-linux-gnu",
+    "upstream_pins": [
+      "is0.12.0",
+      "str0m-proto0.8.0",
+      "str0m-rust-crypto0.7.0"
+    ],
+    "revision": "5f2183ce7c67117cd1960dfeb11bed11fc188b66",
+    "selected_license": "MIT; original pinned monorepo grant + exact package/author declarations",
+    "generic_fallback": false
+  },
+  "scope_policy_tests": {
+    "real_rtc_ranges_and_tamper": "passed",
+    "old_actual_windows_and_macos_bundles": "passed",
+    "old_main_root_features_exactly_preserved": true,
+    "actual_nix_python_all_union_and_rtc_agree": true,
+    "release_regressions": 15
+  },
+  "vm": {
+    "driver": "/nix/store/j7ih3jfrkxfz38adzc8n24fkwd3m3lpm-nixos-test-driver-nuschl-server",
+    "configuration": "/nix/store/z2hrvnjv1kbbfwm0jsdqcqj2ysy0aiw8-driverConfiguration.json",
+    "test_script": "/nix/store/d0g7aa3ma7njgf8qn0jnmz7a9ayb85rx-test-script",
+    "six_nodes": [
+      "client",
+      "encrypted",
+      "encryptedPostgres",
+      "postgres",
+      "server",
+      "witness"
+    ],
+    "source_test": "nix/vm-server.nix; standalone serverPackage for4services, client/witness unchanged",
+    "standalone_mainpid_executable_assertions": true,
+    "result": {
+      "pid": 3594038,
+      "elapsed_seconds": 300.0201840400696,
+      "minimum_tmp_free": 22476148736,
+      "exit_code": 0,
+      "aborted": false
+    },
+    "junit": {
+      "disabled": "0",
+      "errors": "0",
+      "failures": "0",
+      "tests": "1",
+      "time": "0.0"
+    },
+    "entire_existing_suite_completed": true,
+    "state_directory": "/home/ambiso/.cache/ns-sr-vm",
+    "state_after_cleanup_bytes": 0,
+    "no_host_display_or_audio": "DISPLAY/Wayland removed; invalidPulse; QEMU_AUDIO_DRVnone; no audiohardware in VMstart scripts"
+  },
+  "builds": {
+    "rtc-inventory": {
+      "pid": 1774644,
+      "elapsed_seconds": 5.001319885253906,
+      "minimum_tmp_free": 22476148736,
+      "exit_code": 0,
+      "aborted": false
+    },
+    "rtc-inventory-resolved": {
+      "pid": 2116404,
+      "elapsed_seconds": 5.0011982917785645,
+      "minimum_tmp_free": 22476148736,
+      "exit_code": 0,
+      "aborted": false
+    },
+    "native-products": {
+      "pid": 2569033,
+      "elapsed_seconds": 10.001768350601196,
+      "minimum_tmp_free": 22476148736,
+      "exit_code": 1,
+      "aborted": false
+    },
+    "native-products-fixed": {
+      "pid": 2681538,
+      "elapsed_seconds": 15.002139329910278,
+      "minimum_tmp_free": 22476148736,
+      "exit_code": 0,
+      "aborted": false
+    },
+    "vm-driver": {
+      "pid": 3043529,
+      "elapsed_seconds": 20.002384424209595,
+      "minimum_tmp_free": 22476148736,
+      "exit_code": 0,
+      "aborted": false
+    }
+  },
+  "retained_failures": [
+    "native-products.log: isolated probe lacked workspace-relative VP8; fixed with declared exact Nix input",
+    "vm-suite.log: missing outputdirectory rejected before boot; createdowned directory, complete rerun passed"
+  ],
+  "evidence_directory": "/home/ambiso/.cache/nuschl-server-rtc-build",
+  "limits": [
+    "No build workspace/package manifests, Cargo.lock or generated graph changed; upstream Cargo.toml copies are attribution evidence only",
+    "Cross Windows/Darwin and default-crane builders deliberately remain",
+    "Standalone server storage mode retains existing direct-child/systemd boundary; stronger isolation remainsTODO",
+    "Server uses existing complete native-family notice superset; RTC scope is standalone",
+    "Linux x86_64 products/runtime tested; other3nativeRTCscope definitions are not hardware/runtime proofs",
+    "Probe synthetic encoded delivery is not live capture/video calling/A-Vsync",
+    "No hostaudio/camera/display capture, publicMumble server, prodkey/enrollment or remote operation"
+  ]
+}
