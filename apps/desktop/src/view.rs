@@ -349,6 +349,10 @@ fn server_rail(this: &Desktop, selected: Option<usize>, cx: &mut Context<Desktop
                                 ),
                             }
                         })
+                        .when_some(
+                            crate::voice::rail_ring(this, server, radius),
+                            |tile, ring| tile.child(ring),
+                        )
                         .child(
                             div()
                                 .absolute()
@@ -361,10 +365,6 @@ fn server_rail(this: &Desktop, selected: Option<usize>, cx: &mut Context<Desktop
                                 .items_center()
                                 .justify_center()
                                 .child(security_icon(server.security, index, 12.)),
-                        )
-                        .when_some(
-                            crate::voice::rail_ring(this, server, radius),
-                            |tile, ring| tile.child(ring),
                         )
                         .when_some(
                             crate::voice::rail_badge(this, index, server),
@@ -2004,6 +2004,45 @@ fn conversation(
                                     .child(div().flex_shrink_0().h(shown.above).children(above))
                                     .children(rows)
                                     .child(div().flex_shrink_0().h(shown.below).children(below)),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .id("chat-history-scrollbar-area")
+                            .absolute()
+                            .top_0()
+                            .bottom_0()
+                            .right_0()
+                            .w(px(12.))
+                            .role(Role::Group)
+                            .aria_label("Chat history scrollbar")
+                            // A thumb grab takes over immediately, even before
+                            // its first move changes the retained scroll offset.
+                            .capture_any_mouse_down(cx.listener(
+                                |this, event: &MouseDownEvent, _, _| {
+                                    if event.button == MouseButton::Left {
+                                        this.cancel_chat_scroll();
+                                    }
+                                },
+                            ))
+                            .child(
+                                Scrollbar::vertical(&this.scroll)
+                                    .id("chat-history-scrollbar")
+                                    .mode(ScrollbarMode::Always)
+                                    .styles(|styles| {
+                                        styles
+                                            .track(|track| {
+                                                track.width(px(8.)).bg(color(MAIN).into())
+                                            })
+                                            .thumb(|thumb| {
+                                                thumb
+                                                    .width(px(4.))
+                                                    .bg(color(BORDER_STRONG))
+                                                    .radius(px(2.))
+                                            })
+                                            .thumb_hover(|thumb| thumb.bg(color(TEXT_FAINT)))
+                                            .thumb_active(|thumb| thumb.bg(color(TEXT_MUTED)))
+                                    }),
                             ),
                     )
                     .when_some(jump_pill(this, channel, cx), |view, pill| view.child(pill)),
