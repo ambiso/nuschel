@@ -7,6 +7,7 @@ const defaultFactory=()=>new Worker(new URL("./content-worker.js",import.meta.ur
 // One owner for this module/page lifetime, not one lease per conversation or
 // facade. No public reset/replacement option can discard a retiring owner's cost.
 let sharedOwner;
+const snapshot=job=>Object.freeze({id:job.id,size:job.size,deadline:job.deadline});
 
 class ContentOwner {
   constructor(factory,startupMs) {
@@ -130,8 +131,8 @@ export class ContentService {
   constructor({workerFactory=defaultFactory,timeoutMs=8000,startupMs=15000}={}) {
     this.workerFactory=workerFactory;this.timeoutMs=bounded(timeoutMs,8000);this.startupMs=bounded(startupMs,15000);this.disposed=false;
   }
-  get active(){return sharedOwner?.active??null;}
-  get queue(){return sharedOwner?.queue??[];}
+  get active(){return sharedOwner?.active?snapshot(sharedOwner.active):null;}
+  get queue(){return Object.freeze((sharedOwner?.queue??[]).map(snapshot));}
   get bytes(){return sharedOwner?.bytes??0;}
   get retired(){return sharedOwner?.phase==="retired";}
   get terminationFailed(){return sharedOwner?.retiredOwner?.terminationFailed??false;}

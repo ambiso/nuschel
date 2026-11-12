@@ -52,13 +52,25 @@ test("unused/disposed facades do not claim the lazy first factory or retain an i
   replacement.ready();replacement.finish();assert.ok((await pending).value);client.dispose();
   const later=new f.Service({workerFactory:()=>assert.fail("new factory")});const next=outcome(later.render({source:"later"}));replacement.finish();assert.ok((await next).value);later.dispose();
 });
+test("diagnostic snapshots cannot mutate admission, source state or consumer settlement",async()=>{
+  const {service,workers}=fixture();const jobs=Array.from({length:8},(_,i)=>outcome(service.render({source:`source ${i}`})));
+  const queue=service.queue;assert.ok(Object.isFrozen(queue));assert.ok(queue.every(Object.isFrozen));
+  assert.deepEqual(Object.keys(queue[0]),["id","size","deadline"]);
+  assert.throws(()=>queue.pop());assert.throws(()=>{queue[0].deadline=Infinity;});
+  await assert.rejects(service.render({source:"cannot manufacture capacity"}),/busy/);
+  workers[0].ready();const active=service.active;assert.ok(Object.isFrozen(active));
+  assert.deepEqual(Object.keys(active),["id","size","deadline"]);assert.equal(active.resolve,undefined);assert.equal(active.packet,undefined);assert.equal(active.client,undefined);
+  assert.throws(()=>{active.size=0;});assert.equal(workers[0].sent.length,1);
+  for(let i=0;i<8;i++){workers[0].finish(`reply ${i}`);assert.equal((await jobs[i]).value.plain_text,`reply ${i}`);}
+  assert.equal(service.bytes,0);service.dispose();
+});
 test("active cancellation retains exact slot/bytes/deadline until real ACK then reuses same worker",async()=>{
   const {service,workers,clock}=fixture();const abort=new AbortController();
   const first=outcome(service.render({source:"old"},{signal:abort.signal})),next=outcome(service.render({source:"new"}));
   workers[0].ready();const id=workers[0].sent[0].id;clock.advance(10);abort.abort();
   assert.match((await first).error.message,/cancelled/);assert.equal(service.bytes,6);assert.equal(service.active.id,id);
   assert.equal(service.active.deadline,8000);assert.equal(workers[0].sent.length,1);assert.equal(workers[0].terminated,0);
-  workers[0].finish("discarded old derivative",id);assert.equal(service.active.packet.source,"new");assert.equal(service.bytes,3);
+  workers[0].finish("discarded old derivative",id);assert.equal(workers[0].sent.at(-1).source,"new");assert.equal(service.bytes,3);
   workers[0].finish("current");assert.equal((await next).value.plain_text,"current");assert.equal(workers.length,1);service.dispose();
 });
 test("cancelled active reservation still consumes global job and byte budget",async()=>{
