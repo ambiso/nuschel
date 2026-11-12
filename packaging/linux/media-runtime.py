@@ -52,11 +52,40 @@ def live_supervisor(binary, environment, log_path):
                 event = reply['payload']
                 if event['kind'] == 'status':
                     break
+            containment = None
+            if event['ready']:
+                descendants = []
+                pending = [process.pid]
+                while pending:
+                    parent = pending.pop()
+                    children = Path(f'/proc/{parent}/task/{parent}/children').read_text().split()
+                    pending.extend(map(int, children))
+                    descendants.extend(map(int, children))
+                workers = [pid for pid in descendants if Path(f'/proc/{pid}/cmdline').read_bytes().split(b'\0')[:2] == [b'/worker', b'--live']]
+                assert len(workers) == 1, workers
+                pid = workers[0]
+                child = Path(f'/proc/{pid}')
+                assert not any((child / 'root' / path).exists() for path in ('nix/store', 'home', 'stage', 'evidence', 'dev/snd', 'dev/dri'))
+                keys = {entry.split(b'=', 1)[0].decode() for entry in (child / 'environ').read_bytes().split(b'\0') if entry}
+                assert keys <= {'PWD', 'XDG_RUNTIME_DIR', 'NUSCHL_AUDIO_BACKEND', 'PULSE_SERVER', 'PULSE_SOURCE', 'PULSE_SINK'}, keys
+                assert (child / 'ns/net').readlink() != Path('/proc/self/ns/net').readlink()
+                assert (child / 'ns/pid').readlink() != Path('/proc/self/ns/pid').readlink()
+                mounts = {}
+                for line in (child / 'mountinfo').read_text().splitlines():
+                    fields = line.split()
+                    if fields[4] in ('/usr/share/pipewire', '/usr/share/alsa'):
+                        assert 'ro' in fields[5].split(',')
+                        mounts[fields[4]] = 'readonly'
+                assert set(mounts) == {'/usr/share/pipewire', '/usr/share/alsa'}, mounts
+                containment = {'public_data': mounts, 'fresh_pid_and_network_namespaces': True,
+                               'store_home_profile_audio_gpu_absent': True, 'only_role_environment': True,
+                               'observed_worker_sha256': hashlib.sha256((child / 'exe').read_bytes()).hexdigest()}
+                assert containment['observed_worker_sha256'] == hashlib.sha256(binary.with_name('nuschl-media-worker').read_bytes()).hexdigest()
             send(process, {'kind': 'shutdown'})
             process.stdin.close()
             process.wait(timeout=5)
             assert process.returncode == 0
-            return {'ready': event['ready'], 'message': event['message'], 'exit': process.returncode, 'reaped': True}
+            return {'ready': event['ready'], 'message': event['message'], 'exit': process.returncode, 'reaped': True, 'containment': containment}
         finally:
             if process.poll() is None:
                 process.kill()
