@@ -942,8 +942,12 @@ listed below. Plugin data remains the explicit gap.
       Tab/reverse Tab reveal first/last actions; reading keys scroll the region.
       A shared occluding hitbox prevents wheel events reaching the underlying
       channel browser. Real full-admin-menu baseline clipping and the corrected
-      Linux geometry are retained; complete native pointer/keyboard/idle proof
-      and root integration remain the final gates. See `docs/context-menus.md`.
+      Linux geometry are retained. The complete private full-admin matrix passes
+      first/last pointer and keyboard activation, 100/200% wrapping/placement,
+      background wheel isolation, reading/dismissal and native prompt editing.
+      All 82 native units and exact package/notice checks pass. The eight-second
+      menu idle proof has two transport-driven draws and no new focus reveals;
+      root integration remains the final gate. See `docs/context-menus.md`.
 - [ ] Keep menu focus attached to a semantic action when permissions or server
       context actions change while the menu is open. Current item/focus keys use
       vector indexes; inserting/removing entries can reuse an index for a different

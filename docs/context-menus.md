@@ -57,7 +57,7 @@ and last actions activated by both real pointer and keyboard. Ban actions only
 open a reason prompt and are cancelled; the fixture never actually moderates a
 user. It also checks long-label wrapping, keyboard focus reveal/wrap, viewport
 and right-edge message-popup placement, reading keys, hover, outside/Escape
- dismissal, unchanged underlying channel-row positions after wheel bursts and
+dismissal, unchanged underlying channel-row positions after wheel bursts and
 retained menu scroll/focus across a real periodic transport update.
 
 The input-editing control uses a benign nickname prompt after the geometry cases.
@@ -75,11 +75,29 @@ Transport notifications still cause legitimate draws. The complete trace and
 notification timestamps are retained; no zero-redraw or cross-platform performance
 claim follows from this private fixture.
 
-Evidence is retained under `~/.cache/nuschl-next/context-menus/`, including baseline,
-failed harness/geometry/scroll-isolation trials, native unit/package logs and the
-final handoff. The Linux source checkpoint passes all 82 native desktop unit
-tests. This work does not add GPUI-kit components, dependencies or vendor patches;
-it reuses the existing GPUI-base focus trap and application layout helpers.
+Final November 12 evidence is retained under
+`~/.cache/nuschl-next/context-menus/`: `baseline5/` reproduces clipping with the
+old combined package; `final5/` and `final5-profiled/` pass the full private
+scenario. Earlier failed harness, geometry and scroll-isolation trials remain
+separate. The production source is `ab9c59d2`, packaged as
+`/nix/store/5qc1lbycc00xv68nx523s3w448h4m5ad-nuschl-0.1.0`; its actual scoped
+notice reader passes. All 82 native desktop unit tests pass. No GPUI-kit component,
+dependency, vendor or general-layout-helper changes were needed.
+
+| Requested frame / zoom | Actual bounded popup, physical pixels |
+| --- | --- |
+| 1280×800 / 100% | 320×736 |
+| 900×600 / 100% | 320×564 |
+| 900×800 / 200% | 640×708 |
+
+The final 8.017-second profiled idle interval contains exactly two transport
+notifications, five seconds apart, and two corresponding draws 50/57 microseconds
+later. There are no new focus reveals; the longest continuous quiet interval is
+5.010 seconds. The full scenario records 314 draws: p95 request-layout is
+0.727 ms and p95 total draw is 3.069 ms (maximum 7.907 ms). These measurements
+describe this private fixture; the baseline executable was not instrumented for
+a before/after performance comparison. `handoff.json` identifies exact commits,
+packages, traces, screenshots and limits.
 
 ## Separate action-authority work
 
