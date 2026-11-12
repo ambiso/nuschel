@@ -8,7 +8,7 @@ use crate::{
     adaptive::{Controller, WINDOW},
     capture::CaptureConverter,
     capture_queue::CaptureQueue,
-    dsp::{CapturePipeline, FRAME, RATE},
+    dsp::{CapturePipeline, FRAME},
     mixer::{Mixer, Voice},
     playback::PlaybackConverter,
     probe::EchoProbe,
