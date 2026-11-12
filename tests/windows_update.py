@@ -278,6 +278,7 @@ $profile = Join-Path (Split-Path -Parent $ownedExe) 'profiles\profile µ'
     focus_owned(args.run)
     vm("click", *map(str, UPDATE_BUTTON))  # "Restart now" replaces the update button
     time.sleep(15)
+    focus_owned(args.run)
     vm("screenshot", str(args.output / "update-restarted.png"))
     report = guest(owned_processes(args.run) + r'''
 $dir = "$env:LOCALAPPDATA\Programs\NuschlUpdateTest\__RUN__"
