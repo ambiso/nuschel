@@ -40,7 +40,7 @@ pkgs.testers.runNixOSTest {
       };
       # Only a PUBLIC fixture root enters the store. Its private key is generated
       # in owned disk scratch and copied into the guest at runtime by the driver.
-      security.pki.certificateFiles = lib.optional (trustedCaFile != null) trustedCaFile;
+      security.pki.certificates = lib.optional (trustedCaFile != null) (builtins.readFile trustedCaFile);
       security.acme = {
         acceptTerms = true;
         defaults = {
