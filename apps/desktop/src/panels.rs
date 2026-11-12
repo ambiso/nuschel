@@ -681,13 +681,22 @@ pub fn panel(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement> {
             origin,
             editor,
         } => {
-            let server = &origin.live_index(this)?;
-            let view = this.client.servers.get(*server)?;
-            (
-                format!("Permissions · {}", channel_name(view, *channel)),
-                760.,
-                crate::acl_editor::render(view, editor, cx),
-            )
+            if let Some(server) = origin
+                .live_index(this)
+                .and_then(|index| this.client.servers.get(index))
+            {
+                (
+                    format!("Permissions · {}", channel_name(server, *channel)),
+                    760.,
+                    crate::acl_editor::render(server, editor, cx),
+                )
+            } else {
+                (
+                    format!("Retained permissions · channel {channel}"),
+                    760.,
+                    crate::acl_editor::render_stale(editor, cx),
+                )
+            }
         }
         Panel::ChannelEdit {
             origin,

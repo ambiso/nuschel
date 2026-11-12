@@ -1272,7 +1272,24 @@ pub async fn run(
                         },
                         _ => None,
                     };
+                    let admin_refusal = match &command {
+                        Command::Scoped {authority,command} => {
+                            let request=match command.as_ref() {Command::QueryAclDraft {request,channel}=>Some((*request,*channel,false)),Command::LookupAccount {request,channel,..}=>Some((*request,*channel,true)),_=>None};
+                            request.map(|(request,channel,account)| {
+                                let reason=if state.own_session!=Some(authority.own.0) {"The original connection's user session changed."}
+                                else if state.users.get(&authority.own.0).is_none_or(|own|own.instance!=authority.own.1) {"The original connection's user presence changed."}
+                                else if !authority.channels.iter().any(|(id,instance)|*id==channel && state.channels.get(id).is_some_and(|current|current.instance==*instance)) {"The original channel was replaced or was not covered by this action."}
+                                else if !state.command_permitted(command) {"You no longer have permission to edit this channel."}
+                                else {"The original action authority changed. Reopen permissions on the intended channel."};
+                                (request,account,reason)
+                            })
+                        },_=>None,
+                    };
                     let Some(command) = state.authorize(command) else {
+                        if let Some((request,account,reason))=admin_refusal {
+                            if account {emit(&events,SessionEvent::AccountReply(AccountReply {request,result:Err(reason.into())})).await?;}
+                            else {emit(&events,SessionEvent::AclReply(AclReply {request,result:Err(reason.into())})).await?;}
+                        }
                         if let Some(request_id) = request_id {
                             emit(&events, SessionEvent::Nuschl(NuschlEvent::Error(nuschl::error(request_id, v1::error::Code::NotFound, 0)))).await?;
                         }
@@ -1478,6 +1495,30 @@ fn kt_reply(
         return Ok(None);
     }
     Ok(Some(frame))
+}
+
+fn resolved_account(
+    name: &str,
+    query: &proto::QueryUsers,
+) -> Result<RegisteredAccount, &'static str> {
+    // A one-name query has zero or one canonical pair. Do not accept unrelated
+    // bulk/partial data as the fresh result of this explicit lookup.
+    if query.ids.len() != query.names.len() || query.ids.len() > 1 {
+        return Err("The server returned an invalid registered-account lookup response.");
+    }
+    match query.ids.first().zip(query.names.first()) {
+        Some((&id, canonical))
+            if id != u32::MAX
+                && canonical.len() <= 512
+                && canonical.to_lowercase() == name.to_lowercase() =>
+        {
+            Ok(RegisteredAccount {
+                id,
+                name: canonical.clone(),
+            })
+        }
+        _ => Err("No registered account with that name was found."),
+    }
 }
 
 struct AccountLookup {
@@ -4017,20 +4058,7 @@ impl State {
                                 .into(),
                         )
                     } else {
-                        query
-                            .ids
-                            .iter()
-                            .zip(&query.names)
-                            .find_map(|(id, name)| {
-                                (*id != u32::MAX
-                                    && name.len() <= 512
-                                    && name.to_lowercase() == lookup.name.to_lowercase())
-                                .then(|| RegisteredAccount {
-                                    id: *id,
-                                    name: name.clone(),
-                                })
-                            })
-                            .ok_or_else(|| "No registered account with that name was found.".into())
+                        resolved_account(&lookup.name, &query).map_err(str::to_owned)
                     };
                     emit(
                         events,
@@ -4554,6 +4582,42 @@ pub mod fuzzing {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn explicit_registered_lookup_refuses_partial_bulk_unrelated_and_unknown_pairs() {
+        let pair = |ids, names: Vec<&str>| proto::QueryUsers {
+            ids,
+            names: names.into_iter().map(str::to_owned).collect(),
+        };
+        assert_eq!(
+            resolved_account("Alice", &pair(vec![99], vec!["ALICE"]))
+                .unwrap()
+                .id,
+            99
+        );
+        for query in [
+            pair(vec![1, 99], vec!["Alice"]),
+            pair(vec![1, 99], vec!["Alice", "Bob"]),
+            pair(vec![u32::MAX], vec!["Alice"]),
+            pair(vec![99], vec!["Different account"]),
+            pair(vec![], vec![]),
+        ] {
+            assert!(
+                resolved_account("Alice", &query).is_err(),
+                "must not bind {query:?}"
+            );
+        }
+        assert!(
+            resolved_account(
+                &"x".repeat(513),
+                &proto::QueryUsers {
+                    ids: vec![99],
+                    names: vec!["x".repeat(513)]
+                }
+            )
+            .is_err()
+        );
+    }
 
     #[tokio::test]
     async fn registered_lookup_drains_old_names_preserves_ping_stats_and_serializes_queries() {

@@ -1519,6 +1519,11 @@ impl Desktop {
     }
 
     pub(crate) fn reconcile_delayed_actions(&mut self) {
+        if matches!(self.panel.as_ref(),Some(Panel::Acl {origin,..}) if origin.live_index(self).is_none())
+        {
+            crate::acl_editor::retain_stale(self);
+            return;
+        }
         if let Some(panel) = self.panel.as_ref() {
             let index = panel.origin().and_then(|origin| match panel {
                 Panel::Connection { .. } => origin.local_index(self),

@@ -39,6 +39,7 @@ struct Resolved {
 
 pub struct Editor {
     pub token: u64,
+    stale: bool,
     state: AclEditorState,
     selected_rule: Option<(usize, RowId)>,
     selected_group: Option<(usize, RowId)>,
@@ -86,6 +87,7 @@ impl Editor {
         });
         Self {
             token,
+            stale: false,
             state: AclEditorState::new(channel),
             selected_rule: None,
             selected_group: None,
@@ -211,10 +213,285 @@ fn sync_lookup(this: &mut Desktop, token: u64, index: usize, cx: &mut Context<De
     }
 }
 
+/// A local inspector can outlive its network origin. It can select/read rows,
+/// never mutate the draft or send commands through this helper.
+fn local_editor(this: &mut Desktop, token: u64) -> Option<&mut Editor> {
+    match this.panel.as_mut()? {
+        Panel::Acl { editor, .. } if editor.token == token => Some(editor),
+        _ => None,
+    }
+}
+
+pub fn retain_stale(this: &mut Desktop) {
+    let Some(Panel::Acl { editor, .. }) = this.panel.as_mut() else {
+        return;
+    };
+    if editor.stale {
+        return;
+    }
+    editor.stale = true;
+    if let Some(request) = editor.state.pending() {
+        editor.state.timeout(request);
+    }
+    editor.timeout = None;
+    editor.lookup = None;
+    editor.lookup_timeout = None;
+    editor.resolved = None;
+    editor.state.error = true;
+    editor.state.message="The original connection or channel changed. Your draft is retained below for inspection, and cannot be saved to a replacement connection. Close it explicitly, then reopen permissions on the intended channel.".into();
+}
+
+#[derive(Clone, Copy)]
+enum Inspect {
+    Rules,
+    Groups,
+    Members(usize),
+}
+fn inspect_selection(editor: &Editor, kind: Inspect) -> Option<(usize, u64)> {
+    match kind {
+        Inspect::Rules => editor.selected_rule,
+        Inspect::Groups => editor.selected_group,
+        Inspect::Members(kind) => {
+            editor.member_selected[kind].map(|(index, id)| (index, u64::from(id)))
+        }
+    }
+}
+fn inspect_row(editor: &Editor, kind: Inspect, index: usize) -> Option<(u64, String)> {
+    let draft = editor.state.draft()?;
+    match kind {
+        Inspect::Rules => {
+            let row = draft.entries().get(index)?;
+            Some((
+                row.id,
+                format!(
+                    "{}{}",
+                    if row.value.inherited {
+                        "Inherited · "
+                    } else {
+                        ""
+                    },
+                    row.value
+                        .user_id
+                        .map(|id| format!("#{id}"))
+                        .unwrap_or_else(|| format!(
+                            "@{}",
+                            row.value.group.as_deref().unwrap_or("?")
+                        ))
+                ),
+            ))
+        }
+        Inspect::Groups => {
+            let row = draft.groups().get(index)?;
+            Some((row.id, format!("@{}", row.value.name)))
+        }
+        Inspect::Members(kind) => {
+            let (group, id) = editor.selected_group?;
+            let group = &draft.groups().get(group).filter(|row| row.id == id)?.value;
+            let members = match kind {
+                0 => &group.add,
+                1 => &group.remove,
+                _ => &group.inherited_members,
+            };
+            let id = *members.get(index)?;
+            Some((u64::from(id), format!("#{id}")))
+        }
+    }
+}
+fn inspect_select(editor: &mut Editor, kind: Inspect, index: usize, id: u64) {
+    match kind {
+        Inspect::Rules => editor.selected_rule = Some((index, id)),
+        Inspect::Groups => {
+            editor.selected_group = Some((index, id));
+            editor.member_selected = [None; 3];
+        }
+        Inspect::Members(kind) => editor.member_selected[kind] = Some((index, id as u32)),
+    }
+}
+fn inspect_list(
+    editor: &Editor,
+    kind: Inspect,
+    count: usize,
+    cx: &mut Context<Desktop>,
+) -> AnyElement {
+    let token = editor.token;
+    let (key, scroll, focus) = match kind {
+        Inspect::Rules => (
+            "rules".to_string(),
+            editor.rule_scroll.clone(),
+            editor.rule_focus.clone(),
+        ),
+        Inspect::Groups => (
+            "groups".to_string(),
+            editor.group_scroll.clone(),
+            editor.group_focus.clone(),
+        ),
+        Inspect::Members(kind) => (
+            format!("members-{kind}"),
+            editor.member_scroll[kind].clone(),
+            editor.member_focus[kind].clone(),
+        ),
+    };
+    let rows_key = key.clone();
+    let list = uniform_list(
+        SharedString::from(format!("acl-inspect-{token}-{key}")),
+        count,
+        cx.processor(move |this, range: Range<usize>, _, cx| {
+            let mut rows = Vec::new();
+            for index in range {
+                let Some((id, label, selected)) = (|| {
+                    let editor = local_editor(this, token)?;
+                    if !editor.stale {
+                        return None;
+                    }
+                    let (id, label) = inspect_row(editor, kind, index)?;
+                    Some((
+                        id,
+                        label,
+                        inspect_selection(editor, kind) == Some((index, id)),
+                    ))
+                })() else {
+                    continue;
+                };
+                rows.push(row_button(
+                    format!("acl-inspect-row-{token}-{rows_key}-{id}"),
+                    label,
+                    selected,
+                    move |this, _, cx| {
+                        if let Some(editor) = local_editor(this, token) {
+                            if editor.stale
+                                && inspect_row(editor, kind, index)
+                                    .is_some_and(|(current, _)| current == id)
+                            {
+                                inspect_select(editor, kind, index, id);
+                            }
+                        }
+                        cx.notify();
+                    },
+                    cx,
+                ));
+            }
+            rows
+        }),
+    )
+    .track_scroll(&scroll)
+    .h(px(34. * count.clamp(1, 5) as f32))
+    .w_full();
+    let focus_on_key = focus.clone();
+    div()
+        .id(SharedString::from(format!(
+            "acl-inspect-owner-{token}-{key}"
+        )))
+        .role(Role::ListBox)
+        .aria_label(format!("Retained draft {key}"))
+        .track_focus(&focus)
+        .tab_index(0)
+        .min_w_0()
+        .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
+            let Some(editor) = local_editor(this, token) else {
+                return;
+            };
+            if !editor.stale {
+                return;
+            }
+            let current = inspect_selection(editor, kind).map_or(0, |(index, _)| index);
+            if let Some(next) = list_key(event, current, count) {
+                if let Some((id, _)) = inspect_row(editor, kind, next) {
+                    window.focus(&focus_on_key, cx);
+                    inspect_select(editor, kind, next, id);
+                    scroll.scroll_to_item(next, ScrollStrategy::Nearest);
+                    cx.stop_propagation();
+                    cx.notify();
+                }
+            }
+        }))
+        .child(list)
+        .into_any_element()
+}
+
+pub fn render_stale(editor: &Editor, cx: &mut Context<Desktop>) -> AnyElement {
+    let mut body = div()
+        .px_6()
+        .pb_6()
+        .min_w_0()
+        .flex()
+        .flex_col()
+        .gap_3()
+        .child(note("acl-stale", editor.state.message.clone()));
+    let Some(draft) = editor.state.draft() else {
+        return body.into_any_element();
+    };
+    body = body
+        .child(note(
+            "acl-stale-dirty",
+            if editor.dirty {
+                "Unsaved draft retained · read-only"
+            } else {
+                "Original snapshot retained · read-only"
+            },
+        ))
+        .child(note(
+            "acl-stale-inherit",
+            format!("Inherit parent permissions: {}", draft.inherit_acls()),
+        ))
+        .child(note(
+            "acl-stale-rules-title",
+            format!("Rules · {}", draft.entries().len()),
+        ))
+        .child(inspect_list(
+            editor,
+            Inspect::Rules,
+            draft.entries().len(),
+            cx,
+        ));
+    if let Some((_, entry)) = editor.rule() {
+        body = body.child(note(
+            "acl-stale-rule-detail",
+            format!(
+                "This channel: {}; subchannels: {}; inherited: {}; grant: {:#010x}; deny: {:#010x}",
+                entry.apply_here, entry.apply_subs, entry.inherited, entry.grant, entry.deny
+            ),
+        ));
+    }
+    body = body
+        .child(note(
+            "acl-stale-groups-title",
+            format!("Groups · {}", draft.groups().len()),
+        ))
+        .child(inspect_list(
+            editor,
+            Inspect::Groups,
+            draft.groups().len(),
+            cx,
+        ));
+    if let Some((index, id)) = editor.selected_group {
+        if let Some(group) = draft
+            .groups()
+            .get(index)
+            .filter(|row| row.id == id)
+            .map(|row| &row.value)
+        {
+            body=body.child(note("acl-stale-group-flags",format!("@{} · inherited: {}; inherit parent members: {}; inheritable by subchannels: {}",group.name,group.inherited,group.inherit,group.inheritable)));
+            for (kind, title, count) in [
+                (0, "Local members", group.add.len()),
+                (1, "Local exclusions", group.remove.len()),
+                (2, "Inherited members", group.inherited_members.len()),
+            ] {
+                body = body
+                    .child(note(
+                        SharedString::from(format!("acl-stale-member-title-{kind}")),
+                        format!("{title} · {count}"),
+                    ))
+                    .child(inspect_list(editor, Inspect::Members(kind), count, cx));
+            }
+        }
+    }
+    body.into_any_element()
+}
+
 fn active_editor(this: &mut Desktop, token: u64) -> Option<&mut Editor> {
     let valid = match this.panel.as_ref()? {
         Panel::Acl { origin, editor, .. } => {
-            editor.token == token && origin.live_index(this).is_some()
+            editor.token == token && !editor.stale && origin.live_index(this).is_some()
         }
         _ => false,
     };
@@ -315,6 +592,7 @@ fn enqueue_query(
     request: u64,
     cx: &mut Context<Desktop>,
 ) {
+    tracing::debug!(token, channel, request, "enqueue ACL draft query");
     if let Err(error) = send(this, token, Command::QueryAclDraft { channel, request }) {
         if let Some(editor) = active_editor(this, token) {
             editor.state.timeout(request);
@@ -399,6 +677,12 @@ pub fn sync(this: &mut Desktop, cx: &mut Context<Desktop>) {
             return;
         };
         editor.timeout = None;
+        tracing::debug!(
+            token,
+            request = reply.request,
+            error = reply.result.as_ref().err(),
+            "apply correlated ACL draft response"
+        );
         let write = editor.state.receive(&reply);
         if write.is_none() && !editor.state.error {
             editor.selected_rule = None;

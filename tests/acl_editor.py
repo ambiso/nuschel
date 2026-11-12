@@ -11,7 +11,7 @@ from pathlib import Path
 import document_link_regression as fixture
 import welcome_html
 from accessibility import items
-from admin_bootstrap import Operator
+from admin_bootstrap import Operator, scalar
 from hash_document_wire import fields
 from local_murmur import Murmur, eventually
 from local_nuschld import Nuschld
@@ -159,7 +159,7 @@ def configure(_shell, root, output):
         if offline:
             offline.close()
         reader.close()
-    return {"RUST_LOG": "nuschl=info,nuschl::layout=debug"}
+    return {"RUST_LOG": "nuschl=info,nuschl::layout=debug,nuschl::acl_editor=debug"}
 
 
 def actions(args, root, shell, application, bot, murmur):
@@ -239,6 +239,32 @@ def actions(args, root, shell, application, bot, murmur):
             "ACL draft did not load",
         )
 
+    def matching(fragment):
+        return eventually(
+            lambda: next(
+                (
+                    node
+                    for node, role, name, _ in items(application)
+                    if role == "push button" and fragment in name
+                ),
+                None,
+            ),
+            f"missing action containing {fragment}",
+        )
+
+    def click_matching(fragment):
+        node = matching(fragment)
+        assert node.call("Component", "GrabFocus")[0]
+        time.sleep(0.15)
+        shell.click(*point(node))
+
+    def query_channel(admin, channel):
+        admin.send(13, scalar(1, channel) + scalar(5, 1))
+        return admin.wait(13)
+
+    def local_rules(acl):
+        return [fields(raw) for raw in acl.get(4, []) if not fields(raw).get(3, [1])[0]]
+
     def save():
         activate("Save permissions")
         eventually(
@@ -276,11 +302,127 @@ def actions(args, root, shell, application, bot, murmur):
     finally:
         admin.close()
     shell.screenshot(args.output / "native-root-group.png")
+    activate("Done")
+    open_acl("Lobby")
+    activate("@native-team · inherited")
+    type_field("Registered group member", f"#{IDS['offline']}")
+    activate("Exclude inherited member")
+    click_matching("Inheritable by subchannels")
+    activate("Add rule")
+    type_field("ACL rule target", "native-team")
+    activate("Apply target")
+    activate("Speak: unset")
+    click_matching("Apply to subchannels")
+    activate("Add rule")
+    activate("Registered user")
+    type_field("ACL rule target", "Offline member")
+    activate("Resolve account")
+    eventually(
+        lambda: text_contains(f"Resolved Offline member (#{IDS['offline']})"),
+        "fresh rule account did not resolve",
+    )
+    activate("Apply target")
+    activate("Speak: unset")
+    activate("Speak: allow")
+    activate("Move rule up")
+    save()
+    shell.screenshot(args.output / "native-child-rules.png")
+    admin = operator(root, pin)
+    try:
+        child = query_channel(admin, 1)
+        group = next(
+            fields(raw) for raw in child[3] if fields(raw)[1] == [b"native-team"]
+        )
+        assert (
+            group.get(2) == [1]
+            and group.get(3, [1]) == [1]
+            and group.get(4, [1]) == [0]
+        ), group
+        assert group.get(6) == [IDS["offline"]], group
+        rules = local_rules(child)
+        assert len(rules) == 2, rules
+        assert rules[0].get(4) == [IDS["offline"]] and rules[0].get(7) == [8], rules
+        assert rules[0].get(1, [1]) == [1] and rules[0].get(2, [1]) == [1], rules
+        assert rules[1].get(5) == [b"native-team"] and rules[1].get(6) == [8], rules
+        assert rules[1].get(1, [1]) == [1] and rules[1].get(2, [1]) == [0], rules
+    finally:
+        admin.close()
+    observer = Client(
+        args.binaries, "127.0.0.1", SERVER.port, pin, "Offline member", root / "offline"
+    )
+    try:
+        for channel in (1, 2):
+            observer.send(kind="permissions", channel=channel)
+            permission = observer.wait(
+                lambda event, channel=channel: (
+                    event["kind"] == "permissions" and event["channel"] == channel
+                )
+            )
+            assert permission["permissions"] & 8 == 0, permission
+        bot.send(kind="permissions", channel=1)
+        control = bot.wait(
+            lambda event: event["kind"] == "permissions" and event["channel"] == 1
+        )
+        assert control["permissions"] & 8 != 0, control
+    finally:
+        observer.close()
+    activate("Done")
+    open_acl()
+    type_field("New group name", "unsaved-draft")
+    activate("Create group")
+    pending_save = wait("Save permissions", "push button")
+    bot.close()
+    SERVER.stop()
+    eventually(
+        lambda: text_contains("Unsaved draft retained"),
+        "disconnect silently discarded the draft",
+    )
+    SERVER.start()
+    eventually(
+        lambda: any(
+            role == "tree item" and name.startswith("Welcome reader")
+            for _, role, name, _ in items(application)
+        ),
+        "native client did not reconnect",
+    )
+    eventually(
+        lambda: named("@unsaved-draft", "push button"),
+        "stale inspector lost its unsaved group",
+    )
+    try:
+        accepted = pending_save.call("Action", "DoAction", "i", "0")[0]
+    except RuntimeError:
+        accepted = False
+    assert accepted is False, "old Save became active on replacement connection"
+    shell.screenshot(args.output / "native-stale-draft.png")
+    admin = operator(root, pin)
+    try:
+        persisted = query_channel(admin, 1)
+        assert local_rules(persisted) == rules, (
+            "local rule order/permissions did not persist"
+        )
+        root_acl = admin.acl()
+        assert all(fields(raw)[1] != [b"unsaved-draft"] for raw in root_acl[3]), (
+            "unsent draft appeared on server"
+        )
+    finally:
+        admin.close()
+    activate("Done")
+    open_acl()
+    save()
     return {
         "fresh_offline_lookup": True,
         "unknown_account_refused": True,
         "close_reopen_stale_save_refused": True,
         "native_group_saved": True,
+        "inherited_group_override_saved": True,
+        "ordered_group_and_registered_user_rules_saved": True,
+        "deny_applies_to_user_and_subchannel": True,
+        "unrelated_control_can_speak": True,
+        "dirty_draft_retained_read_only_after_disconnect": True,
+        "stale_reconnect_save_refused": True,
+        "persistence_after_restart": True,
+        "fresh_editor_after_reconnect": True,
         "registered_ids": IDS.copy(),
         "server": args.server,
     }
@@ -295,10 +437,7 @@ def checked_actions(*args):
             shell.screenshot(options.output / "failed-editor.png")
             (options.output / "failed-accessible.json").write_text(
                 json.dumps(
-                    [
-                        (role, name, node.extents())
-                        for node, role, name, _ in items(application)
-                    ],
+                    [(role, name) for _, role, name, _ in items(application)],
                     indent=2,
                 )
                 + "\n"
