@@ -198,6 +198,11 @@ export class BrowserAudio {
   }
   applyPolicy() {
     if(this.disposed)return;
+    const playback=this.playbackEnabled();
+    const playbackChanged=playback!==this.playbackRunning;
+    // Every re-enable starts a fresh authorization. A disabled barrier from an
+    // earlier suspended/listening state may still be queued on the other port.
+    if(playbackChanged&&playback)this.receiveEpoch="rx"+ ++this.receiveRevision;
     const capture=this.captureEnabled()&&Boolean(this.stream)&&!this.stream.getAudioTracks().some(t=>t.muted||t.readyState!=="live");
     if(capture!==Boolean(this.captureRunning)) {
       this.captureRunning=capture;
@@ -206,8 +211,7 @@ export class BrowserAudio {
       this.configureWorker(capture);
       this.captureNode?.port.postMessage({kind:"configure",epoch:this.epoch,enabled:capture});
     }
-    const playback=this.playbackEnabled();
-    if(playback!==this.playbackRunning) {
+    if(playbackChanged) {
       this.playbackRunning=playback;
       this.configureWorker(capture);this.configurePlayback();
     }

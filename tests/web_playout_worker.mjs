@@ -22,9 +22,17 @@ function pair(queue) {
   const b={sent:[],start(){},close(){this.closed=true;},postMessage(data){this.sent.push(data);queue.push(()=>a.onmessage?.({data}));}};
   return [a,b];
 }
-async function fixture({loading=false}={}) {
+async function fixture({loading=false,measure=false}={}) {
   let time=0,release;const queue=[],messages=[],ready=new Promise(resolve=>{release=resolve;});
-  const context=vm.createContext({...protocol,VoiceEncoder:codec.VoiceEncoder,VoicePlayout:codec.VoicePlayout,
+  let decodes=0;
+  class MeasuredPlayout {
+    constructor(){this.inner=new codec.VoicePlayout();}
+    static validate_packet(packet){codec.VoicePlayout.validate_packet(packet);}
+    push(...args){return this.inner.push(...args);}
+    render(){const samples=this.inner.render();if(this.inner.last_render_kind())decodes++;return samples;}
+    gain(){return this.inner.gain();}free(){this.inner.free();}
+  }
+  const context=vm.createContext({...protocol,VoiceEncoder:codec.VoiceEncoder,VoicePlayout:measure?MeasuredPlayout:codec.VoicePlayout,
     Float32Array,Uint8Array,performance:{now:()=>time},init:()=>ready,
     onmessage:null,postMessage:data=>messages.push(data),setInterval:()=>0,close:()=>{}});
   const initialized=new vm.Script(`(async()=>{${source}\n})()`).runInContext(context);
@@ -36,7 +44,7 @@ async function fixture({loading=false}={}) {
   const packet=(opus,sequence=0,gain=.25,speaker=1,rx="rx",job=1,end=false)=>send({kind:"decode",epoch:rx,job,speaker,sequence:String(sequence),opus,end,volume:gain});
   const load=async()=>{release();await initialized;};
   if(!loading)await load();
-  return {send,port,remote,queue,messages,pump,authorize,wanted,render,packet,load,now:value=>{time=value;},close:()=>send({kind:"close"})};
+  return {send,port,remote,queue,messages,pump,decodes:()=>decodes,authorize,wanted,render,packet,load,now:value=>{time=value;},close:()=>send({kind:"close"})};
 }
 const encoder=new codec.VoiceEncoder();
 const packets=Array.from({length:8},(_,frame)=>encoder.encode(Float32Array.from({length:960},(_,n)=>Math.sin(2*Math.PI*997*(frame*960+n)/48000)*.2)));
@@ -72,6 +80,16 @@ test("new RX packets interleaved with either barrier order survive without old-R
   assert.equal(f.port.sent.at(-1).speakers[0].speaker,30);
   assert.equal(f.port.sent.at(-1).speakers[0].volume,.75);f.close();
  }
+});
+
+test("late disabled barrier from the previous authorization cannot discard freshly reenabled RX",async()=>{
+ const f=await fixture();f.authorize("old");f.wanted("old",1);f.pump();
+ // Main revokes, then re-enables with its mandatory fresh receive epoch before
+ // the old Worklet disable control is processed on the other port.
+ f.authorize("old",false,"tx2",false);f.authorize("new",false,"tx3",true);
+ f.packet(packets[0],0,.25,9,"new");f.packet(packets[1],2,.5,9,"new",2);
+ f.wanted("old",2,false);f.wanted("new",3,true);f.pump();f.render(1,480,"new",3);f.pump();
+ assert.equal(f.port.sent.at(-1).speakers.length,1);assert.equal(f.port.sent.at(-1).speakers[0].volume,.25);f.close();
 });
 
 test("TX configure preserves actual RX decoder/cache; RX revoke clears it",async()=>{
@@ -203,4 +221,28 @@ test("worst permitted duration performs at most one120ms decode per16 speakers p
  f.render(13,6240);f.pump();assert.equal(f.port.sent.at(-1).speakers.length,0);
  console.log(JSON.stringify({worst_case:{speakers:16,packet_ms:120,first_render_ms:elapsed,wasm_before:before,wasm_after:wasm.memory.buffer.byteLength},
   scope:"bounded decode work, not a guaranteed10ms CPU deadline on every device"}));f.close();
+});
+
+
+test("non-silent independent10/20/120ms packets measure aligned16-speaker decode bursts",async()=>{
+ const matrix=[];
+ for(const duration of [1,2,12]) {
+  const packet=duration===1?ten:Uint8Array.from([ten[0]|3,duration,...Array.from({length:duration},()=>Array.from(ten.slice(1))).flat()]);
+  const f=await fixture({measure:true}),cost=[],decodeCost=[];f.authorize();f.wanted();f.pump();
+  // Prebuffer enough for the inherited40ms minimum, then feed at exact cadence.
+  const initial=Math.ceil(4/duration)+1;
+  for(let index=0;index<initial;index++)for(let speaker=0;speaker<16;speaker++)f.packet(packet,index*duration,.25,speaker,"rx",index*16+speaker+1);
+  for(let tick=0;tick<240;tick++) {
+   f.now(tick*10);
+   if(tick%duration===0)for(let speaker=0;speaker<16;speaker++)f.packet(packet,(initial+tick/duration)*duration,.25,speaker,"rx",1000+tick*16+speaker);
+   const count=f.decodes(),start=performance.now();f.render(tick+1,(tick+1)*480);f.pump();const elapsed=performance.now()-start;cost.push(elapsed);
+   const decoded=f.decodes()-count;assert.ok(decoded===0||decoded===16,"decode bursts remain aligned");
+   if(decoded)decodeCost.push(elapsed);
+   const batch=f.port.sent.at(-1);assert.equal(batch.kind,"playout");assert.equal(batch.speakers.length,16);
+   assert.ok(batch.speakers.every(s=>s.samples.every(Number.isFinite)));
+  }
+  const stats=list=>{list.sort((a,b)=>a-b);return {p50:list[Math.floor(list.length*.5)],p95:list[Math.floor(list.length*.95)],max:list.at(-1),over10ms:list.filter(x=>x>10).length,over20ms:list.filter(x=>x>20).length};};
+  matrix.push({duration_ms:duration*10,speakers:16,renders:cost.length,render_ms:stats(cost),aligned_decode_bursts:decodeCost.length,aligned_decode_ms:stats(decodeCost),wasm_memory:wasm.memory.buffer.byteLength});f.close();
+ }
+ console.log(JSON.stringify({non_silent_reference_packets:matrix,scope:"Node production worker+actualWASM, costs compared with10/20ms reserve; actual scheduling tested separately"}));
 });

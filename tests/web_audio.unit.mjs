@@ -148,6 +148,20 @@ test("mic mute and bitrate reset TX only, but deafen/route changes revoke RX",as
   audio.ctx=null;await audio.dispose();
 });
 
+test("every playback reenable has a new RX authorization even when old disable messages are delayed",async()=>{
+  const messages=[],audio=new BrowserAudio();audio.syncVoice(voice());
+  audio.ctx={state:"running",currentTime:0};audio.workerReady=true;audio.nodesReady=true;
+  audio.worker={postMessage:m=>messages.push(m),terminate:()=>{}};
+  audio.playbackNode={port:{postMessage:()=>{}},disconnect:()=>{}};
+  audio.applyPolicy();const initial=audio.receiveEpoch;
+  audio.ctx.state="suspended";audio.applyPolicy();
+  audio.ctx.state="running";audio.applyPolicy();
+  assert.notEqual(audio.receiveEpoch,initial);
+  const latest=messages.filter(m=>m.kind==="configure").at(-1);
+  assert.equal(latest.playback,true);assert.equal(latest.receive_epoch,audio.receiveEpoch);
+  audio.ctx=null;await audio.dispose();
+});
+
 test("explicit undeafen restores acknowledged playback while microphone capture stays closed",async()=>{
   const originals=new Map(["isSecureContext","AudioContext","AudioWorkletNode"].map(key=>[key,Object.getOwnPropertyDescriptor(globalThis,key)]));
   Object.defineProperty(globalThis,"isSecureContext",{value:true,configurable:true});
