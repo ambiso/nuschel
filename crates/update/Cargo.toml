@@ -7,12 +7,14 @@ rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
 
+[features]
+default = ["client"]
+client = ["dep:cap-std", "dep:ureq", "dep:nuschl-ipc", "dep:tokio"]
+
 [dependencies]
 # Every file operation goes through a handle on the installation folder:
 # absolute paths, `..` and symlinks leading outside are refused.
-cap-std = "4.0.3"
-# Pure Rust, no dependencies: verifies the release manifest's signature.
-minisign-verify = "0.2"
+cap-std = { version = "4.0.3", optional = true }
 semver = { version = "1.0.28", features = ["serde"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
@@ -20,10 +22,12 @@ sha2 = "0.10.9"
 thiserror = "2.0.21"
 url = "2.5.8"
 # HTTPS through rustls with ring and Mozilla's roots, as the Mumble connection uses.
-ureq = { version = "3", default-features = false, features = ["rustls"] }
+ureq = { version = "3", optional = true, default-features = false, features = ["rustls"] }
+
+nuschl-ipc = { workspace = true, optional = true }
+tokio = { version = "1.54.1", optional = true, features = ["io-util", "process", "time", "rt"] }
 
 [dev-dependencies]
-minisign = "0.7"
 tempfile = "3.27.0"
 
 [lints]

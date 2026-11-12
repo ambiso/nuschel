@@ -3,12 +3,21 @@
 //! Cryptographic engines belong only in the isolated verifier executables and
 //! explicit offline/CI signing tool, never linked into the UI/updater parent.
 
+#[cfg(feature = "mldsa44")]
+use auth_format::ML_CONTEXT;
+#[cfg(any(feature = "ed25519", feature = "mldsa44"))]
+use auth_format::{PublicKey, Signature, signed_bytes};
+#[cfg(feature = "ed25519")]
 use curve25519_dalek::{edwards::CompressedEdwardsY, scalar::Scalar};
-use nuschl_update::auth_format::{self, ML_CONTEXT, PublicKey, Signature, signed_bytes};
+use nuschl_update::auth_format;
 
 #[cfg(feature = "signer")]
 pub mod key_file;
-#[cfg(any(feature = "signer", test))]
+#[cfg(all(
+    any(feature = "signer", test),
+    feature = "ed25519",
+    feature = "mldsa44"
+))]
 pub mod signing;
 pub use nuschl_update::trust;
 
@@ -28,6 +37,7 @@ pub enum Error {
     ExistingFile,
 }
 
+#[cfg(feature = "ed25519")]
 fn strong_point(bytes: &[u8; 32]) -> bool {
     CompressedEdwardsY(*bytes).decompress().is_some_and(|p| {
         p.compress().as_bytes() == bytes && p.is_torsion_free() && !p.is_small_order()
@@ -37,51 +47,73 @@ fn strong_point(bytes: &[u8; 32]) -> bool {
 /// Strong encoding checks precede dalek's strict verifier. In particular AKD
 /// can unify legacy_compatibility for the whole binary: our explicit canonical
 /// scalar check still rejects S >= the group order under that feature.
+#[cfg(feature = "ed25519")]
 pub fn verify_ed25519(
     key: &PublicKey,
     signature: &Signature,
     manifest: &[u8],
 ) -> Result<(), Error> {
     signature.check_key(key)?;
-    let encoded = signature.ed25519();
+    verify_ed25519_component(
+        key.ed25519(),
+        signature.ed25519(),
+        &signed_bytes(key, manifest)?,
+    )
+}
+
+#[cfg(feature = "ed25519")]
+pub fn verify_ed25519_component(
+    public: &[u8; 32],
+    encoded: &[u8; 64],
+    message: &[u8],
+) -> Result<(), Error> {
     let r: &[u8; 32] = encoded[..32].try_into().map_err(|_| Error::Signature)?;
     let s: [u8; 32] = encoded[32..].try_into().map_err(|_| Error::Signature)?;
-    if !strong_point(key.ed25519())
+    if !strong_point(public)
         || !strong_point(r)
         || !bool::from(Scalar::from_canonical_bytes(s).is_some())
     {
         return Err(Error::Signature);
     }
-    let public =
-        ed25519_dalek::VerifyingKey::from_bytes(key.ed25519()).map_err(|_| Error::Signature)?;
+    let public = ed25519_dalek::VerifyingKey::from_bytes(public).map_err(|_| Error::Signature)?;
     public
-        .verify_strict(
-            &signed_bytes(key, manifest)?,
-            &ed25519_dalek::Signature::from_bytes(encoded),
-        )
+        .verify_strict(message, &ed25519_dalek::Signature::from_bytes(encoded))
         .map_err(|_| Error::Signature)
 }
 
+#[cfg(feature = "mldsa44")]
 pub fn verify_mldsa44(
     key: &PublicKey,
     signature: &Signature,
     manifest: &[u8],
 ) -> Result<(), Error> {
     signature.check_key(key)?;
-    let encoded =
-        ml_dsa::EncodedVerifyingKey::<ml_dsa::MlDsa44>::try_from(key.mldsa44().as_slice())
-            .map_err(|_| Error::Signature)?;
-    let public = ml_dsa::VerifyingKey::<ml_dsa::MlDsa44>::decode(&encoded);
-    let signature = ml_dsa::Signature::<ml_dsa::MlDsa44>::try_from(signature.mldsa44().as_slice())
+    verify_mldsa44_component(
+        key.mldsa44(),
+        signature.mldsa44(),
+        &signed_bytes(key, manifest)?,
+    )
+}
+
+#[cfg(feature = "mldsa44")]
+pub fn verify_mldsa44_component(
+    public: &[u8; 1312],
+    signature: &[u8; 2420],
+    message: &[u8],
+) -> Result<(), Error> {
+    let encoded = ml_dsa::EncodedVerifyingKey::<ml_dsa::MlDsa44>::try_from(public.as_slice())
         .map_err(|_| Error::Signature)?;
-    if public.verify_with_context(&signed_bytes(key, manifest)?, ML_CONTEXT, &signature) {
+    let public = ml_dsa::VerifyingKey::<ml_dsa::MlDsa44>::decode(&encoded);
+    let signature = ml_dsa::Signature::<ml_dsa::MlDsa44>::try_from(signature.as_slice())
+        .map_err(|_| Error::Signature)?;
+    if public.verify_with_context(message, ML_CONTEXT, &signature) {
         Ok(())
     } else {
         Err(Error::Signature)
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "ed25519", feature = "mldsa44"))]
 mod tests {
     use super::*;
     const MESSAGE: &[u8] = br#"{"format":2,"version":"0.1.0"}"#;

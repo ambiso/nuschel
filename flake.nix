@@ -222,7 +222,7 @@
             }")
           mkdir -p "$out/libexec/nuschl"
           mv "$out/bin/nuschl" "$out/libexec/nuschl/nuschl"
-          for worker in nuschl-content-worker nuschl-crypto-worker nuschl-math-worker nuschl-media-worker nuschl-storage-worker nuschl-transfer-worker; do
+          for worker in nuschl-content-worker nuschl-crypto-worker nuschl-math-worker nuschl-media-worker nuschl-storage-worker nuschl-transfer-worker nuschl-update-verify-ed25519 nuschl-update-verify-mldsa44; do
             ln -s "../../bin/$worker" "$out/libexec/nuschl/$worker"
           done
           makeWrapper "$out/libexec/nuschl/nuschl" "$out/bin/nuschl" "''${runtimeFlags[@]}"
@@ -257,6 +257,13 @@
         updateSigner = crates.project.workspaceMembers."nuschl-update-worker".build.override {
           features = [ "signer" ];
         };
+        updateVerifier = feature: crates.project.workspaceMembers."nuschl-update-worker".build.override {
+          features = [ feature ];
+        };
+        updateEdVerifier = updateVerifier "ed25519";
+        updateMlVerifier = updateVerifier "mldsa44";
+        # Explicit fixture executable, not part of the distributed payload.
+        updateRuntimeFixture = updateVerifier "runtime-fixture";
         # What nix/crate2nix/Cargo.nix was generated from: Cargo.lock and every
         # manifest. `just crate2nix` records it; a check compares.
         crate2nixInputs =
@@ -290,7 +297,7 @@
             }
             ''
               mkdir -p "$out/bin"
-              for crate in ${lib.concatStringsSep " " crates.binaries}; do
+              for crate in ${lib.concatStringsSep " " (crates.binaries ++ [ updateEdVerifier updateMlVerifier ])}; do
                 for program in "$crate"/bin/*; do
                   cp "$program" "$out/bin/"
                 done
@@ -308,7 +315,7 @@
               "aarch64-apple-darwin"
             ];
           };
-        desktopCrates = "-p nuschl -p nuschl-content-worker -p nuschl-crypto-worker -p nuschl-math-worker -p nuschl-media-worker -p nuschl-storage-worker -p nuschl-transfer-worker";
+        desktopCrates = "-p nuschl -p nuschl-content-worker -p nuschl-crypto-worker -p nuschl-math-worker -p nuschl-media-worker -p nuschl-storage-worker -p nuschl-transfer-worker -p nuschl-update-worker --features nuschl-update-worker/ed25519,nuschl-update-worker/mldsa44";
         crossCommon = {
           version = "0.1.0";
           inherit src dummySrc;
@@ -328,7 +335,7 @@
             __CRANE_EXPORT_CARGO_TARGET_X86_64_PC_WINDOWS_GNU_RUNNER = "${pkgs.coreutils}/bin/false";
             CARGO_TARGET_X86_64_PC_WINDOWS_GNU_RUSTFLAGS = "-C target-feature=+crt-static -L native=${mingw.windows.pthreads}/lib";
             postInstall = ''
-              for program in nuschl nuschl-content-worker nuschl-crypto-worker nuschl-math-worker nuschl-media-worker nuschl-storage-worker nuschl-transfer-worker; do
+              for program in nuschl nuschl-content-worker nuschl-crypto-worker nuschl-math-worker nuschl-media-worker nuschl-storage-worker nuschl-transfer-worker nuschl-update-verify-ed25519 nuschl-update-verify-mldsa44; do
                 test -f "$out/bin/$program.exe"
               done
               if ${pkgs.binutils}/bin/objdump -p "$out/bin/nuschl.exe" | grep -iE 'DLL Name:.*(libgcc|libstdc|libwinpthread)'; then
@@ -387,7 +394,7 @@
           pkgs.runCommand "nuschl-macos-universal" { nativeBuildInputs = [ pkgs.llvmPackages.llvm ]; }
             ''
               mkdir -p "$out/bin"
-              for program in nuschl nuschl-content-worker nuschl-crypto-worker nuschl-math-worker nuschl-media-worker nuschl-storage-worker nuschl-transfer-worker; do
+              for program in nuschl nuschl-content-worker nuschl-crypto-worker nuschl-math-worker nuschl-media-worker nuschl-storage-worker nuschl-transfer-worker nuschl-update-verify-ed25519 nuschl-update-verify-mldsa44; do
                 llvm-lipo -create ${macSlice "x86_64"}/bin/$program ${macSlice "aarch64"}/bin/$program \
                   -output "$out/bin/$program"
                 llvm-lipo "$out/bin/$program" -verify_arch x86_64 arm64
@@ -446,6 +453,9 @@
         packages.server = serverPackage;
         packages.witness = witnessPackage;
         packages.update-signer = updateSigner;
+        packages.update-verifier-ed25519 = updateEdVerifier;
+        packages.update-verifier-mldsa44 = updateMlVerifier;
+        packages.update-runtime-fixture = updateRuntimeFixture;
         apps.update-signer = flake-utils.lib.mkApp {
           drv = updateSigner;
           exePath = "/bin/nuschl-update-sign";
@@ -504,6 +514,10 @@
               cargoClippyExtraArgs = "--all-targets -- --deny warnings";
             }
           );
+          update-unit = crates.project.workspaceMembers."nuschl-update".build.override { runTests = true; };
+          update-crypto = crates.project.workspaceMembers."nuschl-update-worker".build.override {
+            features = [ "signer" ]; runTests = true;
+          };
           fmt = craneLib.cargoFmt { inherit src; };
           deny = craneLib.cargoDeny (
             common

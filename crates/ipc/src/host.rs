@@ -43,6 +43,26 @@ pub fn content_sandbox_command(
     content_sandbox(executable, arguments, 5)
 }
 
+/// Update-only one-shot verifier, with no data directory, network capability or
+/// inherited environment. `post_quantum` selects a distinct fixed LPAC profile;
+/// it does not select a cryptographic algorithm inside the executable.
+#[cfg(target_os = "linux")]
+pub fn update_sandbox_command(executable: &Path, _post_quantum: bool) -> Result<Command, Error> {
+    let limits = ["--as=268435456".into(), "--cpu=5".into()];
+    Ok(Sandbox::new(executable, &limits)?.run(std::iter::empty::<&str>()))
+}
+#[cfg(target_os = "macos")]
+pub fn update_sandbox_command(executable: &Path, _post_quantum: bool) -> Result<Command, Error> {
+    sandbox_exec(seatbelt::CONTENT, executable, &[])
+}
+#[cfg(windows)]
+pub fn update_sandbox_command(executable: &Path, post_quantum: bool) -> Result<Command, Error> {
+    Ok(windows_worker(
+        executable,
+        &windows_policies::update(post_quantum),
+    ))
+}
+
 /// The math worker (`crate::math`): confined like the content worker, with
 /// no network, no files beyond the runtime libraries and itself, and an empty
 /// environment. It is long-lived, so its CPU limit covers its whole life;
@@ -695,6 +715,21 @@ mod windows_policies {
             less_privileged: true,
             memory: CONTENT,
             cpu_seconds: Some(cpu_seconds),
+            ..Policy::default()
+        }
+    }
+
+    pub fn update(post_quantum: bool) -> Policy {
+        Policy {
+            profile: if post_quantum {
+                "nuschl.update.mldsa44"
+            } else {
+                "nuschl.update.ed25519"
+            }
+            .into(),
+            less_privileged: true,
+            memory: 256 * 1024 * 1024,
+            cpu_seconds: Some(5),
             ..Policy::default()
         }
     }

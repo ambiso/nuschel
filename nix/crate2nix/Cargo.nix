@@ -6974,20 +6974,6 @@ rec {
         };
         resolvedDefaultFeatures = [ "default" ];
       };
-      "ct-codecs" = rec {
-        crateName = "ct-codecs";
-        version = "1.1.8";
-        edition = "2018";
-        sha256 = "1pcg0cslxdg4dprbzbjxa6gdrzsla6ap2c3120fgdzicdzdz7ncg";
-        libName = "ct_codecs";
-        authors = [
-          "Frank Denis <github@pureftpd.org>"
-        ];
-        features = {
-          "default" = [ "std" ];
-        };
-        resolvedDefaultFeatures = [ "default" "std" ];
-      };
       "ctor" = rec {
         crateName = "ctor";
         version = "1.0.13";
@@ -20813,57 +20799,6 @@ rec {
         };
         resolvedDefaultFeatures = [ "std" ];
       };
-      "minisign" = rec {
-        crateName = "minisign";
-        version = "0.7.9";
-        edition = "2018";
-        sha256 = "1rqdmnzzak7svsgcjnrb7rrbq4gv378alcnmynfq47js863i6m16";
-        authors = [
-          "Frank Denis <github@pureftpd.org>"
-          "Daniel Rangel <daniel@rangel.in>"
-        ];
-        dependencies = [
-          {
-            name = "ct-codecs";
-            packageId = "ct-codecs";
-          }
-          {
-            name = "getrandom";
-            packageId = "getrandom 0.2.17";
-            usesDefaultFeatures = false;
-            target = { target, features }: ((("wasm32" == target."arch" or null) || ("wasm64" == target."arch" or null)) && ("unknown" == target."os" or null));
-            features = [ "js" ];
-          }
-          {
-            name = "getrandom";
-            packageId = "getrandom 0.2.17";
-            usesDefaultFeatures = false;
-            target = { target, features }: (!((("wasm32" == target."arch" or null) || ("wasm64" == target."arch" or null)) && ("unknown" == target."os" or null)));
-          }
-          {
-            name = "rpassword";
-            packageId = "rpassword";
-            target = { target, features }: ((target."windows" or false) || (target."unix" or false));
-          }
-          {
-            name = "scrypt";
-            packageId = "scrypt 0.11.0";
-            usesDefaultFeatures = false;
-          }
-        ];
-
-      };
-      "minisign-verify" = rec {
-        crateName = "minisign-verify";
-        version = "0.2.5";
-        edition = "2018";
-        sha256 = "17jfphs7bs9pcj1ajmy9486slbax8wicadhz26w75sk5nxf69y92";
-        libName = "minisign_verify";
-        authors = [
-          "Frank Denis <github@pureftpd.org>"
-        ];
-
-      };
       "miniz_oxide 0.8.9" = rec {
         crateName = "miniz_oxide";
         version = "0.8.9";
@@ -23995,10 +23930,12 @@ rec {
           {
             name = "cap-std";
             packageId = "cap-std";
+            optional = true;
           }
           {
-            name = "minisign-verify";
-            packageId = "minisign-verify";
+            name = "nuschl-ipc";
+            packageId = "nuschl-ipc";
+            optional = true;
           }
           {
             name = "semver";
@@ -24023,23 +23960,34 @@ rec {
             packageId = "thiserror 2.0.21";
           }
           {
+            name = "tokio";
+            packageId = "tokio";
+            optional = true;
+            features = [ "io-util" "process" "time" "rt" ];
+          }
+          {
             name = "ureq";
             packageId = "ureq";
+            optional = true;
             usesDefaultFeatures = false;
             features = [ "rustls" ];
           }
+          {
+            name = "url";
+            packageId = "url";
+          }
         ];
         devDependencies = [
-          {
-            name = "minisign";
-            packageId = "minisign";
-          }
           {
             name = "tempfile";
             packageId = "tempfile";
           }
         ];
-
+        features = {
+          "client" = [ "dep:cap-std" "dep:ureq" "dep:nuschl-ipc" "dep:tokio" ];
+          "default" = [ "client" ];
+        };
+        resolvedDefaultFeatures = [ "client" "default" ];
       };
       "nuschl-update-worker" = rec {
         crateName = "nuschl-update-worker";
@@ -24047,9 +23995,24 @@ rec {
         edition = "2024";
         crateBin = [
           {
+            name = "nuschl-update-runtime-fixture";
+            path = "src/bin/runtime-fixture.rs";
+            requiredFeatures = [ "runtime-fixture" ];
+          }
+          {
             name = "nuschl-update-sign";
             path = "src/bin/sign.rs";
             requiredFeatures = [ "signer" ];
+          }
+          {
+            name = "nuschl-update-verify-ed25519";
+            path = "src/bin/verify-ed25519.rs";
+            requiredFeatures = [ "ed25519" ];
+          }
+          {
+            name = "nuschl-update-verify-mldsa44";
+            path = "src/bin/verify-mldsa44.rs";
+            requiredFeatures = [ "mldsa44" ];
           }
         ];
         src = lib.cleanSourceWith { filter = sourceFilter;  src = ../../apps/update-worker; };
@@ -24058,10 +24021,12 @@ rec {
           {
             name = "curve25519-dalek";
             packageId = "curve25519-dalek 4.1.3";
+            optional = true;
           }
           {
             name = "ed25519-dalek";
             packageId = "ed25519-dalek";
+            optional = true;
             usesDefaultFeatures = false;
             features = [ "std" "zeroize" ];
           }
@@ -24078,12 +24043,19 @@ rec {
           {
             name = "ml-dsa";
             packageId = "ml-dsa";
+            optional = true;
             usesDefaultFeatures = false;
             features = [ "alloc" "zeroize" ];
           }
           {
+            name = "nuschl-sandbox-windows";
+            packageId = "nuschl-sandbox-windows";
+            target = { target, features }: (target."windows" or false);
+          }
+          {
             name = "nuschl-update";
             packageId = "nuschl-update";
+            usesDefaultFeatures = false;
           }
           {
             name = "serde";
@@ -24093,6 +24065,16 @@ rec {
           {
             name = "serde_json";
             packageId = "serde_json";
+          }
+          {
+            name = "sha2";
+            packageId = "sha2 0.10.9";
+            optional = true;
+          }
+          {
+            name = "tempfile";
+            packageId = "tempfile";
+            optional = true;
           }
           {
             name = "thiserror";
@@ -24110,9 +24092,12 @@ rec {
           }
         ];
         features = {
-          "signer" = [ "dep:getrandom" "ml-dsa/rand_core" ];
+          "ed25519" = [ "dep:curve25519-dalek" "dep:ed25519-dalek" ];
+          "mldsa44" = [ "dep:ml-dsa" ];
+          "runtime-fixture" = [ "signer" "nuschl-update/client" "dep:tempfile" "dep:sha2" ];
+          "signer" = [ "ed25519" "mldsa44" "dep:getrandom" "ml-dsa/rand_core" ];
         };
-        resolvedDefaultFeatures = [ "default" "signer" ];
+        resolvedDefaultFeatures = [ "default" "ed25519" "mldsa44" "runtime-fixture" "signer" ];
       };
       "nuschl-web-relay" = rec {
         crateName = "nuschl-web-relay";
@@ -30402,7 +30387,7 @@ rec {
           }
           {
             name = "scrypt";
-            packageId = "scrypt 0.12.0";
+            packageId = "scrypt";
             optional = true;
             usesDefaultFeatures = false;
           }
@@ -34071,33 +34056,6 @@ rec {
         };
         resolvedDefaultFeatures = [ "default" "positions" "std" ];
       };
-      "rpassword" = rec {
-        crateName = "rpassword";
-        version = "7.5.4";
-        edition = "2024";
-        sha256 = "15n1fgzr5x17bwp5ydmrmr5gmn0bclww9clwvr9x1qs7byhid8rd";
-        authors = [
-          "Conrad Kleinespel <conradk@conradk.com>"
-        ];
-        dependencies = [
-          {
-            name = "libc";
-            packageId = "libc";
-            target = { target, features }: (target."unix" or false);
-          }
-          {
-            name = "rtoolbox";
-            packageId = "rtoolbox";
-          }
-          {
-            name = "windows-sys";
-            packageId = "windows-sys 0.61.2";
-            target = { target, features }: (target."windows" or false);
-            features = [ "Win32_Foundation" "Win32_System_Console" "Win32_System_IO" "Win32_Storage_FileSystem" "Win32_Security" "Win32_System_SystemServices" ];
-          }
-        ];
-
-      };
       "rsa" = rec {
         crateName = "rsa";
         version = "0.9.10";
@@ -34197,31 +34155,6 @@ rec {
           "u64_digit" = [ "num-bigint/u64_digit" ];
         };
         resolvedDefaultFeatures = [ "getrandom" "std" ];
-      };
-      "rtoolbox" = rec {
-        crateName = "rtoolbox";
-        version = "0.0.6";
-        edition = "2018";
-        sha256 = "17c16l2h8c671rmh8wacbk628jggnv0bwppzwv8555s6l49gw7ls";
-        authors = [
-          "Conrad Kleinespel <conradk@conradk.com>"
-        ];
-        dependencies = [
-          {
-            name = "libc";
-            packageId = "libc";
-            target = { target, features }: (target."unix" or false);
-          }
-          {
-            name = "windows-sys";
-            packageId = "windows-sys 0.61.2";
-            target = { target, features }: (target."windows" or false);
-            features = [ "Win32_Foundation" "Win32_Security" "Win32_Storage_FileSystem" "Win32_System_Console" "Win32_System_SystemServices" ];
-          }
-        ];
-        features = {
-          "serde" = [ "dep:serde" "dep:serde_json" ];
-        };
       };
       "rtrb" = rec {
         crateName = "rtrb";
@@ -35219,38 +35152,7 @@ rec {
         features = {
         };
       };
-      "scrypt 0.11.0" = rec {
-        crateName = "scrypt";
-        version = "0.11.0";
-        edition = "2021";
-        sha256 = "07zxfaqpns9jn0mnxm7wj3ksqsinyfpirkav1f7kc2bchs2s65h5";
-        authors = [
-          "RustCrypto Developers"
-        ];
-        dependencies = [
-          {
-            name = "pbkdf2";
-            packageId = "pbkdf2 0.12.2";
-          }
-          {
-            name = "salsa20";
-            packageId = "salsa20 0.10.2";
-            usesDefaultFeatures = false;
-          }
-          {
-            name = "sha2";
-            packageId = "sha2 0.10.9";
-            usesDefaultFeatures = false;
-          }
-        ];
-        features = {
-          "default" = [ "simple" "std" ];
-          "password-hash" = [ "dep:password-hash" ];
-          "simple" = [ "password-hash" ];
-          "std" = [ "password-hash/std" ];
-        };
-      };
-      "scrypt 0.12.0" = rec {
+      "scrypt" = rec {
         crateName = "scrypt";
         version = "0.12.0";
         edition = "2024";
