@@ -188,3 +188,69 @@ GitHub's documentation distinguishes prereleases from the latest full release:
 [latest release API](https://docs.github.com/en/rest/releases/releases#get-the-latest-release).
 Reusable build/publication jobs can only retain or reduce caller token permissions:
 [reusable workflow permissions](https://docs.github.com/en/actions/reference/workflows-and-actions/reusing-workflow-configurations#access-and-permissions-for-nested-workflows).
+
+
+## Prepared native Apple static CI gate (not yet run)
+
+`.github/workflows/build.yml` now prepares `macos-native-verify` after the existing
+Linux/Nix `macos` cross-build. The reusable `macos-artifact` output is supplied
+only by that successful native job, preserving the artifact name. A native
+verification failure therefore fails the reusable workflow and blocks its release
+caller. No remote run, push, dispatch, publication or signing-secret operation was
+performed to prepare this gate; actual Apple success remains unchecked.
+
+The explicit standard runner is `macos-26` (ARM64). GitHub's
+[current image table](https://github.com/actions/runner-images/blob/main/README.md)
+and [macOS 26 GA announcement](https://github.com/actions/runner-images/issues/13739)
+were checked on 2026-11-12: `macos-26-intel` is Intel, while `macos-26` is ARM64;
+macOS 14 retired from Actions on November 2. One native host statically checks
+both slices; it establishes neither Intel program execution nor macOS 14.2
+runtime compatibility.
+
+The early inline guard fails unsupported events before checkout/download. It
+accepts the existing manual dispatch and release tag-push callers; reusable
+workflows inherit their caller's event. Checkout uses the exact workflow SHA and
+persists no Git credential. The pinned artifact action downloads only
+`needs.macos.outputs.artifact` in this run; it has no cross-run/repository/token
+overrides. The [pinned action contract](https://github.com/actions/download-artifact/blob/d3f86a106a0bac45b974a628896c90dbdf5c8093/action.yml)
+defines this same-run default. Repository, commit, run, prior successful attempt
+(up to the current attempt), tar checksums, safe extraction, all nine programs and
+source-selected Mac notice coverage are rechecked before native tools run.
+This supports rerunning failed jobs without accepting a different run/source.
+
+`tests/macos_native.py` invokes only fixed `/usr/bin/codesign`, `lipo` and `otool`.
+It requires strict/deep/all-architecture bundle validation, strict checks of all
+nine binaries and explicit arm64/x86_64 signatures, exact universal architecture
+sets, source version/bundle metadata, minOS14.2 and portable library imports.
+The app and helper programs never execute; no profile, GPU, microphone, camera,
+new Nix/SDK build or Apple developer account is needed. Ad-hoc signatures provide
+integrity, not Developer ID, notarisation or Gatekeeper publisher acceptance.
+Apple documents [strict/deep verification](https://developer.apple.com/library/archive/technotes/tn2206/)
+and [independent universal-architecture hashes](https://developer.apple.com/documentation/technotes/tn3126-inside-code-signing-hashes).
+The existing producer/publisher signature rules are unchanged.
+
+Each Apple command has a 30-second/128KiB limit, with a five-minute/4MiB aggregate
+budget; failures remain failures. Bounded reports/raw logs upload even on failure,
+with no extracted application in the diagnostics. Local policy regressions use
+the real full frozen Mac tar and original notice bytes, test foreign metadata,
+retry/name/hash/scope/traversal/link rejection and the non-Mac/CI-preparation
+guards. Another test executes the actual inline Bash for permitted dispatch/tag
+retry contexts and forbidden PR/workflow-run/branch contexts. Actionlint checks
+both build/release DAGs. These tests do not fake or claim an Apple tool pass.
+
+### Separate native runtime work still open
+
+The native `update-runtime-fixture` package attribute exists, but the official
+Linux-hosted Darwin cross products do not include/export a corresponding fixture;
+it must remain absent from distributed apps. The current `cfg(unix)` adversarial
+fixture uses a Python shebang, while the Mac content profile permits execution
+and reading of only the literal selected worker (plus its imported system policy).
+Interpreter/runtime access may therefore be denied: that is a source-derived
+risk, not an observed Mac result. A native test-only fault executable and separate
+fixture product need actual Seatbelt canary/forgery/timeout/reaping tests before
+claiming parity. Do not broaden production grants to make a script pass.
+
+Mac update workers currently get the Seatbelt profile and supervisor's bounded
+request/deadline/reaping, but no explicit address-space/CPU resource limit like
+the Linux launcher/Windows Job. Native resource-containment validation and any
+reviewed platform adapter remain in TODO. No runtime implementation changed here.

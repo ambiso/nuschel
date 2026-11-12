@@ -1700,6 +1700,27 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
       unreferenced docs/reviews JSON can still change final products/notices even
       while dependency derivations stay cached. Preserve all actually included
       runtime JSON, test vectors, schemas/assets and notice authority inputs.
+- [x] Prepare a required native Apple static-verification CI job after the Linux
+      Mac cross-build, on officially verified `macos-26` ARM64. Same-run/source
+      artifact metadata, safe extraction and notice policy precede absolute Apple
+      tool calls for all nine programs/both architectures; verified output gates
+      reusable workflow/release success. No keys, write permission, Nix rebuild or
+      artifact execution; bounded diagnostics upload on failure. Local real-tar,
+      context-guard and actionlint checks pass. This is prepared source only.
+- [ ] Run that prepared job on the intended actual CI artifact and retain Apple's
+      strict/deep/all-architecture codesign result. No Mac job/tool execution has
+      happened locally; Gatekeeper publisher trust/Developer ID/notarisation and
+      application/runtime behavior are separate from static ad-hoc integrity.
+- [ ] Adapt the existing Unix hybrid runtime fixture for real macOS Seatbelt tests:
+      its Python shebang may be denied by the literal-worker-only exec/read rules.
+      The native fixture attribute exists, but a separate Linux-hosted Darwin
+      fixture/fault-executable product and actual native canary/forgery/deadline/
+      reaping/install tests are missing. Never distribute the signer/fixture or
+      broaden production sandbox grants just to make a script pass.
+- [ ] Add/review native macOS worker resource-containment parity: the update
+      launcher has Seatbelt plus a six-second supervisor deadline/reaping, but no
+      explicit address-space/CPU cap comparable to Linux limits/Windows Jobs.
+      Validate limits on real macOS before claiming the same blast-radius bound.
 - [ ] Windows installer (Start menu entry, uninstall); today the zip is portable and
       updates itself where it was unpacked.
 - Deferred (user, 2026-11-11: **no Windows or macOS code signing for now**). The

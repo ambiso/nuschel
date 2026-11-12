@@ -13,6 +13,7 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
+import textwrap
 import unittest
 
 spec = importlib.util.spec_from_file_location("macos_native", Path(__file__).with_name("macos_native.py"))
@@ -148,6 +149,37 @@ class ActualArchive(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("prepare-only cannot be used", result.stderr)
         self.assertFalse((self.root / "must-not-open").exists())
+
+
+class ActualWorkflowGuard(unittest.TestCase):
+    def test_execute_the_actual_early_guard_for_dispatch_tag_retry_and_untrusted_contexts(self):
+        # Execute the real inline Bash, rather than asserting source fragments
+        # or reproducing its decision logic in a second implementation.
+        workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/build.yml").read_text()
+        step = workflow.split("      - name: Reject unsupported contexts before checkout or artifact download\n", 1)[1]
+        script = textwrap.dedent(step.split("        run: |\n", 1)[1].split("\n      - ", 1)[0])
+        for event, ref, retention, name, success in (
+            ("workflow_dispatch", "refs/heads/main", "7", "correct", True),
+            ("push", "refs/tags/v0.1.0", "7", "correct", True),
+            ("pull_request", "refs/pull/1/merge", "7", "correct", False),
+            ("pull_request_target", "refs/heads/main", "7", "correct", False),
+            ("workflow_run", "refs/heads/main", "7", "correct", False),
+            ("push", "refs/heads/main", "7", "correct", False),
+            ("workflow_dispatch", "refs/heads/main", "7", "foreign", False),
+            ("workflow_dispatch", "refs/heads/main", "0", "correct", False),
+        ):
+            with self.subTest(event=event, ref=ref, name=name, retention=retention):
+                with tempfile.TemporaryDirectory(prefix="mac-workflow-context-") as temporary:
+                    environment = os.environ | {
+                        "RUNNER_TEMP": temporary, "GITHUB_SHA": args.commit,
+                        "GITHUB_EVENT_NAME": event, "GITHUB_REF": ref, "GITHUB_RUN_ATTEMPT": "2",
+                        "EXPECTED_MAC_ARTIFACT": "nuschl-macos-universal-" + (args.commit if name == "correct" else "0" * 40),
+                        "REQUESTED_RETENTION": retention,
+                    }
+                    result = subprocess.run(["bash", "-euo", "pipefail", "-c", script], env=environment,
+                                            capture_output=True, text=True, timeout=10)
+                    self.assertEqual(result.returncode == 0, success, result.stderr)
+                    self.assertTrue((Path(temporary) / "macos-native-logs/context.txt").is_file())
 
 
 if __name__ == "__main__":
