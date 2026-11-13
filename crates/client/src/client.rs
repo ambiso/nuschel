@@ -347,6 +347,23 @@ fn seats(servers: &[ServerState]) -> impl Fn(&str) -> Seat + '_ {
     }
 }
 
+/// A direct conversation asked for (`OpenDirect`): the server and the
+/// generation of the connection that asked, the peer's session, and whether
+/// to open it once known.
+struct DirectRequest {
+    server: String,
+    generation: u64,
+    session: u32,
+    open: bool,
+}
+
+impl DirectRequest {
+    /// Whether `server`'s current connection made this request.
+    fn made_on(&self, server: &ServerState) -> bool {
+        self.server == server.id && self.generation == server.generation
+    }
+}
+
 pub struct Client {
     /// Live servers in stable runtime-index order; use ordered_servers() for display.
     pub servers: Vec<ServerState>,
@@ -360,9 +377,8 @@ pub struct Client {
     pub preferences: Preferences,
     platform: Box<dyn Platform>,
     sending: Option<PendingSend>,
-    /// Direct conversations asked for (`OpenDirect`), by request id: the
-    /// server, the peer's session, and whether to open it once known.
-    direct_requests: BTreeMap<u64, (String, u32, bool)>,
+    /// Direct conversations asked for (`OpenDirect`), by request id.
+    direct_requests: BTreeMap<u64, DirectRequest>,
     /// Share links asked for, by request id.
     share_requests: BTreeMap<u64, share::ShareRequest>,
     /// When we last said we type, where (the platform's monotonic ms).
@@ -1320,8 +1336,15 @@ impl Client {
         while self.direct_requests.len() >= 16 {
             self.direct_requests.pop_first();
         }
-        self.direct_requests
-            .insert(request_id, (server.id.clone(), peer.session, true));
+        self.direct_requests.insert(
+            request_id,
+            DirectRequest {
+                server: server.id.clone(),
+                generation: server.generation,
+                session: peer.session,
+                open: true,
+            },
+        );
         true
     }
 
@@ -2651,6 +2674,15 @@ impl Client {
 
     /// The server named one of our direct conversations (opened by us).
     fn direct_opened(&mut self, index: usize, opened: v1::DirectOpened) {
+        // Another connection's request waits for its own answer; this one
+        // changes nothing. Without a request, the conversation is only noted.
+        if self
+            .direct_requests
+            .get(&opened.request_id)
+            .is_some_and(|request| !request.made_on(&self.servers[index]))
+        {
+            return;
+        }
         let request = self.direct_requests.remove(&opened.request_id);
         let Some(direct) = opened.direct else {
             return;
@@ -2666,7 +2698,7 @@ impl Client {
             .unwrap_or_else(|| direct.name.clone());
         server.directs.insert(id, direct);
         let channel = server.direct_view(id, &name, peer);
-        if request.is_some_and(|(_, _, open)| open) {
+        if request.is_some_and(|request| request.open) {
             self.updates.push(Update::Browse {
                 server: server.id.clone(),
                 channel: server.channels[channel].id,
@@ -2752,12 +2784,25 @@ impl Client {
     }
 
     fn direct_failed(&mut self, index: usize, error: v1::Error) {
-        let Some((server_id, session, open)) = self.direct_requests.remove(&error.request_id)
+        // Only this connection's request fails; another's waits on.
+        if self
+            .direct_requests
+            .get(&error.request_id)
+            .is_none_or(|request| !request.made_on(&self.servers[index]))
+        {
+            return;
+        }
+        let Some(DirectRequest {
+            server: server_id,
+            session,
+            open,
+            ..
+        }) = self.direct_requests.remove(&error.request_id)
         else {
             return;
         };
         let server = &self.servers[index];
-        if server.id != server_id || !open {
+        if !open {
             return;
         }
         if let Some(peer) = server.users.get(&session).cloned() {

@@ -40,24 +40,195 @@ use tokio::{
 
 mod media;
 
-/// Server history pages asked for, by request id: server, ticket, cursor,
-/// and where the page is kept in local history.
-type ServerPages = BTreeMap<u64, (String, HistoryTicket, Page, Option<CacheKey>)>;
-static SERVER_PAGES: std::sync::Mutex<ServerPages> = std::sync::Mutex::new(BTreeMap::new());
+/// Answers a driver's connections wait for: history pages and edits or
+/// deletions, by request id. Each request keeps the connection that sent it
+/// (server and generation) and the conversation it named; only that
+/// connection's answer for that conversation can take it. One driver and its
+/// connections share it; no other driver sees it.
+#[derive(Default)]
+struct PendingReplies {
+    pages: BTreeMap<u64, PagePending>,
+    changes: BTreeMap<u64, ChangePending>,
+}
+type Pending = std::sync::Arc<std::sync::Mutex<PendingReplies>>;
 
-fn server_pages() -> std::sync::MutexGuard<'static, ServerPages> {
-    SERVER_PAGES
+/// Requests of each kind kept at most: answers that never came (a dropped
+/// connection) do not pile up.
+const MAX_PENDING: usize = 64;
+
+/// What a fitting answer failed with when it named another conversation.
+const OTHER_CONVERSATION: &str = "The server answered for another conversation.";
+
+/// A history page asked for: the ticket and cursor it answers, and where it
+/// is kept in local history.
+struct PagePending {
+    server: String,
+    generation: u64,
+    conversation: [u8; 16],
+    ticket: HistoryTicket,
+    page: Page,
+    cache: Option<CacheKey>,
+}
+
+/// An edit or deletion asked for.
+struct ChangePending {
+    generation: u64,
+    change: ChangeRequest,
+}
+
+/// A request waiting for its answer.
+enum Tracked {
+    Page(PagePending),
+    Change(ChangePending),
+}
+
+/// The connection an answer came from (or a request went to).
+#[derive(Clone, Copy)]
+struct Owner<'a> {
+    server: &'a str,
+    generation: u64,
+}
+
+/// What becomes of a history page that arrived.
+enum PageRoute {
+    /// No request of this driver waits for it: nothing happens.
+    Missing,
+    /// Another connection's request: it waits on, and nothing happens.
+    Foreign,
+    /// This connection's, encrypted: decrypted first, the request waiting on.
+    Decrypt,
+    /// This connection's, but for another conversation: the request fails.
+    Mismatch(PagePending),
+    /// This connection's: rendered and kept.
+    Render(PagePending),
+}
+
+/// What becomes of an acknowledgement that arrived.
+enum AckRoute {
+    /// Not one of this driver's edits or deletions: passed on as it was.
+    Missing,
+    /// Another connection's: it waits on, and nothing happens.
+    Foreign,
+    /// This connection's, but for another conversation: the change fails.
+    Mismatch(ChangePending),
+    /// This connection's: the change is applied.
+    Apply(ChangePending),
+}
+
+/// What becomes of an error that arrived.
+enum ErrorRoute {
+    /// No request of this driver waits for it: passed on as it was (share
+    /// links and direct conversations are the client's own requests).
+    Missing,
+    /// Another connection's request: it waits on, and nothing happens.
+    Foreign,
+    Page(PagePending),
+    Change(ChangePending),
+}
+
+fn pending_replies(pending: &Pending) -> std::sync::MutexGuard<'_, PendingReplies> {
+    pending
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-static CHANGES: std::sync::Mutex<BTreeMap<u64, ChangeRequest>> =
-    std::sync::Mutex::new(BTreeMap::new());
+impl PagePending {
+    fn sent_by(&self, owner: Owner<'_>) -> bool {
+        self.server == owner.server && self.generation == owner.generation
+    }
+}
 
-fn changes() -> std::sync::MutexGuard<'static, BTreeMap<u64, ChangeRequest>> {
-    CHANGES
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+impl ChangePending {
+    fn sent_by(&self, owner: Owner<'_>) -> bool {
+        self.change.server == owner.server && self.generation == owner.generation
+    }
+}
+
+impl PendingReplies {
+    fn insert(&mut self, request_id: u64, tracked: Tracked) {
+        match tracked {
+            Tracked::Page(page) => {
+                while self.pages.len() >= MAX_PENDING {
+                    self.pages.pop_first();
+                }
+                self.pages.insert(request_id, page);
+            }
+            Tracked::Change(change) => {
+                while self.changes.len() >= MAX_PENDING {
+                    self.changes.pop_first();
+                }
+                self.changes.insert(request_id, change);
+            }
+        }
+    }
+
+    /// The request never left (it could not be queued): forget it, if it
+    /// is still the one `owner` registered.
+    fn forget(&mut self, request_id: u64, owner: Owner<'_>) {
+        use std::collections::btree_map::Entry;
+        if let Entry::Occupied(entry) = self.pages.entry(request_id)
+            && entry.get().sent_by(owner)
+        {
+            entry.remove();
+        }
+        if let Entry::Occupied(entry) = self.changes.entry(request_id)
+            && entry.get().sent_by(owner)
+        {
+            entry.remove();
+        }
+    }
+
+    /// A page arrived from `from`; `decrypt` when that connection decrypts
+    /// pages and this one is not decrypted yet. The owner and the
+    /// conversation are checked before anything is decrypted or rendered,
+    /// and again when the decrypted page comes back.
+    fn page(&mut self, from: Owner<'_>, page: &v1::HistoryPage, decrypt: bool) -> PageRoute {
+        use std::collections::btree_map::Entry;
+        let Entry::Occupied(entry) = self.pages.entry(page.request_id) else {
+            return PageRoute::Missing;
+        };
+        if !entry.get().sent_by(from) {
+            return PageRoute::Foreign;
+        }
+        if page.conversation.as_slice() != entry.get().conversation.as_slice() {
+            return PageRoute::Mismatch(entry.remove());
+        }
+        if decrypt {
+            return PageRoute::Decrypt;
+        }
+        PageRoute::Render(entry.remove())
+    }
+
+    fn ack(&mut self, from: Owner<'_>, ack: &v1::ChatAck) -> AckRoute {
+        use std::collections::btree_map::Entry;
+        let Entry::Occupied(entry) = self.changes.entry(ack.request_id) else {
+            return AckRoute::Missing;
+        };
+        if !entry.get().sent_by(from) {
+            return AckRoute::Foreign;
+        }
+        if ack.conversation.as_slice() != entry.get().change.conversation.as_slice() {
+            return AckRoute::Mismatch(entry.remove());
+        }
+        AckRoute::Apply(entry.remove())
+    }
+
+    fn error(&mut self, from: Owner<'_>, request_id: u64) -> ErrorRoute {
+        use std::collections::btree_map::Entry;
+        if let Entry::Occupied(entry) = self.pages.entry(request_id) {
+            if !entry.get().sent_by(from) {
+                return ErrorRoute::Foreign;
+            }
+            return ErrorRoute::Page(entry.remove());
+        }
+        if let Entry::Occupied(entry) = self.changes.entry(request_id) {
+            if !entry.get().sent_by(from) {
+                return ErrorRoute::Foreign;
+            }
+            return ErrorRoute::Change(entry.remove());
+        }
+        ErrorRoute::Missing
+    }
 }
 
 /// The author shown for a server message.
@@ -527,6 +698,19 @@ fn enqueue_scoped(
     generation: u64,
     command: Command,
 ) -> Result<(), String> {
+    scoped_connection(connections, server, generation, &command)?
+        .commands
+        .try_send(command)
+        .map_err(|_| "Connection is busy or has ended; reconnect to try again.".into())
+}
+/// The connection a scoped action may be queued on: its own explicit
+/// connection, and never as a voice selection without a current revision.
+fn scoped_connection<'a>(
+    connections: &'a BTreeMap<String, Connection>,
+    server: &str,
+    generation: u64,
+    command: &Command,
+) -> Result<&'a Connection, String> {
     let connection = connections
         .get(server)
         .filter(|connection| connection.generation == generation)
@@ -534,16 +718,60 @@ fn enqueue_scoped(
     if !matches!(command, Command::Scoped { .. }) {
         return Err("Missing action authority.".into());
     }
-    if matches!(&command,Command::Scoped { command,.. } if matches!(command.as_ref(),
+    if matches!(command,Command::Scoped { command,.. } if matches!(command.as_ref(),
         Command::SetVoiceTarget { .. } | Command::SelectVoiceTarget(_) | Command::Whisper { revision:0,.. }))
     {
         return Err("Voice selection requires a current local intent revision.".into());
     }
-
-    connection
-        .commands
-        .try_send(command)
-        .map_err(|_| "Connection is busy or has ended; reconnect to try again.".into())
+    Ok(connection)
+}
+/// Queue an extension request whose answer is awaited, as
+/// [`Driver::command`] queues it (an action scope's conversion and checks
+/// included), and keep `record` for the answer under the generation of the
+/// connection that took it. The record is in place before the request is
+/// queued and goes again only if it could not be. Locks: connections, then
+/// pending; neither is held across an await.
+fn enqueue_tracked(
+    driver: usize,
+    connections: &std::sync::Mutex<BTreeMap<String, Connection>>,
+    pending: &Pending,
+    (server, request_id): (&str, u64),
+    command: Command,
+    record: impl FnOnce(u64) -> Tracked,
+) -> Result<(), String> {
+    if !matches!(
+        command,
+        Command::Nuschl(
+            NuschlRequest::History(_) | NuschlRequest::Edit(_) | NuschlRequest::Delete(_)
+        )
+    ) {
+        return Err("Only history pages, edits and deletions await an answer.".into());
+    }
+    let mut command = Some(command);
+    let scoped = scoped_command(driver, server, &mut command)?;
+    let connections = connections
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let (connection, command) = match (scoped, command) {
+        (Some((generation, scoped)), _) => (
+            scoped_connection(&connections, server, generation, &scoped)?,
+            scoped,
+        ),
+        (None, Some(command)) => (
+            connections.get(server).ok_or("Server is not connected.")?,
+            command,
+        ),
+        (None, None) => return Err("This action does not authorize that request.".into()),
+    };
+    let owner = Owner {
+        server,
+        generation: connection.generation,
+    };
+    pending_replies(pending).insert(request_id, record(owner.generation));
+    connection.commands.try_send(command).map_err(|_| {
+        pending_replies(pending).forget(request_id, owner);
+        "Connection is busy or has ended; reconnect to try again.".to_owned()
+    })
 }
 
 pub struct Driver {
@@ -555,6 +783,8 @@ pub struct Driver {
     storage: mpsc::Sender<StorageCommand>,
     content: mpsc::Sender<ContentWork>,
     connections: std::sync::Mutex<BTreeMap<String, Connection>>,
+    /// History pages, edits and deletions waiting for their answers.
+    pending: Pending,
     generation: std::sync::atomic::AtomicU64,
     settings: watch::Sender<ClientSettings>,
     voice_keys: watch::Sender<VoiceKeys>,
@@ -680,6 +910,7 @@ impl Driver {
             storage,
             content,
             connections: Default::default(),
+            pending: Default::default(),
             generation: Default::default(),
             settings,
             voice_keys,
@@ -726,7 +957,11 @@ impl Driver {
             voice_route.clone(),
             (receiver, sound_requests),
             (self.sender.clone(), self.media.clone()),
-            (self.content.clone(), self.storage.clone()),
+            (
+                self.content.clone(),
+                self.storage.clone(),
+                self.pending.clone(),
+            ),
             (
                 self.settings.subscribe(),
                 self.voice_keys.subscribe(),
@@ -763,27 +998,29 @@ impl Driver {
             Page::After(after) => Anchor::After(seq(after)),
             Page::Around(around) => Anchor::Around(seq(around)),
         };
-        {
-            let mut pages = server_pages();
-            // Answers that never came (a dropped connection) do not pile up.
-            while pages.len() >= 64 {
-                pages.pop_first();
-            }
-            pages.insert(request_id, (server.clone(), ticket, page, cache));
-        }
-        let result = self.command(
-            &server,
-            Command::Nuschl(NuschlRequest::History(v1::HistoryRequest {
-                request_id,
-                conversation: conversation.to_vec(),
-                anchor: Some(anchor),
-                limit: 50,
-            })),
-        );
-        if result.is_err() {
-            server_pages().remove(&request_id);
-        }
-        result
+        let command = Command::Nuschl(NuschlRequest::History(v1::HistoryRequest {
+            request_id,
+            conversation: conversation.to_vec(),
+            anchor: Some(anchor),
+            limit: 50,
+        }));
+        enqueue_tracked(
+            self as *const Self as usize,
+            &self.connections,
+            &self.pending,
+            (&server, request_id),
+            command,
+            |generation| {
+                Tracked::Page(PagePending {
+                    server: server.clone(),
+                    generation,
+                    conversation,
+                    ticket,
+                    page,
+                    cache,
+                })
+            },
+        )
     }
     /// Edit (`content`) or delete a message on a Nuschl server. The answer
     /// arrives as `Event::Edited`/`Event::Deleted` or `Event::ChangeFailed`.
@@ -805,18 +1042,14 @@ impl Driver {
             }),
         };
         let server = change.server.clone();
-        {
-            let mut pending = changes();
-            while pending.len() >= 64 {
-                pending.pop_first();
-            }
-            pending.insert(request_id, change);
-        }
-        let result = self.command(&server, Command::Nuschl(request));
-        if result.is_err() {
-            changes().remove(&request_id);
-        }
-        result
+        enqueue_tracked(
+            self as *const Self as usize,
+            &self.connections,
+            &self.pending,
+            (&server, request_id),
+            Command::Nuschl(request),
+            |generation| Tracked::Change(ChangePending { generation, change }),
+        )
     }
     /// A request to the crypto worker that concerns no server (Settings → Identity).
     pub fn identity(&self, request: nuschl_ipc::crypto::CryptoRequest) {
@@ -1203,7 +1436,11 @@ async fn connection_loop(
     voice_route: std::sync::Arc<nuschl_session::connection::VoiceRoute>,
     (mut commands, mut sounds): (mpsc::Receiver<Command>, mpsc::Receiver<Sound>),
     (events, hub): (mpsc::Sender<Event>, media::Hub),
-    (content, storage): (mpsc::Sender<ContentWork>, mpsc::Sender<StorageCommand>),
+    (content, storage, pending): (
+        mpsc::Sender<ContentWork>,
+        mpsc::Sender<StorageCommand>,
+        Pending,
+    ),
     (mut settings, mut voice_keys, mut plugin_data): (
         watch::Receiver<ClientSettings>,
         watch::Receiver<VoiceKeys>,
@@ -1229,7 +1466,7 @@ async fn connection_loop(
             generation,
             (&mut commands, &mut sounds),
             (&events, &hub),
-            (&content, &storage),
+            (&content, &storage, &pending),
             (&mut settings, &mut voice_keys, &mut plugin_data),
             &mut restore,
         )
@@ -1372,7 +1609,11 @@ async fn connect_once(
     generation: u64,
     (commands, sounds): (&mut mpsc::Receiver<Command>, &mut mpsc::Receiver<Sound>),
     (events, hub): (&mpsc::Sender<Event>, &media::Hub),
-    (content, storage): (&mpsc::Sender<ContentWork>, &mpsc::Sender<StorageCommand>),
+    (content, storage, pending): (
+        &mpsc::Sender<ContentWork>,
+        &mpsc::Sender<StorageCommand>,
+        &Pending,
+    ),
     (settings, voice_keys, plugin_data): (
         &mut watch::Receiver<ClientSettings>,
         &mut watch::Receiver<VoiceKeys>,
@@ -1588,46 +1829,14 @@ async fn connect_once(
                         NuschlEvent::DecryptedPage { page, unauthenticated } => (page, true, unauthenticated),
                         _ => unreachable!(),
                     };
-                    if encrypted_server && !decrypted {
-                        let _ = session_commands.send(Command::Mls(nuschl_session::mls::MlsCommand::DecryptPage { page })).await;
-                        continue;
-                    }
-                    let asked = server_pages().remove(&page.request_id);
-                    if let Some((server, ticket, asked, cache)) = asked {
-                        let (events, storage) = (events.clone(), storage.clone());
-                        tokio::spawn(async move {
-                            let (messages, (next_before, next_after), records) = render_server_page(page, cache.as_ref(), &unauthenticated).await;
-                            // Kept for offline reading and search.
-                            if !records.is_empty() { let _ = storage.send(StorageCommand::StoreServer { records }).await; }
-                            let event = match asked {
-                                Page::Before(before) => Event::History { server, ticket, before, messages, next_before },
-                                page => Event::HistoryWindow { server, ticket, page, messages, next_before, next_after },
-                            };
-                            let _ = events.send(event).await;
-                        });
-                    }
+                    let from = Owner { server: &id, generation };
+                    reply_page(pending, from, (page, encrypted_server && !decrypted, unauthenticated), (events, storage, &session_commands)).await;
                 },
-                SessionEvent::Nuschl(NuschlEvent::Ack(ack)) if changes().contains_key(&ack.request_id) => {
-                    let change = changes().remove(&ack.request_id);
-                    if let Some(change) = change {
-                        // The server tells others, never us: apply it here.
-                        let at_ms = ack.server_ms;
-                        let kind = match change.content {
-                            Some(content) => ChangeKind::Edit { content, edited_ms: at_ms },
-                            None => ChangeKind::Delete(Deletion { at_ms, moderator: change.moderator }),
-                        };
-                        let job = ChangeJob { server: change.server, conversation: change.conversation, seq: change.seq, cache: change.cache, change: kind };
-                        queue_change(content, events, job).await;
-                    }
+                SessionEvent::Nuschl(NuschlEvent::Ack(ack)) => {
+                    reply_ack(pending, Owner { server: &id, generation }, ack, (events, content)).await;
                 },
                 SessionEvent::Nuschl(NuschlEvent::Error(error)) => {
-                    let asked = server_pages().remove(&error.request_id);
-                    let change = changes().remove(&error.request_id);
-                    match (asked, change) {
-                        (Some((server, ticket, _, _)), _) => { let _ = events.send(Event::HistoryFailed { server, ticket, reason: error.detail }).await; },
-                        (None, Some(change)) => { let _ = events.send(Event::ChangeFailed { server: change.server, delete: change.content.is_none(), reason: error.detail }).await; },
-                        (None, None) => { let _ = events.send(Event::Protocol { server: id.clone(), generation, event: SessionEvent::Nuschl(NuschlEvent::Error(error)) }).await; },
-                    }
+                    reply_error(pending, Owner { server: &id, generation }, error, events).await;
                 },
                 SessionEvent::Nuschl(NuschlEvent::Chat(chat)) => {
                     // New messages arrive as `Text`; edits and deletions here.
@@ -1881,6 +2090,169 @@ async fn mark_talking(
             })
             .await;
     }
+}
+
+/// A history page arrived on connection `from` (`decrypt`: it still needs
+/// decrypting there). Only the request this connection made for this
+/// conversation takes it: decrypted first where needed (the request waits
+/// on, and is checked again when the page comes back), then rendered, kept
+/// in local history and shown. Anything else changes nothing.
+async fn reply_page(
+    pending: &Pending,
+    from: Owner<'_>,
+    (page, decrypt, unauthenticated): (v1::HistoryPage, bool, Vec<u64>),
+    (events, storage, session): (
+        &mpsc::Sender<Event>,
+        &mpsc::Sender<StorageCommand>,
+        &mpsc::Sender<Command>,
+    ),
+) {
+    let route = {
+        let mut replies = pending_replies(pending);
+        replies.page(from, &page, decrypt)
+    };
+    match route {
+        PageRoute::Missing | PageRoute::Foreign => {}
+        PageRoute::Decrypt => {
+            let _ = session
+                .send(Command::Mls(nuschl_session::mls::MlsCommand::DecryptPage {
+                    page,
+                }))
+                .await;
+        }
+        PageRoute::Mismatch(asked) => {
+            let _ = events
+                .send(Event::HistoryFailed {
+                    server: asked.server,
+                    ticket: asked.ticket,
+                    reason: OTHER_CONVERSATION.into(),
+                })
+                .await;
+        }
+        PageRoute::Render(asked) => {
+            let (events, storage) = (events.clone(), storage.clone());
+            tokio::spawn(async move {
+                let (messages, (next_before, next_after), records) =
+                    render_server_page(page, asked.cache.as_ref(), &unauthenticated).await;
+                // Kept for offline reading and search.
+                if !records.is_empty() {
+                    let _ = storage.send(StorageCommand::StoreServer { records }).await;
+                }
+                let (server, ticket) = (asked.server, asked.ticket);
+                let event = match asked.page {
+                    Page::Before(before) => Event::History {
+                        server,
+                        ticket,
+                        before,
+                        messages,
+                        next_before,
+                    },
+                    page => Event::HistoryWindow {
+                        server,
+                        ticket,
+                        page,
+                        messages,
+                        next_before,
+                        next_after,
+                    },
+                };
+                let _ = events.send(event).await;
+            });
+        }
+    }
+}
+
+/// An acknowledgement arrived on connection `from`: our edit or deletion,
+/// if this connection asked for it in this conversation, is applied.
+async fn reply_ack(
+    pending: &Pending,
+    from: Owner<'_>,
+    ack: v1::ChatAck,
+    (events, content): (&mpsc::Sender<Event>, &mpsc::Sender<ContentWork>),
+) {
+    let route = {
+        let mut replies = pending_replies(pending);
+        replies.ack(from, &ack)
+    };
+    match route {
+        AckRoute::Missing => {
+            let event = SessionEvent::Nuschl(NuschlEvent::Ack(ack));
+            let _ = events
+                .send(Event::Protocol {
+                    server: from.server.to_owned(),
+                    generation: from.generation,
+                    event,
+                })
+                .await;
+        }
+        AckRoute::Foreign => {}
+        AckRoute::Mismatch(asked) => {
+            let _ = events
+                .send(Event::ChangeFailed {
+                    server: asked.change.server,
+                    delete: asked.change.content.is_none(),
+                    reason: OTHER_CONVERSATION.into(),
+                })
+                .await;
+        }
+        AckRoute::Apply(asked) => {
+            let change = asked.change;
+            // The server tells others, never us: apply it here.
+            let at_ms = ack.server_ms;
+            let kind = match change.content {
+                Some(content) => ChangeKind::Edit {
+                    content,
+                    edited_ms: at_ms,
+                },
+                None => ChangeKind::Delete(Deletion {
+                    at_ms,
+                    moderator: change.moderator,
+                }),
+            };
+            let job = ChangeJob {
+                server: change.server,
+                conversation: change.conversation,
+                seq: change.seq,
+                cache: change.cache,
+                change: kind,
+            };
+            queue_change(content, events, job).await;
+        }
+    }
+}
+
+/// An error arrived on connection `from`: this connection's page or change
+/// fails with it; one for the client's own requests (share links, direct
+/// conversations) is passed on; another connection's changes nothing.
+async fn reply_error(
+    pending: &Pending,
+    from: Owner<'_>,
+    error: v1::Error,
+    events: &mpsc::Sender<Event>,
+) {
+    let route = {
+        let mut replies = pending_replies(pending);
+        replies.error(from, error.request_id)
+    };
+    let event = match route {
+        ErrorRoute::Page(asked) => Event::HistoryFailed {
+            server: asked.server,
+            ticket: asked.ticket,
+            reason: error.detail,
+        },
+        ErrorRoute::Change(asked) => Event::ChangeFailed {
+            server: asked.change.server,
+            delete: asked.change.content.is_none(),
+            reason: error.detail,
+        },
+        ErrorRoute::Foreign => return,
+        ErrorRoute::Missing => Event::Protocol {
+            server: from.server.to_owned(),
+            generation: from.generation,
+            event: SessionEvent::Nuschl(NuschlEvent::Error(error)),
+        },
+    };
+    let _ = events.send(event).await;
 }
 
 /// An edit or deletion joins the messages on their way to the timeline.
@@ -3447,5 +3819,464 @@ mod action_scope_tests {
         assert!(
             matches!(voice_intent(&connections,"a",7,Command::SelectVoiceTarget(0)).unwrap(),Command::SelectVoiceTargetAt {revision,id:0} if revision>revision_c)
         );
+    }
+}
+
+#[cfg(test)]
+mod reply_owner_tests {
+    use super::*;
+    use crate::{Conversation, HistorySource, Navigation};
+    use nuschl_session::connection::{ActionSubject, CommandAuthority};
+    use std::time::Duration;
+
+    const ASKED: [u8; 16] = [5; 16];
+    const DRIVER: usize = 0x5eed;
+
+    fn ticket() -> HistoryTicket {
+        Navigation::default().browse(
+            Conversation {
+                server: "a".into(),
+                channel: 2,
+            },
+            HistorySource::ServerArchive,
+        )
+    }
+    fn page_asked(server: &str, generation: u64) -> Tracked {
+        Tracked::Page(PagePending {
+            server: server.into(),
+            generation,
+            conversation: ASKED,
+            ticket: ticket(),
+            page: Page::Before(None),
+            cache: None,
+        })
+    }
+    fn change_asked(server: &str, generation: u64, content: Option<&str>) -> Tracked {
+        Tracked::Change(ChangePending {
+            generation,
+            change: ChangeRequest {
+                server: server.into(),
+                conversation: ASKED,
+                seq: 4,
+                content: content.map(Into::into),
+                cache: None,
+                moderator: false,
+            },
+        })
+    }
+    fn page(request_id: u64, conversation: &[u8]) -> v1::HistoryPage {
+        v1::HistoryPage {
+            request_id,
+            conversation: conversation.to_vec(),
+            ..Default::default()
+        }
+    }
+    fn ack(request_id: u64, conversation: &[u8]) -> v1::ChatAck {
+        v1::ChatAck {
+            request_id,
+            conversation: conversation.to_vec(),
+            seq: 9,
+            server_ms: 1234,
+        }
+    }
+    fn error(request_id: u64) -> v1::Error {
+        v1::Error {
+            request_id,
+            detail: "refused".into(),
+            ..Default::default()
+        }
+    }
+    fn from(server: &str, generation: u64) -> Owner<'_> {
+        Owner { server, generation }
+    }
+
+    /// The channels the reply branches write to, and their receiving ends.
+    struct Sinks {
+        events: (mpsc::Sender<Event>, mpsc::Receiver<Event>),
+        storage: (mpsc::Sender<StorageCommand>, mpsc::Receiver<StorageCommand>),
+        session: (mpsc::Sender<Command>, mpsc::Receiver<Command>),
+        content: (mpsc::Sender<ContentWork>, mpsc::Receiver<ContentWork>),
+    }
+    impl Sinks {
+        fn new() -> Self {
+            Self {
+                events: mpsc::channel(16),
+                storage: mpsc::channel(16),
+                session: mpsc::channel(16),
+                content: mpsc::channel(16),
+            }
+        }
+        async fn page(
+            &self,
+            pending: &Pending,
+            from: Owner<'_>,
+            page: v1::HistoryPage,
+            decrypt: bool,
+        ) {
+            let senders = (&self.events.0, &self.storage.0, &self.session.0);
+            reply_page(pending, from, (page, decrypt, Vec::new()), senders).await;
+        }
+        async fn ack(&self, pending: &Pending, from: Owner<'_>, ack: v1::ChatAck) {
+            reply_ack(pending, from, ack, (&self.events.0, &self.content.0)).await;
+        }
+        async fn error(&self, pending: &Pending, from: Owner<'_>, error: v1::Error) {
+            reply_error(pending, from, error, &self.events.0).await;
+        }
+        /// Nothing was shown, kept, decrypted or applied (spawned work included).
+        async fn quiet(&mut self) -> bool {
+            tokio::time::sleep(Duration::from_millis(30)).await;
+            self.events.1.try_recv().is_err()
+                && self.storage.1.try_recv().is_err()
+                && self.session.1.try_recv().is_err()
+                && self.content.1.try_recv().is_err()
+        }
+        async fn event(&mut self) -> Event {
+            tokio::time::timeout(Duration::from_secs(5), self.events.1.recv())
+                .await
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| panic!("no event"))
+        }
+    }
+
+    fn has_page(pending: &Pending, request_id: u64) -> bool {
+        pending_replies(pending).pages.contains_key(&request_id)
+    }
+
+    #[tokio::test]
+    async fn only_the_asking_connection_claims_its_page_and_only_once() {
+        let pending = Pending::default();
+        let mut sinks = Sinks::new();
+        pending_replies(&pending).insert(41, page_asked("a", 7));
+        // Another server, and a later connection of the same server, plain or
+        // still encrypted: nothing is decrypted, rendered, kept or shown.
+        for owner in [from("b", 3), from("a", 8), from("b", 7)] {
+            for decrypt in [false, true] {
+                sinks.page(&pending, owner, page(41, &ASKED), decrypt).await;
+            }
+        }
+        assert!(sinks.quiet().await);
+        assert!(
+            has_page(&pending, 41),
+            "the request waits for its own answer"
+        );
+        sinks
+            .page(&pending, from("a", 7), page(41, &ASKED), false)
+            .await;
+        assert!(matches!(sinks.event().await, Event::History { server, .. } if server == "a"));
+        assert!(!has_page(&pending, 41));
+        sinks
+            .page(&pending, from("a", 7), page(41, &ASKED), false)
+            .await;
+        assert!(sinks.quiet().await, "a second copy finds nothing");
+    }
+
+    #[tokio::test]
+    async fn another_conversation_fails_only_its_own_page_before_any_decryption() {
+        let pending = Pending::default();
+        let mut sinks = Sinks::new();
+        for (request_id, conversation) in [(41, vec![6; 16]), (42, vec![5; 15])] {
+            pending_replies(&pending).insert(request_id, page_asked("a", 7));
+            sinks
+                .page(
+                    &pending,
+                    from("a", 7),
+                    page(request_id, &conversation),
+                    true,
+                )
+                .await;
+            assert!(matches!(sinks.event().await,
+                Event::HistoryFailed { server, reason, .. } if server == "a" && reason == OTHER_CONVERSATION));
+            assert!(sinks.quiet().await, "nothing decrypted, rendered or kept");
+            assert!(!has_page(&pending, request_id));
+        }
+        // Encrypted and fitting: decrypted first, the request waiting on.
+        pending_replies(&pending).insert(43, page_asked("a", 7));
+        sinks
+            .page(&pending, from("a", 7), page(43, &ASKED), true)
+            .await;
+        assert!(matches!(sinks.session.1.try_recv(),
+            Ok(Command::Mls(nuschl_session::mls::MlsCommand::DecryptPage { page })) if page.request_id == 43));
+        assert!(has_page(&pending, 43));
+        // The decrypted page is claimed again: never by another connection.
+        sinks
+            .page(&pending, from("b", 7), page(43, &ASKED), false)
+            .await;
+        sinks
+            .page(&pending, from("a", 7), page(43, &[6; 16]), false)
+            .await;
+        assert!(matches!(sinks.event().await, Event::HistoryFailed { .. }));
+        assert!(!has_page(&pending, 43));
+        pending_replies(&pending).insert(44, page_asked("a", 7));
+        sinks
+            .page(&pending, from("a", 7), page(44, &ASKED), true)
+            .await;
+        assert!(sinks.session.1.try_recv().is_ok());
+        sinks
+            .page(&pending, from("a", 7), page(44, &ASKED), false)
+            .await;
+        assert!(matches!(sinks.event().await, Event::History { .. }));
+        // A decrypted page whose request is gone (taken, failed or evicted)
+        // changes nothing.
+        sinks
+            .page(&pending, from("a", 7), page(44, &ASKED), false)
+            .await;
+        pending_replies(&pending).insert(45, page_asked("a", 7));
+        sinks.error(&pending, from("a", 7), error(45)).await;
+        assert!(
+            matches!(sinks.event().await, Event::HistoryFailed { reason, .. } if reason == "refused")
+        );
+        sinks
+            .page(&pending, from("a", 7), page(45, &ASKED), false)
+            .await;
+        for request_id in 100..=100 + MAX_PENDING as u64 {
+            pending_replies(&pending).insert(request_id, page_asked("a", 7));
+        }
+        assert_eq!(pending_replies(&pending).pages.len(), MAX_PENDING);
+        assert!(!has_page(&pending, 100), "the oldest went");
+        sinks
+            .page(&pending, from("a", 7), page(100, &ASKED), false)
+            .await;
+        assert!(sinks.quiet().await);
+    }
+
+    #[tokio::test]
+    async fn only_the_asking_connection_applies_or_fails_its_change() {
+        let pending = Pending::default();
+        let mut sinks = Sinks::new();
+        pending_replies(&pending).insert(42, change_asked("a", 7, Some("fixed")));
+        sinks.ack(&pending, from("b", 3), ack(42, &ASKED)).await;
+        sinks.error(&pending, from("b", 3), error(42)).await;
+        sinks.ack(&pending, from("a", 8), ack(42, &ASKED)).await;
+        assert!(sinks.quiet().await);
+        assert!(pending_replies(&pending).changes.contains_key(&42));
+        sinks.ack(&pending, from("a", 7), ack(42, &ASKED)).await;
+        let Ok(ContentWork::Change(job)) = sinks.content.1.try_recv() else {
+            panic!("no change applied");
+        };
+        assert!(job.server == "a" && job.seq == 4 && job.conversation == ASKED);
+        assert!(
+            matches!(job.change, ChangeKind::Edit { content, edited_ms: 1234 } if content == "fixed")
+        );
+        assert!(pending_replies(&pending).changes.is_empty());
+        pending_replies(&pending).insert(43, change_asked("a", 7, None));
+        sinks.ack(&pending, from("a", 7), ack(43, &[6; 16])).await;
+        assert!(matches!(sinks.event().await,
+            Event::ChangeFailed { server, delete: true, reason } if server == "a" && reason == OTHER_CONVERSATION));
+        assert!(sinks.quiet().await, "no change applied");
+        assert!(pending_replies(&pending).changes.is_empty());
+    }
+
+    #[tokio::test]
+    async fn foreign_answers_stay_unseen_and_unknown_ones_reach_the_client() {
+        let pending = Pending::default();
+        let mut sinks = Sinks::new();
+        pending_replies(&pending).insert(41, page_asked("a", 7));
+        pending_replies(&pending).insert(42, change_asked("a", 7, None));
+        sinks.error(&pending, from("b", 3), error(41)).await;
+        sinks.error(&pending, from("b", 3), error(42)).await;
+        assert!(sinks.quiet().await, "not forwarded either");
+        assert!(has_page(&pending, 41) && pending_replies(&pending).changes.contains_key(&42));
+        // Not this driver's: the client's own requests (share links, direct
+        // conversations) still get their errors and acknowledgements.
+        sinks.error(&pending, from("b", 3), error(77)).await;
+        assert!(matches!(sinks.event().await,
+            Event::Protocol { server, generation: 3, event: SessionEvent::Nuschl(NuschlEvent::Error(error)) }
+                if server == "b" && error.request_id == 77));
+        sinks.ack(&pending, from("b", 3), ack(78, &ASKED)).await;
+        assert!(matches!(sinks.event().await,
+            Event::Protocol { server, generation: 3, event: SessionEvent::Nuschl(NuschlEvent::Ack(ack)) }
+                if server == "b" && ack.request_id == 78));
+    }
+
+    fn connection(
+        server: &str,
+        generation: u64,
+    ) -> (
+        std::sync::Mutex<BTreeMap<String, Connection>>,
+        mpsc::Receiver<Command>,
+    ) {
+        let (commands, queued) = mpsc::channel(1);
+        let (sounds, _) = mpsc::channel(1);
+        let connection = Connection {
+            generation,
+            voice_route: Default::default(),
+            commands,
+            sounds,
+            task: tokio::spawn(async {}),
+        };
+        (
+            std::sync::Mutex::new(BTreeMap::from([(server.into(), connection)])),
+            queued,
+        )
+    }
+    fn history(request_id: u64, conversation: [u8; 16]) -> Command {
+        Command::Nuschl(NuschlRequest::History(v1::HistoryRequest {
+            request_id,
+            conversation: conversation.to_vec(),
+            ..Default::default()
+        }))
+    }
+    fn lease() -> CommandAuthority {
+        CommandAuthority {
+            own: (1, 11),
+            subject: Some(ActionSubject::Channel(2, 12)),
+            users: vec![],
+            channels: vec![],
+            conversations: vec![ASKED],
+            accounts: vec![],
+        }
+    }
+    fn page_generation(pending: &Pending, request_id: u64) -> Option<u64> {
+        pending_replies(pending)
+            .pages
+            .get(&request_id)
+            .map(|page| page.generation)
+    }
+
+    #[tokio::test]
+    async fn tracked_requests_are_recorded_for_the_connection_that_took_them() {
+        let (connections, mut queued) = connection("a", 7);
+        let pending = Pending::default();
+        let record = |generation| page_asked("a", generation);
+        pending_replies(&pending).insert(5, page_asked("a", 7));
+        enqueue_tracked(
+            DRIVER,
+            &connections,
+            &pending,
+            ("a", 6),
+            history(6, ASKED),
+            record,
+        )
+        .unwrap();
+        assert_eq!(page_generation(&pending, 6), Some(7));
+        // The queue is full: only this request's record goes.
+        assert!(
+            enqueue_tracked(
+                DRIVER,
+                &connections,
+                &pending,
+                ("a", 7),
+                history(7, ASKED),
+                record
+            )
+            .is_err()
+        );
+        assert!(has_page(&pending, 5) && has_page(&pending, 6) && !has_page(&pending, 7));
+        assert!(matches!(queued.recv().await,
+            Some(Command::Nuschl(NuschlRequest::History(request))) if request.request_id == 6));
+        assert!(
+            enqueue_tracked(
+                DRIVER,
+                &connections,
+                &pending,
+                ("z", 8),
+                history(8, ASKED),
+                record
+            )
+            .is_err()
+        );
+        assert!(!has_page(&pending, 8));
+        // An action scope keeps its checks: its own connection only, and only
+        // the conversations it covers.
+        with_action_scope(DRIVER, "a".into(), 6, lease(), || {
+            assert!(
+                enqueue_tracked(
+                    DRIVER,
+                    &connections,
+                    &pending,
+                    ("a", 9),
+                    history(9, ASKED),
+                    record
+                )
+                .is_err()
+            );
+        });
+        with_action_scope(DRIVER, "a".into(), 7, lease(), || {
+            assert!(
+                enqueue_tracked(
+                    DRIVER,
+                    &connections,
+                    &pending,
+                    ("a", 10),
+                    history(10, [6; 16]),
+                    record
+                )
+                .is_err()
+            );
+            enqueue_tracked(
+                DRIVER,
+                &connections,
+                &pending,
+                ("a", 11),
+                history(11, ASKED),
+                record,
+            )
+            .unwrap();
+        });
+        assert!(!has_page(&pending, 9) && !has_page(&pending, 10));
+        assert_eq!(page_generation(&pending, 11), Some(7));
+        let Some(Command::Scoped { command, .. }) = queued.recv().await else {
+            panic!("the scoped request was not queued");
+        };
+        assert!(matches!(*command,
+            Command::Nuschl(NuschlRequest::History(request)) if request.request_id == 11));
+        assert!(
+            enqueue_tracked(
+                DRIVER,
+                &connections,
+                &pending,
+                ("a", 12),
+                Command::RequestStats(2),
+                record
+            )
+            .is_err()
+        );
+        assert!(!has_page(&pending, 12));
+    }
+
+    #[tokio::test]
+    async fn two_drivers_never_claim_each_others_requests() {
+        let (connections_one, _queued_one) = connection("a", 7);
+        let (connections_two, _queued_two) = connection("a", 7);
+        let (one, two) = (Pending::default(), Pending::default());
+        let (mut sinks_one, mut sinks_two) = (Sinks::new(), Sinks::new());
+        let record = |generation| page_asked("a", generation);
+        enqueue_tracked(
+            1,
+            &connections_one,
+            &one,
+            ("a", 21),
+            history(21, ASKED),
+            record,
+        )
+        .unwrap();
+        enqueue_tracked(
+            2,
+            &connections_two,
+            &two,
+            ("a", 22),
+            history(22, ASKED),
+            record,
+        )
+        .unwrap();
+        // The same server and generation on the other driver: nothing.
+        sinks_two
+            .page(&two, from("a", 7), page(21, &ASKED), false)
+            .await;
+        sinks_one
+            .page(&one, from("a", 7), page(22, &ASKED), false)
+            .await;
+        assert!(sinks_one.quiet().await && sinks_two.quiet().await);
+        assert!(has_page(&one, 21) && !has_page(&one, 22));
+        assert!(has_page(&two, 22) && !has_page(&two, 21));
+        sinks_one
+            .page(&one, from("a", 7), page(21, &ASKED), false)
+            .await;
+        assert!(matches!(sinks_one.event().await, Event::History { .. }));
+        sinks_two
+            .page(&two, from("a", 7), page(22, &ASKED), false)
+            .await;
+        assert!(matches!(sinks_two.event().await, Event::History { .. }));
     }
 }
