@@ -69,7 +69,7 @@ async function open(username,fault="",width=1280,trust=true) {
  const page=await context.newPage();
  await page.addInitScript(()=>{
   globalThis.captureCalls=0;navigator.mediaDevices.getUserMedia=()=>{captureCalls++;return Promise.reject(new Error("No capture in broker fixture"));};
-  const fixture=globalThis.brokerFixture={sdk:null,last:null,work:[],replies:[],pending:new Map(),workers:[],completions:[],codec:[],snapshots:0,snapshot_bytes:0,holdAck:false,heldAck:null,invalidateState:false,ackCount:0,commands:new Map(),errors:[],fatals:[],requestIds:new Set(),requestResults:new WeakSet(),requestsOutstanding:0,requestsPeak:0,delayRequestResults:0,dropAck:false,droppedAck:null,dropRetire:false,retires:[],retireReplies:[],ackPosts:0,watch:new Map()};
+  const fixture=globalThis.brokerFixture={sdk:null,last:null,work:[],replies:[],pending:new Map(),workers:[],completions:[],codec:[],snapshots:0,snapshot_bytes:0,holdAck:false,heldAck:null,invalidateState:false,ackCount:0,appliedPublication:null,commands:new Map(),errors:[],fatals:[],requestIds:new Set(),requestResults:new WeakSet(),requestsOutstanding:0,requestsPeak:0,delayRequestResults:0,dropAck:false,droppedAck:null,dropRetire:false,retires:[],retireReplies:[],ackPosts:0,watch:new Map()};
   const NativeWorker=globalThis.Worker;
   globalThis.Worker=class extends NativeWorker {
    constructor(...args) {
@@ -105,6 +105,7 @@ async function open(username,fault="",width=1280,trust=true) {
    postMessage(data,...rest) {
     if(data?.method==="state_applied")fixture.ackCount++;
     if(data?.method==="state_applied"&&fixture.holdAck){fixture.heldAck=data.args[0];return;}
+    if(data?.method==="state_applied")fixture.appliedPublication=data.args[0];
     if(this.fixtureSdk&&data?.id!==undefined){fixture.commands.set(data.id,data.method);if(fixture.commands.size>256)throw Error("fixture command bound");}
     if(data?.method==="content_complete"){fixture.ackPosts++;fixture.pending.set(data.id,data.args[0]);fixture.completions.push({request:data.args[0],bytes:data.args[1]?.length});if(fixture.completions.length>128)fixture.completions.shift();}
     if(this.fixtureSdk&&data?.method==="content_request"&&data.id!==undefined){fixture.requestIds.add(data.id);fixture.requestsPeak=Math.max(fixture.requestsPeak,++fixture.requestsOutstanding);}
@@ -211,14 +212,24 @@ try {
   const tooLarge="<p>"+"x".repeat(256*1024)+"</p>",beforeRows=await page.evaluate(()=>brokerFixture.last.timeline.messages.length);
   for(let index=0;index<4;index++)observer.message(1,tooLarge);
   const notice="Some incoming messages exceeded the local display limit and were not shown.";
-  await page.getByText(notice,{exact:true}).waitFor({timeout:20000});
-  assert.equal(await page.getByText(notice,{exact:true}).count(),1);
+  // Capture the exact applied SDK publication and its rendered count in ONE
+  // browser task. A locator becoming visible is not a publication barrier: a
+  // later snapshot can replace it before a separate count() RPC runs.
+  const noticeBarrier=await page.waitForFunction(notice=>{
+   const state=brokerFixture.last;
+   if(state?.servers[0]?.notice!==notice||brokerFixture.appliedPublication!==state.publication)return null;
+   const count=[...document.querySelectorAll(".notice > span")].filter(node=>node.textContent===notice).length;
+   return count===1?{publication:state.publication,applied:brokerFixture.appliedPublication,notice:state.servers[0].notice,count}:null;
+  },notice,{timeout:20000}).then(handle=>handle.jsonValue());
+  assert.equal(noticeBarrier.count,1);
+  assert.equal(noticeBarrier.notice,notice);
+  assert.equal(noticeBarrier.applied,noticeBarrier.publication);
   assert.equal(await page.evaluate(()=>brokerFixture.work.filter(work=>work.source?.length>256*1024).length),0);
   assert.equal(await page.evaluate(()=>brokerFixture.last.timeline.messages.length),beforeRows,"oversized wire body is never admitted as a chat row");
   observer.message(1,"HEALTHY_AFTER_OVERSIZE");await page.locator("article").filter({hasText:"HEALTHY_AFTER_OVERSIZE"}).waitFor();
   await rpc(page,"open",0,0);await page.waitForFunction(()=>brokerFixture.last.timeline.channel===0);await rpc(page,"open",0,1);await page.waitForFunction(()=>brokerFixture.last.timeline.channel===1);
   assert.equal(await page.evaluate(()=>brokerFixture.work.filter(work=>work.source?.length>256*1024).length),0);
-  result.permanent={wire_refusal_notice:true,oversized_bytes:Buffer.byteLength(tooLarge),worker_admissions:0,oversized_rows:0,healthy_following_message:true,broker_terminal_scope:"unit tests; normal wire/history paths enforce the source cap before broker admission"};
+  result.permanent={wire_refusal_notice:true,notice_publication_barrier:noticeBarrier,oversized_bytes:Buffer.byteLength(tooLarge),worker_admissions:0,oversized_rows:0,healthy_following_message:true,broker_terminal_scope:"unit tests; normal wire/history paths enforce the source cap before broker admission"};
   const stalled=await open("broker-no-ack");await hold(stalled);const snapshots=await stalled.evaluate(()=>brokerFixture.snapshots);
   for(let index=0;index<8;index++)await rpc(stalled,"dismiss_notice",0);
   const completions=await stalled.evaluate(()=>brokerFixture.completions.length);

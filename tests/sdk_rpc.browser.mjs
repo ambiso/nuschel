@@ -7,6 +7,7 @@ import {createConnection} from "node:net";
 import {readFile,mkdir,writeFile} from "node:fs/promises";
 import {resolve,extname,sep} from "node:path";
 import {pathToFileURL} from "node:url";
+const {legacyPeer}=await import(new URL("./web_broker_legacy_peer.mjs",import.meta.url));
 const RPC_LIMIT=128, RPC_ACK_RESERVE=4, RPC_ORDINARY_LIMIT=RPC_LIMIT-RPC_ACK_RESERVE;
 const [site,relayUrl,port,wrapper,output] = process.argv.slice(2);
 assert.ok(site&&relayUrl&&port&&wrapper&&output);
@@ -54,13 +55,14 @@ csp=csp.replace("connect-src 'self'",`connect-src 'self' ${origin.replace("http:
 const {chromium}=await import(pathToFileURL(process.env.NUSCHL_PLAYWRIGHT||"/nix/store/phc5gsqnm205r6hvlay77f7ia3w4bzzk-playwright-core-1.64.1/index.mjs").href);
 const browser=await chromium.launch({headless:true,executablePath:wrapper});
 const contexts=[],errors=[],remote=[],workerEvents=[];
+let observer;
 async function open(username,width=1200,height=800) {
   const context=await browser.newContext({viewport:{width,height},permissions:["microphone"]});contexts.push(context);
   const page=await context.newPage();
   page.on("pageerror",e=>errors.push(e.message));
   page.on("request",r=>{if(!r.url().startsWith(origin+"/"))remote.push(r.url());});
   await page.addInitScript(()=>{
-    const proof=window.__voiceProof={terminations:0,pendingRpc:new Map(),peakRpc:0,peakOrdinaryRpc:0,messagesAfterRetirement:0,tracks:[],voice:null,packets:0,states:0,commands:[],microphoneCalls:0,violations:[],contexts:[],gains:[]};
+    const proof=window.__voiceProof={terminations:0,pendingRpc:new Map(),peakRpc:0,peakOrdinaryRpc:0,messagesAfterRetirement:0,tracks:[],voice:null,packets:0,states:0,commands:[],microphoneCalls:0,violations:[],contexts:[],gains:[],holdCodec:false,heldCodec:null,postedJobs:new Map(),ackJobs:new Map(),ackReplies:[],codecReplies:0};
     document.addEventListener("securitypolicyviolation",e=>proof.violations.push(e.violatedDirective));
     const Context=window.AudioContext;
     window.AudioContext=class extends Context {
@@ -71,17 +73,28 @@ async function open(username,width=1200,height=800) {
     navigator.mediaDevices.getUserMedia=async constraints=>{proof.microphoneCalls++;const stream=await getUserMedia(constraints);proof.tracks.push(...stream.getTracks());return stream;};
     const Worker=window.Worker;
     window.Worker=class extends Worker {
-      constructor(url,options){super(url,options);if(String(url).includes("sdk.worker")){
+      constructor(url,options){super(url,options);
+        if(String(url).includes("content-worker-"))this.addEventListener("message",event=>{
+          if(event.data?.kind!=="result")return;
+          if(proof.holdCodec){assertBoundedHold();proof.heldCodec={worker:this,data:event.data};event.stopImmediatePropagation();return;}
+          proof.codecReplies++;
+        });
+        function assertBoundedHold(){if(proof.heldCodec)throw new Error("Only one actual codec reply may be held.");}
+        if(String(url).includes("sdk.worker")){
         this.__ownedSdk=true;proof.sdk=this;
         this.addEventListener("message",({data})=>{
           if(proof.terminations)proof.messagesAfterRetirement++;
-          if(data.kind==="result")proof.pendingRpc.delete(data.id);
+          if(data.kind==="content_work")for(const work of data.operations)if(work.kind==="render")proof.postedJobs.set(work.request,work.source);
+          if(data.kind==="result"){
+            proof.pendingRpc.delete(data.id);
+            if(proof.ackJobs.has(data.id)){proof.ackReplies.push({id:data.id,error:data.error??null});if(data.error===undefined)proof.postedJobs.delete(proof.ackJobs.get(data.id));proof.ackJobs.delete(data.id);}
+          }
           if(data.kind==="state"){proof.voice=data.voice;proof.timeline=data.timeline;proof.servers=data.servers;proof.states++;}
           if(data.kind==="voice_packet")proof.packets++;
         });
       }}
       terminate(){if(this.__ownedSdk){proof.terminations++;proof.terminatedAt=performance.now();proof.terminatedWall=Date.now();proof.pendingAtRetirement=proof.pendingRpc.size;}return super.terminate();}
-      postMessage(message,...rest){if(message?.method){proof.commands.push(message.method);if(this.__ownedSdk&&Number.isSafeInteger(message.id)){proof.pendingRpc.set(message.id,message.method);proof.peakRpc=Math.max(proof.peakRpc,proof.pendingRpc.size);proof.peakOrdinaryRpc=Math.max(proof.peakOrdinaryRpc,[...proof.pendingRpc.values()].filter(method=>method!=="content_complete").length);}(proof.commandTimes??=[]).push({method:message.method,wall:Date.now()});}if(message?.method==="send_text")proof.lastSentText=message.args[0];return super.postMessage(message,...rest);}
+      postMessage(message,...rest){if(message?.method){proof.commands.push(message.method);if(this.__ownedSdk&&Number.isSafeInteger(message.id)){proof.pendingRpc.set(message.id,message.method);if(message.method==="content_complete")proof.ackJobs.set(message.id,message.args[0]);proof.peakRpc=Math.max(proof.peakRpc,proof.pendingRpc.size);proof.peakOrdinaryRpc=Math.max(proof.peakOrdinaryRpc,[...proof.pendingRpc.values()].filter(method=>method!=="content_complete").length);}(proof.commandTimes??=[]).push({method:message.method,wall:Date.now()});}if(message?.method==="send_text")proof.lastSentText=message.args[0];return super.postMessage(message,...rest);}
     };
     proof.measure=()=>{
       const context=proof.contexts.at(-1),gain=proof.gains.at(-1);
@@ -121,7 +134,19 @@ try {
  const editor=page.getByLabel("Message",{exact:true}),historyText="RPC history sentinel";
  await editor.fill(historyText);await page.getByRole("button",{name:"Send",exact:true}).click();
  await page.locator("article").filter({hasText:historyText}).waitFor();
- const before=await cache(page);assert.ok(before.bookmarks&&before.messages.length);
+ await page.waitForFunction(()=>__voiceProof.pendingRpc.size===0&&__voiceProof.postedJobs.size===0);
+ // Four genuine incoming messages reserve the SDK's complete posted-job window.
+ // Hold ONE real codec reply before delivery; the serial production worker will
+ // produce the other three after release. Never construct a content ACK here.
+ observer=await legacyPeer(Number(port),"rpc-content-observer");observer.join(0);
+ await observer.wait(()=>observer.users.get(observer.session)?.channel===0,"observer root join");
+ await page.evaluate(()=>{__voiceProof.holdCodec=true;});
+ const sources=Array.from({length:RPC_ACK_RESERVE},(_,index)=>`RPC_REAL_ACK_${index}`);
+ for(const source of sources)observer.message(0,source);
+ await page.waitForFunction(sources=>__voiceProof.heldCodec!==null&&sources.every(source=>[...__voiceProof.postedJobs.values()].includes(source)),sources,{timeout:4000});
+ const admitted=await page.evaluate(()=>({jobs:[...__voiceProof.postedJobs],ackReplies:__voiceProof.ackReplies.length,codecReplies:__voiceProof.codecReplies}));
+ assert.equal(admitted.jobs.length,RPC_ACK_RESERVE);
+ const before=await cache(page);assert.ok(before.bookmarks&&before.messages.length>=1+RPC_ACK_RESERVE);
  const draft="Unsent draft survives SDK retirement\nwith a second line";await editor.fill(draft);
  const sdk=page.workers().find(worker=>worker.url().includes("sdk.worker"));assert.ok(sdk);
  let closed=false,finished=false,nativeClosedAt=0;const closedPromise=new Promise(resolve=>sdk.once("close",()=>{closed=true;nativeClosedAt=performance.now();resolve();}));
@@ -140,9 +165,18 @@ try {
  assert.equal(audioInbox,2);
  const serverName=await page.evaluate(()=>__voiceProof.servers[0].name);
  await page.getByRole("button",{name:`Browse ${serverName}`,exact:true}).evaluate(button=>{for(let index=0;index<140;index++)button.click();});
+ const beforeRelease=await page.evaluate(()=>({ordinary:[...__voiceProof.pendingRpc.values()].filter(method=>method!=="content_complete").length,acks:__voiceProof.ackJobs.size,posted:__voiceProof.postedJobs.size}));
+ assert.deepEqual(beforeRelease,{ordinary:RPC_ORDINARY_LIMIT,acks:0,posted:RPC_ACK_RESERVE});
+ await page.evaluate(()=>{const held=__voiceProof.heldCodec;if(!held)throw new Error("Missing real codec reply");__voiceProof.holdCodec=false;__voiceProof.heldCodec=null;held.worker.dispatchEvent(new MessageEvent("message",{data:held.data}));});
+ await page.waitForFunction(()=>__voiceProof.ackJobs.size===4,null,{timeout:3000});
+ const heldCredit=await page.evaluate(()=>({posted:[...__voiceProof.postedJobs.keys()],ackJobs:[...__voiceProof.ackJobs.values()],replyCount:__voiceProof.ackReplies.length,codecReplies:__voiceProof.codecReplies}));
+ assert.deepEqual(heldCredit.posted,admitted.jobs.map(([id])=>id));
+ assert.deepEqual(new Set(heldCredit.ackJobs),new Set(heldCredit.posted));
+ assert.equal(heldCredit.replyCount,admitted.ackReplies,"posting completion is not an SDK ACK and cannot release credit");
+ assert.equal(heldCredit.codecReplies-admitted.codecReplies,4,"all ACKs follow genuine codec replies");
  const fullInbox=await page.evaluate(()=>({current:__voiceProof.pendingRpc.size,peak:__voiceProof.peakRpc,ordinary:[...__voiceProof.pendingRpc.values()].filter(method=>method!=="content_complete").length,acks:[...__voiceProof.pendingRpc.values()].filter(method=>method==="content_complete").length,peakOrdinary:__voiceProof.peakOrdinaryRpc}));
  assert.equal(fullInbox.ordinary,RPC_ORDINARY_LIMIT);assert.equal(fullInbox.peakOrdinary,RPC_ORDINARY_LIMIT);
- assert.ok(fullInbox.acks<=RPC_ACK_RESERVE);assert.equal(fullInbox.current,fullInbox.ordinary+fullInbox.acks);
+ assert.equal(fullInbox.acks,RPC_ACK_RESERVE);assert.equal(fullInbox.current,RPC_LIMIT);assert.equal(fullInbox.current,fullInbox.ordinary+fullInbox.acks);
  assert.ok(fullInbox.current<=RPC_LIMIT&&fullInbox.peak<=RPC_LIMIT);
  await page.getByRole("button",{name:"Reload client",exact:true}).waitFor({timeout:22000});
  const elapsed=performance.now()-start;
@@ -179,7 +213,7 @@ try {
  assert.equal(await page.evaluate(()=>__voiceProof.commands.length),terminal.commands);
  assert.deepEqual(errors,[]);assert.deepEqual(remote,[]);assert.deepEqual(terminal.violations,[]);
  await page.screenshot({path:resolve(out,"unavailable-draft.png")});
- const report={passed:true,site,csp,actual_stall_ms:17000,rpc_deadline_ms:15000,observed_retirement_ms:elapsed,observed_native_close_ms:nativeClosedAt-start,audio_rpc_inbox:audioInbox,sdk_rpc_inbox:fullInbox,sdk_rpc_budget:{total:RPC_LIMIT,ordinary:RPC_ORDINARY_LIMIT,content_ack_reserve:RPC_ACK_RESERVE},
+ const report={passed:true,site,csp,actual_stall_ms:17000,rpc_deadline_ms:15000,observed_retirement_ms:elapsed,observed_native_close_ms:nativeClosedAt-start,audio_rpc_inbox:audioInbox,sdk_rpc_inbox:fullInbox,real_content_ack_credit:{beforeRelease,heldCredit,admitted},sdk_rpc_budget:{total:RPC_LIMIT,ordinary:RPC_ORDINARY_LIMIT,content_ack_reserve:RPC_ACK_RESERVE},
   messages_after_retirement:afterTail.messagesAfterRetirement,three_explicit_stale_callbacks_ignored:true,worker_closed:closed,worker_stall_completed:finished,worker_events:workerEvents,terminations:terminal.terminations,microphone_tracks:terminal.tracks,
   draft_retained_and_selectable:true,cache_unchanged:true,new_send_denied:true,
   checks:["actual packaged App and owned SDK worker","fixture-appended ordinary-message17s block; original packaged SDK prefix unmodified","15s logical retirement/termination request before synthetic rejection","physical shutdown timing recorded separately","no auto restart/consent","tracks stopped","Unavailable status/no voice controls","read-only selectable draft","bookmarks/certificate/history unchanged","new command denied","stale ready/state/result callbacks cannot revive old owner","production CSP/no foreign requests"]};
@@ -187,5 +221,6 @@ try {
 }catch(error){
  await writeFile(resolve(out,"failure.json"),JSON.stringify({error:String(error),errors,remote,workerEvents,states:await Promise.all(contexts.map(async context=>context.pages()[0]?.evaluate(()=>({text:document.body.textContent,terminations:__voiceProof.terminations,commands:__voiceProof.commands,commandTimes:__voiceProof.commandTimes,terminatedWall:__voiceProof.terminatedWall,tracks:__voiceProof.tracks.map(t=>t.readyState)})).catch(()=>null)))},null,2));throw error;
 }finally{
+ observer?.socket.destroy();
  for(const context of contexts)await context.close();await browser.close();for(const socket of tunnels)socket.destroy();await new Promise(done=>server.close(done));
 }
