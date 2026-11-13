@@ -198,6 +198,53 @@ async fn check(worker: &Path) {
     assert!(matches!(listener.accept(), Err(e) if e.kind() == io::ErrorKind::WouldBlock));
     assert!(children().is_empty(), "unreaped actual content worker");
 
+    // Prepare returns only the carried derivative. A separate confined request
+    // decodes those exact bytes, with a known pixel oracle independent of the
+    // worker's preparation state or the original encoded input.
+    let Response::Image { image, .. } = host::preview(
+        worker,
+        Request::PrepareImage {
+            schema: preview::SCHEMA,
+            image: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGM4EaABAAMkAUEdGZ/EAAAAAElFTkSuQmCC".into(),
+            alt: "known pixel".into(),
+        },
+    )
+    .await
+    .unwrap() else {
+        panic!("expected a prepared carried image");
+    };
+    let Response::Pixels { pixels, .. } = host::preview(
+        worker,
+        Request::RenderImage {
+            schema: preview::SCHEMA,
+            image: image.clone(),
+        },
+    )
+    .await
+    .unwrap() else {
+        panic!("expected source-free pixels from the carried bytes");
+    };
+    assert_eq!((pixels.width, pixels.height), (1, 1));
+    assert_eq!(pixels.decode(), Some(vec![200, 80, 40, 255]));
+    let mut wrong = image;
+    wrong.width = 2;
+    assert_eq!(
+        host::preview(
+            worker,
+            Request::RenderImage {
+                schema: preview::SCHEMA,
+                image: wrong
+            }
+        )
+        .await
+        .unwrap(),
+        Response::Unavailable {
+            schema: preview::SCHEMA,
+            reason: preview::Unavailable::Malformed
+        }
+    );
+    assert!(children().is_empty(), "unreaped image operation worker");
+
     observed_namespace_retirement(&fake).await;
     unknown_startup_remains_pending(&fake).await;
 }

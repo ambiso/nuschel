@@ -163,23 +163,10 @@ pub enum Unavailable {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Response {
-    Metadata {
-        schema: u16,
-        metadata: Metadata,
-    },
-    Image {
-        schema: u16,
-        image: EmbeddedImage,
-        pixels: Pixels,
-    },
-    Pixels {
-        schema: u16,
-        pixels: Pixels,
-    },
-    Unavailable {
-        schema: u16,
-        reason: Unavailable,
-    },
+    Metadata { schema: u16, metadata: Metadata },
+    Image { schema: u16, image: EmbeddedImage },
+    Pixels { schema: u16, pixels: Pixels },
+    Unavailable { schema: u16, reason: Unavailable },
 }
 
 impl Response {
@@ -188,17 +175,7 @@ impl Response {
     pub fn is_bounded(&self) -> bool {
         match self {
             Self::Metadata { schema, metadata } => *schema == SCHEMA && metadata.is_bounded(),
-            Self::Image {
-                schema,
-                image,
-                pixels,
-            } => {
-                *schema == SCHEMA
-                    && bounded_image(image)
-                    && image.width == pixels.width
-                    && image.height == pixels.height
-                    && pixels.is_bounded()
-            }
+            Self::Image { schema, image } => *schema == SCHEMA && bounded_image(image),
             Self::Pixels { schema, pixels } => *schema == SCHEMA && pixels.is_bounded(),
             Self::Unavailable { schema, .. } => *schema == SCHEMA,
         }
@@ -294,18 +271,24 @@ mod tests {
             height: pixels.height,
             alt: "\"".repeat(MAX_ALT_BYTES),
         };
-        let response = Response::Image {
-            schema: SCHEMA,
-            image,
-            pixels,
-        };
-        assert!(response.is_bounded());
-        let bytes = serde_json::to_vec(&crate::Envelope::new(
-            1,
-            crate::ContentResponse::Preview(response),
-        ))
-        .unwrap();
-        assert!(bytes.len() <= MAX_RESPONSE_FRAME_BYTES);
+        for response in [
+            Response::Image {
+                schema: SCHEMA,
+                image,
+            },
+            Response::Pixels {
+                schema: SCHEMA,
+                pixels,
+            },
+        ] {
+            assert!(response.is_bounded());
+            let bytes = serde_json::to_vec(&crate::Envelope::new(
+                1,
+                crate::ContentResponse::Preview(response),
+            ))
+            .unwrap();
+            assert!(bytes.len() <= MAX_RESPONSE_FRAME_BYTES);
+        }
         let request = Request::Document {
             schema: SCHEMA,
             body: String::new(),
