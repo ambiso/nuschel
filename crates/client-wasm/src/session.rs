@@ -278,6 +278,7 @@ pub struct Session {
     users: BTreeMap<u32, User>,
     own: Option<u32>,
     welcome_source: Option<String>,
+    oversized_text_reported: bool,
     last_ping: f64,
     certificate_reported: bool,
     limits: nuschl_core::model::ServerLimits,
@@ -357,6 +358,7 @@ impl Session {
             users: BTreeMap::new(),
             own: None,
             welcome_source: None,
+            oversized_text_reported: false,
             last_ping: 0.0,
             certificate_reported: false,
             limits: nuschl_core::model::ServerLimits::default(),
@@ -1073,7 +1075,16 @@ impl Session {
                 let Ok(message) = proto::TextMessage::decode(payload) else {
                     return;
                 };
-                if self.phase != Phase::LoggedIn || message.message.len() > MAX_CONTENT_BYTES {
+                if self.phase != Phase::LoggedIn {
+                    return;
+                }
+                if message.message.len() > MAX_CONTENT_BYTES {
+                    if !self.oversized_text_reported {
+                        self.oversized_text_reported = true;
+                        self.events.push_back(Event::Server(ServerEvent::Notice(
+                            "Some incoming messages exceeded the local display limit and were not shown.".into(),
+                        )));
+                    }
                     return;
                 }
                 let peer = message.actor.and_then(|id| self.users.get(&id)).cloned();
@@ -2255,6 +2266,67 @@ mod tests {
             session.take_events().first(),
             Some(Event::Certificate { .. })
         ));
+    }
+
+    #[test]
+    fn oversized_incoming_text_is_refused_once_without_blocking_valid_messages() {
+        let mut session = session();
+        let wire = |body: String| {
+            proto::TextMessage {
+                channel_id: vec![0],
+                message: body,
+                ..Default::default()
+            }
+            .encode_to_vec()
+            .into()
+        };
+        // Unauthenticated input neither admits a row nor consumes the notice.
+        session.control(kind::TEXT_MESSAGE, wire("x".repeat(MAX_CONTENT_BYTES + 1)));
+        assert!(!session.oversized_text_reported);
+        assert!(session.take_events().is_empty());
+        session.phase = Phase::LoggedIn;
+        session.channels.insert(
+            0,
+            Channel {
+                id: 0,
+                ..Default::default()
+            },
+        );
+        for body in [
+            "a".repeat(MAX_CONTENT_BYTES),
+            "🙂".repeat(MAX_CONTENT_BYTES / 4),
+        ] {
+            session.control(kind::TEXT_MESSAGE, wire(body.clone()));
+            assert!(
+                matches!(session.take_events().as_slice(), [Event::Text { body: received, .. }] if received == &body)
+            );
+        }
+        // The bound is UTF-8 BYTES, not Unicode scalar or UTF-16 length.
+        let large = "🙂".repeat(MAX_CONTENT_BYTES / 4 + 1);
+        for _ in 0..32 {
+            session.control(kind::TEXT_MESSAGE, wire(large.clone()));
+        }
+        assert!(
+            matches!(session.take_events().as_slice(), [Event::Server(ServerEvent::Notice(text))] if text == "Some incoming messages exceeded the local display limit and were not shown.")
+        );
+        assert!(!session.is_closed());
+        session.control(kind::TEXT_MESSAGE, wire("healthy following message".into()));
+        assert!(
+            matches!(session.take_events().as_slice(), [Event::Text { body, .. }] if body == "healthy following message")
+        );
+        let fresh = super::Session::new(Login {
+            host: "localhost".into(),
+            port: 64738,
+            username: "fresh".into(),
+            password: None,
+            tokens: vec![],
+            pin: None,
+        })
+        .unwrap();
+        assert!(
+            !fresh.oversized_text_reported,
+            "the one-time suppression belongs to one connection"
+        );
     }
 
     #[test]
