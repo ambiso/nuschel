@@ -297,16 +297,23 @@ try {
  assert.equal(result.expiry.articles,7);assert.equal(result.expiry.content_workers,1);assert.equal(result.expiry.capture_calls,0);
  await expiry.screenshot({path:screenshot.replace(".png","-expiry.png")});
 
+ const stopped="[Message previews stopped because a preview job was not acknowledged. Reload this page to prepare previews again.]";
+ // A stalled worker misses its execution deadline and the service retires. The
+ // job that actually settled is ACKed and shows reload guidance; the lane then
+ // retires once through the bounded notice, so waiting rows turn terminal.
  const failed=await open("broker-retired","stall");
  await send(failed,"retired-source-first");await send(failed,"retired-source-second");
- await failed.waitForFunction(()=>[...document.querySelectorAll("small")].filter(node=>node.textContent==="Preview unavailable. Reload to try again.").length>=2,null,{timeout:20000});
+ await failed.waitForFunction(text=>[...document.querySelectorAll("article")].filter(node=>[...node.querySelectorAll("small")].some(small=>small.textContent==="Preview unavailable. Reload to try again.")||node.textContent.includes(text)).length>=2,stopped,{timeout:20000});
  assert.equal(await failed.getByRole("button",{name:"Retry message preview",exact:true}).count(),0);
  const before=await failed.evaluate(()=>brokerFixture.workers.filter(url=>url.includes("content-worker-")).length);
  await send(failed,"retired-source-third");
  await failed.waitForFunction(()=>document.querySelectorAll("article").length>=3);
- await failed.waitForFunction(()=>[...document.querySelectorAll("small")].filter(node=>node.textContent==="Preview unavailable. Reload to try again.").length>=3);
- result.retired=await failed.evaluate(()=>({content_workers:brokerFixture.workers.filter(url=>url.includes("content-worker-")).length,capture_calls:captureCalls,articles:document.querySelectorAll("article").length}));
+ await failed.waitForFunction(text=>[...document.querySelectorAll("article")].filter(node=>[...node.querySelectorAll("small")].some(small=>small.textContent==="Preview unavailable. Reload to try again.")||node.textContent.includes(text)).length>=3,stopped,{timeout:20000});
+ result.retired=await failed.evaluate(text=>({content_workers:brokerFixture.workers.filter(url=>url.includes("content-worker-")).length,capture_calls:captureCalls,articles:document.querySelectorAll("article").length,unavailable_rows:[...document.querySelectorAll("small")].filter(node=>node.textContent==="Preview unavailable. Reload to try again.").length,terminal_rows:[...document.querySelectorAll("article")].filter(node=>node.textContent.includes(text)).length,retires:brokerFixture.retires,third_render_work:brokerFixture.work.filter(operation=>operation.kind==="render"&&operation.source==="retired-source-third").length}),stopped);
  assert.equal(before,1);assert.equal(result.retired.content_workers,1);assert.equal(result.retired.capture_calls,0);
+ assert.ok(result.retired.unavailable_rows>=1,"the settled job shows reload guidance");
+ assert.deepEqual(result.retired.retires,["undelivered"],"the service retirement reaches the SDK once");
+ assert.equal(result.retired.third_render_work,0,"a retired lane posts no further codec work");
  assert.equal(await failed.locator("article").filter({hasText:"retired-source-third"}).count(),0,"retired codec never triggers privileged rendering fallback");
  await failed.screenshot({path:screenshot.replace(".png","-retired.png")});
 
@@ -326,7 +333,6 @@ try {
  assert.ok(result.slow.renders>=6&&result.slow.elapsed_ms>=6*2500);assert.equal(result.slow.content_workers,1);assert.equal(result.slow.capture_calls,0);
  await slow.screenshot({path:screenshot.replace(".png","-slow.png")});
 
- const stopped="[Message previews stopped because a preview job was not acknowledged. Reload this page to prepare previews again.]";
  // A content ACK the bridge cannot deliver: it keeps that credit and tells the
  // SDK explicitly, so waiting and new rows turn terminal without a clock shift.
  const signal=await open("broker-ack-signal");
@@ -389,9 +395,9 @@ try {
    const diagnostic=await direct.evaluate(before=>({before,channel:brokerFixture.last?.timeline?.channel,instance:brokerFixture.last?.timeline?.instance,row:brokerFixture.last?.timeline?.messages.find(message=>message.serial===before.serial),retries:[...document.querySelectorAll("article button")].filter(node=>node.textContent==="Retry message preview").length}),before);
    console.error("direct-diagnostic",JSON.stringify(diagnostic));result.direct_failure=diagnostic;await direct.screenshot({path:screenshot.replace(".png","-direct-failure.png")});throw error;
   }
-  result.direct=await direct.evaluate(before=>({channel:before.channel,instance_before:before.instance,instance_after:brokerFixture.last.timeline.instance,token:before.token,token_kept:brokerFixture.last.timeline.messages.find(message=>message.serial===before.serial).content_token===before.token,retries:[...document.querySelectorAll("article button")].filter(node=>node.textContent==="Retry message preview").length,content_workers:brokerFixture.workers.filter(url=>url.includes("content-worker-")).length,capture_calls:captureCalls}),before);
+  result.direct=await direct.evaluate(before=>({channel:before.channel,instance_before:before.instance,instance_after:brokerFixture.last.timeline.instance,token:before.token,token_kept:brokerFixture.last.timeline.messages.find(message=>message.serial===before.serial).content_token===before.token,unavailable:[...document.querySelectorAll("small")].filter(node=>node.textContent.includes("Preview unavailable")).length,retries:[...document.querySelectorAll("article button")].filter(node=>node.textContent==="Retry message preview").length,content_workers:brokerFixture.workers.filter(url=>url.includes("content-worker-")).length,capture_calls:captureCalls}),before);
   assert.equal(result.direct.token_kept,true);assert.equal(result.direct.instance_after,result.direct.instance_before,"a direct conversation keeps its instance");
-  assert.equal(result.direct.retries,0);assert.equal(result.direct.content_workers,1);assert.equal(result.direct.capture_calls,0);
+  assert.equal(result.direct.retries,0);assert.equal(result.direct.unavailable,0,"no preview-unavailable guidance either");assert.equal(result.direct.content_workers,1);assert.equal(result.direct.capture_calls,0);
   await direct.screenshot({path:screenshot.replace(".png","-direct.png")});
  } finally { dmPeer.socket.destroy(); }
  if(result.stress) {
@@ -498,10 +504,25 @@ try {
   assert.equal(dbCount,4500,"unsaved live canary was never silently saved/replaced by fixture history");
   result.recovery={seeded,serial_preserved:true,unsaved_status_preserved:true,original_plain_mode_preserved:true,second_reconnect_inactive:true,articles:after.count,workers:after.workers,db_count:dbCount};
   // The visible conversation reconnects: its newest history page reloads, and
-  // the verified unsaved row keeps the same derivative in that same poll.
+  // the verified unsaved row keeps the same derivative. Wait for an APPLIED
+  // publication from the new lifetime in which that reloaded page has been
+  // processed (the timeline no longer holds the 901 resident rows, nothing is
+  // loading, and every reloaded row is readable), not merely for the canary.
+  const selectedBefore=await recovery.evaluate(()=>({instance:brokerFixture.last.timeline.instance,messages:brokerFixture.last.timeline.messages.length}));
   await rpc(recovery,"disconnect",0);await rpc(recovery,"connect",0);
   await recovery.waitForFunction(()=>brokerFixture.last?.servers[0].status==="connected",null,{timeout:20000});
-  await recovery.waitForFunction(({serial,token})=>brokerFixture.last?.timeline?.channel===0&&brokerFixture.last.timeline.messages.find(message=>message.serial===serial)?.content_token===token,{serial:original.serial,token:derivative},{timeout:10000});
+  try {
+   result.reconnect.selected_reload=await recovery.waitForFunction(({serial,token,before})=>{
+    const state=brokerFixture.last,timeline=state?.timeline;
+    if(state?.servers[0].status!=="connected"||timeline?.channel!==0||timeline.loading||timeline.instance===before.instance||brokerFixture.appliedPublication!==state.publication)return null;
+    if(timeline.messages.length===before.messages)return null;
+    if(!timeline.messages.every(message=>!message.content_failed&&!message.document.blocks.some(block=>block.kind==="text"&&block.text.startsWith("["))))return null;
+    return timeline.messages.find(message=>message.serial===serial)?.content_token===token?{publication:state.publication,instance:timeline.instance,messages:timeline.messages.length}:null;
+   },{serial:original.serial,token:derivative,before:selectedBefore},{timeout:30000}).then(handle=>handle.jsonValue());
+  } catch(error) {
+   const diagnostic=await recovery.evaluate(({serial,before})=>({before,status:brokerFixture.last?.servers[0].status,channel:brokerFixture.last?.timeline?.channel,instance:brokerFixture.last?.timeline?.instance,loading:brokerFixture.last?.timeline?.loading,messages:brokerFixture.last?.timeline?.messages.length,applied:brokerFixture.appliedPublication,publication:brokerFixture.last?.publication,canary:brokerFixture.last?.timeline?.messages.find(message=>message.serial===serial)?.content_token,unreadable:brokerFixture.last?.timeline?.messages.filter(message=>message.content_failed||message.document.blocks.some(block=>block.kind==="text"&&block.text.startsWith("["))).length}),{serial:original.serial,before:selectedBefore});
+   console.error("selected-reload-diagnostic",JSON.stringify(diagnostic));result.selected_reload_failure=diagnostic;throw error;
+  }
   result.reconnect.selected_reconnect_token_kept=true;
   await recovery.screenshot({path:screenshot.replace(".png","-recovery.png")});
  }
