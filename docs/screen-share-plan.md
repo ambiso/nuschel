@@ -1,0 +1,225 @@
+# Screen sharing plan: Nuschl and stock Mumble servers, with browser watch links
+
+Status: plan, 2026-11-13, against main 8781be09. It folds in the frozen #139 signalling design (`83a5b5a7:docs/legacy-signalling-plan.md`), the frozen #93 plugin-data work (`0e40c7ac`), #35, #135 and #139–#147, the owner's request for link-secret key agreement that only an active server can defeat, and the domain decisions (stream.nuschl.eu/watch, turn.nuschl.eu). Nothing here is implemented; effort figures are rough estimates.
+
+## 0. Bottom line
+
+- **Nothing user-visible exists yet.** What exists is a str0m transport trial with synthetic frames, the #139 design, #93 plugin data (frozen, off main), and reusable post-quantum crypto (HPKE with X-Wing) in `nuschl-identity`. There is no capture, encoder, decoder, SFU, watch page or SFrame code.
+- **Topology:** for one sharer and many viewers, use a forward-only **companion SFU at stream.nuschl.eu**. I don't recommend mesh. TURN at turn.nuschl.eu is a reachability fallback, restricted so it can only relay to the SFU. It is not on the critical path.
+- **Fastest route to "working":**
+  - **Phase 1:** browser-captured sharing launched from Nuschl. Nuschl opens `stream.nuschl.eu/share` in the system browser, and viewers use `stream.nuschl.eu/watch#…`. It works on stock Mumble and on compatible-mode Nuschl servers.
+  - **Phase 2, in parallel lanes:** native Linux capture and VP8 encoding in a new isolated video worker; native viewing comes after.
+  - **End-to-end-mode Nuschl servers come last.** Until then they refuse sharing (fail closed).
+- **Stock-server key agreement (owner's request): use (b), not a PAKE.**
+  - Each viewer runs a fresh X-Wing (ML-KEM-768 + X25519) exchange with the sharer, authenticated by a pre-shared key derived from the link secret (HPKE PSK mode, RFC 9180).
+  - The SFrame key is random and sent to each viewer over that viewer's own channel.
+  - A stock server that only reads the link cannot decrypt the video.
+  - To watch, the server has to act: either join as a viewer (it then shows up in the sharer's viewer list), or intercept browser viewers' key exchanges, which needs help from the stream host (SFU or page code). Identity-bound Nuschl viewers detect interception.
+
+## 1. Inventory: what is code, what is design, what is missing
+
+| Item | State | Where |
+| --- | --- | --- |
+| `nuschl-rtc` | **Code, trial.** Socket-independent str0m 0.25 with the `rust-crypto` feature (DTLS adapter patched, `vendor/str0m-rust-crypto/NUSCHL-PATCH.md`). Opus and VP8 only. Up to 2 audio + 2 video tracks, roles bound to track IDs (`Purpose::ScreenVideo`). One offer/answer only. Host candidate only: no TURN, no ICE restart, no SFrame. Limits: SDP 32 KiB, datagram 2 KiB, video frame 256 KiB. 17 tests (12 transport, 5 signalling). | `crates/rtc/src/lib.rs:1-13, 27-31, 43-49, 157-190, 204, 421, 488-520`; `signaling.rs:7-13, 48-57`; `crates/rtc/tests/` |
+| `apps/rtc-probe` | **Code, trial only.** Two loopback UDP endpoints, synthetic Opus and VP8 keyframes, delay/BWE readout. Not an application call path. | `apps/rtc-probe/src/main.rs:1-60` |
+| WebRTC stack | **str0m only.** C++/Go stacks are excluded even behind bindings or workers (`docs/architecture.md:200-206`). str0m has no TURN client (sans-IO, its `lib.rs:470-489`). It has an RTP mode for SFU forwarding. Its VP8 keyframe detection reads the first payload byte (`packet/vp8.rs:341, 403`), so SFrame must leave the VP8 header unencrypted. cargo-deny allows only `nuschl-rtc` to use str0m (`deny.toml:60-63`). | — |
+| Capture, encode, decode | **Nothing first-party.** GPUI ships capture code (`vendor/gpui-pre/src/platform/scap_screen_capture.rs`, via zed-scap: X11/xcb, ScreenCaptureKit, windows-capture). It runs inside the desktop shell, so it can't be used: capture APIs belong in a capture worker (`docs/screen-share-audio.md:61-66`), and AGENTS.md forbids extending the GPUI exception by analogy. `rav1e` is in the lockfile only through image→ravif. #35 (decoder isolation) is open. | `Cargo.lock` |
+| Media worker isolation | **Code.** One media worker per application: CPAL, opus-pure, Sonora, nnnoiseless, pipewire. Linux bubblewrap profile: audio sockets, `/dev/snd`, no network/home/D-Bus, 1 GiB address space. Windows: AppContainer with the microphone capability. macOS: deny-list Seatbelt. Supervised with generations and revisions. **Not suitable for video:** it holds microphone and audio-socket capabilities. Precedent for a new role: the music-bot codec worker's fixed roles (`SECURITY.md:43`). | `crates/ipc/src/host.rs:773-829`; `SECURITY.md:28-29, 79-84, 228-231`; `crates/client/src/native/media.rs:1-13` |
+| Browser media paths | **Audio only, over the WebSocket TLS tunnel:** `crates/client-wasm`, separate Opus WASM worker (`web/app/audio-codec.worker.js`), AudioWorklet. No RTCPeerConnection, no getDisplayMedia. Web CSP allows only the microphone (`nix/web-module.nix:64-83`). Video and screen sharing are listed as unsupported (`docs/web.md:376-385`). | — |
+| `docs/screen-share-audio.md` | **Design only**, for #146. Separate capture worker; the portal grants video, not audio (`:128-136`); exclusion barrier; SFrame keys never in capture or codec workers (`:251-256`); relay-only rules (`:246-250`). | — |
+| PluginDataTransmission (#93) | **Code, frozen `0e40c7ac`, not on main.** 13 files, +2,704 lines: `crates/protocol/src/plugin.rs`, session `connection.rs` (+900), `client/plugin.rs`, `client.rs`, `native.rs`, server `handlers.rs`. Opt-in, bounded, never on end-to-end servers, reserved `nuschl/` dataID namespace. Loopback interop passed with Murmur 1.5.939 and nuschld. No browser support, no UI. **Collides with Codex's `client.rs` work.** Not needed for Phase 1. | — |
+| Capability negotiation | **Code.** ALPN `nuschl/1` plus a `NuschlHello` capability list, frozen per connection, sticky policy (`docs/extension.md:24-98`). `privacy/1` relay-only (`:613-641`) and `PeerPolicy` (`crates/core/src/network.rs:15-26`). **No `rtc/1` yet** (#141; #139 §6.2 proposes 0x4EA0–0x4EAF). | — |
+| SFrame / MLS exporter (#135) | **Design plus a spike.** `docs/e2ee.md:1071-1088, 1141, 1182`; `spikes/mls/src/lib.rs:409-414` exports "SFrame 1.0 Base Key". End-to-end servers block voice (`SECURITY.md:198-203`). No SFrame implementation exists. | — |
+| Reusable crypto | **Code.** HPKE with X-Wing in PSK and base modes (`crates/identity/src/hpke.rs:1-66`). Device linking already uses SPAKE2 plus X-Wing HPKE-PSK (`link.rs:1-35`). X-Wing comes from `libcrux-kem` `XWingKemDraft06` (`crypto.rs:319-345`). `spake2` 0.4 is also magic-wormhole's PAKE. **cargo-deny confines `nuschl-identity`** to kt, e2ee, nuschld and the crypto worker (`deny.toml:173-178`), so reuse the pattern, not the crate. RustCrypto `x-wing` 0.1.1 and `ml-kem` 0.3.4 are already in the lockfile (via hpke-rs-rust-crypto). | — |
+| #139 signalling design | **Design, frozen `83a5b5a7`.** One typed signalling format over three transports, `CallBinding`, plugin framing, SFU/TURN rules, slices A–J, decisions D1–D14. No code. | — |
+| Web host | **Code.** Share links (`docs/web.md:204-266`), `PROJECT_WEB_HOST = nuschl.eu` (`crates/core/src/share.rs:27`). Precedent for posting a structured offer as chat text: `apps/desktop/src/transfer.rs:530-553`. | — |
+
+## 2. MVP definition (recommended)
+
+**Phase 1, the first shippable release:**
+- **Who shares:** a Nuschl desktop user clicks "Share screen" in a channel. Nuschl generates the link secret S and a separate publisher secret P, opens `https://stream.nuschl.eu/share#v=1&k=S&p=P` in the system browser, and posts the legacy line containing `https://stream.nuschl.eu/watch#v=1&k=S`. P is never posted.
+- **Capture:** the browser's own picker and recording indicator, via getDisplayMedia. Video only, at most 1080p and 15 fps, VP8 at up to 2.5 Mbit/s.
+- **Viewers:** anyone with the link, in a browser. Nuschl users get the same link (no in-app player yet).
+- **Media path:** browser → companion SFU → browsers. SFrame with a random key per epoch, delivered per viewer by the X-Wing PSK exchange.
+- **Servers:** stock Murmur 1.x and compatible-mode nuschld (both use the chat-link path). End-to-end-mode nuschld refuses with "not available yet" (fail closed; #139 §2).
+- **Viewer cap:** 1 publisher and 16 viewers on the project instance.
+
+**Phase 2, in parallel lanes:**
+- Native Linux sharer: portal picker, `nuschl-video-worker` with libvpx VP8, the SDK driver's str0m connection to the SFU.
+- Native in-app viewer: isolated decoder (#35), GPUI rendering (#145), identity-bound key exchange (#139 B), plugin-data stream cards (#93 + #139 C).
+- End-to-end servers (#139 I0/I, #135).
+
+**Later:** Windows/macOS capture, audio (#146/#144), scalable video (#140), nuschld's own SFU and `rtc/1` (#142/#141), long-call validation (#147).
+
+**Why an SFU:** a sharer acting as the hub uploads N copies, and a browser re-encodes once per peer connection. The browser viewers also need a rendezvous at nuschl.eu anyway. str0m's frame and RTP-mode forwarding is the shared core that #142 reuses later.
+
+## 3. Stock-server key agreement (owner's PAKE request)
+
+**Key schedule** (replaces #139 §5.2's `sframe_base(g)`, which was derived from S):
+- S is 32 bytes from the OS RNG. PRK = HKDF-Extract("nuschl/stream/v2", S).
+- From PRK: `stream_id` (16 B, the SFU room), `admit_key` (SFU challenge), `mac_key`, `psk`, `signal_key`.
+
+**Joining:**
+- The viewer makes a fresh X-Wing keypair (sk_v, pk_v) and sends `KeyRequest{stream_id, viewer_id, nonce, pk_v, [CallBinding]}`, with an HMAC under `mac_key` so non-holders are dropped cheaply.
+- The sharer replies `KeyGrant` = HPKE PSK-mode seal to pk_v, with info = the transcript hash, psk/psk_id from S, carrying {epoch, K_epoch, kid, not_after}.
+- The HPKE context then exports a per-viewer channel key. Rekeys are sealed with that key plus a counter.
+- Configuration: the same suite as `crates/identity/src/hpke.rs:35-43` (X-Wing / HKDF-SHA256 / ChaCha20-Poly1305).
+
+**Fan-out and rekeying:**
+- The key exchange travels over the SFU WebSocket as opaque blobs of at most 4 KiB. Plugin data is a poor fit: pk_v is 1,216 B and the ciphertext 1,120 B, which is 2–3 chunks each under Murmur's 4 messages/s budget.
+- Late joiners get only the current epoch.
+- Rekey on any leave or kick, batched within 2 s; on joins, batched (gives backward secrecy); and every 15 minutes.
+- Receivers keep the previous epoch for about 2 s.
+- A kicked viewer can rejoin via the link until "Rotate link" (new S, new room).
+- The SFU sees only HPKE and SFrame ciphertext.
+
+**SFrame profile:** RFC 9605 AES_128_GCM_SHA256_128. The VP8 header prefix (10 bytes on keyframes, 3 on others) stays unencrypted but authenticated, as Jitsi does. This deviates from RFC 9605 and is needed because str0m and browser depacketizers read the P bit. It leaks frame type and dimensions.
+
+**Options evaluated:**
+- **(a) SPAKE2** is reusable (spake2 0.4; magic-wormhole 0.8.1; `link.rs`) but classical: a quantum-capable recorder who later learns S breaks it.
+- **(b) HPKE PSK mode with X-Wing — recommended.** Post-quantum against passive observers, and no man-in-the-middle without S. It is the confidentiality half of `link.rs` without the human-code half.
+- **(c) Post-quantum PAKEs** (CAKE/OCAKE, CPace+OQUAKE drafts) have no reviewed Rust implementation and are immature.
+- **When a PAKE proper matters:** only when the secret is short or typed by a human, because the transcript then allows offline guessing. With 256 bits of S that can't happen.
+- **Passive password holders:** even with a PAKE, a passive party that knows the password can't derive the session key, because it lacks the ephemeral secret (SPAKE2: g^xy is still a Diffie–Hellman problem).
+
+**Who can do what:**
+- Passive stock server with S: cannot decrypt (needs sk_v).
+- The SFU without S: can neither forge a MAC nor open a grant.
+- Active stock server alone: can only join as an extra viewer, which appears in the roster, or swap the posted link and relay the stream, which also needs it to join.
+- Stock server colluding with the SFU or page code: can intercept browser viewers undetected.
+- Identity-bound Nuschl viewers: any substitution of pk_v breaks the `CallBinding` transcript, giving "Identity check failed".
+- A leaked link plus recorded SFU traffic no longer decrypts later. This fixes #139 §3.1's retention problem.
+- Browser viewers have no identity key, so they are shown as "unverified viewer".
+
+**Where it runs:**
+- One portable crate, `crates/stream`, compiled natively and to WASM, so no JS crypto library is added.
+- Browser: one dedicated worker that is also the encoded-transform worker, so the main thread never holds K.
+- Native (Phase 2): the SDK driver (network process).
+- Never in capture, encode or decode workers.
+- The crypto worker only signs and verifies `CallBinding`.
+
+**Proposed labels:**
+- Sharer card: "Encrypted against passive servers. Anyone with the link can watch; everyone watching is listed here. A server that saw the link could join, or, with the stream host's help, intercept browser viewers." Short form "Link-encrypted". **Never the green lock.**
+- End-to-end-server streams turn green only under `docs/e2ee.md` §7.4.
+
+**Supersedes in #139:** the §0 row "ephemeral keys + PSK: refuted", §5.2 `sframe_base`, and the §3.1/§8 "Not end-to-end encrypted" labels. Record this as a new descendant revision of the plan; don't rewrite frozen `83a5b5a7`.
+
+## 4. Critical path
+
+Phase 1 order: S0 → K1 → K2 → W1 → B1 → T1, with E1 (the long pole) in parallel and D1 and I1 alongside. Rough estimate for Phase 1 with 5–6 lanes: about 2.5–3 weeks (uncertain).
+
+| ID | Slice | Issue | Depends on | Files / crates | New dependencies (safety / licence) | Runs in | Tests | Size | Lane |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| S0 | Spikes, run in parallel: (a) wasm32 build of the HPKE/X-Wing backend plus RustCrypto `hkdf`/`hmac`/`sha2`/`aes-gcm`; (b) browser encoded-transform support matrix, sender and receiver, VP8; (c) str0m RTP-mode forwarding of SFrame'd VP8 with clear prefix, PLI behaviour | new (under #139/#147) | — | owned scratch only | — | — | results recorded | S, 1–2 d | A/B/C |
+| K1 | `nuschl-stream`: link v1 strict parse, key schedule, request/grant/update codec, HPKE-PSK exchange, per-viewer channel, rekey manager, SFrame with replay window | new (child of #139; SFrame later shared with #135) | S0a | `crates/stream/*`, test vectors, fuzz targets | RustCrypto (in graph, MIT/Apache; same `aes` as the OCB2 exception, `SECURITY.md:35`). KEM: hpke-rs-libcrux (same code as identity; would extend the libcrux SIMD row `SECURITY.md:39` to the SDK and WASM) **or** RustCrypto x-wing/ml-kem (pure Rust; check draft-06 parity) | browser worker; SDK driver | native = WASM known answers; HPKE PSK vectors; **passive observer** (S + every recording, all S-derived keys fail); **MITM** (anonymous viewer intercepted, documented; with binding required, rejected; without S, rejected); replay; stale epoch; removed viewer can't decrypt; fuzz | M, 4–6 d | A |
+| K2 | `crates/stream-wasm` | new | K1 | wasm-bindgen (pinned, in graph) | — | dedicated worker | Node and headless-browser known-answer equality | S | A |
+| E1 | Companion SFU: rooms in memory, admission HMAC, publisher verifier from P, browser SDP under bounds, VP8 RTP forwarding, PLI coalescing, opaque key relay, TURN REST credentials, caps, NixOS unit, Origin check | #142 core + #139 E | S0c | `crates/sfu`, `apps/sfu`, `nix/stream-module.nix` | str0m (**new wrapper `nuschl-sfu`**, `deny.toml:60-63`); tokio-tungstenite (in graph); HMAC-SHA1 for coturn REST credentials | systemd-hardened service; no keys, no decoding | VM with headless Chromium/Firefox; fuzz the WebSocket protocol and SDP; limits; log scan | L, 8–10 d | B |
+| W1 | Watch page: strict fragment, `replaceState`, `/sfu`, encoded-transform decrypt, fail closed without support, roster, accessibility | #139 F (new issue) | K2, E1, S0b | `web/stream/{watch.html, watch.js, stream-worker.js}`, `packages.stream-site` | none (plain JS) | browser | `tests/web_stream.mjs`; CSP; no fragment in logs | M, 5–7 d | C |
+| B1 | Share page: getDisplayMedia video only, `selfBrowserSurface:'exclude'`, `systemAudio:'exclude'`, VP8 maxBitrate, SFrame encrypt, grants and rekeys, viewer roster, Stop, warning when a whole monitor is shared | new (#139 J, **needs owner approval**) | W1, E1 | `web/stream/share.*` | — | browser (its own encoder and sandbox) | headless Chromium with fake capture; rekey on leave | M, 3–4 d | C |
+| D1 | Desktop handoff: consent dialog, S/P from OS RNG held in memory, open share page, post the HTML or text line as `transfer.rs` does, "ended" line, rotate | #145 UI / #139 G | K1 link format | `crates/core/src/stream.rs` (new), `apps/desktop/src/stream.rs` (new), one menu hunk | — | desktop shell | units; private GNOME screenshots; AT-SPI | S–M, 2–4 d | E |
+| I1 | Infrastructure (§5) | #143 + new infra issue | owner hosts and DNS | `nix/stream-module.nix`, coturn config | coturn (C; infrastructure exception, D7) | servers | TURN relays only to the SFU; relay-only browser run | S–M | F |
+| T1 | End-to-end evidence and documentation | #147 (partial) | Phase 1 | `tests/stream_vm.nix`; docs (Root merges) | — | VM | owned Murmur 1.4/1.5 plus a real stock Mumble client showing the line; two browsers; passive and MITM; rotate/kick; secret-free logs | M | F + all |
+| V1 | `nuschl-video-worker --screen-encode` (Linux): only the inherited portal PipeWire FD; SHM buffers; BGRx→I420 with downscaling; libvpx realtime screen-content mode; at most 2 queued frames | #145 + #140 (single layer) | host.rs hunk via Root | `apps/video-worker`, `crates/ipc/src/video.rs` (new), `crates/ipc/src/host.rs` (`video_sandbox_command`) | pipewire 0.10.1 (existing FFI row); **libvpx** (C, BSD-3; binding crate to review; new SECURITY row and deny wrapper). The libvpx VP8 encoder has had an in-the-wild exploit (CVE-2023-5217, from memory), so the encoder must be isolated too | new worker: no audio sockets, D-Bus, network or home; fails closed | private PipeWire with a synthetic producer node in a VM; round-trip decode; sandbox denials; kill and reap | M–L, 6–8 d | D |
+| R1 | Driver RTC: UDP owned by the network process, `PeerPolicy` before gathering, WSS to the SFU, SFrame between V1 and rtc, BWE → bitrate, PLI → keyframe, results bound to generation | #143 + #145 | K1, E1, V1 | `crates/client/src/native/rtc.rs` (new), `native.rs` hunk, `crates/rtc` (send-only screen mode, ICE-TCP) | — | SDK driver | loopback SFU; packet capture shows no host/srflx candidates in relay-only mode | L, 8–10 d | **wait for Codex** |
+| U1 | Native share UX: ashpd `screencast` (window preselected, `multiple=false`, no persist token), worker spawn with the FD, indicator, stop on disconnect / channel change / portal Closed / exit, privacy curtain | #145 | V1, R1 | `apps/desktop/src/stream.rs`, `Cargo.toml` feature (Root) | ashpd feature (zbus 5 advisories already accepted, `deny.toml:18-20`) | desktop shell (portal broker only) | private headless GNOME with portal; AT-SPI | M, 4–6 d | E |
+| N1 | Native viewer: `--decode` role (strict profile, pixel caps), GPUI surface, `CallBinding`, plugin announce | #35, #145, #139 B/C, #93 | V1, R1, #93 merged | video worker, desktop, `crates/identity/src/call.rs`, `apps/crypto-worker/src/call.rs` | libvpx decoder | decode worker; crypto worker | malformed VP8 corpus; identity mismatch | L | later |
+| M1 | End-to-end servers: MLS ephemeral `Signal` with S over MLS (or exporter keys), native viewers only | #139 I0/I, #135 | N1 | e2ee envelope, crypto-worker `mls.rs`, server `mls.rs` | — | crypto worker | e2ee flow tests | M–L | later |
+
+## 5. Infrastructure the owner must provide or approve
+
+**Hosts and DNS:**
+- `stream.nuschl.eu` (A/AAAA): nginx serves `/watch` and `/share` (static, access logs off, no other content) and the `/sfu` WebSocket (same origin, so CSP stays `'self'`).
+- SFU media: UDP 443 if nginx QUIC is off, otherwise one fixed UDP port.
+- `turn.nuschl.eu` (A/AAAA, preferably its own IP): 3478 UDP/TCP, 5349 TLS (443 TLS if a dedicated IP is available), relay range for example 49152–49999/udp.
+- TLS for both via ACME; coturn needs read access to its certificate.
+- CAA records; HSTS includeSubDomains on the apex.
+
+**TURN:**
+- coturn for now, using `use-auth-secret` with the secret delivered through `LoadCredential`.
+- Peer addresses restricted to the SFU's IPs only (`allowed-peer-ip`), with private, loopback, link-local, CGNAT and multicast ranges denied. That makes it impossible to use as an open relay even if credentials leak.
+- `no-tcp-relay`, `no-cli`, per-user and total quotas, `max-bps` about 4 Mbit/s, minimal logging with short retention.
+- Credentials are 10-minute REST/HMAC credentials, **issued by the SFU only after link admission**, rate-limited per IP and room.
+- Later: nuschld issues the same format for Nuschl servers (#141/#143).
+- Credentials derived from the link secret, or an unauthenticated public TURN: rejected.
+- A Rust TURN server (webrtc-rs `turn`, librice) is to be evaluated under #143; maturity and licences unverified.
+
+**Project SFU caps:** 1 publisher and 16 viewers per room, 2.5 Mbit/s, 4 h room lifetime, room creations per IP (IPv6 by /64), a total egress budget. A refused join fails only that join. Operators can self-host through the same NixOS module.
+
+**Same-site implications** (app.nuschl.eu, stream.nuschl.eu and nuschl.eu are separate origins but the same site):
+- Passkey rpId: **not `nuschl.eu`**; the owner is choosing between app.nuschl.eu and a dedicated auth.nuschl.eu, before passkeys ship. With rpId `nuschl.eu`, the watch page could request an assertion or PRF output (the identity backup key).
+- The watch and share pages run no identity code and send `Permissions-Policy: publickey-credentials-get=(), publickey-credentials-create=()`.
+- No cookies on the stream host; elsewhere only `__Host-` cookies, never `Domain=nuschl.eu`. The app must not rely on SameSite for CSRF protection.
+- Headers on the watch and share pages:
+  - `Origin-Agent-Cluster: ?1`
+  - `COOP: same-origin`, `COEP: require-corp`, `CORP: same-origin`
+  - CSP: `default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; connect-src 'self'; img-src 'self' blob:; style-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; require-trusted-types-for 'script'`
+  - `Permissions-Policy`: the watch page denies display-capture, camera and microphone; the share page allows `display-capture=(self)` only.
+  - `no-referrer`, `nosniff`.
+- The SFU checks the Origin header.
+- Origin-Agent-Cluster and COOP/COEP only *request* origin-keyed process isolation; Chromium isolates per site by default. A **separate registrable domain** for viewing untrusted media is optional extra hardening.
+
+**What nuschl.eu learns:** IP addresses, user agents and TLS fingerprints, timing, the room id (which links all viewers of one stream), viewer counts, bitrates and packet timing, and TURN allocations.
+
+**What it doesn't learn:** S or K (from an honest page), media content, sealed titles, the Mumble server, channels or names. A malicious or compromised stream host can serve JavaScript that steals S and K from browser users; native viewers never run its code.
+
+## 6. Security and privacy invariants
+
+- **Consent:**
+  - Capture needs a fresh picker every time (browser picker, or portal with no restore token) and a visible indicator (the browser's or the portal's, plus Nuschl's banner, voice bar and window title).
+  - Never automatic; never restored after a reconnect.
+  - Stops on Stop, disconnect, channel change, portal or track ended, and app exit.
+  - Worker credit is held until the process has actually been reaped.
+  - Joining or watching never opens the microphone or camera.
+- **Own windows:** window sharing is preselected. Sharing a monitor shows a warning (`displaySurface === 'monitor'` in the browser, the portal's `source_type` natively) and, natively, a privacy curtain over conversations. Linux portals have no exclude-window API. Windows' exclude-from-capture flag would need new unsafe code, so it is not planned.
+- **Encryption:**
+  - Stock and compatible servers: link-encrypted as in §3, honestly labelled.
+  - End-to-end servers: MLS only, never links or plugin data.
+  - No plaintext fallback: a browser without encoded transforms refuses to play or share.
+- **Authenticity:**
+  - `CallBinding` signs the full transcript, including pk_v, enc and DTLS fingerprints (#139 §5.5).
+  - Unknown identities are never pinned from a stock server.
+  - Results are bound to {connection generation, stream id, epoch, signalling id, request}.
+- **Isolation:**
+  - Native codecs only in `nuschl-video-worker` roles.
+  - Keys only in the SDK driver or browser stream worker.
+  - The desktop never decodes.
+  - The SFU never decodes and holds no keys.
+- **Relay-only:** no host/srflx candidates and no STUN. Only configured SFU/TURN hosts are contacted. If the relay fails, the call ends; no direct fallback.
+- **Bounds:**
+  - Video: at most 1920×1080 and 15 fps by default (30 opt-in), 2.5 Mbit/s, frames ≤256 KiB (a large keyframe may need an intra-bitrate cap or 512 KiB; to verify), ≤2 queued frames.
+  - Key messages ≤4 KiB, ≤32 pending key requests, at least 1 s between epochs, bounded replay windows.
+  - Viewer and SFU caps as in §5.
+  - Decoder pixel, memory and CPU caps.
+
+## 7. Owner decisions, with recommended defaults
+
+1. **Phase 1 sharer:** browser capture launched from Nuschl, with native Linux in parallel. Approves #139 J. The alternative, native Linux first, adds about 1–2 weeks.
+2. **Topology:** companion SFU at stream.nuschl.eu, not mesh. **16 viewers** on the project instance; configurable when self-hosted.
+3. **Key agreement:** option (b), HPKE PSK mode with X-Wing. The KEM backend is chosen by spike S0a.
+4. **Viewer policy and rekeying:** Link policy by default (Approve available); rekey on leave and join (batched within 2 s) and every 15 minutes.
+5. **Labels:** a new "Link-encrypted" state with the §3 wording, never green.
+6. **Codecs:** VP8 everywhere for now. Natively, libvpx in the isolated video worker (new SECURITY.md exception and cargo-deny wrapper). The alternative, rav1e AV1, is slow and Safari's AV1 support is limited.
+7. **Hosting:** coturn at turn.nuschl.eu limited to SFU peers, now; a Rust TURN server later. SFU and pages on the same host. Minimal logs and a stated retention period.
+8. **Domains:** stream.nuschl.eu/watch (decided); the passkey rpId leaves the apex (app.nuschl.eu or auth.nuschl.eu, pending); a separate viewing domain is optional.
+9. **End-to-end servers:** S delivered over an MLS `Signal` envelope (fast), with exporter keys (#135) later for voice.
+10. **cargo-deny:** add str0m wrapper `nuschl-sfu`, a KEM/HPKE wrapper for `nuschl-stream`, and a vpx wrapper for the video worker (Root reviews).
+11. **Compatible-mode nuschld in Phase 1:** use the interim link mode, until `rtc/1` (#141) brings a server-made line.
+
+The coordinator should file new issues for K1, W1, B1, V1 and the infrastructure, with `source:user-request` quoting today's requests. #140–#147 are approved migrated scope.
+
+## 8. Lanes for the next 1–2 days (no conflicts with current work)
+
+- **L1, stream crypto:** S0a, then K1, in new `crates/stream`.
+- **L2, SFU:** S0c, then the E1 skeleton, in new `crates/sfu` and `apps/sfu`.
+- **L3, web stream:** S0b, then the W1 skeleton, in new `web/stream/`. Not `web/app`, `web/site` or `crates/client-wasm`.
+- **L4, video worker:** libvpx binding and Nix review, synthetic PipeWire fixture design, a draft of new `crates/ipc/src/video.rs`. Dry runs only; the `host.rs` hunk is proposed to Root.
+- **L5, desktop share:** D1 in new `crates/core/src/stream.rs` and `apps/desktop/src/stream.rs`. The menu hunk needs agreement with the desktop-next lane.
+- **L6, infrastructure and docs:** `nix/stream-module.nix`, coturn config, the owner's DNS/TLS checklist, the #139 plan amendment as a new revision, draft SECURITY/architecture/web rows for Root.
+- **Root only:** `Cargo.toml` members, `Cargo.lock`, crate2nix, `deny.toml`, `SECURITY.md`.
+- **On hold:**
+  - R1 and the #93 merge (they touch `client.rs`, `native.rs` and session `connection.rs` while Codex works on #108/#118).
+  - Anything in `apps/server` (#115).
+  - `crates/client-wasm` `session.rs`/`browser.rs` (#13).
+  - `web/app` (browser broker staging).
+
+**Unverified, needs checking:** browser encoded-transform support (Chromium's RTCRtpScriptTransform vs `createEncodedStreams`; Safari); libcrux on wasm32 and X-Wing draft parity; str0m forwarding of SFrame'd VP8; which libvpx binding crate; ScreenCast portal on X11 sessions and SHM fallback; Rust TURN servers; a roughly one-second room-squatting window in the Phase 1 handoff (fails closed as "link already in use"; same threat class as link substitution); all effort estimates.
