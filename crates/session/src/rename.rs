@@ -194,7 +194,7 @@ fn canonical_worker_path(path: &Path) -> io::Result<std::path::PathBuf> {
 
 #[cfg(all(windows, not(test)))]
 fn retire_windows(old: Option<&Layout>, new: &Layout) -> io::Result<()> {
-    use nuschl_ipc::windows_sandbox::scoped_profile;
+    use nuschl_sandbox::windows_policy::scoped_profile;
     fn retire_legacy_profile(name: &str, directories: &[std::path::PathBuf]) -> io::Result<()> {
         use std::{
             os::windows::process::CommandExt,

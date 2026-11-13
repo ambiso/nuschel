@@ -54,7 +54,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         [] => None,
         [flag, path] if flag == "--file" => Some(File::open(path)),
         #[cfg(windows)]
-        [flag, handle] if flag == nuschl_ipc::windows_sandbox::FILE_HANDLE_FLAG => {
+        [flag, handle] if flag == nuschl_sandbox_windows::FILE_HANDLE_FLAG => {
             Some(nuschl_sandbox_windows::inherited_file(handle))
         }
         _ => return Err("usage: nuschl-transfer-worker [--file PATH]".into()),

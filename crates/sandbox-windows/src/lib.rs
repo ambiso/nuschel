@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! The launch stage of Nuschl's Windows workers.
 //!
-//! A worker executable started with `nuschl_ipc::windows_sandbox::LAUNCH_FLAG`
+//! A worker executable started with `nuschl_sandbox::windows_policy::LAUNCH_FLAG`
 //! calls [`launch_if_requested`] first thing in `main`. That creates (or reuses)
 //! the AppContainer profile the policy names, grants it the policy's
 //! directories, and starts the same executable inside it with only the
@@ -44,6 +44,9 @@ mod windows;
 
 #[cfg(windows)]
 pub use windows::{inherited_file, launch_if_requested, retire_legacy_profile};
+/// The worker argument that names the handle [`inherited_file`] opens.
+#[cfg(windows)]
+pub use nuschl_sandbox::windows_policy::FILE_HANDLE_FLAG;
 
 /// Exit code of a launch stage that could not start its worker confined.
 pub const LAUNCH_FAILED: i32 = 125;

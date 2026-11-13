@@ -34,7 +34,7 @@ tempfile = "3.27.0"
 tokio = { version = "1.54.1", features = ["macros", "rt-multi-thread", "time", "sync"] }
 
 # The launch stage: on Windows the worker starts itself again inside its
-# AppContainer (nuschl_ipc::windows_sandbox).
+# AppContainer (nuschl_sandbox::windows_policy).
 [target.'cfg(windows)'.dependencies]
 nuschl-sandbox-windows.workspace = true
 

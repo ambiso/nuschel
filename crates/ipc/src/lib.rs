@@ -9,7 +9,6 @@ pub mod murmur;
 #[cfg(not(target_family = "wasm"))]
 pub mod musicbot;
 pub mod server;
-pub mod windows_sandbox;
 
 use std::io::{self, Read, Write};
 

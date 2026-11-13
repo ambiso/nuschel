@@ -7252,6 +7252,7 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "nuschl-core",
+ "nuschl-sandbox",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
@@ -7408,12 +7409,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "nuschl-sandbox"
+version = "0.1.0"
+
+[[package]]
 name = "nuschl-sandbox-windows"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "nuschl-core",
  "nuschl-ipc",
+ "nuschl-sandbox",
  "serde",
  "serde_json",
  "tokio",
@@ -7430,6 +7436,7 @@ dependencies = [
  "nuschl-ipc",
  "nuschl-legacy-html",
  "nuschl-protocol",
+ "nuschl-sandbox",
  "p12-keystore",
  "prost",
  "rcgen",

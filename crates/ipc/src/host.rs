@@ -1048,13 +1048,13 @@ pub fn transfer_sandbox_command(executable: &Path, file: Option<&Path>) -> Resul
 /// Windows: each worker runs in its own AppContainer (no capabilities unless
 /// listed: no network, no access to the user's files) inside a job object,
 /// started by its own executable's launch stage (see
-/// [`crate::windows_sandbox`] and `nuschl-sandbox-windows`). The launch
+/// `nuschl_sandbox::windows_policy` and `nuschl-sandbox-windows`). The launch
 /// stage itself runs with an empty environment apart from Windows' own
 /// directories, without a console window, inside the kill-on-close job of
 /// [`contain`]; it refuses to start a worker it cannot confine, as Linux
 /// refuses without bwrap.
 #[cfg(windows)]
-fn windows_worker(executable: &Path, policy: &crate::windows_sandbox::Policy) -> Command {
+fn windows_worker(executable: &Path, policy: &nuschl_sandbox::windows_policy::Policy) -> Command {
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     let mut command = Command::new(executable);
     command.env_clear();
@@ -1080,7 +1080,7 @@ mod windows_limits {
 #[cfg(any(windows, test))]
 mod windows_policies {
     use super::windows_limits::{CONTENT, PERSISTENT};
-    use crate::windows_sandbox::{Policy, scoped_profile};
+    use nuschl_sandbox::windows_policy::{Policy, scoped_profile};
     use std::path::Path;
 
     /// No capabilities, no files: decoding happens on what arrives over stdin.

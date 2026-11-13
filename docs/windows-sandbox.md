@@ -45,7 +45,7 @@ The launch stage reads no untrusted input: the worker's pipes go straight to the
 confined process. When the supervisor kills it (a timeout, a mute change, Nuschl
 exiting), its job handle closes and the job ends the worker.
 
-The policy is plain data (`nuschl_ipc::windows_sandbox::Policy`), encoded on the
+The policy is plain data (`nuschl_sandbox::windows_policy::Policy`), encoded on the
 command line by the supervisor and parsed by the launch stage. Its encoding, the
 command-line quoting and the per-worker policies are unit-tested on every platform.
 

@@ -303,6 +303,16 @@ rec {
       # File a bug if you depend on any for non-debug work!
       debug = internal.debugCrate { inherit packageId; };
     };
+    "nuschl-sandbox" = rec {
+      packageId = "nuschl-sandbox";
+      build = internal.buildRustCrateWithFeatures {
+        packageId = "nuschl-sandbox";
+      };
+
+      # Debug support which might change between releases.
+      # File a bug if you depend on any for non-debug work!
+      debug = internal.debugCrate { inherit packageId; };
+    };
     "nuschl-sandbox-windows" = rec {
       packageId = "nuschl-sandbox-windows";
       build = internal.buildRustCrateWithFeatures {
@@ -23865,6 +23875,10 @@ rec {
             packageId = "nuschl-core";
           }
           {
+            name = "nuschl-sandbox";
+            packageId = "nuschl-sandbox";
+          }
+          {
             name = "serde";
             packageId = "serde";
             features = [ "derive" ];
@@ -24435,6 +24449,14 @@ rec {
         ];
 
       };
+      "nuschl-sandbox" = rec {
+        crateName = "nuschl-sandbox";
+        version = "0.1.0";
+        edition = "2024";
+        src = lib.cleanSourceWith { filter = sourceFilter;  src = ../../crates/sandbox; };
+        libName = "nuschl_sandbox";
+
+      };
       "nuschl-sandbox-windows" = rec {
         crateName = "nuschl-sandbox-windows";
         version = "0.1.0";
@@ -24443,8 +24465,8 @@ rec {
         libName = "nuschl_sandbox_windows";
         dependencies = [
           {
-            name = "nuschl-ipc";
-            packageId = "nuschl-ipc";
+            name = "nuschl-sandbox";
+            packageId = "nuschl-sandbox";
           }
           {
             name = "windows-sys";
@@ -24461,6 +24483,10 @@ rec {
           {
             name = "nuschl-core";
             packageId = "nuschl-core";
+          }
+          {
+            name = "nuschl-ipc";
+            packageId = "nuschl-ipc";
           }
           {
             name = "serde";
@@ -24514,6 +24540,10 @@ rec {
           {
             name = "nuschl-protocol";
             packageId = "nuschl-protocol";
+          }
+          {
+            name = "nuschl-sandbox";
+            packageId = "nuschl-sandbox";
           }
           {
             name = "p12-keystore";
