@@ -904,6 +904,8 @@ fn category_tabs(picker: &Picker, cx: &mut Context<Desktop>) -> AnyElement {
         .aria_label("Categories")
         .mx_2()
         .flex()
+        // The tabs are narrower than the picker: the space is on both sides.
+        .justify_center()
         .children(categories().map(|(name, icon)| {
             let selected = current == Some(name);
             div()
