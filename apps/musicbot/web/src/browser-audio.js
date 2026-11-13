@@ -43,6 +43,8 @@ export class AudioRecordParser {
           this.#reset();
           continue;
         }
+        // Keep-alive while the queue has nothing to play; it carries no audio.
+        if (type === 2) continue;
         if (type !== 1) throw new Error(`The browser audio stream contains an invalid record (${type}).`);
         this.#payload = new Uint8Array(FRAME_BYTES);
         this.#filled = 0;
@@ -57,6 +59,8 @@ export class AudioRecordParser {
       for (let i = 0; i < samples.length; i++) {
         const sample = view.getFloat32(i * 4, true);
         if (!Number.isFinite(sample)) throw new Error("The browser audio stream contains a non-finite sample.");
+        // The server clamps to full scale; anything louder is not this protocol.
+        if (sample < -1 || sample > 1) throw new Error("The browser audio stream contains an out-of-range sample.");
         if (!LITTLE_ENDIAN) samples[i] = sample;
       }
       this.#payload = null;

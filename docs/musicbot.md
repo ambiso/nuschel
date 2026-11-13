@@ -91,6 +91,13 @@ replaces it, and the old one stops working. Without a certificate anybody could 
 the same name later, so every `!web` gives a new link. Links are kept in
 `tokens.json` in the state directory.
 
+A link grants everything the page does: controlling every queue, reading playback
+history, and streaming any queue's audio in a browser (only the server-wide cap of
+16 browser streams applies, about 3 Mbit/s each). The bot also writes to each
+configured library account: it scrobbles every qualifying play to that account's
+history, and any valid link can set or clear that account's song ratings. The bot
+uses one account per library, so every link holder shares those ratings.
+
 At most 4,096 links are retained. When the limit is reached, issuance fails
 without replacing another person's link. Token files are capped at 4 MiB.
 Link changes use synced atomic replacement; a failed write rolls back the in-memory
@@ -378,8 +385,8 @@ against Murmur in a VM, then the same script.
 **Listen** starts audio for the selected queue after a browser gesture. The
 **Browser volume** slider changes only local playback; **Mumble volume** controls
 the bot's channel output. Speech ducking applies to Mumble output. Browser audio
-uses the original decoded stereo samples, so every format the bot decodes can be
-heard here. Selecting another queue switches the listening stream while keeping
+uses the original decoded stereo samples (at most full scale), so every format the
+confined decode worker decodes can be heard here. Selecting another queue switches the listening stream while keeping
 the browser's audio context and volume.
 
 Pause, seek and skip follow the shared queue and clear buffered browser audio.
@@ -515,9 +522,13 @@ and `X-Accel-Buffering: no`. Format headers are `X-Audio-Format: f32le`,
 `X-Audio-Rate: 48000`, `X-Audio-Channels: 2` and `X-Audio-Frame-Samples: 960`.
 
 The first body record is byte 0, which clears buffered audio. Byte 1 is followed
-by exactly 7,680 bytes: 960 interleaved stereo frames of little-endian float32 PCM.
-Reset records also delimit pauses, seeks and song changes. The stream remains open
-while the queue waits; disconnecting releases its subscription. Revoked links are
+by exactly 7,680 bytes: 960 interleaved stereo frames of little-endian float32 PCM,
+each sample within -1.0..1.0 (clients reject anything else). Reset records also
+delimit pauses, seeks and song changes. Byte 2 is a keep-alive without audio: a
+stream with nothing else to send (a paused or waiting queue) sends one at least every
+15 seconds, so proxies with read timeouts (nginx defaults to 60 seconds) keep it
+open. The stream remains open while the queue waits; disconnecting releases its
+subscription. Revoked links are
 checked during playback and at least once per second while idle or backpressured.
 
 The authenticated `GET /u/<token>/licenses` route serves the installed, bounded

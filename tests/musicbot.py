@@ -18,6 +18,7 @@ import ctypes
 import http.client
 import http.server
 import json
+import math
 from pathlib import Path
 import re
 import socket
@@ -505,6 +506,94 @@ def channel_subscription_playback(link, alice, bob, dj):
     return len(heard)
 
 
+def rate(link, library, song, rating):
+    request = urllib.request.Request(
+        link + "api/rating", method="POST",
+        data=json.dumps({"library": library, "id": song, "rating": rating}).encode(),
+        headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT) as response:
+        assert response.status == 204 and response.read() == b"", response.status
+
+
+def shared_ratings(link, watchers):
+    """Ratings live in the library account; only a successful write bumps the
+    live revision every viewer follows."""
+    revision = api(link)["rating_revision"]
+    assert api(link, "rating", library=0, id="s1") == {"rating": 0}
+    rate(link, 0, "s1", 4)
+    assert api(link, "rating", library=0, id="s1") == {"rating": 4}
+    assert Library.ratings == {("plain", "s1"): 4}, Library.ratings
+    for watcher in watchers:
+        watcher.wait(lambda state: state["rating_revision"] == revision + 1)
+    expect_error(link + "api/rating", 400, json_error=True,
+                 data=json.dumps({"library": 0, "id": "s1", "rating": 6}).encode(),
+                 headers={"Content-Type": "application/json"})
+    rate(link, 0, "s1", 0)
+    assert api(link, "rating", library=0, id="s1") == {"rating": 0} and not Library.ratings
+    assert api(link)["rating_revision"] == revision + 2
+
+
+def listening(link, player):
+    return urllib.request.urlopen(link + f"api/listen?player={player}", timeout=HTTP_TIMEOUT)
+
+
+def next_record(stream):
+    """One browser-audio record: 0 reset, 1 PCM frame, 2 keep-alive."""
+    kind = stream.read(1)
+    assert len(kind) == 1, "the listening stream ended"
+    if kind == b"\x01":
+        payload = stream.read(7680)
+        assert len(payload) == 7680, len(payload)
+        samples = struct.unpack("<1920f", payload)
+        assert all(math.isfinite(sample) and -1 <= sample <= 1 for sample in samples)
+        return 1
+    assert kind in (b"\x00", b"\x02"), kind
+    return kind[0]
+
+
+def new_link_from(client, bot, old):
+    """`!web new` replaces the link; the old one stops working."""
+    client.send(kind="direct", session=bot, body="!web new")
+    text = client.wait(lambda event: event["kind"] == "text" and not event["outgoing"]
+                       and "/u/" in event["body"] and old not in event["body"], timeout=15)
+    return re.search(r"https?://[^\s\"<]+/u/[0-9a-f-]{36}/", text["body"]).group(0)
+
+
+def browser_listening(link, alice, dj, player):
+    """A browser alone plays a queue with nobody in its channel; streams are
+    bounded and end when their link is replaced."""
+    assert api(link)["players"][player]["listeners"] == 0
+    stream = listening(link, player)
+    try:
+        headers = stream.headers
+        assert headers.get_content_type() == "application/octet-stream", dict(headers)
+        assert headers["Cache-Control"] == "no-store" and headers["X-Accel-Buffering"] == "no"
+        assert (headers["X-Audio-Format"], headers["X-Audio-Rate"], headers["X-Audio-Channels"],
+                headers["X-Audio-Frame-Samples"]) == ("f32le", "48000", "2", "960"), dict(headers)
+        assert stream.read(1) == b"\x00", "the stream did not start with a reset"
+        eventually(lambda: api(link), lambda state: state["players"][player]["listeners"] == 1,
+                   "browser listener counted")
+        command(link, "add", player=player, kind="song", library=0, id="s1", index=None)
+        frames = 0
+        while frames < 25:
+            frames += next_record(stream) == 1
+        extra = []
+        try:
+            for _ in range(15):
+                extra.append(listening(link, player))
+            expect_error(link + f"api/listen?player={player}", 503, json_error=True)
+        finally:
+            close_resources(extra)
+        replaced = new_link_from(alice, dj, link)
+        deadline = time.monotonic() + 10
+        while stream.read(65536):
+            assert time.monotonic() < deadline, "a replaced link kept streaming"
+        expect_error(link + f"api/listen?player={player}", 404, json_error=True)
+        return replaced, frames
+    finally:
+        stream.close()
+
+
 def track_identity(state, entry):
     track = entry["track"]
     return state["libraries"][track["library"]], track["id"], entry["added_by"]
@@ -588,6 +677,7 @@ def main():
                 watchers.append(Events(bob_link))
                 for watcher, name in zip(watchers, ("alice", "bob")):
                     watcher.wait(lambda state, name=name: state["you"] == name)
+                shared_ratings(link, watchers)
                 # Keep the queue paused so exact shared snapshots can be compared.
                 broadcast(watchers, link, "pause", lambda state: state["players"][0]["paused"])
                 broadcast(watchers, bob_link, "volume", lambda state: state["players"][0]["volume"] == 71,
@@ -629,6 +719,12 @@ def main():
                 assert completed["started_at_ms"] is not None and completed["error"] is None
                 assert 2800 <= completed["played_ms"] <= 3200, completed
                 first_history_id = completed["id"]
+                # The library account hears of the play: now playing, then one submission.
+                reports = eventually(lambda: [report for report in Library.scrobbles if report[1] == "s1"],
+                                     lambda reports: any(report[3] for report in reports),
+                                     "playback submitted to the library")
+                assert reports == [("plain", "s1", completed["started_at_ms"], False),
+                                   ("plain", "s1", completed["started_at_ms"], True)], reports
 
                 drain(alice)
                 command(link, "add", kind="song", library=0, id="s1", index=None)
@@ -844,11 +940,14 @@ def main():
                            for item in removed_library_history["items"]), removed_library_history
                 presence_comments(alice, connected(alice), link)
                 subscription_audio = channel_subscription_playback(link, alice, bob, session_of(alice, "DJ"))
+                music_bot = session_of(alice, "DJ")
+                link, browser_frames = browser_listening(link, alice, music_bot, music)
                 print(json.dumps({"full_song": len(full), "seek_remainder": len(remainder),
                                   "music": len(heard_alice), "lobby": len(heard_bob), "shared": shared,
                                   "deployment_remainder": len(deployed_audio), "sse_viewers": 2,
                                   "music_history": deployed_history["id"], "history_pagination": True,
-                                  "channel_subscription_audio": subscription_audio}))
+                                  "channel_subscription_audio": subscription_audio,
+                                  "browser_frames": browser_frames, "scrobbles": len(Library.scrobbles)}))
             finally:
                 try:
                     bot.stop()

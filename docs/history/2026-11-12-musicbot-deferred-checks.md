@@ -6,8 +6,7 @@ These observations record the checkpoint below. Current work is tracked through
 Observed during the musicbot rebase onto `origin/main` at `b5e301e`, with the
 pinned Rust 1.99.1 toolchain. The user explicitly requested that these unrelated
 findings be recorded and left unfixed. Temporary source edits were reverted;
-they are not part of the musicbot submission. The earlier audio work is preserved
-on `preserved/audio-bitrate-stereo`.
+they are not part of the musicbot submission.
 
 `direnv exec . just check` stopped at workspace Clippy on the findings below, so
 that invocation did **not** reach the full workspace tests or live advisory check.
@@ -50,8 +49,3 @@ Do not describe the whole workspace as green based on those scoped results.
 - Vendored `speexdsp-resampler` emits four function-item-to-integer cast
   warnings; vendored `magic-wormhole` uses deprecated `time` Year/Month
   formatting components. These were warnings, not the scoped bot failures.
-- Environment-only Git fetch blockers: the session initially lacked `ssh`,
-  then OpenSSH rejected the owner/permissions of `~/.ssh/config`. Global Git
-  configuration rewrites GitHub HTTPS URLs to SSH. The fetch used a
-  command-local HTTPS override; no SSH files or persistent Git configuration
-  were changed. Review separately if SSH transport is wanted in this session.

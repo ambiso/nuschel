@@ -674,8 +674,10 @@ impl Player {
         let browser_sent = if self.browser.receiver_count() > 0 {
             let mut bytes = Vec::with_capacity(1 + FRAME * CHANNELS * 4);
             bytes.push(1);
+            // The decode worker's PCM is only checked to be finite; browsers
+            // get full scale at most, as the Mumble path's gain stage ensures.
             for sample in frame.iter() {
-                bytes.extend_from_slice(&sample.to_le_bytes());
+                bytes.extend_from_slice(&sample.clamp(-1.0, 1.0).to_le_bytes());
             }
             self.browser
                 .send(BrowserRecord {
@@ -1249,8 +1251,7 @@ mod tests {
         start_next(&player);
         let original: Vec<f32> = (0..FRAME * CHANNELS)
             .map(|sample| {
-                ((sample / CHANNELS) as f32 * 440.0 * std::f32::consts::TAU / 48_000.0).sin()
-                    * 0.8
+                ((sample / CHANNELS) as f32 * 440.0 * std::f32::consts::TAU / 48_000.0).sin() * 0.8
             })
             .collect();
         {
@@ -1286,6 +1287,30 @@ mod tests {
         }
         player.skip();
         assert_eq!(player.state().history[0].played_ms, 40);
+    }
+
+    #[tokio::test]
+    async fn browser_pcm_is_clamped_to_full_scale() {
+        let player = Arc::new(player());
+        let mut browser = player.subscribe_browser();
+        assert_eq!(browser.recv().await.unwrap().as_ref(), &[0]);
+        player.enqueue(vec![track("a")], "ada", None);
+        start_next(&player);
+        let frame: Vec<f32> = (0..FRAME * CHANNELS)
+            .map(|index| match index % 4 {
+                0 => 1e30,
+                1 => -7.5,
+                2 => 0.25,
+                _ => -1.0,
+            })
+            .collect();
+        {
+            let mut state = player.state();
+            player.broadcast_frame(state.current.as_mut().unwrap(), &frame, None, || 1000);
+        }
+        let sent = pcm(&browser.recv().await.unwrap());
+        assert!(sent.iter().all(|sample| (-1.0..=1.0).contains(sample)));
+        assert_eq!(&sent[..4], &[1.0, -1.0, 0.25, -1.0]);
     }
 
     #[tokio::test]

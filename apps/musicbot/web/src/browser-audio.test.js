@@ -3,7 +3,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { AudioRecordParser, validateAudioHeaders } from "./browser-audio.js";
 
-function audioRecord(sample = (i) => i % 2 === 0 ? 1.25 : -2.5) {
+function audioRecord(sample = (i) => i % 2 === 0 ? 0.625 : -1) {
   const record = new Uint8Array(1 + 960 * 2 * 4);
   record[0] = 1;
   const view = new DataView(record.buffer);
@@ -53,7 +53,7 @@ test("browser records survive every chunk boundary and preserve finite stereo PC
     assert.equal(received[0], "reset");
     assert.equal(received[2], "reset");
     assert.equal(received[1].length, 1920);
-    for (let i = 0; i < received[1].length; i++) assert.equal(received[1][i], i % 2 === 0 ? 1.25 : -2.5);
+    for (let i = 0; i < received[1].length; i++) assert.equal(received[1][i], i % 2 === 0 ? 0.625 : -1);
     assert.ok(Object.is(received[3][0], -0));
     assert.equal(received[3][1], 0.125);
     assert.equal(received[3][1919], -0.75);
@@ -63,7 +63,8 @@ test("browser records survive every chunk boundary and preserve finite stereo PC
 test("browser audio rejects missing resets, invalid records, truncated frames and non-finite PCM", () => {
   const parser = () => new AudioRecordParser(() => {}, () => {});
   assert.throws(() => parser().push(audioRecord()), /did not start with a reset/);
-  assert.throws(() => parser().push(new Uint8Array([0, 2])), /invalid record/);
+  assert.throws(() => parser().push(new Uint8Array([0, 3])), /invalid record/);
+  assert.throws(() => parser().push(new Uint8Array([2, 0])), /did not start with a reset/);
   assert.throws(() => parser().finish(), /truncated record/);
   const partial = parser();
   partial.push(new Uint8Array([0]));
@@ -74,4 +75,22 @@ test("browser audio rejects missing resets, invalid records, truncated frames an
     malformed.push(new Uint8Array([0]));
     assert.throws(() => malformed.push(audioRecord((i) => i === 1919 ? sample : 0)), /non-finite sample/);
   }
+  for (const sample of [1.0000001, -1.5, 3.4e38]) {
+    const loud = parser();
+    loud.push(new Uint8Array([0]));
+    assert.throws(() => loud.push(audioRecord((i) => i === 7 ? sample : 0)), /out-of-range sample/);
+  }
+});
+
+test("keep-alive records carry no audio and never interrupt a frame", () => {
+  const received = [];
+  const parser = new AudioRecordParser(() => received.push("reset"), (frame) => received.push(frame));
+  const record = audioRecord((i) => (i % 3) / 4);
+  const wire = new Uint8Array([0, 2, 2, ...record, 2]);
+  for (let offset = 0; offset < wire.length; offset += 1000) parser.push(wire.subarray(offset, offset + 1000));
+  parser.finish();
+  assert.equal(received.length, 2);
+  assert.equal(received[0], "reset");
+  assert.equal(received[1].length, 1920);
+  assert.equal(received[1][2], 0.5);
 });

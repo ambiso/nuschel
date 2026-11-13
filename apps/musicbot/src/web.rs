@@ -50,6 +50,11 @@ static COVER_JOBS: Semaphore = Semaphore::const_new(MAX_COVER_JOBS);
 /// Live bodies have their own admission, independent of library metadata calls.
 const MAX_LISTEN_STREAMS: usize = 16;
 static LISTEN_STREAMS: Semaphore = Semaphore::const_new(MAX_LISTEN_STREAMS);
+/// A listening stream with nothing to send (a paused or waiting queue) sends
+/// this one-byte record at least this often, so proxies with read timeouts
+/// (nginx defaults to 60 s) keep it open.
+const LISTEN_KEEPALIVE: Duration = Duration::from_secs(15);
+const KEEPALIVE_RECORD: &[u8] = &[2];
 /// Albums per page of an album list.
 const PAGE_SIZE: u32 = 48;
 /// Changes that come in a burst are sent as one state.
@@ -744,6 +749,7 @@ fn listen_response(
         let mut lease = lease;
         let mut check = tokio::time::interval(Duration::from_secs(1));
         check.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut last_record = tokio::time::Instant::now();
         loop {
             if !bot.tokens.is_valid(&token) {
                 break;
@@ -764,11 +770,15 @@ fn listen_response(
                     Some(record) => record,
                     None => break,
                 },
+                _ = tokio::time::sleep_until(last_record + LISTEN_KEEPALIVE) => {
+                    Bytes::from_static(KEEPALIVE_RECORD)
+                }
             };
             if !bot.tokens.is_valid(&token) {
                 break;
             }
             space.send(record);
+            last_record = tokio::time::Instant::now();
         }
     });
     let body = Body::from_stream(ListenBody { records, producer });
@@ -1465,6 +1475,34 @@ mod tests {
             listen_response(bot, token, 0, &ADMISSION).err().unwrap().0,
             StatusCode::NOT_FOUND
         );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn idle_listening_sends_a_keepalive_record_at_least_every_fifteen_seconds() {
+        static ADMISSION: Semaphore = Semaphore::const_new(1);
+        let (_directory, bot, token) = listening_bot();
+        bot.players[0].set_paused(true);
+        let response = listen_response(bot.clone(), token, 0, &ADMISSION).unwrap();
+        let mut stream = response.into_body().into_data_stream();
+        assert_eq!(stream.next().await.unwrap().unwrap().as_ref(), &[0]);
+        for _ in 0..3 {
+            assert!(
+                tokio::time::timeout(Duration::from_secs(14), stream.next())
+                    .await
+                    .is_err(),
+                "a keep-alive came early"
+            );
+            let record = tokio::time::timeout(Duration::from_secs(2), stream.next())
+                .await
+                .expect("no keep-alive within 15 seconds")
+                .unwrap()
+                .unwrap();
+            assert_eq!(record.as_ref(), KEEPALIVE_RECORD);
+        }
+        assert_eq!(ADMISSION.available_permits(), 0);
+        drop(stream);
+        released(&bot, 0).await;
+        assert_eq!(ADMISSION.available_permits(), 1);
     }
 
     async fn response_json(response: Response) -> serde_json::Value {
