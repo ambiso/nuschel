@@ -32,9 +32,17 @@ export class StatePublication {
   changed(raw) {
     if(this.closed)return;
     try {
-      const size=bytes(raw,MAX_STATE_EVENT_BYTES),events=JSON.parse(raw);
-      if(!Array.isArray(events)||events.length+this.events.length+(this.inflight?.events??0)>MAX_STATE_EVENTS)throw new Error("Browser state event limit exceeded.");
-      const charge=events.length?size:0;
+      bytes(raw,MAX_STATE_EVENT_BYTES);
+      const incoming=JSON.parse(raw);
+      if(!Array.isArray(incoming))throw new Error("Invalid browser state events.");
+      const redundant=event=>event!==null&&typeof event==="object"&&!Array.isArray(event)&&event.kind==="changed"&&Object.keys(event).length===1;
+      let changed=this.events.some(redundant);
+      // This generic marker carries no event payload; the current model is
+      // collected later. Keep one charged indication in this pending batch,
+      // without mutating the already posted frame or discarding other events.
+      const events=incoming.filter(event=>{if(!redundant(event))return true;if(changed)return false;changed=true;return true;});
+      if(events.length+this.events.length+(this.inflight?.events??0)>MAX_STATE_EVENTS)throw new Error("Browser state event limit exceeded.");
+      const charge=events.length?bytes(JSON.stringify(events),MAX_STATE_EVENT_BYTES):0;
       if(charge+this.eventBytes+(this.inflight?.eventBytes??0)>MAX_STATE_EVENT_BYTES)throw new Error("Browser state event limit exceeded.");
       this.events.push(...events);this.eventBytes+=charge;this.dirty=true;this.flush();
     } catch(error) { this.fail(String(error?.message||error)); }

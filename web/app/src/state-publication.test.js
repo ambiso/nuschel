@@ -54,3 +54,14 @@ test("UI state ACK has independent exact-owner control credit and application fa
  assert.equal(rpc.acceptState(2),true);rpc.close("UI apply failed");assert.equal(rpc.ackState(2),false);assert.equal(terminated,1);await Promise.all(pending);
  const other=new SdkRpc(worker,{clock});other.initialize("ws://127.0.0.1/relay");other.acceptReady();assert.equal(other.acceptState(2),false);assert.equal(other.closed,true,"new owner cannot accept previous owner's sequence");
 });
+
+test("large roster changed notices coalesce one charged indication; payload events remain exact FIFO",()=>{
+ const f=fixture(),changes=Array.from({length:10000},()=>({kind:"changed"}));
+ f.flow.changed(JSON.stringify([...changes,{kind:"sent",body:"first"},{kind:"changed",extra:"must survive"},{kind:"error",message:"original"}]));
+ assert.deepEqual(f.posted[0].updates,[{kind:"changed"},{kind:"sent",body:"first"},{kind:"changed",extra:"must survive"},{kind:"error",message:"original"}]);
+ const original=JSON.stringify(f.posted[0]);
+ f.flow.changed(JSON.stringify([...changes,{kind:"sent",body:"second"},...changes,{kind:"error",message:"second"}]));
+ assert.equal(JSON.stringify(f.posted[0]),original,"inflight frame is immutable");
+ assert.equal(f.flow.events.length,3);assert.equal(f.flow.inflight.events,4);
+ f.flow.ack(1);assert.deepEqual(f.posted[1].updates,[{kind:"changed"},{kind:"sent",body:"second"},{kind:"error",message:"second"}]);
+});
