@@ -16,6 +16,8 @@ use crate::{
     PreparedContent, write_frame,
 };
 
+pub mod preview_lifecycle;
+
 #[derive(Debug, Error)]
 pub enum Error {
     #[error(transparent)]
@@ -43,6 +45,28 @@ pub fn content_sandbox_command(
     arguments: &[OsString],
 ) -> Result<Command, Error> {
     content_sandbox(executable, arguments, 5)
+}
+
+/// Preview-only Linux containment with a trusted namespace-init receipt on
+/// stderr. The caller must pipe stderr and acquire `preview_lifecycle::Retirement`
+/// before sending any input, retaining it through actual namespace retirement.
+#[cfg(target_os = "linux")]
+pub fn preview_sandbox_command(
+    executable: &Path,
+    arguments: &[OsString],
+) -> Result<Command, Error> {
+    let limits = [CONTENT_MEMORY.into(), "--cpu=5".into()];
+    let mut sandbox = Sandbox::new(executable, &limits)?;
+    sandbox.0.args(["--json-status-fd", "2"]);
+    Ok(sandbox.run(arguments))
+}
+
+/// Other platforms need an equivalent observed whole-role retirement path.
+#[cfg(not(target_os = "linux"))]
+pub fn preview_sandbox_command(_: &Path, _: &[OsString]) -> Result<Command, Error> {
+    Err(Error::MissingSandboxHelper(
+        "preview role retirement on this platform",
+    ))
 }
 
 /// Update-only one-shot verifier, with no data directory, network capability or
