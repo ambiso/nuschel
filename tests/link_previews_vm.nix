@@ -168,7 +168,7 @@ pkgs.testers.runNixOSTest {
         machine.succeed(f"ip addr add {address}/32 dev lo")
     machine.succeed("touch /run/nuschl-preview-dedicated-vm")
     native_directory = "${nativeDirectory}"
-    machine.succeed(f"test ! -e {native_directory}; install -d -m0700 -o tester -g users {native_directory} {native_directory}/tmp")
+    machine.succeed(f"test ! -e {native_directory} && install -d -m0700 -o tester -g users {native_directory} {native_directory}/tmp")
     machine.succeed("runuser -u tester -- ${python} -c 'import json,os;open(\"${nativeDirectory}/vm-identity.json\",\"x\").write(json.dumps({\"net_inode\":os.stat(\"/proc/self/ns/net\").st_ino}))'")
     native_units = ("nuschl-preview-native-test.service", "nuschl-preview-native-peers.service")
     native_pids = {}
@@ -180,7 +180,7 @@ pkgs.testers.runNixOSTest {
         peer_group = machine.succeed("systemctl show -p ControlGroup --value nuschl-preview-native-peers.service").strip()
         assert peer_group == "/system.slice/nuschl-preview-native-peers.service", peer_group
         native_groups[native_units[1]] = peer_group
-        peer_ready = json.loads(machine.succeed(f"test $(stat -c%s {native_directory}/peers-ready.json) -le 32768; cat {native_directory}/peers-ready.json"))
+        peer_ready = json.loads(machine.succeed(f"test $(stat -c%s {native_directory}/peers-ready.json) -le 32768 && cat {native_directory}/peers-ready.json"))
         assert type(peer_ready["pid"]) is int and peer_ready["pid"] > 0
         assert machine.succeed("systemctl show -p ExecMainPID --value nuschl-preview-native-peers.service").strip() == str(peer_ready["pid"])
         native_pids[native_units[1]] = peer_ready["pid"]
@@ -191,10 +191,10 @@ pkgs.testers.runNixOSTest {
         assert test_pid.isdecimal() and int(test_pid) > 0, test_pid
         native_pids[native_units[0]] = int(test_pid)
         assert native_status == 0, native_log
-        authority = json.loads(machine.succeed(f"test $(stat -c%s {native_directory}/test-process-authority.json) -le 16384; cat {native_directory}/test-process-authority.json"))
+        authority = json.loads(machine.succeed(f"test $(stat -c%s {native_directory}/test-process-authority.json) -le 16384 && cat {native_directory}/test-process-authority.json"))
         assert authority["cgroup"] == "0::/system.slice/nuschl-preview-native-test.service\n", authority
         native_groups[native_units[0]] = authority["cgroup"].split("::", 1)[1].rstrip("\n")
-        result = json.loads(machine.succeed(f"test $(stat -c%s {native_directory}/fetch-result.json) -le 65536; cat {native_directory}/fetch-result.json"))
+        result = json.loads(machine.succeed(f"test $(stat -c%s {native_directory}/fetch-result.json) -le 65536 && cat {native_directory}/fetch-result.json"))
         assert result["passed"] is True and len(result["checks"]) == 13, result
     finally:
         # Requesting stop is insufficient: admission below also requires the
@@ -207,7 +207,7 @@ pkgs.testers.runNixOSTest {
         machine.succeed(f"(ip -4 route show table all; ip -6 route show table all; iptables-save; ip6tables-save) > {native_directory}/routes.txt")
         machine.succeed("install -d /tmp/preview-native-evidence")
         for name in ("launcher.log", "stop.log", "test.log", "peers.log", "fetch-result.json", "test-process-authority.json", "peers-ready.json", "peers.json", "artifacts.sha256", "source-identity.txt", "routes.txt"):
-            machine.succeed(f"if test -f {native_directory}/{name}; then test $(stat -c%s {native_directory}/{name}) -le 1048576; cp {native_directory}/{name} /tmp/preview-native-evidence/; fi")
+            machine.succeed(f"if test -f {native_directory}/{name}; then test $(stat -c%s {native_directory}/{name}) -le 1048576 && cp {native_directory}/{name} /tmp/preview-native-evidence/; fi")
         machine.copy_from_machine("/tmp/preview-native-evidence", "native")
         assert stop_status == 0, stop_log
         for unit in native_units:
