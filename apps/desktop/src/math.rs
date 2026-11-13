@@ -324,7 +324,9 @@ async fn serve(mut jobs: mpsc::Receiver<Job>) {
             .map_err(|error| match error {
                 nuschl_ipc::host::Error::Rejected(reason) => reason,
                 nuschl_ipc::host::Error::Timeout => "it took too long".into(),
-                nuschl_ipc::host::Error::MissingSandboxHelper(helper) => {
+                nuschl_ipc::host::Error::Sandbox(nuschl_sandbox::Error::MissingSandboxHelper(
+                    helper,
+                )) => {
                     format!("{helper} is missing")
                 }
                 _ => "the math worker failed".into(),

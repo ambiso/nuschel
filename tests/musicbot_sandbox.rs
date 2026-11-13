@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: EUPL-1.2
-//! Test-only launcher probe. Link against the same nuschl-ipc rlib as the bot;
-//! the Python fixture supplies only its owned canary and loopback endpoint.
+//! Test-only launcher probe. Link against the same nuschl-sandbox rlib as the
+//! bot; the Python fixture supplies only its owned canary and loopback endpoint.
+use nuschl_sandbox::Role::MusicbotCodec;
 use std::{ffi::OsString, path::PathBuf};
 
 fn main() {
@@ -18,7 +19,7 @@ fn main() {
         );
         let arguments = [OsString::from("--codec-worker"), args[3].clone()];
         let mut command =
-            nuschl_ipc::host::musicbot_codec_sandbox_command(&PathBuf::from(&args[2]), &arguments)
+            nuschl_sandbox::command(&PathBuf::from(&args[2]), MusicbotCodec, &arguments)
                 .expect("sandbox must be available");
         let status = command.as_std_mut().status().expect("role launch");
         std::process::exit(status.code().unwrap_or(1));
@@ -47,7 +48,7 @@ print(json.dumps({'file_denied':file_denied,'network_denied':network_denied,
         args[3].clone(),
     ];
     let mut command =
-        nuschl_ipc::host::musicbot_codec_sandbox_command(&PathBuf::from(&args[1]), &arguments)
+        nuschl_sandbox::command(&PathBuf::from(&args[1]), MusicbotCodec, &arguments)
             .expect("sandbox must be available; no unrestricted fallback");
     let output = command.as_std_mut().output().expect("sandbox probe launch");
     assert!(

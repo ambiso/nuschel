@@ -11,7 +11,6 @@ use crate::{
 };
 use std::{
     path::{Path, PathBuf},
-    process::Stdio,
     time::Duration,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -100,27 +99,25 @@ pub fn verify_hybrid(
 }
 
 async fn one(executable: &Path, post_quantum: bool, request: Request) -> Result<(), Error> {
-    let mut command = nuschl_ipc::host::update_sandbox_command(executable, post_quantum)
-        .map_err(|_| Error::Verifier)?;
-    command
-        .kill_on_drop(true)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null());
-    let mut child = command.spawn().map_err(|_| Error::Verifier)?;
-    let _containment = match nuschl_ipc::host::contain(&child) {
-        Ok(value) => value,
-        Err(_) => {
+    let role = nuschl_sandbox::Role::Update { post_quantum };
+    let command = nuschl_sandbox::command(executable, role, &[]).map_err(|_| Error::Verifier)?;
+    let nuschl_sandbox::Worker {
+        mut child,
+        mut input,
+        output,
+        containment: _containment,
+    } = match nuschl_sandbox::spawn(command) {
+        Ok(worker) => worker,
+        Err(nuschl_sandbox::Error::Uncontained { mut child, .. }) => {
             let _ = child.kill().await;
             let _ = child.wait().await;
             return Err(Error::Verifier);
         }
+        Err(_) => return Err(Error::Verifier),
     };
     let expected = request.expected_reply();
     let bytes = request.encode();
     let result = tokio::time::timeout(Duration::from_secs(6), async {
-        let mut input = child.stdin.take().ok_or(Error::Verifier)?;
-        let output = child.stdout.take().ok_or(Error::Verifier)?;
         input.write_all(&bytes).await.map_err(|_| Error::Verifier)?;
         input.shutdown().await.map_err(|_| Error::Verifier)?;
         drop(input);

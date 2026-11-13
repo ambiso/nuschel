@@ -3354,7 +3354,6 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.21",
  "tokio",
- "win32job",
 ]
 
 [[package]]
@@ -3408,6 +3407,11 @@ dependencies = [
 [[package]]
 name = "nuschl-sandbox"
 version = "0.1.0"
+dependencies = [
+ "thiserror 2.0.21",
+ "tokio",
+ "win32job",
+]
 
 [[package]]
 name = "nuschl-session"

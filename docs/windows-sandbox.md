@@ -8,12 +8,12 @@ verified in a Windows 11 VM, and what remains. SECURITY.md has the summary.
 
 Windows has no `exec`, so a helper cannot set up confinement and then become the
 worker, as bwrap and `sandbox-exec` do. Each worker executable is therefore its own
-launch stage. The supervisor (`crates/ipc/src/host.rs`) starts it as
+launch stage. The supervisor (`nuschl_sandbox::command`, `crates/sandbox/src/windows.rs`) starts it as
 
     nuschl-<kind>-worker.exe --nuschl-sandbox --profile NAME [policy] -- [worker arguments]
 
 with an empty environment apart from `SystemRoot`, `WINDIR`, `TEMP` and `TMP`, no
-console window, and inside the supervisor's kill-on-close job (`host::contain`, as
+console window, and inside the supervisor's kill-on-close job (`nuschl_sandbox::spawn`, as
 before). The first thing every worker's `main` does is
 `nuschl_sandbox_windows::launch_if_requested()`. With the flag, that code:
 

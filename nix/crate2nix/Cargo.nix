@@ -23144,6 +23144,10 @@ rec {
             packageId = "nuschl-protocol";
           }
           {
+            name = "nuschl-sandbox";
+            packageId = "nuschl-sandbox";
+          }
+          {
             name = "nuschl-session";
             packageId = "nuschl-session";
           }
@@ -23692,6 +23696,10 @@ rec {
             packageId = "nuschl-protocol";
           }
           {
+            name = "nuschl-sandbox";
+            packageId = "nuschl-sandbox";
+          }
+          {
             name = "nuschl-session";
             packageId = "nuschl-session";
           }
@@ -23895,11 +23903,6 @@ rec {
             name = "tokio";
             packageId = "tokio";
             features = [ "io-util" "macros" "process" "time" "rt" "sync" ];
-          }
-          {
-            name = "win32job";
-            packageId = "win32job";
-            target = { target, features }: (target."windows" or false);
           }
         ];
 
@@ -24455,6 +24458,22 @@ rec {
         edition = "2024";
         src = lib.cleanSourceWith { filter = sourceFilter;  src = ../../crates/sandbox; };
         libName = "nuschl_sandbox";
+        dependencies = [
+          {
+            name = "thiserror";
+            packageId = "thiserror 2.0.21";
+          }
+          {
+            name = "tokio";
+            packageId = "tokio";
+            features = [ "process" ];
+          }
+          {
+            name = "win32job";
+            packageId = "win32job";
+            target = { target, features }: (target."windows" or false);
+          }
+        ];
 
       };
       "nuschl-sandbox-windows" = rec {
@@ -24852,8 +24871,8 @@ rec {
             optional = true;
           }
           {
-            name = "nuschl-ipc";
-            packageId = "nuschl-ipc";
+            name = "nuschl-sandbox";
+            packageId = "nuschl-sandbox";
             optional = true;
           }
           {
@@ -24903,7 +24922,7 @@ rec {
           }
         ];
         features = {
-          "client" = [ "dep:cap-std" "dep:ureq" "dep:nuschl-ipc" "dep:tokio" ];
+          "client" = [ "dep:cap-std" "dep:ureq" "dep:nuschl-sandbox" "dep:tokio" ];
           "default" = [ "client" ];
         };
         resolvedDefaultFeatures = [ "client" "default" ];

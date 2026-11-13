@@ -9,7 +9,7 @@ publish.workspace = true
 
 [features]
 default = ["client"]
-client = ["dep:cap-std", "dep:ureq", "dep:nuschl-ipc", "dep:tokio"]
+client = ["dep:cap-std", "dep:ureq", "dep:nuschl-sandbox", "dep:tokio"]
 
 [dependencies]
 # Every file operation goes through a handle on the installation folder:
@@ -24,7 +24,7 @@ url = "2.5.8"
 # HTTPS through rustls with ring and Mozilla's roots, as the Mumble connection uses.
 ureq = { version = "3", optional = true, default-features = false, features = ["rustls"] }
 
-nuschl-ipc = { workspace = true, optional = true }
+nuschl-sandbox = { workspace = true, optional = true }
 tokio = { version = "1.54.1", optional = true, features = ["io-util", "process", "time", "rt"] }
 
 [dev-dependencies]

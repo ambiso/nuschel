@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! The network side of file transfers, over magic-wormhole. The supervisor
 //! starts one worker per offer or download in its sandbox
-//! (`nuschl_ipc::host::transfer_sandbox_command`): an offer reads only the
+//! (`nuschl_sandbox::Role::Transfer`): an offer reads only the
 //! file at `--file` (on Windows, the inherited handle `--file-handle`, as the
 //! worker's AppContainer cannot open the user's files), a download streams
 //! what it receives back over stdout. Neither opens any other file, and

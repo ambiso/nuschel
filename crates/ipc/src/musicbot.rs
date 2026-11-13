@@ -19,7 +19,6 @@ use std::{
     ffi::OsString,
     io::{self, Read, Write},
     path::{Path, PathBuf},
-    process::Stdio,
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -335,12 +334,23 @@ pub struct Process {
     pub child: Child,
     pub input: Option<ChildStdin>,
     pub output: Option<ChildStdout>,
-    _containment: crate::host::Containment,
+    _containment: nuschl_sandbox::Containment,
     #[cfg(test)]
     retirement_gate: Option<Arc<Notify>>,
 }
 
 impl Process {
+    fn new(worker: nuschl_sandbox::Worker) -> Self {
+        Self {
+            child: worker.child,
+            input: Some(worker.input),
+            output: Some(worker.output),
+            _containment: worker.containment,
+            #[cfg(test)]
+            retirement_gate: None,
+        }
+    }
+
     /// A kill request is not a released slot: callers retain this object until
     /// the OS has confirmed exit. Errors leave ownership with the caller.
     pub async fn retire(&mut self) -> Result<(), String> {
@@ -379,40 +389,20 @@ pub async fn spawn(executable: &Path, role: Role) -> Result<Process, String> {
         OsString::from("--codec-worker"),
         OsString::from(role.argument()),
     ];
-    let mut command = crate::host::musicbot_codec_sandbox_command(executable, &arguments)
+    let sandbox = nuschl_sandbox::Role::MusicbotCodec;
+    let command = nuschl_sandbox::command(executable, sandbox, &arguments)
         .map_err(|_| "secure music codec sandbox is unavailable")?;
-    let mut child = command
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .kill_on_drop(true)
-        .spawn()
-        .map_err(|_| "cannot start isolated music codec worker")?;
-    let containment = match crate::host::contain(&child) {
-        Ok(containment) => containment,
-        Err(_) => {
+    match nuschl_sandbox::spawn(command) {
+        Ok(worker) => Ok(Process::new(worker)),
+        Err(nuschl_sandbox::Error::Uncontained { mut child, .. }) => {
             child
                 .kill()
                 .await
                 .map_err(|_| "cannot stop uncontained codec worker")?;
-            return Err("cannot contain music codec worker".into());
+            Err("cannot contain music codec worker".into())
         }
-    };
-    let input = child.stdin.take();
-    let output = child.stdout.take();
-    let mut process = Process {
-        child,
-        input,
-        output,
-        _containment: containment,
-        #[cfg(test)]
-        retirement_gate: None,
-    };
-    if process.input.is_none() || process.output.is_none() {
-        process.retire().await?;
-        return Err("codec worker pipes are unavailable".into());
+        Err(_) => Err("cannot start isolated music codec worker".into()),
     }
-    Ok(process)
 }
 
 pub async fn write_request(
@@ -1082,25 +1072,14 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     fn held_client(role: Role) -> (Client, Arc<Notify>, u32) {
-        let mut child = tokio::process::Command::new(std::env::current_exe().unwrap())
+        let mut command = tokio::process::Command::new(std::env::current_exe().unwrap());
+        command
             .args(["--exact", "musicbot::tests::retirement_child", "--ignored"])
-            .env("NUSCHL_RETIREMENT_CHILD", "1")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .kill_on_drop(true)
-            .spawn()
-            .unwrap();
-        let pid = child.id().unwrap();
-        let containment = crate::host::contain(&child).unwrap();
+            .env("NUSCHL_RETIREMENT_CHILD", "1");
+        let mut process = Process::new(nuschl_sandbox::spawn(command).unwrap());
+        let pid = process.child.id().unwrap();
         let gate = Arc::new(Notify::new());
-        let process = Process {
-            input: child.stdin.take(),
-            output: child.stdout.take(),
-            child,
-            _containment: containment,
-            retirement_gate: Some(gate.clone()),
-        };
+        process.retirement_gate = Some(gate.clone());
         let mut client = Client::new(role, PathBuf::from("/nonexistent/no-replacement"));
         client.process = Some(process);
         client.close_grace = Duration::from_millis(20);

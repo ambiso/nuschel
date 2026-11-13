@@ -42,11 +42,11 @@ mod raw;
 #[cfg(windows)]
 mod windows;
 
-#[cfg(windows)]
-pub use windows::{inherited_file, launch_if_requested, retire_legacy_profile};
 /// The worker argument that names the handle [`inherited_file`] opens.
 #[cfg(windows)]
 pub use nuschl_sandbox::windows_policy::FILE_HANDLE_FLAG;
+#[cfg(windows)]
+pub use windows::{inherited_file, launch_if_requested, retire_legacy_profile};
 
 /// Exit code of a launch stage that could not start its worker confined.
 pub const LAUNCH_FAILED: i32 = 125;

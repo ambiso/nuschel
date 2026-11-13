@@ -205,7 +205,7 @@ The NixOS server's storage preflight inherits its hardened systemd unit.
 
 ### macOS (implemented, not yet validated on macOS)
 
-macOS workers start under `sandbox-exec` with Seatbelt profiles (`crates/ipc/src/host.rs`).
+macOS workers start under `sandbox-exec` with Seatbelt profiles (`crates/sandbox/src/macos.rs`).
 Content, math and storage workers are deny-by-default on top of Apple's `system.sb`. Storage
 may read and write only its history directory, and neither gets any network rule. The
 media worker needs CoreAudio's undocumented Mach services, so for now it is confined by
@@ -219,7 +219,7 @@ writes to the home directory. Neither test has run on macOS yet.
 
 Windows workers run in AppContainers, each in a job object of its own
 (docs/windows-sandbox.md). A worker executable is its own launch stage: started with
-`--nuschl-sandbox` and a policy (`crates/ipc/src/host.rs`), it creates or reuses the
+`--nuschl-sandbox` and a policy (`crates/sandbox/src/windows.rs`), it creates or reuses the
 worker kind's AppContainer profile, grants it its directories, and starts itself
 again inside it, suspended, then assigned to a job, then resumed; it waits and passes
 on the exit code. It reads no untrusted input, and it refuses (exit 125) rather than

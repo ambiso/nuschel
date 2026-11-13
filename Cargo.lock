@@ -7050,6 +7050,7 @@ dependencies = [
  "nuschl-core",
  "nuschl-ipc",
  "nuschl-protocol",
+ "nuschl-sandbox",
  "nuschl-session",
  "nuschl-update",
  "serde_json",
@@ -7190,6 +7191,7 @@ dependencies = [
  "nuschl-ipc",
  "nuschl-kt",
  "nuschl-protocol",
+ "nuschl-sandbox",
  "nuschl-sandbox-windows",
  "nuschl-session",
  "nuschl-witness",
@@ -7257,7 +7259,6 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.21",
  "tokio",
- "win32job",
 ]
 
 [[package]]
@@ -7411,6 +7412,11 @@ dependencies = [
 [[package]]
 name = "nuschl-sandbox"
 version = "0.1.0"
+dependencies = [
+ "thiserror 2.0.21",
+ "tokio",
+ "win32job",
+]
 
 [[package]]
 name = "nuschl-sandbox-windows"
@@ -7516,7 +7522,7 @@ name = "nuschl-update"
 version = "0.1.0"
 dependencies = [
  "cap-std",
- "nuschl-ipc",
+ "nuschl-sandbox",
  "semver",
  "serde",
  "serde_json",
