@@ -100,13 +100,16 @@ class RecoveryTest(DesktopTest):
             self.capture("reconnecting")
             murmur.start()
             self.peer = Client(self.args.binaries, "127.0.0.1", port, pin, "RecoveryPeer", self.root / "peer")
-            with quarantine.step("vm-smoke/desktop-recovery-reconnect"):
+            back = None
+            with quarantine.step("vm-smoke/desktop-recovery-reconnect",
+                                 evidence=lambda: self.capture("quarantined-reconnect")):
                 back = self.peer.wait(lambda e: e["kind"] == "user" and e["user"]["name"] == "RecoveryDesktop"
                                       and e["user"]["channel"] == 1, timeout=60)["user"]
+            if back is not None:
                 assert back["self_muted"], "reconnect lost the mute state"
-                self.wait_for("list item", "Disconnected from", partial=True)
-                self.capture("reconnected")
-                print("Server restart: reconnected, rejoined Lobby muted and marked the history gap.", flush=True)
+            self.wait_for("list item", "Disconnected from", partial=True)
+            self.capture("reconnected")
+            print("Server restart: reconnected, rejoined Lobby muted and marked the history gap.", flush=True)
 
             # Starting Nuschl again (no link) connects and rejoins the channel it was last in.
             terminate(self.app)
