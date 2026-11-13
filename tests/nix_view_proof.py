@@ -473,6 +473,61 @@ def start_system_bus(ctx):
     return process, directory
 
 
+def verify_private_compositor(shell, app, root):
+    """Before any clipboard access: the Shell.Eval target, its bus and its
+    display are the ones this scenario started. `root` is the dbus-run-session
+    process GnomeSession started (PID and start time recorded right after it
+    started); the bus daemon and the org.gnome.Shell owner must descend from
+    it, the Wayland socket must be ours under the owned NUSCHL_WL_TMP, and the
+    shell's own window list must hold the desktop's window with its PID."""
+    record = {"verified": False, "root": root}
+    try:
+        env = shell.environment() | {"DBUS_SESSION_BUS_ADDRESS": shell.bus}
+
+        def owner(name):
+            reply = subprocess.run(["gdbus", "call", "--session", "--dest", "org.freedesktop.DBus", "--object-path",
+                                    "/org/freedesktop/DBus", "--method",
+                                    "org.freedesktop.DBus.GetConnectionUnixProcessID", name],
+                                   env=env, capture_output=True, text=True, timeout=10, check=True).stdout
+            return int(re.search(r"(\d+)", reply).group(1))
+        table = proc_table()
+
+        def lineage(pid):
+            chain = []
+            while pid in table and len(chain) < 64:
+                chain.append({"pid": pid, "start": table[pid]["start"], "comm": table[pid]["comm"]})
+                pid = table[pid]["ppid"]
+            return chain
+
+        def descends(pid):
+            return any(entry["pid"] == root["pid"] and entry["start"] == root["start"] for entry in lineage(pid))
+        wl = Path(os.environ["NUSCHL_WL_TMP"]).resolve()
+        runtime = shell.runtime.resolve()
+        display = runtime / shell.DISPLAY
+        bus_pid, shell_pid = owner("org.freedesktop.DBus"), owner("org.gnome.Shell")
+        window_pid = int(shell.eval("(global.get_window_actors().map(a => a.meta_window)"
+                                    ".find(w => (w.get_title() || '').startsWith('Nuschl')) || {get_pid: () => -1})"
+                                    ".get_pid().toString()"))
+        cmdline = Path(f"/proc/{shell_pid}/cmdline").read_bytes().split(b"\0")
+        record |= {
+            "session_bus": shell.bus, "bus_address_file": str(runtime / "bus-address"),
+            "bus_daemon": {"pid": bus_pid, "lineage": lineage(bus_pid), "descends_from_root": descends(bus_pid)},
+            "compositor": {"pid": shell_pid, "lineage": lineage(shell_pid), "descends_from_root": descends(shell_pid),
+                           "cmdline": [part.decode(errors="replace") for part in cmdline if part]},
+            "display": {"socket": str(display), "is_socket": display.is_socket(),
+                        "owner_is_us": display.stat().st_uid == os.getuid(),
+                        "under_owned_wl": runtime.is_relative_to(wl)},
+            "desktop": {"pid": app.pid, "window_pid": window_pid}}
+        arguments = record["compositor"]["cmdline"]
+        record["verified"] = bool(
+            table.get(root["pid"], {}).get("start") == root["start"] and record["bus_daemon"]["descends_from_root"]
+            and record["compositor"]["descends_from_root"] and "--headless" in arguments
+            and shell.DISPLAY in arguments and all(record["display"].values()) and window_pid == app.pid)
+    except (OSError, subprocess.SubprocessError, ValueError, AttributeError, RuntimeError) as error:
+        record["error"] = repr(error)
+    return record
+
+
 def desktop_pixels(ctx, magick, crops):
     """Token colours in the nix crop, line by line, against the control crop
     of the same text (plain fallback): same font, layout and anti-aliasing."""
@@ -553,7 +608,8 @@ def scenario_desktop(ctx):
         server = start_server(ctx)
         shell = GnomeSession(cfg["gnome_shell"], 1600, 1200, log=(out / "gnome.log").open("x"))
         shell.start()
-        log("private GNOME Shell ready")
+        root = {"pid": shell.process.pid, "start": proc_table().get(shell.process.pid, {}).get("start")}
+        log(f"private GNOME Shell ready; dbus-run-session {root}")
 
         def spawn(command, env, name):
             process = subprocess.Popen(command, env=env, stdout=(out / name).open("a"), stderr=subprocess.STDOUT,
@@ -735,7 +791,13 @@ def scenario_desktop(ctx):
         send_text(ctx, bot, DEVELOPMENT, "nix")
         label = receive("nix")
         crops["nix"] = screenshot("nix", label)
-        if ctx.private_clipboard:
+        binding = verify_private_compositor(shell, app, root) if ctx.private_clipboard else None
+        if binding is not None:
+            write_json(out / "desktop-compositor-binding.json", binding)
+        if binding is not None and not binding["verified"]:
+            ctx.checks.skipped.append("desktop clipboard reads: the private compositor binding was not verified "
+                                      "(desktop-compositor-binding.json); nothing was read")
+        elif binding is not None:
             # The real copy paths, read back from the PRIVATE compositor's clipboard.
             clipboard(SENTINEL)
             buttons = [(extents(node), node) for node, _ in nodes("push button", "Copy code")]
