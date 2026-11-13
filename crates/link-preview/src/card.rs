@@ -2,7 +2,7 @@
 //! The preview card: what the sender sees in the composer and what one
 //! message carries. Built only from validated parts; converts losslessly to
 //! and from the carried model in `nuschl_core::preview`.
-use crate::extract::ExtractedMetadata;
+use crate::metadata::ExtractedMetadata;
 use crate::model::{
     self, EmbeddedImage, ImageMime, MAX_ALT_BYTES, MAX_DESCRIPTION_BYTES, MAX_TITLE_BYTES, Preview,
     ProviderId,

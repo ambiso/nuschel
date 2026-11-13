@@ -13,13 +13,9 @@
 //! the caller keeps that file as it is. A ProxyRequired file stays
 //! ProxyRequired even when its proxy settings are incomplete or invalid (its
 //! route then fails, so nothing is fetched): no reading ever yields Direct
-//! unless the file says Direct. A managed sidecar
-//! (`managed-link-previews.json`, same format), when present, decides alone.
-//!
-//! No JSON parser is linked here: the caller passes a [`Codec`] (serde_json in
-//! the frontends) and does the file I/O; this module owns the decisions.
-use crate::policy::{Error as PolicyError, Mode, Settings};
-use serde::de::DeserializeOwned;
+//! unless the file says Direct. `managed-link-previews.json` (same format) can
+//! only narrow the user's choice; see [`cap`]. The caller does the file I/O.
+use crate::policy::{DnsSettings, Error as PolicyError, Mode, Settings};
 use serde::{Deserialize, Serialize};
 
 pub const FILE_NAME: &str = "link-previews.json";
@@ -27,13 +23,6 @@ pub const MANAGED_FILE_NAME: &str = "managed-link-previews.json";
 pub const VERSION: u32 = 1;
 /// Larger files are not parsed.
 pub const MAX_FILE_BYTES: usize = 4096;
-
-/// A serde data format: serde_json for the real files.
-pub trait Codec {
-    type Error;
-    fn decode<T: DeserializeOwned>(&self, bytes: &[u8]) -> Result<T, Self::Error>;
-    fn encode<T: Serialize>(&self, value: &T) -> Result<Vec<u8>, Self::Error>;
-}
 
 /// What reading the file gave.
 #[derive(Clone, Copy, Debug)]
@@ -45,7 +34,7 @@ pub enum Source<'a> {
     Bytes(&'a [u8]),
 }
 
-/// Why the file was not used as written. No text from the file is kept: a
+/// Why a file was not used as written. No text from the file is kept: a
 /// parser message could quote a proxy address or resolver URL.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Problem {
@@ -62,12 +51,16 @@ pub enum Problem {
 impl std::fmt::Display for Problem {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Unreadable => write!(formatter, "{FILE_NAME} could not be read"),
-            Self::TooLarge => write!(formatter, "{FILE_NAME} exceeds {MAX_FILE_BYTES} bytes"),
-            Self::Malformed => write!(formatter, "{FILE_NAME} is not valid"),
-            Self::Version(version) => {
-                write!(formatter, "{FILE_NAME} has unknown version {version}")
-            }
+            Self::Unreadable => formatter.write_str("the link preview settings could not be read"),
+            Self::TooLarge => write!(
+                formatter,
+                "the link preview settings exceed {MAX_FILE_BYTES} bytes"
+            ),
+            Self::Malformed => formatter.write_str("the link preview settings are not valid"),
+            Self::Version(version) => write!(
+                formatter,
+                "the link preview settings have unknown version {version}"
+            ),
             Self::Incomplete(error) => write!(formatter, "proxy settings incomplete: {error}"),
         }?;
         formatter.write_str("; link previews are off")
@@ -117,11 +110,11 @@ struct FileV1 {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     proxy: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    dns: Option<crate::policy::DnsSettings>,
+    dns: Option<DnsSettings>,
 }
 
 /// Read one sidecar (the user's or the managed one).
-pub fn parse<C: Codec>(codec: &C, source: Source<'_>) -> Loaded {
+pub fn parse(source: Source<'_>) -> Loaded {
     let bytes = match source {
         Source::Missing => return Loaded::off(false, None),
         Source::Unreadable => return Loaded::off(true, Some(Problem::Unreadable)),
@@ -131,13 +124,13 @@ pub fn parse<C: Codec>(codec: &C, source: Source<'_>) -> Loaded {
         return Loaded::off(true, Some(Problem::TooLarge));
     }
     // The version first: a later version may have fields this one refuses.
-    let Ok(probe) = codec.decode::<Probe>(bytes) else {
+    let Ok(probe) = serde_json::from_slice::<Probe>(bytes) else {
         return Loaded::off(true, Some(Problem::Malformed));
     };
     if probe.version != VERSION {
         return Loaded::off(true, Some(Problem::Version(probe.version)));
     }
-    let Ok(file) = codec.decode::<FileV1>(bytes) else {
+    let Ok(file) = serde_json::from_slice::<FileV1>(bytes) else {
         return Loaded::off(true, Some(Problem::Malformed));
     };
     let settings = Settings {
@@ -145,14 +138,17 @@ pub fn parse<C: Codec>(codec: &C, source: Source<'_>) -> Loaded {
         proxy: file.proxy,
         dns: file.dns,
     };
-    let problem = match (settings.mode, settings.route()) {
-        (Mode::ProxyRequired, Err(error)) => Some(Problem::Incomplete(error)),
-        _ => None,
-    };
     Loaded {
+        problem: incomplete(&settings),
         settings,
         present: true,
-        problem,
+    }
+}
+
+fn incomplete(settings: &Settings) -> Option<Problem> {
+    match (settings.mode, settings.route()) {
+        (Mode::ProxyRequired, Err(error)) => Some(Problem::Incomplete(error)),
+        _ => None,
     }
 }
 
@@ -174,84 +170,113 @@ impl std::error::Error for SaveError {}
 
 /// The file's bytes for `settings`. Incomplete proxy settings may be saved
 /// (they read back as ProxyRequired with a [`Problem`]).
-pub fn serialize<C: Codec>(codec: &C, settings: &Settings) -> Result<Vec<u8>, SaveError> {
+pub fn serialize(settings: &Settings) -> Result<Vec<u8>, SaveError> {
     let file = FileV1 {
         version: VERSION,
         mode: settings.mode,
         proxy: settings.proxy.clone(),
         dns: settings.dns.clone(),
     };
-    let bytes = codec.encode(&file).map_err(|_| SaveError::Encode)?;
+    let bytes = serde_json::to_vec_pretty(&file).map_err(|_| SaveError::Encode)?;
     if bytes.len() > MAX_FILE_BYTES {
         return Err(SaveError::TooLarge);
     }
     Ok(bytes)
 }
 
-/// The policy in force: a present managed sidecar decides alone, and one
-/// that cannot be used means Off (never the user's Direct); otherwise the
-/// user's sidecar.
+/// The policy in force from the user's sidecar and the managed one. A
+/// managed file that is unreadable, malformed or of an unknown version means
+/// Off; a usable one narrows the user's settings with [`cap`].
 pub fn effective(user: &Loaded, managed: &Loaded) -> Loaded {
-    // `parse` already made a managed file with a problem Off, or kept it an
-    // incomplete ProxyRequired.
-    if managed.present {
-        managed.clone()
-    } else {
-        user.clone()
+    if !managed.present {
+        return user.clone();
+    }
+    if matches!(
+        managed.problem,
+        Some(Problem::Unreadable | Problem::TooLarge | Problem::Malformed | Problem::Version(_))
+    ) {
+        return managed.clone();
+    }
+    let settings = cap(&user.settings, &managed.settings);
+    let problem = match &user.problem {
+        // The user's own file was not understood: it stays the notice.
+        Some(Problem::Incomplete(_)) | None => incomplete(&settings),
+        Some(problem) => Some(problem.clone()),
+    };
+    Loaded {
+        settings,
+        present: true,
+        problem,
+    }
+}
+
+/// The managed cap, kept apart so its semantics are easy to change: the
+/// mode is the narrower of the two (Off < ProxyRequired < Direct), so a
+/// managed file never turns Off into anything else nor ProxyRequired into
+/// Direct. A proxy or resolver the managed file names replaces the user's.
+pub fn cap(user: &Settings, managed: &Settings) -> Settings {
+    fn exposure(mode: Mode) -> u8 {
+        match mode {
+            Mode::Off => 0,
+            Mode::ProxyRequired => 1,
+            Mode::Direct => 2,
+        }
+    }
+    Settings {
+        mode: if exposure(managed.mode) < exposure(user.mode) {
+            managed.mode
+        } else {
+            user.mode
+        },
+        proxy: managed.proxy.clone().or_else(|| user.proxy.clone()),
+        dns: managed.dns.clone().or_else(|| user.dns.clone()),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::policy::{DnsSettings, Route};
-
-    struct Json;
-    impl Codec for Json {
-        type Error = serde_json::Error;
-        fn decode<T: DeserializeOwned>(&self, bytes: &[u8]) -> Result<T, Self::Error> {
-            serde_json::from_slice(bytes)
-        }
-        fn encode<T: Serialize>(&self, value: &T) -> Result<Vec<u8>, Self::Error> {
-            serde_json::to_vec_pretty(value)
-        }
-    }
+    use crate::policy::Route;
 
     fn read(text: &str) -> Loaded {
-        parse(&Json, Source::Bytes(text.as_bytes()))
+        parse(Source::Bytes(text.as_bytes()))
+    }
+
+    fn dns() -> DnsSettings {
+        DnsSettings {
+            url: "https://dns.example/dns-query".into(),
+            bootstrap: vec![
+                "192.0.2.53".parse().unwrap(),
+                "2001:db8::53".parse().unwrap(),
+            ],
+        }
     }
 
     fn proxy_settings() -> Settings {
         Settings {
             mode: Mode::ProxyRequired,
             proxy: Some("socks5://127.0.0.1:9050".into()),
-            dns: Some(DnsSettings {
-                url: "https://dns.example/dns-query".into(),
-                bootstrap: vec![
-                    "192.0.2.53".parse().unwrap(),
-                    "2001:db8::53".parse().unwrap(),
-                ],
-            }),
+            dns: Some(dns()),
+        }
+    }
+
+    fn mode(mode: Mode) -> Settings {
+        Settings {
+            mode,
+            ..Settings::default()
         }
     }
 
     #[test]
     fn every_mode_round_trips() {
-        for settings in [
-            Settings::default(),
-            Settings {
-                mode: Mode::Direct,
-                ..Settings::default()
-            },
-            proxy_settings(),
-        ] {
-            let bytes = serialize(&Json, &settings).unwrap();
-            let loaded = parse(&Json, Source::Bytes(&bytes));
+        for settings in [mode(Mode::Off), mode(Mode::Direct), proxy_settings()] {
+            let bytes = serialize(&settings).unwrap();
+            let loaded = parse(Source::Bytes(&bytes));
             assert_eq!(loaded.settings, settings);
             assert!(loaded.present);
             assert_eq!(loaded.problem, None);
         }
-        let text = String::from_utf8(serialize(&Json, &Settings::default()).unwrap()).unwrap();
+        let text = String::from_utf8(serialize(&Settings::default()).unwrap()).unwrap();
         assert_eq!(text, "{\n  \"version\": 1,\n  \"mode\": \"off\"\n}");
         let loaded = read(
             r#"{"version":1,"mode":"proxy_required","proxy":"socks5://127.0.0.1:9050","dns":{"url":"https://dns.example/dns-query","bootstrap":["192.0.2.53"]}}"#,
@@ -261,13 +286,10 @@ mod tests {
 
     #[test]
     fn missing_broken_or_later_files_are_off_with_a_problem() {
-        let missing = parse(&Json, Source::Missing);
+        let missing = parse(Source::Missing);
         assert_eq!(missing.settings.mode, Mode::Off);
         assert!(!missing.present && missing.problem.is_none());
-        assert_eq!(
-            parse(&Json, Source::Unreadable).problem,
-            Some(Problem::Unreadable)
-        );
+        assert_eq!(parse(Source::Unreadable).problem, Some(Problem::Unreadable));
         let padded = format!(
             r#"{{"version":1,"mode":"direct","proxy":"{}"}}"#,
             "x".repeat(MAX_FILE_BYTES)
@@ -326,14 +348,8 @@ mod tests {
             assert!(loaded.may_overwrite());
         }
         // Saved incomplete settings read back the same way.
-        let incomplete = Settings {
-            mode: Mode::ProxyRequired,
-            ..Settings::default()
-        };
-        let loaded = parse(
-            &Json,
-            Source::Bytes(&serialize(&Json, &incomplete).unwrap()),
-        );
+        let incomplete = mode(Mode::ProxyRequired);
+        let loaded = parse(Source::Bytes(&serialize(&incomplete).unwrap()));
         assert_eq!(loaded.settings, incomplete);
         assert_eq!(
             loaded.problem,
@@ -345,38 +361,64 @@ mod tests {
             proxy: Some("x".repeat(MAX_FILE_BYTES)),
             dns: None,
         };
-        assert_eq!(serialize(&Json, &huge), Err(SaveError::TooLarge));
+        assert_eq!(serialize(&huge), Err(SaveError::TooLarge));
     }
 
     #[test]
-    fn a_managed_sidecar_decides_alone_and_fails_closed() {
-        let direct = read(r#"{"version":1,"mode":"direct"}"#);
-        let absent = parse(&Json, Source::Missing);
-        assert_eq!(effective(&direct, &absent), direct);
-        let managed_off = read(r#"{"version":1,"mode":"off"}"#);
-        assert_eq!(effective(&direct, &managed_off).settings.mode, Mode::Off);
-        let managed_proxy = parse(
-            &Json,
-            Source::Bytes(&serialize(&Json, &proxy_settings()).unwrap()),
-        );
+    fn a_managed_file_only_narrows_the_user_mode() {
+        let user_off = read(r#"{"version":1,"mode":"off"}"#);
+        let user_direct = read(r#"{"version":1,"mode":"direct"}"#);
+        let user_proxy = parse(Source::Bytes(&serialize(&proxy_settings()).unwrap()));
+        let absent = parse(Source::Missing);
+        assert_eq!(effective(&user_direct, &absent), user_direct);
+        // Every (user, managed) pair: the narrower mode wins.
+        let users = [&user_off, &user_proxy, &user_direct];
+        let caps = [Mode::Off, Mode::ProxyRequired, Mode::Direct];
+        for (u, user) in users.iter().enumerate() {
+            for (c, cap_mode) in caps.iter().enumerate() {
+                let managed = parse(Source::Bytes(&serialize(&mode(*cap_mode)).unwrap()));
+                let effective = effective(user, &managed);
+                assert_eq!(
+                    effective.settings.mode,
+                    [caps[u], caps[c]][usize::from(c < u)]
+                );
+            }
+        }
+        // Off stays Off whatever the managed file says.
+        let managed_direct = read(r#"{"version":1,"mode":"direct"}"#);
         assert_eq!(
-            effective(&direct, &managed_proxy).settings,
-            proxy_settings()
+            effective(&user_off, &managed_direct).settings.mode,
+            Mode::Off
         );
+        assert_eq!(effective(&absent, &managed_direct).settings.mode, Mode::Off);
+        // A managed cap at ProxyRequired keeps the user's proxy, or replaces
+        // it with its own; without any proxy nothing is fetched.
+        let managed_proxy_only = read(r#"{"version":1,"mode":"proxy_required"}"#);
+        let narrowed = effective(&user_proxy, &managed_proxy_only);
+        assert!(matches!(narrowed.settings.route(), Ok(Route::Proxy { .. })));
+        assert_eq!(narrowed.problem, None);
+        let from_direct = effective(&user_direct, &managed_proxy_only);
+        assert_eq!(from_direct.settings.mode, Mode::ProxyRequired);
+        assert!(from_direct.settings.route().is_err());
+        assert!(matches!(from_direct.problem, Some(Problem::Incomplete(_))));
+        let managed_with_proxy = parse(Source::Bytes(&serialize(&proxy_settings()).unwrap()));
+        let supplied = effective(&user_direct, &managed_with_proxy);
+        assert_eq!(supplied.settings, proxy_settings());
+        assert_eq!(supplied.problem, None);
         // A managed file that cannot be used is Off, never the user's Direct.
         for broken in [
-            parse(&Json, Source::Unreadable),
+            parse(Source::Unreadable),
             read("{"),
             read(r#"{"version":9,"mode":"direct"}"#),
         ] {
-            let effective = effective(&direct, &broken);
+            let effective = effective(&user_direct, &broken);
             assert_eq!(effective.settings.mode, Mode::Off);
             assert!(effective.problem.is_some());
         }
-        // A managed ProxyRequired with incomplete settings stays that way.
-        let incomplete = read(r#"{"version":1,"mode":"proxy_required"}"#);
-        let effective = effective(&direct, &incomplete);
-        assert_eq!(effective.settings.mode, Mode::ProxyRequired);
-        assert!(effective.settings.route().is_err());
+        // A user file that was not understood stays Off and keeps its notice.
+        let user_broken = read("{");
+        let effective = effective(&user_broken, &managed_direct);
+        assert_eq!(effective.settings.mode, Mode::Off);
+        assert_eq!(effective.problem, Some(Problem::Malformed));
     }
 }
