@@ -341,25 +341,11 @@ mod tests {
 
     /// A 48 kHz stereo WAV file of `frames` 20 ms frames of a sine.
     fn wav_frames(frames: usize) -> Vec<u8> {
-        let pcm: Vec<u8> = (0..frames)
-            .flat_map(|_| audio())
-            .flat_map(|sample| ((sample * f32::from(i16::MAX)) as i16).to_le_bytes())
-            .collect();
-        let mut bytes = Vec::new();
-        bytes.extend_from_slice(b"RIFF");
-        bytes.extend_from_slice(&(36 + pcm.len() as u32).to_le_bytes());
-        bytes.extend_from_slice(b"WAVEfmt ");
-        bytes.extend_from_slice(&16u32.to_le_bytes());
-        bytes.extend_from_slice(&1u16.to_le_bytes());
-        bytes.extend_from_slice(&(CHANNELS as u16).to_le_bytes());
-        bytes.extend_from_slice(&RATE.to_le_bytes());
-        bytes.extend_from_slice(&(RATE * CHANNELS as u32 * 2).to_le_bytes());
-        bytes.extend_from_slice(&(CHANNELS as u16 * 2).to_le_bytes());
-        bytes.extend_from_slice(&16u16.to_le_bytes());
-        bytes.extend_from_slice(b"data");
-        bytes.extend_from_slice(&(pcm.len() as u32).to_le_bytes());
-        bytes.extend(pcm);
-        bytes
+        let samples = (0..frames).flat_map(|_| audio());
+        crate::decode::stereo_wav(
+            RATE,
+            samples.map(|sample| (sample * f32::from(i16::MAX)) as i16),
+        )
     }
 
     #[test]
