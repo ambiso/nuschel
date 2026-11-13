@@ -236,32 +236,19 @@ pub fn scroll_region(
 /// must not occupy the track's hit area, including when its labels wrap.
 pub const SCROLLBAR_GUTTER: f32 = 12.;
 
-/// An anchor for overlays inside a scroll container. GPUI measures a scroll
-/// container's extent from every direct child's layout box, absolute ones
-/// included (`Div::prepaint`'s `content_size`). Taffy places an absolute child
-/// without insets at its static position, which in block layout is below the
-/// preceding in-flow content: a viewport-sized overlay appended after the
-/// content added a whole page of blank scrolling. Zero insets would instead
-/// start at the padding edge and add a padded region's top padding. A zero-size
-/// box at the static position lies within the content's extent in block and
-/// flex containers alike; children take their geometry from a retained
-/// handle, never from this box.
-fn overlay_anchor() -> Div {
-    div().absolute().size(px(0.))
-}
-
 /// One native scrollbar style for ordinary and virtualized scroll handles.
 /// The kit paints and hit-tests the bar at the handle's actual viewport, even
-/// when appended inside moving content; its own layout box (the full size of
-/// its parent) is held in a zero-size anchor so it never adds scroll extent.
-/// Always means visible *when it overflows*: the kit omits both track and
-/// thumb for a non-scrollable axis.
+/// when appended inside moving content. Always means visible *when it
+/// overflows*: the kit omits both track and thumb for a non-scrollable axis.
+/// GPUI counts absolute children toward a scroll container's extent, so the
+/// bar's full-size box sits in a zero-size box at its static position (insets
+/// would start at the padding edge), which adds none.
 pub fn scrollbar<H: ScrollbarHandle + Clone>(
     id: impl Into<ElementId>,
     handle: &H,
     background: Token,
 ) -> Div {
-    overlay_anchor().child(
+    div().absolute().size(px(0.)).child(
         Scrollbar::vertical(handle)
             .id(id)
             .mode(ScrollbarMode::Always)
@@ -325,8 +312,7 @@ fn scroll_events(
 ) -> impl IntoElement {
     canvas(
         // An absolute child's layout origin moves with its scroll parent.
-        // Resolve from the retained viewport so its gutter remains interactive;
-        // the layout box itself is an inert overlay anchor (no scroll extent).
+        // Resolve from the retained viewport so its gutter remains interactive.
         move |_, window, _| window.insert_hitbox(handle.bounds(), HitboxBehavior::Normal),
         move |_, hitbox, window, _| {
             window.on_mouse_event(move |event: &ScrollEvent, phase, window, cx| {
@@ -392,8 +378,7 @@ pub fn scrollable(id: &'static str, label: &'static str, handle: ScrollHandle) -
         .track_scroll(&handle)
         // Establish an autoscroll scope before prepainting descendants; a
         // request from a preceding sibling must not scroll this region.
-        // At its static position, like `overlay_anchor`: an inset of zero
-        // would extend the scroll extent over a padded region's top padding.
+        // Zero-size without insets, as in `scrollbar`.
         .child(
             canvas(
                 move |_, window, _| {
