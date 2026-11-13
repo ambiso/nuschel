@@ -81,7 +81,8 @@ class Pulse:
 class Worker:
     def __init__(self, binary, pulse):
         env = {"PULSE_SERVER": f"unix:{pulse.socket}", "XDG_RUNTIME_DIR": str(pulse.root),
-               "NUSCHL_AUDIO_BACKEND": "pulse", "PATH": os.environ.get("PATH", "")}
+               "NUSCHL_AUDIO_BACKEND": "pulse", "PATH": os.environ.get("PATH", ""),
+               "NUSCHL_AUDIO_TIMING": os.environ.get("NUSCHL_AUDIO_TIMING", "")}
         self.process = subprocess.Popen([str(binary), "--live"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, env=env)
         self.events = []
         self.reader = threading.Thread(target=self._read, daemon=True)

@@ -89,6 +89,9 @@ impl CaptureQueue {
             }
         }
     }
+    pub fn queued(&self) -> usize {
+        self.pending.len()
+    }
     /// One packet on the 20 ms sample clock. Small scheduler jitter preserves
     /// phase; a large stall starts a new deadline instead of a catch-up burst.
     /// There is no initial fill timer.
