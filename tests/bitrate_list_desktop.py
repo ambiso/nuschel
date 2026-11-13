@@ -2,13 +2,13 @@
 """Settings names only the servers below the requested voice bitrate.
 
 The real desktop in a private headless GNOME Shell, operated over AT-SPI,
-with nine loopback stock Mumble servers at different bandwidth limits and
-one offline bookmark. A private PulseAudio is the only audio service; no
+with eight loopback stock Mumble servers (the desktop's connection limit)
+at different bandwidth limits and one offline bookmark. A private PulseAudio is the only audio service; no
 host audio device, profile or recording is used. Checks and screenshots:
 
 - a configured rate none of the choices shows reads "Custom: 80 kb/s";
 - Settings → VOICE QUALITY names the first five servers below the request,
-  in server order, then "+2 more in Connection info", then one line for the
+  in server order, then "+1 more in Connection info", then one line for the
   two servers at the request; nothing for the offline bookmark;
 - choosing 128 kb/s removes the custom line and keeps the list;
 - Connection info shows the voice bitrate of a limited server, of one too
@@ -37,11 +37,11 @@ from mumble_client import certificate_pin  # noqa: E402
 
 # (name, per-user bandwidth; None: Murmur's own 558 kb/s), in rail order.
 SERVERS = [("Wide", None), ("Stock", 72_000), ("Club", 64_000), ("Big", None), ("Tiny", 20_000),
-           ("Guild", 56_000), ("Lan", 48_000), ("Old", 40_000), ("Slow", 32_000)]
+           ("Guild", 56_000), ("Lan", 48_000), ("Old", 40_000)]
 BELOW = ["Stock: 48 kb/s (server limit)", "Club: 40 kb/s (server limit)", "Tiny: not sending (server limit)",
          "Guild: 32 kb/s (server limit)", "Lan: 24 kb/s (server limit)"]
-UNLISTED = ["Old: 16 kb/s (server limit)", "Slow: 8 kb/s (server limit)"]
-MORE = "+2 more in Connection info"
+UNLISTED = ["Old: 16 kb/s (server limit)"]
+MORE = "+1 more in Connection info"
 
 
 class BitrateList(DesktopBitrate):
@@ -152,7 +152,7 @@ class BitrateList(DesktopBitrate):
         self.connection("Stock", "48 of 128 kb/s (server limit)")
         self.connection("Tiny", "Not sending (server limit)")
         self.connection("Wide", "128 kb/s")
-        self.connection("Slow", "8 of 128 kb/s (server limit)")
+        self.connection("Old", "16 of 128 kb/s (server limit)")
         self.connection("Offline", None)
         (self.args.output / "bitrate-list.json").write_text(json.dumps(self.results, indent=2) + "\n")
         print("Voice bitrate list: ok", flush=True)
