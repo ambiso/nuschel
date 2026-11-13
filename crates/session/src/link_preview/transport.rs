@@ -72,6 +72,8 @@ pub(super) async fn open(
         Route::Proxy { proxy, .. } => proxy.address(),
     };
     // SocketAddr overload: never give the socket layer a name to resolve again.
+    #[cfg(test)]
+    super::tests::admit(super::tests::Admission::Socket);
     let mut socket = io_stage(cancel, budget, 5, TcpStream::connect(peer)).await?;
     if socket.peer_addr().ok() != Some(peer) {
         return Err(Unavailable::Address);
@@ -84,6 +86,8 @@ pub(super) async fn open(
         return Ok(Box::new(socket));
     }
     let roots = rustls::RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    #[cfg(test)]
+    let roots = super::tests::with_fixture_root(roots);
     let provider = Arc::new(rustls::crypto::ring::default_provider());
     let mut config = rustls::ClientConfig::builder_with_provider(provider)
         .with_safe_default_protocol_versions()

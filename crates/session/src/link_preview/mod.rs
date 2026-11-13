@@ -3,6 +3,8 @@
 //! no-network content role; only this session owner resolves and opens sockets.
 mod resolve;
 mod supervise;
+#[cfg(test)]
+mod tests;
 mod transport;
 
 use nuschl_link_preview::{

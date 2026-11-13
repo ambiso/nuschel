@@ -98,6 +98,8 @@ async fn system(
     budget.check(cancel)?;
     let host = host.to_owned();
     let before = cancel.clone();
+    #[cfg(test)]
+    super::tests::admit(super::tests::Admission::Dns);
     let mut resolver = tokio::task::spawn_blocking(move || {
         if before.is_cancelled() {
             return Err(Unavailable::Network);
