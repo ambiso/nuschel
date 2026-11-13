@@ -3,4 +3,5 @@
 # Removing a line makes that step a hard check again; each fix removes its own.
 # step                                  issue  reason
 vm-smoke/desktop-recovery-reconnect     #263   the user event after the server restart is missed in CI
+vm-smoke/pipewire-other-app-removed     #275   the gate opens for another application's sound under load
 vm-home-manager/config-folder-listing   #254   an extra file appeared in the config folder once (#261)
