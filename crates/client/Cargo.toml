@@ -11,13 +11,14 @@ publish.workspace = true
 default = ["native"]
 # The driver for Linux, Windows and macOS: tokio, the native session and the
 # sandboxed workers. Without it the SDK builds for wasm32-unknown-unknown.
-native = ["dep:nuschl-ipc", "dep:nuschl-session", "dep:tokio", "nuschl-core/uuid"]
+native = ["dep:nuschl-ipc", "dep:nuschl-sandbox", "dep:nuschl-session", "dep:tokio", "nuschl-core/uuid"]
 
 [dependencies]
 nuschl-core.workspace = true
 nuschl-ipc = { workspace = true, optional = true }
 nuschl-legacy-html.workspace = true
 nuschl-protocol.workspace = true
+nuschl-sandbox = { workspace = true, optional = true }
 nuschl-session = { workspace = true, optional = true }
 serde = { version = "1.0.229", features = ["derive"] }
 tokio = { version = "1.54.1", features = ["rt", "time", "sync", "macros"], optional = true }

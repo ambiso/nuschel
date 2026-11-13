@@ -160,7 +160,7 @@ the inside (docs/windows-sandbox.md). Cross-build it with the workers
 confinement --no-run`), copy the test executable and the six worker executables
 into one folder in the guest (`windows_vm.py push`, then `Get-NuschlTestFile -Name NAME -OutFile PATH`), and
 run `confinement.exe --workers <folder>` there. It starts itself through
-`nuschl_ipc::host`'s real commands as each worker kind; inside, it must fail to read
+`nuschl_sandbox`'s real commands as each worker kind; inside, it must fail to read
 a file it creates in Documents, list or write the profile, `C:\Users\Public` or the
 user's TEMP, connect to 10.0.2.100:80 (only transfer may), start a process, open the
 test's own process to query or terminate it, commit more memory than its job
@@ -185,6 +185,9 @@ Result on 2026-11-11 (Windows 11 25H2): all checks passed for every worker kind,
 including both transfer directions; the desktop, run in the VM against a stock Murmur
 on host loopback, rendered an image message, stored history and captured from the
 microphone with its workers in AppContainers.
+On 2026-11-14 the confinement checks ran again through `nuschl_sandbox` (revision
+e6076e2a, docs/windows-sandbox.md): all passed for every worker kind, nested and not,
+including both transfer directions.
 
 The VM also checks worker confinement, SQLite/PostgreSQL pagination and the NixOS
 module's hardened database preflight. `vm-server` runs the protocol suites against
