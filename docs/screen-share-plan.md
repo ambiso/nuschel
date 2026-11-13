@@ -44,6 +44,8 @@ Status: plan, 2026-11-13, against main 8781be09. It folds in the frozen #139 sig
 - **Servers:** stock Murmur 1.x and compatible-mode nuschld (both use the chat-link path). End-to-end-mode nuschld refuses with "not available yet" (fail closed; #139 §2).
 - **Viewer cap:** 1 publisher and 16 viewers on the project instance.
 
+**Phase 1 is an intermediate milestone, not the end state.** Native capture and native viewing remain the requested result; browser-launched capture is only the owner-approved step towards it.
+
 **Phase 2, in parallel lanes:**
 - Native Linux sharer: portal picker, `nuschl-video-worker` with VA-API AV1 hardware encoding and a software AV1 fallback (§7.6), the SDK driver's str0m connection to the SFU.
 - Native in-app viewer: isolated decoder (#35), GPUI rendering (#145), identity-bound key exchange (#139 B), plugin-data stream cards (#93 + #139 C).
@@ -60,20 +62,35 @@ Status: plan, 2026-11-13, against main 8781be09. It folds in the frozen #139 sig
 - From PRK: `stream_id` (16 B, the SFU room), `admit_key` (SFU challenge), `mac_key`, `psk`, `signal_key`.
 
 **Joining:**
-- The viewer makes a fresh X-Wing keypair (sk_v, pk_v) and sends `KeyRequest{stream_id, viewer_id, nonce, pk_v, [CallBinding]}`, with an HMAC under `mac_key` so non-holders are dropped cheaply.
-- The sharer replies `KeyGrant` = HPKE PSK-mode seal to pk_v, with info = the transcript hash, psk/psk_id from S, carrying {epoch, K_epoch, kid, not_after}.
+- The viewer makes a **fresh random** X-Wing keypair (sk_v, pk_v) for every join, never reused, and sends `KeyRequest{version, suite, stream_id, viewer_id, nonce_v, not_after, pk_v, [binding]}`, with an HMAC under `mac_key` so non-holders are dropped cheaply.
+- **Transcript.** Both sides hash one canonical encoding of the protocol label and version, the role labels (`viewer→sharer`, `sharer→viewer`), the fixed suite IDs (KEM, KDF, AEAD), stream_id, viewer_id, both nonces, not_after and pk_v. HPKE `info` is that hash, and psk/psk_id come from S.
+- The sharer replies `KeyGrant{nonce_s, enc, ciphertext, confirm_s}`. The ciphertext is the HPKE PSK-mode seal to pk_v carrying {epoch, K_epoch, kid, not_after}. `confirm_s` is a MAC over the transcript under a key **exported from the HPKE context**. The viewer answers `KeyAck{confirm_v}` under a second exported key with a different label.
+- **Rejected:**
+  - a replayed request (nonce cache bounded per room and epoch, plus not_after);
+  - a reflected message (role labels differ);
+  - a suite other than the one fixed by the link version (downgrade);
+  - an expired request;
+  - a missing or wrong confirmation.
+
+  All of these fail closed, with no classical-only fallback.
 - The HPKE context then exports a per-viewer channel key. Rekeys are sealed with that key plus a counter.
+- **The passive-holder claim holds only under these conditions:** a party with S and every recording still cannot decrypt, because every sk_v is fresh and random and every K_epoch is independent random (never derived from S or from an earlier K). If any of those were derived from S, the claim would not hold.
+
+**Sizes and authentication profile (to be frozen with S0a's exact numbers):**
+- **Default profile:** an Ed25519 leaf binding (about 334 B) plus pk_v (1,216 B) fits a 4 KiB key message.
+- **Hybrid profile:** a hybrid identity binding (about 3,373 B) plus pk_v (1,216 B) or enc (1,120 B) exceeds 4 KiB before any envelope. Either send the binding as a separate message bound to the transcript hash (each under 4 KiB), or use bounded multipart (at most 3 parts, an 8 KiB total, a reassembly deadline and a per-viewer budget), or define an explicitly larger profile.
+- **No silent downgrade:** a policy that requires the hybrid binding never falls back to classical; it refuses.
 - Configuration: the same suite as `crates/identity/src/hpke.rs:35-43` (X-Wing / HKDF-SHA256 / ChaCha20-Poly1305).
 
 **Fan-out and rekeying:**
 - The key exchange travels over the SFU WebSocket as opaque blobs of at most 4 KiB. Plugin data is a poor fit: pk_v is 1,216 B and the ciphertext 1,120 B, which is 2–3 chunks each under Murmur's 4 messages/s budget.
-- Late joiners get only the current epoch.
-- Rekey on any leave or kick, batched within 2 s; on joins, batched (gives backward secrecy); and every 15 minutes.
+- **Join, rekey first.** A newcomer never receives an epoch that carried media before they joined, because otherwise recorded pre-join media would decrypt. On a join the sharer creates K_{e+1}, sends it to the existing viewers over their channels, then grants K_{e+1} to the newcomer, then forces a keyframe under K_{e+1}. Batching joins (at most 2 s) delays the newcomer; it never hands out the old epoch.
+- **Leave exposure is bounded separately.** On a leave or kick the sharer rekeys, batched within 2 s. A departed viewer can decrypt at most until that rekey takes effect plus the previous-epoch grace (about 2 s). Every 15 minutes there is a rekey regardless.
 - Receivers keep the previous epoch for about 2 s.
 - A kicked viewer can rejoin via the link until "Rotate link" (new S, new room).
 - The SFU sees only HPKE and SFrame ciphertext.
 
-**SFrame profile:** RFC 9605 AES_128_GCM_SHA256_128. Encrypt the whole AV1 frame if the packetizers allow it. If they need clear bytes (as a VP8 payload header would, which is what Jitsi leaves unencrypted but authenticated), keep the smallest clear prefix that works, authenticated; that deviates from RFC 9605 and leaks frame type and dimensions. AV1 (the only codec, §7.6): whether browsers' AV1 packetizers accept an encrypted payload (the OBU headers are inside it), or need a clear prefix as VP8 would, or the generic SFrame packetization, is spike S0b's question. An SFU can pick AV1 layers from the Dependency Descriptor header extension without reading the payload; its integrity then rests on SRTP to the SFU, not on SFrame.
+**SFrame profile:** RFC 9605 AES_128_GCM_SHA256_128, with an unmodified cipher core. Encrypt the whole AV1 frame if the packetizers allow it. If they need clear bytes, a versioned profile adapter carries them as SFrame metadata, which RFC 9605 already authenticates as additional data. That needs no cipher fork, but the clear bytes leak what they contain (for example frame type and dimensions). A codec bitstream prefix is not the same as an RTP payload descriptor; the adapter has to name which one it keeps clear. AV1 (the only codec, §7.6): whether browsers' AV1 packetizers accept an encrypted payload (the OBU headers are inside it), or need a clear prefix as VP8 would, or the generic SFrame packetization, is spike S0b's question. An SFU can pick AV1 layers from the Dependency Descriptor header extension without reading the payload; its integrity then rests on SRTP to the SFU, not on SFrame.
 
 **Options evaluated:**
 - **(a) SPAKE2** is reusable (spake2 0.4; magic-wormhole 0.8.1; `link.rs`) but classical: a quantum-capable recorder who later learns S breaks it.
@@ -81,6 +98,12 @@ Status: plan, 2026-11-13, against main 8781be09. It folds in the frozen #139 sig
 - **(c) Post-quantum PAKEs** (CAKE/OCAKE, CPace+OQUAKE drafts) have no reviewed Rust implementation and are immature.
 - **When a PAKE proper matters:** only when the secret is short or typed by a human, because the transcript then allows offline guessing. With 256 bits of S that can't happen.
 - **Passive password holders:** even with a PAKE, a passive party that knows the password can't derive the session key, because it lacks the ephemeral secret (SPAKE2: g^xy is still a Diffie–Hellman problem).
+
+**What the SFU knows, and admission:**
+- **What the SFU holds:** stream_id (the room), `admit_key` (to check viewer admission) and a publisher verifier derived from P.
+- **What it never holds:** S, `mac_key`, `psk`, `signal_key` or any K_epoch.
+- **Reserve the room before posting.** The share page reserves the room atomically at the SFU (stream_id, admit_key, publisher verifier) *before* Nuschl posts the watch link. If the room already exists, the share fails closed ("link already in use"). This removes the room-squatting window.
+- **Admission is viewer-only.** A viewer proves admit_key by an HMAC over an SFU-issued nonce, and admission grants only the viewer role. The publisher role needs the P verifier. Admission can never replace the publisher; a new publisher needs a new link (Rotate).
 
 **Who can do what:**
 - Passive stock server with S: cannot decrypt (needs sk_v).
@@ -168,6 +191,9 @@ Phase 1 order: S0 → K1 → K2 → W1 → B1 → T1, with E1 (the long pole) in
   - Capture needs a fresh picker every time (browser picker, or portal with no restore token) and a visible indicator (the browser's or the portal's, plus Nuschl's banner, voice bar and window title).
   - Never automatic; never restored after a reconnect.
   - Stops on Stop, disconnect, channel change, portal or track ended, and app exit.
+  - **Phase 1 external browser capture.** Nuschl cannot stop a browser tab's capture directly, so sharing P with the page alone is not enough.
+    - **Revocable delegation.** Nuschl keeps the owner credential (derived from P) and holds its own control connection to the SFU. The page publishes with a short-lived, revocable publisher lease that Nuschl issues and renews: TTL about 10 s, renewed about every 3 s.
+    - **Ending the share.** On native Stop, disconnect, channel change or exit, Nuschl revokes the lease. If Nuschl crashes, the lease simply expires. The SFU then stops forwarding within the lease deadline and tells the page, which calls `track.stop()` locally and must stop within a fixed deadline. Forwarding stops at the SFU even if the page doesn't.
   - Worker credit is held until the process has actually been reaped.
   - Joining or watching never opens the microphone or camera.
 - **Own windows:** window sharing is preselected. Sharing a monitor shows a warning (`displaySurface === 'monitor'` in the browser, the portal's `source_type` natively) and, natively, a privacy curtain over conversations. Linux portals have no exclude-window API. Windows' exclude-from-capture flag would need new unsafe code, so it is not planned.
@@ -184,7 +210,11 @@ Phase 1 order: S0 → K1 → K2 → W1 → B1 → T1, with E1 (the long pole) in
   - Keys only in the SDK driver or browser stream worker.
   - The desktop never decodes.
   - The SFU never decodes and holds no keys.
-- **Relay-only:** no host/srflx candidates and no STUN. Only configured SFU/TURN hosts are contacted. If the relay fails, the call ends; no direct fallback.
+- **Relay-only** uses the owner's existing definition (`docs/extension.md` `privacy/1`; `crates/core/src/network.rs` `PeerPolicy`), neither strengthened nor weakened:
+  - **What it allows and forbids:** configured servers and relays may be contacted. Peer discovery, local-interface/STUN candidate gathering and direct peer connections are not allowed, and peer-supplied endpoints cannot override this. The configured server necessarily sees the source IP.
+  - **Native:** with `relay_only`, the SDK driver gathers no host or srflx candidates and connects only to the configured SFU (or TURN).
+  - **Browser:** strict `iceTransportPolicy: 'relay'` *does* require TURN. A per-leg connection only to the SFU, where the page signals no local candidates and the SFU never forwards anyone's address, may satisfy the same privacy contract without TURN. That is a decision for the owner/coordinator to record explicitly, not a silent substitute.
+  - **No fallback:** if the permitted path fails, the call ends.
 - **Bounds:**
   - Video: at most 1920×1080 and 15 fps by default (30 opt-in), 2.5 Mbit/s, frames ≤256 KiB (a large keyframe may need an intra-bitrate cap or 512 KiB; to verify), ≤2 queued frames.
   - Key messages ≤4 KiB, ≤32 pending key requests, at least 1 s between epochs, bounded replay windows.
@@ -212,7 +242,7 @@ The coordinator should file new issues for K1, W1, B1, V1 and the infrastructure
 - **L1, stream crypto:** S0a, then K1, in new `crates/stream`.
 - **L2, SFU:** S0c, then the E1 skeleton, in new `crates/sfu` and `apps/sfu`.
 - **L3, web stream:** S0b, then the W1 skeleton, in new `web/stream/`. Not `web/app`, `web/site` or `crates/client-wasm`.
-- **L4, video worker:** VA-API AV1 encoding spike on a VCN 4 GPU (bindings review, DMA-BUF import, rate control, temporal layers), software AV1 encoder comparison (rav1e, libaom, SVT-AV1: realtime 1080p15 screen-content CPU and quality, SVC, Nix build, licence and safety review) and rav1d review, synthetic PipeWire fixture design, a draft of new `crates/ipc/src/video.rs`. Dry runs only; the `host.rs` hunk is proposed to Root.
+- **L4, native capture/worker/codec review: owned by the coordinator's own lane.** It covers VA-API AV1 encoding on a VCN 4 GPU (bindings, DMA-BUF import, rate control, temporal layers), software AV1 encoder comparison (rav1e, libaom, SVT-AV1), rav1d review, synthetic PipeWire fixture design, a draft of new `crates/ipc/src/video.rs`. Dry runs only; the `host.rs` hunk is proposed to Root.
 - **L5, desktop share:** D1 in new `crates/core/src/stream.rs` and `apps/desktop/src/stream.rs`. The menu hunk needs agreement with the desktop-next lane.
 - **L6, infrastructure and docs:** `nix/stream-module.nix`, coturn config, the owner's DNS/TLS checklist, the #139 plan amendment as a new revision, draft SECURITY/architecture/web rows for Root.
 - **Root only:** `Cargo.toml` members, `Cargo.lock`, crate2nix, `deny.toml`, `SECURITY.md`.
@@ -222,4 +252,4 @@ The coordinator should file new issues for K1, W1, B1, V1 and the infrastructure
   - `crates/client-wasm` `session.rs`/`browser.rs` (#13).
   - `web/app` (browser broker staging).
 
-**Unverified, needs checking:** browser encoded-transform support (Chromium's RTCRtpScriptTransform vs `createEncodedStreams`; Safari); libcrux on wasm32 and X-Wing draft parity; str0m forwarding of SFrame'd AV1; browser AV1 encode/decode and SVC support per engine (Safari is expected to have no AV1 encoder, so Safari cannot share in Phase 1); WASM rav1d decode speed; AV1 packetization of encrypted payloads; VA-API AV1 encode per GPU vendor and which binding crate; which software AV1 encoder; ScreenCast portal on X11 sessions and SHM fallback; Rust TURN servers; a roughly one-second room-squatting window in the Phase 1 handoff (fails closed as "link already in use"; same threat class as link substitution); all effort estimates.
+**Unverified, needs checking:** browser encoded-transform support (Chromium's RTCRtpScriptTransform vs `createEncodedStreams`; Safari); libcrux on wasm32 and X-Wing draft parity; str0m forwarding of SFrame'd AV1; browser AV1 encode/decode and SVC support per engine (Safari is expected to have no AV1 encoder, so Safari cannot share in Phase 1); WASM rav1d decode speed; AV1 packetization of encrypted payloads; VA-API AV1 encode per GPU vendor and which binding crate; which software AV1 encoder; ScreenCast portal on X11 sessions and SHM fallback; Rust TURN servers; the publisher-lease protocol and its stop deadline; all effort estimates.
