@@ -209,9 +209,9 @@ def desktop(args):
             shell.eval("(()=>{const w=global.get_window_actors().map(a=>a.meta_window)"
                 f".find(w=>w.get_pid()==={pid}); if(!w)throw Error('owned window missing');"
                 "w.activate(global.get_current_time());return true;})()")
-        def window_rect(pid):
+        def window_rect(pid, frame=False):
             return json.loads(shell.eval("JSON.stringify((()=>{const w=global.get_window_actors().map(a=>a.meta_window)"
-                f".find(w=>w.get_pid()==={pid});const b=w.get_buffer_rect();"
+                f".find(w=>w.get_pid()==={pid});const b=w.{'get_frame_rect' if frame else 'get_buffer_rect'}();"
                 "return [b.x,b.y,b.width,b.height];})())"))
         def image_pixels(pid, path):
             focus_window(pid)
@@ -228,6 +228,7 @@ def desktop(args):
                 for channel, target in enumerate((0x20, 0x80, 0xc0))) for offset in range(0, len(raw), 3))
         focus_window(sender_pid)
         last_policy_labels = []
+        observation = {"stage": "initial", "last_requested_mode": None, "last_typed_body": None}
         def named(name, role=None):
             return next((node for node, kind, label, _ in items(application)
                 if label == name and (role is None or kind == role)), None)
@@ -248,6 +249,7 @@ def desktop(args):
         def labels():
             return [label for _, _, label, _ in items(application)]
         def activate(name, role="push button"):
+            observation["last_action"] = name
             node = wait(name, role)
             assert node.call("Component", "GrabFocus")[0]
             if role == "radio button":
@@ -260,8 +262,11 @@ def desktop(args):
             assert node.call("Component", "GrabFocus")[0]
             shell.chord("Control_L", "a")
             shell.type(body)
+            observation["last_typed_body"] = body
             return node
         def choose(mode):
+            observation.update(stage="choose", last_requested_mode=mode, requested_radio_focused_before_space=None)
+            observation.pop("requested_radio_focus_error", None)
             activate("Settings")
             group = wait("Link previews")
             def scoped_radio():
@@ -276,6 +281,10 @@ def desktop(args):
                 return None
             node = eventually(scoped_radio, f"missing {mode} radio within Link previews")
             assert node.call("Component", "GrabFocus")[0]
+            try:
+                observation["requested_radio_focused_before_space"] = node.focused
+            except (RuntimeError, ValueError, TypeError, KeyError, IndexError) as error:
+                observation["requested_radio_focus_error"] = type(error).__name__
             shell.key("space")
             eventually(lambda: not any("Saving preference" in label for label in labels())
                 and any(label.startswith(f"Active policy: {mode}.") for label in labels()),
@@ -297,6 +306,7 @@ def desktop(args):
             return [event for event in list(receiver.events) if event.get("kind") == "text"
                 and event.get("author") == "Welcome reader"]
         def send_and_receive(body, preview):
+            observation.update(stage="send_and_receive", last_send_preview=preview)
             marker = body.split()[0]
             before = len(sent_by_reader())
             activate("Send")
@@ -332,27 +342,11 @@ def desktop(args):
                 wire_sha256=hashlib.sha256(wire.encode()).hexdigest())
             return wire
 
-        initial = len(events())
-        assert initial == scene_start, "startup/receiver display unexpectedly contacted a synthetic peer"
-        assert not (root / "profile/config/link-previews.json").exists(), "startup wrote a default policy instead of preserving absence"
-        assert image_pixels(sender_pid, args.output / "before-preview.png") < 300, "image pixel control is not discriminating"
-        plain = f"off-{uuid.uuid4().hex[:8]} http://93.184.215.14/page "
-        type_message(plain)
-        time.sleep(1.1)  # More than the actual750ms debounce, not a success retry.
-        assert len(events()) == initial, "default Off contacted a peer"
-        send_and_receive(plain, False)
-        mark("default_off_no_fetch_text_send")
-
-        choose("Direct")
-        body = f"card-{uuid.uuid4().hex[:8]} http://93.184.215.14/redirect "
-        type_message(body)
-        try:
-            eventually(ready_card, "sender card never became ready")
-        except AssertionError:
-            diagnostic = {"last_observed_policy_labels": last_policy_labels,
-                "expected_composer": body, "nodes": [], "nodes_truncated": False}
+        def capture_failure(failure):
+            diagnostic = dict(observation, error_type=type(failure).__name__,
+                last_observed_policy_labels=last_policy_labels[:], nodes=[], nodes_truncated=False)
             def expired(_signal, _frame):
-                raise TimeoutError("ready-card failure capture exceeded 12 seconds")
+                raise TimeoutError("scene failure capture exceeded 12 seconds")
             previous_handler = signal.signal(signal.SIGALRM, expired)
             previous_timer = signal.setitimer(signal.ITIMER_REAL, 12)
             started = time.monotonic()
@@ -371,10 +365,17 @@ def desktop(args):
                     diagnostic["nodes"].append(row)
                     if name == "Message" and role in ("entry", "text"):
                         composer_node = node
-                diagnostic["preview_labels"] = [row["name"] for row in diagnostic["nodes"]
+                rows = diagnostic["nodes"]
+                diagnostic["preview_labels"] = [row["name"] for row in rows
                     if "preview" in row["name"].lower() or row["name"].startswith("Text only")][:64]
-                diagnostic["policy_labels"] = [row["name"] for row in diagnostic["nodes"]
+                diagnostic["policy_labels"] = [row["name"] for row in rows
                     if row["name"].startswith("Active policy:")][:4]
+                diagnostic["send_labels"] = [row["name"] for row in rows
+                    if row["name"] in ("Send", "Sending…")]
+                diagnostic["focused"] = [row for row in rows if row["states"] & (1 << 12)][:16]
+                diagnostic["notice_and_status_labels"] = [row["name"] for row in rows
+                    if row["role"] == "status bar" or any(term in row["name"].lower()
+                        for term in ("notice", "not sent", "changed", "unavailable", "cannot"))][:64]
                 if composer_node is not None:
                     try:
                         count = composer_node.bus("get-property", composer_node.destination, composer_node.path,
@@ -384,10 +385,14 @@ def desktop(args):
                         diagnostic["composer_text"] = composer_node.call("Text", "GetText", "ii", "0", str(min(count, 4096)))[0]
                     except (AssertionError, RuntimeError, ValueError, TypeError, KeyError, IndexError) as error:
                         diagnostic["composer_error"] = f"{type(error).__name__}: {error}"[:512]
+                diagnostic["frame"] = window_rect(sender_pid, frame=True)
+                diagnostic["saved_zoom"] = json.loads((root / "profile/config/settings.json").read_text()).get("appearance", {}).get("zoom", 1.0)
+                diagnostic["focused_window_pid"] = json.loads(shell.eval(
+                    "JSON.stringify(global.display.focus_window?.get_pid()??null)"))
                 snapshot = json.dumps(control("snapshot"), separators=(",", ":")).encode()
                 assert len(snapshot) <= 512 * 1024
-                (args.output / "ready-timeout-peers.json").write_bytes(snapshot + b"\n")
-                shell.screenshot(args.output / "ready-timeout.png")
+                (args.output / "failure-peers.json").write_bytes(snapshot + b"\n")
+                shell.screenshot(args.output / "failure.png")
             except (AssertionError, EOFError, OSError, RuntimeError, ValueError,
                     TypeError, KeyError, IndexError, subprocess.SubprocessError) as error:
                 diagnostic["capture_error"] = f"{type(error).__name__}: {error}"[:512]
@@ -400,95 +405,145 @@ def desktop(args):
                 diagnostic["capture_seconds"] = time.monotonic() - started
                 encoded = json.dumps(diagnostic, separators=(",", ":")).encode()
                 assert len(encoded) <= 256 * 1024
-                (args.output / "ready-timeout.json").write_bytes(encoded + b"\n")
-            raise
-        wait("Remove link preview", "push button")
-        fetched = events()
-        assert any(event.get("path") == "/page" for event in fetched)
-        assert any(event.get("path") == "/image.png" for event in fetched)
-        eventually(lambda: image_pixels(sender_pid, args.output / "sender-card.png") > 300,
-            "sender safe worker image was not actually painted")
-        geometry = []
-        for width, zoom, steps in [(1280, 100, 0), (900, 200, 5)]:
-            focus_window(sender_pid)
+                (args.output / "failure.json").write_bytes(encoded + b"\n")
+
+        try:
+            initial = len(events())
+            assert initial == scene_start, "startup/receiver display unexpectedly contacted a synthetic peer"
+            assert not (root / "profile/config/link-previews.json").exists(), "startup wrote a default policy instead of preserving absence"
+            assert image_pixels(sender_pid, args.output / "before-preview.png") < 300, "image pixel control is not discriminating"
+            plain = f"off-{uuid.uuid4().hex[:8]} http://93.184.215.14/page "
+            type_message(plain)
+            time.sleep(1.1)  # More than the actual750ms debounce, not a success retry.
+            assert len(events()) == initial, "default Off contacted a peer"
+            send_and_receive(plain, False)
+            mark("default_off_no_fetch_text_send")
+
+            choose("Direct")
+            body = f"card-{uuid.uuid4().hex[:8]} http://93.184.215.14/redirect "
+            type_message(body)
+            observation["stage"] = "ready"
+            eventually(ready_card, "sender card never became ready")
+            wait("Remove link preview", "push button")
+            fetched = events()
+            assert any(event.get("path") == "/page" for event in fetched)
+            assert any(event.get("path") == "/image.png" for event in fetched)
+            eventually(lambda: image_pixels(sender_pid, args.output / "sender-card.png") > 300,
+                "sender safe worker image was not actually painted")
+            def saved_zoom():
+                return json.loads((root / "profile/config/settings.json").read_text()).get("appearance", {}).get("zoom", 1.0)
+            def wait_zoom(percent):
+                eventually(lambda: abs(saved_zoom() - percent / 100) < .001,
+                    f"actual saved zoom did not reach {percent} percent")
+            geometry = []
+            for width, zoom, steps in [(1280, 100, 0), (900, 200, 5)]:
+                observation.update(stage="geometry", requested_width=width, requested_height=800, requested_zoom=zoom)
+                focus_window(sender_pid)
+                shell.chord("Control_L", "0")
+                wait_zoom(100)
+                # A maximized window ignores move_resize_frame. Match place(),
+                # selecting only our sender rather than the recipient's title.
+                shell.eval("(()=>{const w=global.get_window_actors().map(a=>a.meta_window)"
+                    f".find(w=>w.get_pid()==={sender_pid});if(w.is_maximized())w.unmaximize();"
+                    f"w.move_resize_frame(true,40,40,{width},800);return true;}})()")
+                eventually(lambda: window_rect(sender_pid, frame=True)[2:] == [width, 800],
+                    f"sender actual frame did not reach {width} by 800")
+                for _ in range(steps):
+                    shell.chord("Control_L", "equal")
+                    time.sleep(.1)
+                wait_zoom(zoom)
+                time.sleep(.3)
+                frame = window_rect(sender_pid, frame=True)
+                assert frame[2:] == [width, 800], frame
+                rect = window_rect(sender_pid)
+                controls = {name: wait(name).extents() for name in ("Link preview", "Remove link preview", "Message", "Send")}
+                for bounds in controls.values():
+                    x, y, w, h = bounds
+                    assert x >= 0 and y >= 0 and w > 0 and h > 0 and x + w <= rect[2] + 1 and y + h <= rect[3] + 1, (zoom, controls, rect)
+                shell.screenshot(args.output / f"sender-geometry-{zoom}.png")
+                geometry.append(dict(zoom=zoom, frame=frame, window=rect, controls=controls))
             shell.chord("Control_L", "0")
-            shell.eval("(()=>{const w=global.get_window_actors().map(a=>a.meta_window)"
-                f".find(w=>w.get_pid()==={sender_pid});w.move_resize_frame(false,40,40,{width},800);return true;}})()")
-            for _ in range(steps):
-                shell.chord("Control_L", "equal")
-                time.sleep(.1)
-            time.sleep(.3)
-            rect = window_rect(sender_pid)
-            controls = {name: wait(name).extents() for name in ("Link preview", "Remove link preview", "Message", "Send")}
-            for bounds in controls.values():
-                x, y, w, h = bounds
-                assert x >= 0 and y >= 0 and w > 0 and h > 0 and x + w <= rect[2] + 1 and y + h <= rect[3] + 1, (zoom, controls, rect)
-            shell.screenshot(args.output / f"sender-geometry-{zoom}.png")
-            geometry.append(dict(zoom=zoom, window=rect, controls=controls))
-        shell.chord("Control_L", "0")
-        mark("native_card_controls_and_input_fit_at_narrow_real_200_percent", geometry=geometry)
-        before_send = len(events())
-        send_and_receive(body, True)
-        time.sleep(.4)
-        assert len(events()) == before_send, "receiving/rendering a carried image initiated a fetch"
-        mark("direct_sender_only_embedded_image")
+            wait_zoom(100)
+            previous_layout = [None]
+            def reset_layout_settled():
+                controls = [named(name) for name in ("Link preview", "Remove link preview", "Message", "Send")]
+                if any(node is None for node in controls):
+                    return False
+                current = [node.extents() for node in controls]
+                unchanged = current == previous_layout[0]
+                previous_layout[0] = current
+                return unchanged
+            eventually(reset_layout_settled, "sender layout did not settle after zoom reset")
+            mark("native_card_controls_and_input_fit_at_narrow_real_200_percent", geometry=geometry)
+            before_send = len(events())
+            send_and_receive(body, True)
+            time.sleep(.4)
+            assert len(events()) == before_send, "receiving/rendering a carried image initiated a fetch"
+            mark("direct_sender_only_embedded_image")
 
-        # Explicit removal of a ready card suppresses attachment while the
-        # entire original text still goes in one ordinary message.
-        removed = f"removed-{uuid.uuid4().hex[:8]} http://93.184.215.14/page "
-        type_message(removed)
-        eventually(ready_card, "ready-card removal case never reached Ready")
-        wait("Remove link preview", "push button")
-        activate("Remove link preview")
-        wait("Link preview removed")
-        send_and_receive(removed, False)
-        mark("removed_card_text_only")
+            # Explicit removal of a ready card suppresses attachment while the
+            # entire original text still goes in one ordinary message.
+            removed = f"removed-{uuid.uuid4().hex[:8]} http://93.184.215.14/page "
+            type_message(removed)
+            eventually(ready_card, "ready-card removal case never reached Ready")
+            wait("Remove link preview", "push button")
+            activate("Remove link preview")
+            wait("Link preview removed")
+            send_and_receive(removed, False)
+            mark("removed_card_text_only")
 
-        # Fresh URL and a real response gate exercise late-result suppression.
-        control("arm_http", 39212)
-        baseline = sum(event.get("kind") == "http_gate_entered" for event in events())
-        delayed = f"late-{uuid.uuid4().hex[:8]} http://93.184.215.14/page?late=1 "
-        type_message(delayed)
-        eventually(lambda: sum(event.get("kind") == "http_gate_entered" for event in events()) > baseline,
-            "controlled page request did not reach response gate")
-        activate("Remove link preview")
-        wait("Link preview removed")
-        control("release_http", 39212)
-        time.sleep(1.1)
-        wait("Link preview removed")
-        send_and_receive(delayed, False)
-        mark("late_response_cannot_undo_remove")
+            # Fresh URL and a real response gate exercise late-result suppression.
+            control("arm_http", 39212)
+            baseline = sum(event.get("kind") == "http_gate_entered" for event in events())
+            delayed = f"late-{uuid.uuid4().hex[:8]} http://93.184.215.14/page?late=1 "
+            type_message(delayed)
+            eventually(lambda: sum(event.get("kind") == "http_gate_entered" for event in events()) > baseline,
+                "controlled page request did not reach response gate")
+            activate("Remove link preview")
+            wait("Link preview removed")
+            control("release_http", 39212)
+            time.sleep(1.1)
+            wait("Link preview removed")
+            send_and_receive(delayed, False)
+            mark("late_response_cannot_undo_remove")
 
-        # Explicit fixture operator services, not ambient proxy settings. The
-        # real UI save reloads this managed policy before applying the choice.
-        managed_path = root / "profile/config/managed-link-previews.json"
-        managed_bytes = json.dumps({
-            "version": 1, "mode": "proxy_required", "proxy": "socks5://127.0.0.1:1080",
-            "dns": {"url": "https://resolver.preview.example/dns-query", "bootstrap": ["93.184.215.53"]},
-        }).encode()
-        managed_path.write_bytes(managed_bytes)
-        choose("Proxy required")
-        before = events()
-        proxy_text = f"proxy-{uuid.uuid4().hex[:8]} http://page.preview.example/page "
-        type_message(proxy_text)
-        wait("Link preview unavailable")
-        after = events()[len(before):]
-        assert any(event.get("kind") == "socks" and event.get("destination") == "93.184.215.53" for event in after), after
-        assert not any(event.get("kind") in ("dns", "doh") or event.get("destination") == "93.184.215.14" for event in after), after
-        send_and_receive(proxy_text, False)
-        mark("production_doh_untrusted_ca_refused_without_direct_or_dns_fallback")
+            # Explicit fixture operator services, not ambient proxy settings. The
+            # real UI save reloads this managed policy before applying the choice.
+            managed_path = root / "profile/config/managed-link-previews.json"
+            managed_bytes = json.dumps({
+                "version": 1, "mode": "proxy_required", "proxy": "socks5://127.0.0.1:1080",
+                "dns": {"url": "https://resolver.preview.example/dns-query", "bootstrap": ["93.184.215.53"]},
+            }).encode()
+            managed_path.write_bytes(managed_bytes)
+            choose("Proxy required")
+            before = events()
+            proxy_text = f"proxy-{uuid.uuid4().hex[:8]} http://page.preview.example/page "
+            type_message(proxy_text)
+            wait("Link preview unavailable")
+            after = events()[len(before):]
+            assert any(event.get("kind") == "socks" and event.get("destination") == "93.184.215.53" for event in after), after
+            assert not any(event.get("kind") in ("dns", "doh") or event.get("destination") == "93.184.215.14" for event in after), after
+            send_and_receive(proxy_text, False)
+            mark("production_doh_untrusted_ca_refused_without_direct_or_dns_fallback")
 
-        # The saved user mode remains visible; repeated choices are real UI
-        # actions, while active policy only resumes after its serialized save.
-        choose("Off")
-        sidecar = json.loads((root / "profile/config/link-previews.json").read_text())
-        assert sidecar["mode"] == "off"
-        assert sidecar.get("proxy") is None and sidecar.get("dns") is None, "managed services were copied into user authority"
-        assert managed_path.read_bytes() == managed_bytes, "UI save changed the operator's route"
-        events()  # No synthetic peer assertion may hide at the scenario's end.
-        mark("policy_persisted_without_copying_or_losing_service_settings")
-        return {"server": args.server, "cases": cases, "modern_typed_preview": False,
-            "production_tls_bypass": False, "host_devices": False}
+            # The saved user mode remains visible; repeated choices are real UI
+            # actions, while active policy only resumes after its serialized save.
+            choose("Off")
+            sidecar = json.loads((root / "profile/config/link-previews.json").read_text())
+            assert sidecar["mode"] == "off"
+            assert sidecar.get("proxy") is None and sidecar.get("dns") is None, "managed services were copied into user authority"
+            assert managed_path.read_bytes() == managed_bytes, "UI save changed the operator's route"
+            events()  # No synthetic peer assertion may hide at the scenario's end.
+            mark("policy_persisted_without_copying_or_losing_service_settings")
+            return {"server": args.server, "cases": cases, "modern_typed_preview": False,
+                "production_tls_bypass": False, "host_devices": False}
+        except BaseException as failure:
+            try:
+                capture_failure(failure)
+            except BaseException as capture_error:
+                # Diagnostics cannot replace the original assertion/exception.
+                print(f"bounded scene capture failed: {type(capture_error).__name__}", flush=True)
+            raise
 
     original = scenario.__dict__.copy()
     scenario.WELCOME_EXTRA = ""
