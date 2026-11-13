@@ -38,6 +38,10 @@ pub struct Link {
     pub voice_allowed: bool,
     pub muted: bool,
     pub deafened: bool,
+    /// The server stops us from speaking here: it suppressed us (no Speak
+    /// permission in the channel), muted or deafened us. The microphone
+    /// stays closed for it, and nothing counts as our speech.
+    pub restricted: bool,
     pub bitrate: u32,
     pub loss_percent: u8,
 }
@@ -122,8 +126,55 @@ struct Stream {
     generation: u64,
     /// The worker's number for it (new for every connection).
     number: u32,
+    /// The connection's link, muted while `held`.
     link: Link,
     voice: mpsc::Sender<Outgoing>,
+    /// The microphone stopped by itself while it went here (the worker or
+    /// the device failed): it stays closed until the connection is muted, so
+    /// only an explicit Unmute opens it (#199).
+    held: bool,
+}
+
+impl Stream {
+    /// The connection's `link` as this stream serves it.
+    fn served(&self, link: &Link) -> Link {
+        Link {
+            muted: link.muted || (self.held && speaking_to(link)),
+            ..*link
+        }
+    }
+
+    /// Take the connection's new `link`. A hold ends once the connection
+    /// stops speaking (is muted).
+    fn update(&mut self, link: &Link) {
+        self.held &= speaking_to(link);
+        self.link = self.served(link);
+    }
+}
+
+/// The microphone stopped by itself (its worker failed): hold every stream
+/// it went to and ask each connection to mute, so the next worker starts
+/// with the microphone closed.
+async fn hold_microphone(
+    streams: &mut BTreeMap<String, Stream>,
+    events: &mpsc::Sender<Event>,
+    planned: &mut Plan,
+) {
+    if !planned.capture {
+        return;
+    }
+    for (server, stream) in streams.iter_mut() {
+        if speaking_to(&stream.link) {
+            stream.held = true;
+            stream.link.muted = true;
+            let stopped = Event::MicrophoneStopped {
+                server: server.clone(),
+                generation: stream.generation,
+            };
+            let _ = events.send(stopped).await;
+        }
+    }
+    *planned = plan(streams.values().map(|stream| &stream.link));
 }
 
 /// What the worker does for the attached servers.
@@ -168,12 +219,14 @@ fn plan<'a>(links: impl Iterator<Item = &'a Link>) -> Plan {
     plan
 }
 
-/// The microphone goes to this server.
-fn speaking_to(link: &Link) -> bool {
+/// The microphone goes to this server. The connection admits its frames by
+/// the same rule.
+pub(super) fn speaking_to(link: &Link) -> bool {
     link.voice_allowed
         && link.bitrate >= nuschl_core::audio::MIN_VOICE_BITRATE
         && !link.muted
         && !link.deafened
+        && !link.restricted
 }
 
 /// A destination started/stopped receiving the microphone, or changed its
@@ -239,7 +292,7 @@ async fn run_with_start(
                         || streams.get(server).is_some_and(|old| speaking_to(&old.link)),
                     Control::Update { server, generation, link, .. } => streams.get(server)
                         .filter(|old| old.generation == *generation)
-                        .is_some_and(|old| capture_route_changed(&old.link, link)),
+                        .is_some_and(|old| capture_route_changed(&old.link, &old.served(link))),
                     Control::Detach { server, generation } => streams.get(server)
                         .is_some_and(|old| old.generation == *generation && speaking_to(&old.link)),
                     Control::Sound(_) | Control::Chime(_) => false,
@@ -257,7 +310,7 @@ async fn run_with_start(
                 match message {
                     Control::Attach { server, generation, link, voice } => {
                         numbers = numbers.wrapping_add(1);
-                        if let Some(old) = streams.insert(server, Stream { generation, number: numbers, link, voice })
+                        if let Some(old) = streams.insert(server, Stream { generation, number: numbers, link, voice, held: false })
                             && let Some(media) = &media {
                             let _ = media.commands.try_send(LiveMediaRequest::EndStream { stream: old.number });
                         }
@@ -269,7 +322,7 @@ async fn run_with_start(
                                 // What it had buffered is not played.
                                 let _ = media.commands.try_send(LiveMediaRequest::EndStream { stream: stream.number });
                             }
-                            stream.link = link;
+                            stream.update(&link);
                         }
                         cues.extend(cue.map(|sound| (sound, true)));
                     }
@@ -420,6 +473,7 @@ async fn run_with_start(
                         audio_host.1 = Instant::now() + HOST_PIN;
                         media.take();
                         epoch += 1;
+                        hold_microphone(&mut streams, &events, &mut planned).await;
                         retry = Instant::now() + std::time::Duration::from_millis(if message.starts_with("Audio reconnecting") { 2000 } else { 200 });
                     }
                     // A worker for listening only says so; a server you listen
@@ -431,6 +485,7 @@ async fn run_with_start(
                 None => {
                     media.take();
                     epoch += 1;
+                    hold_microphone(&mut streams, &events, &mut planned).await;
                     retry = Instant::now() + std::time::Duration::from_secs(2);
                     broadcast(&streams, &events, |server, generation| Event::AudioStatus { server, generation, message: "Audio worker restarting…".into() }).await;
                 },
@@ -508,6 +563,7 @@ mod tests {
             voice_allowed: true,
             muted,
             deafened,
+            restricted: false,
             bitrate,
             loss_percent,
         }
@@ -757,6 +813,118 @@ mod tests {
             .unwrap();
         tokio::time::sleep(SETTLE * 3).await;
         assert!(rates(&control).await.0 > moved);
+        task.abort();
+        let _ = task.await;
+    }
+
+    /// #199: a microphone that stopped by itself (its worker or device
+    /// failed) stays closed. The connections it went to are held and asked to
+    /// mute, the next worker starts with it closed, and their mute ends the
+    /// hold, so the next opening is an explicit Unmute.
+    #[tokio::test]
+    async fn a_failed_microphone_stays_closed_until_an_explicit_unmute() {
+        let (events, mut reports) = mpsc::channel(8);
+        let (voice, _voice) = mpsc::channel(1);
+        let talking = link(false, false, 40_000, 3);
+        let stream = |generation, link| Stream {
+            generation,
+            number: 1,
+            link,
+            voice: voice.clone(),
+            held: false,
+        };
+        let mut streams = BTreeMap::from([
+            ("talk".to_string(), stream(7, talking)),
+            (
+                "listen".to_string(),
+                stream(9, link(true, false, 40_000, 3)),
+            ),
+        ]);
+        let mut planned = plan(streams.values().map(|stream| &stream.link));
+        hold_microphone(&mut streams, &events, &mut planned).await;
+        assert!(planned.listen && !planned.capture);
+        match reports.try_recv() {
+            Ok(Event::MicrophoneStopped { server, generation }) => {
+                assert_eq!((server.as_str(), generation), ("talk", 7));
+            }
+            _ => panic!("expected MicrophoneStopped for the talk server"),
+        }
+        assert!(reports.try_recv().is_err(), "only the talk server is asked");
+        let talk = streams.get_mut("talk").unwrap();
+        // A new routing revision of the still unmuted connection keeps it closed.
+        let unmuted = Link {
+            revision: 1,
+            ..talking
+        };
+        assert!(!capture_route_changed(&talk.link, &talk.served(&unmuted)));
+        talk.update(&unmuted);
+        assert!(!speaking_to(&talk.link));
+        // Its mute ends the hold; the Unmute after it opens the microphone.
+        talk.update(&Link {
+            revision: 2,
+            muted: true,
+            ..talking
+        });
+        let reopened = Link {
+            revision: 3,
+            ..talking
+        };
+        assert!(capture_route_changed(&talk.link, &talk.served(&reopened)));
+        talk.update(&reopened);
+        assert!(speaking_to(&talk.link));
+    }
+
+    /// #199: unmuted where the server stops us from speaking (suppressed,
+    /// server muted or deafened), the real supervisor keeps the microphone
+    /// closed.
+    #[tokio::test]
+    async fn a_restricted_server_gets_no_microphone() {
+        let (control, input) = mpsc::unbounded_channel();
+        let (_playback, playback) = mpsc::channel(4);
+        let (events, _events) = mpsc::channel(64);
+        let (_settings, settings) = watch::channel(ClientSettings::default());
+        let (_keys, keys) = watch::channel(VoiceKeys::default());
+        let task = tokio::spawn(run_with_start(
+            (input, playback),
+            events,
+            (settings, keys),
+            || Err(nuschl_session::Error::Worker("synthetic worker".into())),
+        ));
+        let capture = async || {
+            let (reply, inspected) = tokio::sync::oneshot::channel();
+            control.send(Control::Inspect(reply)).unwrap();
+            inspected.await.unwrap().1
+        };
+        let restricted = Link {
+            restricted: true,
+            ..link(false, false, 40_000, 1)
+        };
+        let (voice, _voice) = mpsc::channel(4);
+        control
+            .send(Control::Attach {
+                server: "one".into(),
+                generation: 1,
+                link: restricted,
+                voice,
+            })
+            .unwrap();
+        assert!(
+            !capture().await,
+            "a restricted server opened the microphone"
+        );
+        control
+            .send(Control::Update {
+                server: "one".into(),
+                generation: 1,
+                link: Link {
+                    revision: 1,
+                    restricted: false,
+                    ..restricted
+                },
+                cue: None,
+            })
+            .unwrap();
+        assert!(capture().await, "the restriction alone kept it closed");
         task.abort();
         let _ = task.await;
     }
