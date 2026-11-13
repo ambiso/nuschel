@@ -29,7 +29,13 @@ fn decode(text: &str, output: &mut [u8]) -> Result<(), Error> {
     {
         return Err(Error::KeyDocument);
     }
-    for (pair, byte) in text.as_bytes().chunks_exact(2).zip(output.iter_mut()) {
+    for (pair, byte) in text
+        .as_bytes()
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .zip(output.iter_mut())
+    {
         let digit = |c: u8| if c <= b'9' { c - b'0' } else { c - b'a' + 10 };
         *byte = digit(pair[0]) * 16 + digit(pair[1]);
     }
