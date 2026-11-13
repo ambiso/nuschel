@@ -40,6 +40,7 @@ def control(operation, port=39211):
 
 def peers(args):
     import link_preview_fetch as peer
+    import zlib
     directory = args.directory.resolve(strict=True)
     assert directory.is_dir() and directory.stat().st_uid == os.getuid()
     # Refuse an accidental host invocation. The driver creates this marker
@@ -52,6 +53,16 @@ def peers(args):
     for address in (peer.PAGE, peer.DOH, peer.PROXY_SOURCE):
         assert f"local {address} " in routes, routes
 
+    # The GUI pixel oracle uses a visible 80×40 image at its decoded size.
+    # This process owns the GUI peers; native-peers loads its original image.
+    width, height = 80, 40
+    peer.PNG = (b"\x89PNG\r\n\x1a\n"
+        + peer.png_chunk(b"IHDR", struct.pack("!IIBBBBB", width, height, 8, 6, 0, 0, 0))
+        + peer.png_chunk(b"IDAT", zlib.compress((b"\x00" + b"\x20\x80\xc0\xff" * width) * height))
+        + peer.png_chunk(b"IEND", b""))
+    image_identity = dict(width=width, height=height, rgba_bytes=width * height * 4,
+        png_bytes=len(peer.PNG), sha256=hashlib.sha256(peer.PNG).hexdigest())
+
     class State(peer.State):
         def __init__(self):
             super().__init__(directory)
@@ -59,6 +70,9 @@ def peers(args):
             self.gate_next = False
             self.release_http = threading.Event()
             self.release_http.set()
+
+        def snapshot(self):
+            return super().snapshot() | {"gui_image": image_identity}
 
         def event(self, kind, **values):
             super().event(kind, **values)
@@ -360,6 +374,47 @@ def desktop(args):
         def sent_by_reader():
             return [event for event in list(receiver.events) if event.get("kind") == "text"
                 and event.get("author") == "Welcome reader"]
+        def capture_recipient_failure(failure, pixel_count):
+            diagnostic = dict(error_type=type(failure).__name__, last_cyan_pixels=pixel_count,
+                nodes=[], nodes_truncated=False)
+            def expired(_signal, _frame):
+                raise TimeoutError("recipient failure capture exceeded 12 seconds")
+            previous_handler = signal.signal(signal.SIGALRM, expired)
+            previous_timer = signal.setitimer(signal.ITIMER_REAL, 12)
+            started = time.monotonic()
+            try:
+                diagnostic["frame"] = window_rect(recipient.pid, frame=True)
+                diagnostic["buffer"] = window_rect(recipient.pid)
+                observed = items(recipient_ui)
+                diagnostic["node_count"] = len(observed)
+                diagnostic["nodes_truncated"] = len(observed) > 1024
+                retained_bytes = 0
+                for node, role, name, states in observed[:1024]:
+                    row = dict(role=role[:64], name=name[:256], states=states)
+                    if role in ("image", "list", "list item"):
+                        try:
+                            row["extents"] = node.extents()
+                        except (RuntimeError, ValueError, TypeError, KeyError, IndexError) as error:
+                            row["extents_error"] = f"{type(error).__name__}: {error}"[:512]
+                    retained_bytes += len(json.dumps(row).encode())
+                    if retained_bytes > 128 * 1024:
+                        diagnostic["nodes_truncated"] = True
+                        break
+                    diagnostic["nodes"].append(row)
+                shell.screenshot(args.output / "recipient-failure.png")
+            except (AssertionError, EOFError, OSError, RuntimeError, ValueError,
+                    TypeError, KeyError, IndexError, subprocess.SubprocessError) as error:
+                diagnostic["capture_error"] = f"{type(error).__name__}: {error}"[:512]
+            finally:
+                signal.setitimer(signal.ITIMER_REAL, 0)
+                signal.signal(signal.SIGALRM, previous_handler)
+                if previous_timer[0]:
+                    signal.setitimer(signal.ITIMER_REAL,
+                        max(.001, previous_timer[0] - (time.monotonic() - started)), previous_timer[1])
+                diagnostic["capture_seconds"] = time.monotonic() - started
+                encoded = json.dumps(diagnostic, separators=(",", ":")).encode()
+                assert len(encoded) <= 256 * 1024
+                (args.output / "recipient-failure.json").write_bytes(encoded + b"\n")
         def send_and_receive(body, preview):
             observation.update(stage="send_and_receive", last_send_preview=preview)
             marker = body.split()[0]
@@ -379,8 +434,17 @@ def desktop(args):
             eventually(lambda: any(marker in label for _, _, label, _ in items(recipient_ui)), "real recipient did not render original text")
             if preview:
                 assert any("Synthetic preview" in label for _, _, label, _ in items(recipient_ui))
-                eventually(lambda: image_pixels(recipient.pid, args.output / "recipient-card.png") > 300,
-                    "carried image was not actually painted in independent recipient")
+                pixel_count = None
+                def recipient_image_painted():
+                    nonlocal pixel_count
+                    pixel_count = image_pixels(recipient.pid, args.output / "recipient-card.png")
+                    return pixel_count > 300
+                try:
+                    eventually(recipient_image_painted,
+                        "carried image was not actually painted in independent recipient")
+                except AssertionError as failure:
+                    capture_recipient_failure(failure, pixel_count)
+                    raise
                 focus_window(sender_pid)
                 if args.server == "nuschld":
                     chat = eventually(lambda: next((event for event in list(receiver.events)
