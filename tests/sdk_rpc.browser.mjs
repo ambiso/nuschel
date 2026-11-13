@@ -127,6 +127,13 @@ async function cache(page) {
 }
 try {
  const page=await open("rpc-stall-private");
+ // The reused text-only observer must be deaf BEFORE synthetic voice starts;
+ // it intentionally has no UDPTunnel parser or audio/codec authority.
+ observer=await legacyPeer(Number(port),"rpc-content-observer");
+ observer.send(9,Buffer.from([80,1])); // UserState.self_deaf = true
+ await observer.wait(()=>observer.users.get(observer.session)?.deafened===1,"text observer deaf acknowledgment");
+ observer.join(0);
+ await observer.wait(()=>observer.users.get(observer.session)?.channel===0,"observer root join");
  await page.getByRole("button",{name:"Join voice",exact:true}).click();
  await page.waitForFunction(()=>__voiceProof.voice?.joined);
  await page.getByRole("button",{name:"Unmute microphone",exact:true}).click();
@@ -138,8 +145,6 @@ try {
  // Four genuine incoming messages reserve the SDK's complete posted-job window.
  // Hold ONE real codec reply before delivery; the serial production worker will
  // produce the other three after release. Never construct a content ACK here.
- observer=await legacyPeer(Number(port),"rpc-content-observer");observer.join(0);
- await observer.wait(()=>observer.users.get(observer.session)?.channel===0,"observer root join");
  await page.evaluate(()=>{__voiceProof.holdCodec=true;});
  const sources=Array.from({length:RPC_ACK_RESERVE},(_,index)=>`RPC_REAL_ACK_${index}`);
  for(const source of sources)observer.message(0,source);
