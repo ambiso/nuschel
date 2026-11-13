@@ -155,11 +155,19 @@ async fn run(arguments: Arguments) -> Result<(), String> {
             )
         })
         .collect();
+    // Covers only save work: a broken cache directory turns the cache off.
+    let cover_directory = state_directory.join("covers");
     let covers = covers::CoverCache::open(
-        state_directory.join("covers"),
-        config.web.cover_cache_mib.saturating_mul(1024 * 1024),
+        cover_directory.clone(),
+        config.web.cover_cache_mib * 1024 * 1024,
     )
-    .map_err(|error| format!("{}: {error}", state_directory.join("covers").display()))?;
+    .unwrap_or_else(|error| {
+        tracing::warn!(
+            "{}: {error}; covers are not cached",
+            cover_directory.display()
+        );
+        covers::CoverCache::disabled()
+    });
     let bot = Arc::new(Bot {
         state_directory,
         web_assets: arguments.web_assets,
