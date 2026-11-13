@@ -17,3 +17,15 @@ pixels. A private GNOME fixture reads `image/png` independently and compares its
 decoded pixels with the generated test image (`tests/screenshots.py`, viewer scene).
 Pure MIME/payload regressions live beside the Wayland implementation. Remove this
 patch once the upstream backend provides equivalent typed clipboard support.
+
+## Decorations without a preference
+
+`WindowDecorations::Compositor` (added in `gpui-pre`) sends xdg-decoration's
+`unset_mode` on Wayland instead of `set_mode`, so the compositor's `configure`
+chooses the mode. Until it arrives the window counts as client-side, as the
+protocol expects of a client that has not negotiated server-side decorations;
+GPUI's existing `configure` handler then switches it either way. Without the
+xdg-decoration global it falls back to client-side, as before. X11 has no such
+negotiation, and `Compositor` sets the same `_MOTIF_WM_HINTS` as `Server`. The
+window state only ever holds `Server` or `Client`. Remove this part once
+upstream has an equivalent request.

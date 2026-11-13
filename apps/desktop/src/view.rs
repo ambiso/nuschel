@@ -27,6 +27,7 @@ impl Render for Desktop {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         #[cfg(feature = "frame-timing")]
         let started = std::time::Instant::now();
+        self.window_corners = crate::chrome::corner_radii(window);
         crate::images::collect(window);
         self.ease_voice_toggles(window, cx);
         // Which dialog the last frame showed (see dialogs::modal).
@@ -69,6 +70,7 @@ impl Render for Desktop {
             .flex()
             .flex_col()
             .bg(color(MAIN))
+            .map(|content| crate::chrome::round(content, self.window_corners))
             .text_color(color(TEXT))
             .font_family(theme::ui_font())
             .text_size(px(self.settings.appearance.text_size))
@@ -413,6 +415,7 @@ fn server_rail(this: &Desktop, selected: Option<usize>, cx: &mut Context<Desktop
         .py_3()
         .gap_2()
         .bg(color(RAIL))
+        .rounded_bl(this.window_corners.bottom_left)
         .flex()
         .flex_col()
         .items_center()
@@ -1916,6 +1919,7 @@ fn conversation(
         .flex()
         .flex_col()
         .bg(color(MAIN))
+        .rounded_br(this.window_corners.bottom_right)
         // Asked about whatever is being dragged, hovered or not (see file_drop).
         .can_drop(move |value, _, _| {
             if let Some(paths) = value.downcast_ref::<ExternalPaths>() {
