@@ -102,7 +102,9 @@
             || lib.hasSuffix ".json" path
             || lib.hasSuffix ".vp8" path
             || lib.hasSuffix ".svg" path
+            # The Windows icon and the resource script embed-resource compiles.
             || lib.hasSuffix ".ico" path
+            || lib.hasSuffix ".rc" path
             # The math worker's bundled font (crates/math/fonts).
             || lib.hasSuffix ".otf" path
             # The emoji picker's table.

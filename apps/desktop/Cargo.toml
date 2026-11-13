@@ -36,6 +36,10 @@ tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 ureq = { version = "3", default-features = false, features = ["rustls"] }
 
+[build-dependencies]
+# The icon resource, compiled by windres or llvm-rc for Windows targets.
+embed-resource = "3.0"
+
 [features]
 # Log GPUI's frame phases for measuring (see src/frame_timing.rs).
 frame-timing = ["dep:gpui-profiler"]
