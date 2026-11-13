@@ -610,10 +610,45 @@ def desktop(args):
             own = next(user for user in receiver.users.values() if user["name"] == "Welcome reader")
             voice_channel = own["channel"]
             voice_start = len(receiver.events)
+            def reveal_channel(name):
+                deadline = time.monotonic() + 10
+                for attempt in range(12):
+                    assert time.monotonic() < deadline, "channel wheel reveal exceeded its deadline"
+                    dialog = wait("Channels and servers", "dialog")
+                    tree = wait("Channels", "tree")
+                    target = wait(name, "tree item")
+                    row, branch, modal = target.extents(), tree.extents(), dialog.extents()
+                    window = window_rect(sender_pid)
+                    left = max(branch[0], modal[0], 0)
+                    top = max(branch[1], modal[1], 0)
+                    right = min(branch[0] + branch[2], modal[0] + modal[2], window[2])
+                    bottom = min(branch[1] + branch[3], modal[1] + modal[3], window[3])
+                    x, y = row[0] + row[2] / 2, row[1] + row[3] / 2
+                    if row[2] > 0 and row[3] > 0 and left <= x < right and top <= y < bottom:
+                        return target
+                    visible_tree = left < right and top < bottom
+                    if visible_tree and (y < branch[1] or y >= branch[1] + branch[3]):
+                        pointer = ((left + right) / 2, (top + bottom) / 2)
+                        direction = -1 if y < branch[1] else 1
+                    else:
+                        # The modal's reserved 12-logical-pixel gutter routes
+                        # this wheel step through the enclosing sheet region.
+                        pointer = (min(modal[0] + modal[2], window[2]) - 6 * saved_zoom(),
+                            (max(modal[1], 0) + min(modal[1] + modal[3], window[3])) / 2)
+                        direction = -1 if y < max(modal[1], 0) else 1
+                    trace = dict(target=name, attempt=attempt, row=row, tree=branch, modal=modal,
+                        client=window, pointer=pointer, direction=direction)
+                    observation.setdefault("channel_wheel_reveal", []).append(trace)
+                    assert len(observation["channel_wheel_reveal"]) <= 24
+                    assert max(modal[0], 0) <= pointer[0] < min(modal[0] + modal[2], window[2])
+                    assert max(modal[1], 0) <= pointer[1] < min(modal[1] + modal[3], window[3])
+                    shell.wheel(window[0] + round(pointer[0]), window[1] + round(pointer[1]), direction)
+                    eventually(lambda: (target.extents(), tree.extents(), dialog.extents()) != (row, branch, modal),
+                        "channel wheel step must move the requested region", timeout=max(.01, min(1, deadline - time.monotonic())))
+                raise AssertionError("channel wheel reveal exceeded 12 steps")
             activate("Channels")
             wait("Channels and servers", "dialog")
-            lobby = wait("Lobby", "tree item")
-            lobby.call("Component", "ScrollTo", "u", "0")
+            lobby = reveal_channel("Lobby")
             assert lobby.call("Component", "GrabFocus")[0]
             lobby.press()
             wait("Messages in #Lobby", "list")
@@ -629,8 +664,7 @@ def desktop(args):
             shell.key("Escape")
             eventually(lambda: named("Channels and servers", "dialog") is None, "Escape kept the sheet open")
             activate("Channels")
-            root_channel = wait("Root", "tree item")
-            root_channel.call("Component", "ScrollTo", "u", "0")
+            root_channel = reveal_channel("Root")
             assert root_channel.call("Component", "GrabFocus")[0]
             root_channel.press()
             wait("Messages in #Root", "list")
