@@ -827,6 +827,13 @@ def main():
                 eventually(lambda: api(link), lambda state: not state["players"][0]["ducked"], "VAD release")
                 assert not ducked_while_talking(link, alice, speech), "disabled VAD ducked"
                 command(link, "clear")
+                # History keeps a skipped song once it has sent audio. Let the
+                # ducking songs end, then skip a new song while it is audible.
+                eventually(lambda: api(link), lambda state: state["players"][0]["current"] is None,
+                           "ducking songs finished")
+                command(link, "add", kind="song", library=0, id="s1", index=None)
+                eventually(lambda: api(link), lambda state: (state["players"][0]["current"] or {})
+                           .get("position_ms", 0) > 0, "song audible")
                 command(link, "skip")
                 audio_from(alice, dj, 15)
 
