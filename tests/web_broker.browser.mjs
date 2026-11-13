@@ -69,7 +69,7 @@ async function open(username,fault="",width=1280,trust=true) {
  const page=await context.newPage();
  await page.addInitScript(()=>{
   globalThis.captureCalls=0;navigator.mediaDevices.getUserMedia=()=>{captureCalls++;return Promise.reject(new Error("No capture in broker fixture"));};
-  const fixture=globalThis.brokerFixture={sdk:null,last:null,work:[],replies:[],pending:new Map(),workers:[],completions:[],codec:[],snapshots:0,snapshot_bytes:0,holdAck:false,heldAck:null,invalidateState:false,ackCount:0,commands:new Map(),errors:[],fatals:[],requestIds:new Set(),requestResults:new WeakSet(),requestsOutstanding:0,requestsPeak:0,delayRequestResults:0,dropAck:false,droppedAck:null,ackPosts:0,watch:new Map()};
+  const fixture=globalThis.brokerFixture={sdk:null,last:null,work:[],replies:[],pending:new Map(),workers:[],completions:[],codec:[],snapshots:0,snapshot_bytes:0,holdAck:false,heldAck:null,invalidateState:false,ackCount:0,commands:new Map(),errors:[],fatals:[],requestIds:new Set(),requestResults:new WeakSet(),requestsOutstanding:0,requestsPeak:0,delayRequestResults:0,dropAck:false,droppedAck:null,dropRetire:false,retires:[],retireReplies:[],ackPosts:0,watch:new Map()};
   const NativeWorker=globalThis.Worker;
   globalThis.Worker=class extends NativeWorker {
    constructor(...args) {
@@ -82,6 +82,7 @@ async function open(username,fault="",width=1280,trust=true) {
      if(data?.kind==="state"){if(fixture.invalidateState&&data.servers.length){fixture.invalidateState=false;data.servers[0].runtime_index=data.servers.length;}fixture.last=data;fixture.snapshots++;fixture.snapshot_bytes+=new TextEncoder().encode(JSON.stringify(data)).length;}
      if(data?.kind==="content_work")for(const operation of data.operations){fixture.work.push(operation);if(fixture.work.length>128)fixture.work.shift();if(operation.kind==="render"&&typeof operation.source==="string"&&operation.source.startsWith("PRESSURE_PEER_")&&fixture.watch.size<16)fixture.watch.set(operation.source,{request:operation.request,value:null,error:null});}
      if(data?.kind==="fatal")fixture.fatals.push(data.message);
+     if(data?.kind==="result"&&fixture.commands.get(data.id)==="content_retire")fixture.retireReplies.push({value:data.value??null,error:data.error??null});
      if(data?.kind==="result"&&fixture.commands.has(data.id)){if(data.error)fixture.errors.push({method:fixture.commands.get(data.id),error:data.error});fixture.commands.delete(data.id);}
      if(data?.kind==="result"&&fixture.pending.has(data.id))for(const entry of fixture.watch.values())if(entry.request===fixture.pending.get(data.id)){entry.value=data.value??null;entry.error=data.error??null;}
      if(data?.kind==="result"&&fixture.pending.has(data.id)) {
@@ -112,6 +113,15 @@ async function open(username,fault="",width=1280,trust=true) {
      fixture.dropAck=false;fixture.droppedAck=data.args[0];
      queueMicrotask(()=>this.dispatchEvent(new MessageEvent("message",{data:{kind:"result",id:data.id,error:"Fixture dropped this content ACK before the SDK."}})));
      return;
+    }
+    if(this.fixtureSdk&&data?.method==="content_retire") {
+     fixture.retires.push(data.args?.[0]);
+     if(fixture.dropRetire) {
+      // The lane retirement notice is also lost: only SDK deadlines remain.
+      fixture.dropRetire=false;
+      queueMicrotask(()=>this.dispatchEvent(new MessageEvent("message",{data:{kind:"result",id:data.id,error:"Fixture dropped this lane retirement before the SDK."}})));
+      return;
+     }
     }
     return super.postMessage(data,...rest);
    }
@@ -148,7 +158,7 @@ async function send(page,text) {
  await page.getByRole("button",{name:"Send",exact:true}).click();
  await page.waitForFunction(()=>document.querySelector("textarea")?.value==="");
 }
-const result={passed:false,artifact:root,stale:null,retired:null,expiry:null,slow:null,ack_loss:null,direct:null,recovery:null,pressure:null,reconnect:null,stress:process.argv[7]==="stress",throughput:[]};
+const result={passed:false,artifact:root,stale:null,retired:null,expiry:null,slow:null,ack_signal:null,ack_loss:null,direct:null,recovery:null,pressure:null,reconnect:null,stress:process.argv[7]==="stress",throughput:[]};
 let observer;
 async function hold(page){
  await page.evaluate(()=>{brokerFixture.holdAck=true;brokerFixture.heldAck=null;});
@@ -305,13 +315,32 @@ try {
  assert.ok(result.slow.renders>=6&&result.slow.elapsed_ms>=6*2500);assert.equal(result.slow.content_workers,1);assert.equal(result.slow.capture_calls,0);
  await slow.screenshot({path:screenshot.replace(".png","-slow.png")});
 
- // A content ACK lost before the SDK: credit stays held and the lane retires
- // visibly. Only the SDK deadline clock moves (past the 12s progress budget,
- // then past the 15s cancelled-ACK bound); no ACK is ever delivered for it.
+ const stopped="[Message previews stopped because a preview job was not acknowledged. Reload this page to prepare previews again.]";
+ // A content ACK the bridge cannot deliver: it keeps that credit and tells the
+ // SDK explicitly, so waiting and new rows turn terminal without a clock shift.
+ const signal=await open("broker-ack-signal");
+ await send(signal,"ack-signal-before");
+ await signal.waitForFunction(()=>(brokerFixture.last?.timeline?.messages??[]).some(message=>message.content_token&&!message.content_failed));
+ await signal.evaluate(()=>{brokerFixture.dropAck=true;});
+ await send(signal,"ack-signal-dropped");
+ await signal.waitForFunction(()=>brokerFixture.droppedAck!==null&&brokerFixture.retireReplies.length>0,null,{timeout:10000});
+ await signal.locator("article").filter({hasText:stopped}).first().waitFor({timeout:10000});
+ await send(signal,"ack-signal-after");
+ await signal.waitForFunction(text=>[...document.querySelectorAll("article")].filter(node=>node.textContent.includes(text)).length>=2,stopped,{timeout:10000});
+ result.ack_signal=await signal.evaluate(()=>({dropped:brokerFixture.droppedAck,retires:brokerFixture.retires,retire_replies:brokerFixture.retireReplies,dropped_cancelled:brokerFixture.work.some(operation=>operation.kind==="cancel"&&operation.request===brokerFixture.droppedAck),after_render_work:brokerFixture.work.filter(operation=>operation.kind==="render"&&operation.source==="ack-signal-after").length,reload_client:[...document.querySelectorAll("button")].some(node=>node.textContent==="Reload client"),content_workers:brokerFixture.workers.filter(url=>url.includes("content-worker-")).length,sdk_workers:brokerFixture.workers.filter(url=>url.includes("sdk.worker-")).length,capture_calls:captureCalls}));
+ assert.deepEqual(result.ack_signal.retires,["undelivered"]);assert.deepEqual(result.ack_signal.retire_replies,[{value:true,error:null}]);
+ assert.equal(result.ack_signal.dropped_cancelled,true,"the undelivered job is cancelled, its credit held");assert.equal(result.ack_signal.after_render_work,0);
+ assert.equal(result.ack_signal.reload_client,false);assert.equal(result.ack_signal.content_workers,1);assert.equal(result.ack_signal.sdk_workers,1);assert.equal(result.ack_signal.capture_calls,0);
+ await signal.screenshot({path:screenshot.replace(".png","-ack-signal.png")});
+
+ // Both the content ACK and the retirement notice are lost before the SDK:
+ // credit stays held and the SDK's deadline backstop retires the lane. Only the
+ // SDK deadline clock moves (past the 12s progress budget, then past the 15s
+ // cancelled-ACK bound); no ACK is ever delivered for it.
  const lost=await open("broker-ack-loss");
  await send(lost,"ack-loss-before");
  await lost.waitForFunction(()=>(brokerFixture.last?.timeline?.messages??[]).some(message=>message.content_token&&!message.content_failed));
- await lost.evaluate(()=>{brokerFixture.dropAck=true;});
+ await lost.evaluate(()=>{brokerFixture.dropAck=true;brokerFixture.dropRetire=true;});
  await send(lost,"ack-loss-dropped");
  await lost.waitForFunction(()=>brokerFixture.droppedAck!==null);
  const lostSdk=lost.workers().find(worker=>worker.url().includes("sdk.worker-"));assert.ok(lostSdk);
@@ -321,11 +350,11 @@ try {
  await lost.waitForFunction(()=>[...document.querySelectorAll("small")].some(node=>node.textContent==="Preview unavailable. Reload to try again."));
  await lostSdk.evaluate(()=>{globalThis.fixtureShift=29000;});await rpc(lost,"dismiss_notice",0);
  await send(lost,"ack-loss-after");
- const stopped="[Message previews stopped because a preview job was not acknowledged. Reload this page to prepare previews again.]";
  await lost.locator("article").filter({hasText:stopped}).first().waitFor({timeout:10000});
- result.ack_loss=await lost.evaluate(()=>({dropped:brokerFixture.droppedAck,after_render_work:brokerFixture.work.filter(operation=>operation.kind==="render"&&operation.source==="ack-loss-after").length,errors:brokerFixture.errors.filter(error=>error.method==="content_complete").length,reload_client:[...document.querySelectorAll("button")].some(node=>node.textContent==="Reload client"),content_workers:brokerFixture.workers.filter(url=>url.includes("content-worker-")).length,sdk_workers:brokerFixture.workers.filter(url=>url.includes("sdk.worker-")).length,capture_calls:captureCalls}));
+ result.ack_loss=await lost.evaluate(()=>({dropped:brokerFixture.droppedAck,retires:brokerFixture.retires,retire_replies:brokerFixture.retireReplies,after_render_work:brokerFixture.work.filter(operation=>operation.kind==="render"&&operation.source==="ack-loss-after").length,errors:brokerFixture.errors.filter(error=>error.method==="content_complete").length,reload_client:[...document.querySelectorAll("button")].some(node=>node.textContent==="Reload client"),content_workers:brokerFixture.workers.filter(url=>url.includes("content-worker-")).length,sdk_workers:brokerFixture.workers.filter(url=>url.includes("sdk.worker-")).length,capture_calls:captureCalls}));
  assert.equal(result.ack_loss.after_render_work,0,"a retired lane posts no further codec work");
  assert.equal(result.ack_loss.errors,1);assert.equal(result.ack_loss.reload_client,false,"chat stays usable");
+ assert.deepEqual(result.ack_loss.retires,["undelivered"]);assert.equal(result.ack_loss.retire_replies.length,1);assert.notEqual(result.ack_loss.retire_replies[0].error,null);
  assert.equal(result.ack_loss.content_workers,1);assert.equal(result.ack_loss.sdk_workers,1);assert.equal(result.ack_loss.capture_calls,0);
  await lost.screenshot({path:screenshot.replace(".png","-ack-loss.png")});
 
