@@ -155,6 +155,7 @@ pkgs.testers.runNixOSTest {
   testScript = ''
     import json
     import shlex
+    import textwrap
     from datetime import timedelta
 
     start_all()
@@ -212,14 +213,35 @@ pkgs.testers.runNixOSTest {
         assert stop_status == 0, stop_log
         for unit in native_units:
             group = "/sys/fs/cgroup/system.slice/" + unit
-            machine.wait_until_succeeds(f"test ! -d {group} || grep -qx 'populated 0' {group}/cgroup.events", timeout=timedelta(seconds=15))
             pid = native_pids.get(unit)
-            if pid is not None:
-                machine.wait_until_succeeds(f"test ! -e /proc/{pid}", timeout=timedelta(seconds=15))
+            retirement_check = f"""
+    from pathlib import Path
+    Path('/proc/self/stat').read_text()
+    Path('/sys/fs/cgroup/cgroup.controllers').read_text()
+    group = Path({group!r})
+    try:
+        group.stat()
+    except FileNotFoundError:
+        pass
+    else:
+        assert 'populated 0' in (group / 'cgroup.events').read_text().splitlines()
+    if {pid is not None!r}:
+        try:
+            Path('/proc/{pid}').stat()
+        except FileNotFoundError:
+            pass
+        else:
+            raise AssertionError('original service leader still exists')
+    """
+            machine.wait_until_succeeds("${python} -c " + shlex.quote(textwrap.dedent(retirement_check)), timeout=timedelta(seconds=15))
             native_retirement.append({"unit": unit, "original_group": native_groups.get(unit), "kernel_group": group, "leader_pid": pid, "kernel_empty_or_removed": True, "leader_absent": pid is not None})
         machine.succeed("printf %s " + shlex.quote(json.dumps(native_retirement)) + f" > {native_directory}/retirement.json")
         machine.copy_from_machine(f"{native_directory}/retirement.json", "native-retirement.json")
     assert all(item["leader_absent"] for item in native_retirement), native_retirement
+    native_peers = json.loads(machine.succeed(f"test $(stat -c%s {native_directory}/peers.json) -le 524288 && cat {native_directory}/peers.json"))
+    assert native_peers["overrun"] is False
+    assert isinstance(native_peers["events"], list) and len(native_peers["events"]) <= 4096
+    assert not any(event["kind"] == "peer_error" and event.get("error") == "AssertionError" for event in native_peers["events"]), native_peers
     machine.succeed("systemctl start nuschl-preview-peers.service")
     machine.wait_until_succeeds("test -f /var/lib/nuschl-preview-peers/ready.json")
     machine.succeed("install -d -m0700 -o tester -g users /home/tester/.cache/lp /home/tester/.cache/lp/tmp /home/tester/.cache/lp/wl")

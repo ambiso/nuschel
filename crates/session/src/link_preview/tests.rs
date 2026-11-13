@@ -56,7 +56,14 @@ fn control(operation: &str) -> Value {
 fn events() -> Vec<Value> {
     let value = control("snapshot");
     assert_eq!(value["overrun"], false);
-    value["events"].as_array().unwrap().clone()
+    let events = value["events"].as_array().unwrap();
+    assert!(
+        events
+            .iter()
+            .all(|event| event["kind"] != "peer_error" || event["error"] != "AssertionError"),
+        "synthetic peer assertion failed: {events:?}"
+    );
+    events.clone()
 }
 fn write_new(path: &Path, bytes: &[u8]) {
     let mut options = std::fs::OpenOptions::new();
