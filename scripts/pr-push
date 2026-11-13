@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: EUPL-1.2
+# jj runs no git hooks: push only if scripts/pre-pr passes, e.g.
+#   scripts/pr-push --bookmark my-branch
+set -euo pipefail
+"$(dirname "$0")/pre-pr" --cores 2 --max-jobs 2 && exec jj git push "$@"

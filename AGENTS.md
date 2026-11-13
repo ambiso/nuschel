@@ -66,6 +66,8 @@ Read [SECURITY.md](SECURITY.md), [architecture](docs/architecture.md) and
 - The coordinator owns final integration, main-bookmark movement and remote pushes
   unless explicitly delegated. Existing user authorization persists; do not add
   repetitive confirmations or a new approval process for already-authorized work.
+- Changes reach `main` only through a pull request from a branch of this
+  repository whose required checks pass; never push to `main` directly.
 - Report concrete conflicts/blockers early, then continue independent in-scope work.
 - Check the agreed private coordination inbox at turn start, between substantial
   work units and before yielding. A running watcher is not proof of delivery or
@@ -100,6 +102,11 @@ Read [SECURITY.md](SECURITY.md), [architecture](docs/architecture.md) and
 
 ## Builds and resource use
 
+- A CI job is one command that runs the same locally: `nix build -f ci.nix` is
+  the `ci` check. Run it before pushing as `scripts/pre-pr --cores 2 --max-jobs 2`
+  (`scripts/pr-push` does so for jj bookmarks). Workflows keep read-only tokens
+  (`contents: read`); CodeQL's `security-events: write`, to upload results, is
+  the only exception.
 - Prefer pinned Nix tooling and existing cached crate2nix per-crate build/test leaves.
   Keep working cross/fallback builders until a separate migration is verified.
 - Review dependency safety/licensing and regenerate via `just crate2nix` when needed;

@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: EUPL-1.2
+# Builds ci.nix (Linux packages, Clippy, rustfmt, unit tests, policy checks and
+# the NixOS VM tests) on the self-hosted runner.
+name: Check
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+concurrency:
+  group: check-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  ci:
+    # Fork pull requests fail on a hosted runner (a skipped job would pass the required check).
+    # A fork can edit this file, so approving runs of all external contributors protects ours.
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-24.04' || 'self-hosted' }}
+    timeout-minutes: 240
+    steps:
+      - if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
+        run: echo "CI runs on branches in this repository; ask a maintainer to push the fork branch here." && exit 1
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+      - run: nix --extra-experimental-features 'nix-command flakes' build -f ci.nix --no-link --keep-going -L
