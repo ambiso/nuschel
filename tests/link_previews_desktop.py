@@ -234,7 +234,7 @@ def desktop(args):
         def wait(name, role=None):
             return eventually(lambda: named(name, role), f"missing preview UI {name}")
         def ready_card():
-            card = named("Link preview", "grouping")
+            card = named("Link preview", "panel")
             if card is None:
                 return None
             pending = [(card, 0)]
