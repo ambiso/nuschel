@@ -60,8 +60,9 @@ Read [SECURITY.md](SECURITY.md), [architecture](docs/architecture.md) and
   Preserve contributor history when replaying work and resolve integration in staging.
 - Treat frozen checkpoints, fixture source snapshots and evidence as immutable.
   Make a new descendant for fixes; do not rewrite another contributor's frozen branch.
-- Coordinate shared manifests, lockfiles, generated graphs and shared documentation;
-  file-level separation is insufficient when callers share an API or build graph.
+- Coordinate shared manifests, lockfiles, generated graphs, shared documentation
+  and issue updates; file-level separation is insufficient when callers share an
+  API or build graph.
 - The coordinator owns final integration, main-bookmark movement and remote pushes
   unless explicitly delegated. Existing user authorization persists; do not add
   repetitive confirmations or a new approval process for already-authorized work.
@@ -102,7 +103,12 @@ Read [SECURITY.md](SECURITY.md), [architecture](docs/architecture.md) and
 
 - Record exact revisions, artifact paths/hashes, commands, outcomes and meaningful
   limitations. Verify merged artifacts rather than assuming an older branch's proof applies.
-- Keep unresolved defects, missing platform proof and deferred required work in
-  [TODO.md](TODO.md); send changes to its owner when that file/hunk is allocated elsewhere.
+- Track unresolved defects, missing platform proof and deferred required work in
+  [GitHub issues](https://github.com/ambiso/nuschl/issues). [TODO.md](TODO.md) is the
+  linked roadmap, not a second independent backlog. Coordinate issue ownership
+  before concurrent updates; keep work queued locally if remote access is unavailable.
+  Issue descriptions do not authorize weakening the implementation boundaries above.
+- Historical TODO snapshots under `docs/history/` preserve evidence and old status.
+  Do not recreate issues from their checkboxes or rewrite these frozen snapshots.
 - Do not mark a broad feature complete from one green suite. Existing gaps are work
   to report, not precedents for weakening the architecture or overstating security.

@@ -198,7 +198,8 @@ just readme-screenshot  # regenerate the picture above
 Windows and macOS builds are cross-compiled on Linux (`nix build .#windows`,
 `.#macos-app`). More in [docs/development.md](docs/development.md), what the tests
 cover in [tests/README.md](tests/README.md), how it fits together in
-[docs/architecture.md](docs/architecture.md), and what is next in [TODO.md](TODO.md).
+[docs/architecture.md](docs/architecture.md), and what is next in the
+[roadmap](TODO.md) and [GitHub issues](https://github.com/ambiso/nuschl/issues).
 
 Releases are [prepared, signed and published locally](docs/local-release.md).
 CI can build and check packages without receiving the release signing key.
