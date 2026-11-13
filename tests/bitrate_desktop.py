@@ -19,24 +19,47 @@ audio device, profile or recording is used. Checks and screenshots:
   Narrow's 48 kb/s ("shared with another server");
 - a live ServerConfig (setConf) lowers Narrow's rate, and one too small for
   voice stops sending there without stopping playback;
-- narrow window and 150 % zoom keep the voice card's lines bounded.
+- narrow and zoomed layouts (layout-narrow.json): a window requested at
+  760×700 at 175 % zoom (four Ctrl+= steps). The compositor commits the
+  application's 860 px minimum width, and the run records both sizes.
+  1280×800 at 100 % is the gated control; 860×520 at 200 % is recorded but
+  not gated, because the sidebar's width budget keeps it cramped. Synthetic
+  timeline content: a long link, a long code token, a wide image, joins and
+  a file offer. Checks:
+  * walking the timeline entry by entry with the keyboard, every laid-out
+    accessible node except push buttons stays inside the timeline, short of
+    its scrollbar gutter. No text or image pixel lands in that gutter.
+    Entries that are not laid out are 1x1 stand-ins with no real bounds;
+    they are counted, not measured;
+  * "You joined Lobby" is one line at 100 % and at most five lines at 175 %
+    (the defect stacked it one glyph per line);
+  * every voice destination's name and hang-up can be revealed inside the
+    voice card by focus, by the mouse wheel, and by Tab into the card then
+    End. A visible scrollbar thumb is painted whenever the card overflows;
+  * no interactive accessible node is unnamed.
 
     python3 tests/bitrate_desktop.py <binaries> --murmur <mumble-server> \\
         --at-spi <at-spi2-core> --pulse-bin <pulseaudio>/bin --output <directory> [--gnome-shell ...]
+
+The pixel checks use ImageMagick (`MAGICK`, default `magick`).
 """
 import argparse
+import base64
 import json
 import os
 from pathlib import Path
 import signal
+import struct
 import subprocess
 import sys
 import tempfile
 import time
+import urllib.parse
 import uuid
+import zlib
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from accessibility import snapshot, start_registry  # noqa: E402
+from accessibility import INTERACTIVE, ROLES, Node, snapshot, start_registry  # noqa: E402
 from bitrate_matrix import Bus, allowance, received  # noqa: E402
 from desktop_mumble import media_workers  # noqa: E402
 from gnome_session import GnomeSession  # noqa: E402
@@ -51,6 +74,43 @@ RELEASED_KEYS = {
     "shortcuts", "sidebar_width", "sound_effects", "sound_volume", "user_volumes", "wormhole_relay",
     "wormhole_rendezvous",
 }
+# (label, requested width, height, Ctrl+= steps from 100 %, zoom, gated). The
+# 100 % control runs first: it measures the single-line height that the
+# zoomed line counts are relative to.
+GEOMETRIES = [
+    ("control-1280x800-100", 1280, 800, 0, 1.0, True),
+    ("requested-760x700-175", 760, 700, 4, 1.75, True),
+    ("minimum-860x520-200", 860, 520, 5, 2.0, False),
+]
+# The timeline's scrollbar area, in zoom-aware logical pixels (view.rs).
+TIMELINE_GUTTER = 12
+CONTROL_ROLES = {"push button", "toggle button", "menu item", "check box", "radio button"}
+THUMB = (0x35, 0x3E, 0x4E)  # dark theme BORDER_STRONG
+# Every dark-theme text colour (TEXT_FAINT, the faintest, is 0x949fb2) has a
+# channel at or above this; surfaces, the scrollbar track and its thumb are
+# all below it.
+BRIGHT = 0x70
+WELCOME = "Welcome to Root"
+JOINED = "You joined Lobby"
+OFFER_NAME = "holiday-photos-from-the-long-trip-2026.zip"
+
+
+def make_png(width, height):
+    """A synthetic gradient PNG, standard library only."""
+    rows = b"".join(b"\x00" + bytes(channel for x in range(width)
+                                    for channel in (x * 255 // width, y * 255 // height, 160))
+                    for y in range(height))
+
+    def chunk(kind, data):
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b""))
+
+
+def inside(box, outer):
+    x, y, w, h = box
+    ox, oy, ow, oh = outer
+    return w > 0 and h > 0 and x >= ox - 1 and y >= oy - 1 and x + w <= ox + ow + 1 and y + h <= oy + oh + 1
 
 
 class DesktopBitrate:
@@ -180,6 +240,311 @@ class DesktopBitrate:
         settings = json.loads((config / "settings.json").read_text()) if (config / "settings.json").exists() else {}
         sidecar = config / "voice-quality.json"
         return settings, (json.loads(sidecar.read_text()) if sidecar.exists() else None)
+
+    # Narrow and zoomed layouts.
+
+    def tree(self):
+        """Every accessible node from the Cache interface in one call:
+        {path: (node, role, name)} and {parent path: [child paths]}."""
+        app = self.nuschl
+        data = app.bus("call", app.destination, "/org/a11y/atspi/cache", "org.a11y.atspi.Cache", "GetItems")[0]
+        info, children = {}, {}
+        for (destination, path), _, (_, parent), _, _, _, name, role, _, _ in data:
+            info[path] = (Node(app.bus, destination, path), ROLES.get(role, f"role {role}"), name)
+            children.setdefault(parent, []).append(path)
+        return info, children
+
+    def node(self, name, role=None, timeout=15):
+        def found():
+            info, _ = self.tree()
+            return next((node for node, node_role, node_name in info.values()
+                         if node_name == name and (role is None or node_role == role)), None)
+        return eventually(found, f"no {role or 'node'} named {name!r}", timeout=timeout)
+
+    @staticmethod
+    def extents(node):
+        try:
+            return list(node.extents())
+        except RuntimeError:
+            return None
+
+    def zoom(self):
+        settings, _ = self.files()
+        return settings.get("appearance", {}).get("zoom", 1.0)
+
+    def rects(self):
+        return json.loads(self.shell.eval(
+            "JSON.stringify((()=>{const w=global.get_window_actors().map(a=>a.meta_window)"
+            ".find(w=>(w.get_title()||'').startsWith('Nuschl'));const f=w.get_frame_rect(),"
+            "b=w.get_buffer_rect();return {frame:[f.x,f.y,f.width,f.height],"
+            "buffer:[b.x,b.y,b.width,b.height]};})())"))
+
+    def settled_rects(self):
+        """The compositor's rectangles once two samples agree."""
+        previous, deadline = None, time.monotonic() + 8
+        while time.monotonic() < deadline:
+            current = self.rects()
+            if current == previous:
+                return current
+            previous = current
+            time.sleep(0.4)
+        return previous
+
+    def park_pointer(self):
+        bx, by, _, _ = self.rects()["buffer"]
+        # Over the title strip: no hover wash on rows, no hovered thumb.
+        self.shell.move(bx + 140, by + 30)
+        time.sleep(0.3)
+
+    def pixels(self, shot, box):
+        """The RGB pixels of a screen-coordinate box, clipped to the screen."""
+        x, y, w, h = (round(value) for value in box)
+        x0, y0 = max(x, 0), max(y, 0)
+        x1, y1 = min(x + w, WIDTH + 160), min(y + h, HEIGHT + 100)
+        if x1 <= x0 or y1 <= y0:
+            return 0, 0, b""
+        raw = subprocess.run([os.environ.get("MAGICK", "magick"), str(shot), "-crop",
+                              f"{x1 - x0}x{y1 - y0}+{x0}+{y0}", "+repage", "-depth", "8", "rgb:-"],
+                             check=True, capture_output=True, timeout=30).stdout
+        assert len(raw) == (x1 - x0) * (y1 - y0) * 3, (box, len(raw))
+        return x1 - x0, y1 - y0, raw
+
+    def post_content(self):
+        """Synthetic messages from the Narrow peer into Narrow's Root, the
+        conversation on screen; Murmur allows a text message a second."""
+        peer = self.peers["Narrow"]
+        url = ("https://example.org/" + "-".join(["averyveryverylongpathsegment"] * 3)
+               + "?query=unbrokentoken0123456789")
+        token = "unbroken_identifier_" + "x" * 44
+        encoded = base64.b64encode(make_png(480, 200)).decode()
+        image = "\n".join(urllib.parse.quote(encoded[i:i + 72], safe="") for i in range(0, len(encoded), 72))
+        offer = f"📎 {OFFER_NAME} (48 MB) — receive with magic-wormhole: wormhole receive 7-guitarist-revenge"
+        for command in (dict(kind="text", channel=0, body=f"A long link: {url}"),
+                        dict(kind="text", channel=0, body=f"```\n{token}\n```"),
+                        dict(kind="html", channel=0,
+                             html=f"A wide picture:<br/><img src=\"data:image/PNG;base64,{image}\" />"),
+                        dict(kind="text", channel=0, body=offer)):
+            peer.send(**command)
+            time.sleep(1.3)
+        # Joins and leaves in the conversation on screen: a run of activity.
+        for channel in (0, 1, 0, 1):
+            peer.send(kind="join", channel=channel)
+            time.sleep(1.3)
+
+        def arrived():
+            info, _ = self.tree()
+            names = [name for _, role, name in info.values() if role == "list item"]
+            return any(OFFER_NAME in name for name in names) and names
+        eventually(arrived, "the synthetic content did not reach the timeline", timeout=40)
+        time.sleep(2.0)
+
+    def focus_timeline(self, timeline):
+        """The keyboard's way in: Shift+Tab from the composer."""
+        self.node("Message", "entry").call("Component", "GrabFocus")
+        time.sleep(0.5)
+
+        def focused():
+            info, children = self.tree()
+            items = [info[path][0] for path in children.get(timeline.path, [])
+                     if path in info and info[path][1] == "list item"]
+            return timeline.focused or any(item.focused for item in items[-3:])
+        for _ in range(4):
+            self.shell.chord("Shift_L", "Tab")
+            time.sleep(0.5)
+            if focused():
+                return True
+        return False
+
+    def timeline_pass(self, label, zoom, directory):
+        """Walk the timeline from the newest entry up to the welcome, one
+        entry per Up, measuring every laid-out node and the gutter pixels."""
+        timeline = self.node("Messages in #Root", "list")
+        record = dict(focused=self.focus_timeline(timeline), steps=[], violations=[], controls=[],
+                      joined_heights=[], not_laid_out=0, laid_out=0, top_reached=False)
+        self.shell.key("End")
+        time.sleep(0.6)
+        for step in range(80):
+            self.park_pointer()
+            info, children = self.tree()
+            box = self.extents(timeline)
+            left, right = box[0], box[0] + box[2] - round(TIMELINE_GUTTER * zoom)
+            stack, nodes = list(children.get(timeline.path, [])), []
+            while stack:
+                path = stack.pop()
+                if path in info:
+                    nodes.append(info[path])
+                    stack.extend(children.get(path, []))
+            welcome = False
+            for node, role, name in nodes:
+                extents = self.extents(node)
+                if not extents or extents[2] <= 1 or extents[3] <= 1:
+                    record["not_laid_out"] += 1
+                    continue
+                record["laid_out"] += 1
+                x, _, w, h = extents
+                over = max(left - x, x + w - right)
+                entry = dict(step=step, role=role, name=name[:80], extents=extents, over=over)
+                if over > 1:
+                    (record["controls"] if role in CONTROL_ROLES else record["violations"]).append(entry)
+                if role == "label" and name == JOINED:
+                    record["joined_heights"].append(h)
+                if role == "label" and name == WELCOME:
+                    welcome = True
+            bx, by, _, _ = self.rects()["buffer"]
+            shot = directory / f"{label}-step{step:02}.png"
+            self.shell.screenshot(shot)
+            strip = (bx + right + 1, by + box[1], box[0] + box[2] - right - 1, box[3])
+            width, height, raw = self.pixels(shot, strip)
+            bright = sum(1 for i in range(0, len(raw), 3) if max(raw[i:i + 3]) >= BRIGHT)
+            record["steps"].append(dict(step=step, timeline=box, gutter_strip=strip, gutter_pixels=width * height,
+                                        bright_pixels=bright, png=shot.name))
+            if welcome:
+                record["top_reached"] = True
+                break
+            self.shell.key("Up")
+            time.sleep(0.5)
+        self.shell.key("End")
+        time.sleep(0.6)
+        record["timeline_logical_width"] = round(box[2] / zoom, 1)
+        return record
+
+    def voice_pass(self, label, zoom, directory):
+        """Reveal each destination's name and hang-up inside the voice card by
+        focus, wheel and Tab-then-End, and look for the painted thumb."""
+        region = self.node("Voice destinations")
+        info, _ = self.tree()
+        links = [node for node, role, name in info.values() if role == "push button" and name.startswith("Go to ")]
+        hangups = [node for node, role, name in info.values()
+                   if role == "push button" and name.startswith("Disconnect from ") and name.endswith("(voice and chat)")]
+        record = dict(destinations=len(hangups), focus={}, wheel=None, tab_end=None)
+        assert links and hangups, "no voice destinations"
+        box = self.extents(region)
+        centre = None
+
+        def to_top():
+            nonlocal centre
+            bx, by, _, _ = self.rects()["buffer"]
+            centre = (bx + box[0] + box[2] // 2, by + box[1] + box[3] // 2)
+            self.shell.wheel(*centre, -30)
+            time.sleep(0.8)
+        to_top()
+        self.park_pointer()
+        last = max(hangups, key=lambda node: self.extents(node)[1])
+        first = min(links, key=lambda node: self.extents(node)[1])
+        record["region"] = box
+        record["last"] = last.name
+        record["last_at_top"] = self.extents(last)
+        record["overflows"] = not inside(self.extents(last), box)
+        # The painted thumb, read only from the screenshot.
+        shot = directory / f"{label}-voice.png"
+        self.shell.screenshot(shot)
+        bx, by, _, _ = self.rects()["buffer"]
+        gutter = max(8, round(8 * zoom))
+        width, height, raw = self.pixels(shot, (bx + box[0] + box[2] - gutter, by + box[1], gutter, box[3]))
+        rows = [row for row in range(height)
+                if sum(all(abs(a - b) <= 2 for a, b in zip(raw[(row * width + col) * 3:(row * width + col + 1) * 3],
+                                                             THUMB)) for col in range(width)) >= max(1, round(2 * zoom))]
+        record["thumb_rows"] = [min(rows), max(rows)] if rows else None
+        record["thumb_png"] = shot.name
+
+        def revealed(node, timeout=6):
+            def now():
+                extents, outer = self.extents(node), self.extents(region)
+                return bool(extents and outer and inside(extents, outer))
+            try:
+                eventually(now, "", timeout=timeout)
+                return True
+            except AssertionError:
+                return False
+        # Wheel: from the top, turn the wheel down over the card.
+        self.shell.wheel(*centre, 12)
+        record["wheel"] = revealed(last)
+        self.park_pointer()
+        # Focus: each name and each hang-up, as Tab would reach them.
+        for node in links + hangups:
+            node.call("Component", "GrabFocus")
+            record["focus"][node.name] = revealed(node)
+        # Tab into the card (its first destination), then End.
+        to_top()
+        self.park_pointer()
+        first.call("Component", "GrabFocus")
+        time.sleep(0.4)
+        self.shell.key("End")
+        record["tab_end"] = revealed(last)
+        record["after"] = self.extents(last)
+        return record
+
+    def layout_matrix(self):
+        directory = self.args.output / "layout"
+        directory.mkdir(exist_ok=True)
+        self.post_content()
+        report = dict(geometries=[], reference_line_height=None)
+        for label, width, height, steps, zoom, gated in GEOMETRIES:
+            self.shell.chord("Control_L", "0")
+            eventually(lambda: abs(self.zoom() - 1.0) < 0.001, "zoom did not return to 100 %")
+            time.sleep(0.4)
+            self.shell.place("Nuschl", 40, 40, width, height)
+            committed = self.settled_rects()
+            if label.startswith("requested-760"):
+                self.shot("8-narrow")
+            for _ in range(steps):
+                self.shell.chord("Control_L", "equal")
+                time.sleep(0.3)
+            eventually(lambda: abs(self.zoom() - zoom) < 0.001, f"zoom {zoom} not reached")
+            time.sleep(1.0)
+            zoomed = self.settled_rects()
+            self.shot("9-narrow-zoomed" if label.startswith("requested-760") else f"layout-{label}")
+            entry = dict(label=label, requested=[width, height], zoom=zoom, gated=gated,
+                         committed=committed, committed_zoomed=zoomed)
+            entry["timeline"] = self.timeline_pass(label, zoom, directory)
+            entry["voice"] = self.voice_pass(label, zoom, directory)
+            info, _ = self.tree()
+            entry["unnamed_interactive"] = sorted({role for _, role, name in info.values()
+                                                   if role in INTERACTIVE and not name.strip()})
+            heights = entry["timeline"]["joined_heights"]
+            if label.startswith("control"):
+                report["reference_line_height"] = max(heights) if heights else None
+            reference = report["reference_line_height"]
+            entry["joined_lines"] = (round(max(heights) / (reference * zoom))
+                                     if heights and reference else None)
+            report["geometries"].append(entry)
+            print(f"  {label}: committed frame {committed['frame'][2]}×{committed['frame'][3]} "
+                  f"({zoomed['frame'][2]}×{zoomed['frame'][3]} zoomed), timeline "
+                  f"{entry['timeline']['timeline_logical_width']} logical px, "
+                  f"{len(entry['timeline']['violations'])} node overflows, "
+                  f"{sum(s['bright_pixels'] for s in entry['timeline']['steps'])} gutter pixels, "
+                  f"'{JOINED}' {entry['joined_lines']} line(s), voice wheel {entry['voice']['wheel']} "
+                  f"tab+end {entry['voice']['tab_end']} thumb {entry['voice']['thumb_rows']}", flush=True)
+        self.shell.chord("Control_L", "0")
+        failures = []
+        for entry in report["geometries"]:
+            if not entry["gated"]:
+                continue
+            label, timeline, voice = entry["label"], entry["timeline"], entry["voice"]
+            if not timeline["focused"]:
+                failures.append(f"{label}: Shift+Tab from the composer did not reach the timeline")
+            if not timeline["top_reached"]:
+                failures.append(f"{label}: the walk did not reach '{WELCOME}'")
+            if timeline["violations"]:
+                failures.append(f"{label}: {len(timeline['violations'])} laid-out nodes leave the timeline, "
+                                f"e.g. {timeline['violations'][:3]}")
+            bright = [(s["step"], s["bright_pixels"]) for s in timeline["steps"] if s["bright_pixels"]]
+            if bright:
+                failures.append(f"{label}: text or image pixels in the scrollbar gutter at steps {bright}")
+            limit = 1 if entry["zoom"] == 1.0 else 5
+            if entry["joined_lines"] is None or entry["joined_lines"] > limit:
+                failures.append(f"{label}: '{JOINED}' takes {entry['joined_lines']} lines (at most {limit})")
+            if not voice["wheel"] or not voice["tab_end"] or not all(voice["focus"].values()):
+                failures.append(f"{label}: voice destinations not all reachable: wheel {voice['wheel']}, "
+                                f"tab+end {voice['tab_end']}, focus {voice['focus']}")
+            if voice["overflows"] and not voice["thumb_rows"]:
+                failures.append(f"{label}: the voice card overflows without a painted scrollbar thumb")
+            if entry["unnamed_interactive"]:
+                failures.append(f"{label}: unnamed interactive nodes {entry['unnamed_interactive']}")
+        report["failures"] = failures
+        (self.args.output / "layout-narrow.json").write_text(json.dumps(report, indent=2) + "\n")
+        assert not failures, "narrow layout:\n" + "\n".join(failures)
+        print("Narrow layout: ok", flush=True)
 
     def run(self):
         self.shell = GnomeSession(self.args.gnome_shell, WIDTH + 160, HEIGHT + 100,
@@ -311,15 +676,12 @@ class DesktopBitrate:
         assert self.playback_streams(), "a budget too small for voice stopped playback"
         self.shot("7-voice-card-live-too-small")
 
-        # Narrow window and 150 % zoom: the card's lines stay bounded.
-        self.shell.place("Nuschl", 40, 40, 760, 700)
-        self.shot("8-narrow")
-        for _ in range(4):
-            self.shell.chord("Control_L", "equal")
-            time.sleep(0.3)
-        self.shot("9-narrow-zoomed")
         (self.args.output / "bitrate-desktop.json").write_text(json.dumps(self.results, indent=2))
         print("Desktop voice bitrate: ok", flush=True)
+
+        # Narrow and zoomed: the timeline wraps inside itself and every voice
+        # destination stays reachable (layout-narrow.json).
+        self.layout_matrix()
 
     def close(self):
         for peer in self.peers.values():

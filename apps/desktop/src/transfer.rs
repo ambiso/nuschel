@@ -754,6 +754,8 @@ pub fn card(
         offer.name, message.author, shown.status
     );
     let header = div()
+        .w_full()
+        .min_w_0()
         .flex()
         .items_center()
         .gap_3()
@@ -771,24 +773,39 @@ pub fn card(
                 .text_color(color(tone))
                 .child(extension),
         )
+        // The name beside its actions while both fit. Buttons never shrink,
+        // so in a narrow card they wrap below the name instead of
+        // overflowing it.
         .child(
-            div()
-                .flex_1()
-                .min_w_0()
+            crate::layout::flexible()
                 .flex()
-                .flex_col()
+                .flex_wrap()
+                .items_center()
+                .gap_x_3()
+                .gap_y_2()
                 .child(
                     div()
-                        .truncate()
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(color(TEXT))
-                        .child(text!(offer.name.clone()).with_id(("offer-name", position))),
+                        .flex_grow(1.)
+                        .flex_basis(px(120.))
+                        .min_w_0()
+                        .flex()
+                        .flex_col()
+                        .child(
+                            div()
+                                .truncate()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(color(TEXT))
+                                .child(text!(offer.name.clone()).with_id(("offer-name", position))),
+                        )
+                        .child(
+                            div().text_xs().text_color(color(TEXT_MUTED)).child(
+                                text!(format!("{size} · {}", message.author))
+                                    .with_id(("offer-meta", position)),
+                            ),
+                        ),
                 )
-                .child(div().text_xs().text_color(color(TEXT_MUTED)).child(
-                    text!(format!("{size} · {}", message.author)).with_id(("offer-meta", position)),
-                )),
-        )
-        .children(shown.buttons);
+                .children(shown.buttons),
+        );
     let progress = shown.progress.map(|fraction| {
         div()
             .id(("offer-progress", position))
@@ -820,6 +837,8 @@ pub fn card(
             .id(("offer", position))
             .role(Role::Group)
             .aria_label(label)
+            .w_full()
+            .min_w_0()
             .max_w(px(480.))
             .p_3()
             .rounded(px(8.))
