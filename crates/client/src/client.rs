@@ -3411,6 +3411,66 @@ mod tests {
     }
 
     #[test]
+    fn preview_never_fetches_ineligible_or_disabled_composer_sources() {
+        for case in 0..6 {
+            let (mut client, recorder, _) = connected();
+            client.open(0, 2).unwrap();
+            if case != 0 {
+                client.set_link_preview_settings(
+                    crate::preview::Settings {
+                        mode: crate::preview::Mode::Direct,
+                        ..Default::default()
+                    },
+                    0,
+                );
+            }
+            match case {
+                3 => client.servers[0].mls = true,
+                4 => {
+                    client.servers[0].limits = Some(nuschl_core::model::ServerLimits {
+                        allow_html: false,
+                        ..Default::default()
+                    })
+                }
+                5 => {
+                    client.servers[0]
+                        .channels
+                        .iter_mut()
+                        .find(|channel| channel.id == 2)
+                        .unwrap()
+                        .target = TextTarget::DirectConversation([1; 16])
+                }
+                _ => {}
+            }
+            client.composing_link_preview("https://example.org/ ", false, case == 1, case == 2, 0);
+            client.poll_link_preview(10_000);
+            assert!(recorder.previews.lock().unwrap().is_empty(), "case {case}");
+        }
+    }
+
+    #[test]
+    fn preview_rejects_results_when_certificate_or_own_session_instance_changes() {
+        for change_certificate in [false, true] {
+            let (mut client, recorder, _) = connected();
+            let ticket = prepare_link(&mut client, &recorder);
+            if change_certificate {
+                client.servers[0].peer_sha256 = Some("cd".repeat(32));
+            } else {
+                client.servers[0].users.get_mut(&1).unwrap().instance += 1;
+            }
+            client.handle(Input::LinkPreview {
+                id: ticket.id,
+                result: Err(crate::preview::Unavailable::Network),
+            });
+            assert_eq!(
+                *recorder.cancelled_previews.lock().unwrap(),
+                vec![ticket.id]
+            );
+            assert_eq!(client.link_preview_status(), crate::preview::Status::None);
+        }
+    }
+
+    #[test]
     fn preview_sends_one_html_entry_and_acknowledges_exact_original_logical_text() {
         let (mut client, recorder, id) = connected();
         let ticket = prepare_link(&mut client, &recorder);

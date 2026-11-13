@@ -16,6 +16,8 @@ use crate::{
     PreparedContent, write_frame,
 };
 
+pub mod preview_lifecycle;
+
 #[derive(Debug, Error)]
 pub enum Error {
     #[error(transparent)]
@@ -43,6 +45,28 @@ pub fn content_sandbox_command(
     arguments: &[OsString],
 ) -> Result<Command, Error> {
     content_sandbox(executable, arguments, 5)
+}
+
+/// Preview-only Linux containment with a trusted namespace-init receipt on
+/// stderr. The caller must pipe stderr and acquire `preview_lifecycle::Retirement`
+/// before sending any input, retaining it through actual namespace retirement.
+#[cfg(target_os = "linux")]
+pub fn preview_sandbox_command(
+    executable: &Path,
+    arguments: &[OsString],
+) -> Result<Command, Error> {
+    let limits = [CONTENT_MEMORY.into(), "--cpu=5".into()];
+    let mut sandbox = Sandbox::new(executable, &limits)?;
+    sandbox.0.args(["--json-status-fd", "2"]);
+    Ok(sandbox.run(arguments))
+}
+
+/// Other platforms need an equivalent observed whole-role retirement path.
+#[cfg(not(target_os = "linux"))]
+pub fn preview_sandbox_command(_: &Path, _: &[OsString]) -> Result<Command, Error> {
+    Err(Error::MissingSandboxHelper(
+        "preview role retirement on this platform",
+    ))
 }
 
 /// Update-only one-shot verifier, with no data directory, network capability or
@@ -270,9 +294,20 @@ async fn bounded_content_request(
     if maximum == 0 || maximum > MAX_FRAME_BYTES {
         return Err(Error::InvalidResponse);
     }
+    let is_preview = matches!(&request, ContentRequest::Preview(_));
     let mut frame = Vec::new();
     write_frame(&mut frame, &Envelope::new(1, request))?;
-    let mut child = spawn(executable, &[5])?;
+    let mut child = if is_preview {
+        preview_sandbox_command(executable, &[])?
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()?
+    } else {
+        spawn(executable, &[5])?
+    };
+    let mut retirement = is_preview.then(|| preview_lifecycle::Retirement::new(&mut child));
     let _containment = match contain(&child) {
         Ok(guard) => guard,
         Err(error) => {
@@ -280,8 +315,16 @@ async fn bounded_content_request(
             return Err(error);
         }
     };
-    let reply = match (child.stdin.take(), child.stdout.take()) {
-        (Some(mut input), Some(mut output)) => {
+    // Do not cancel this bounded trusted startup read. No untrusted request or
+    // socket has been admitted yet, and losing the original init identity would
+    // make retirement unobservable.
+    let ready = match retirement.as_mut() {
+        Some(retirement) => retirement.ready().await,
+        None => Ok(()),
+    };
+    let reply = match (ready, child.stdin.take(), child.stdout.take()) {
+        (Err(error), _, _) => Err(error),
+        (Ok(()), Some(mut input), Some(mut output)) => {
             let exchange = async {
                 let write = async move {
                     input.write_all(&frame).await?;
@@ -327,7 +370,10 @@ async fn bounded_content_request(
     };
     // A failed wait/kill must not release a caller's process credit. Never
     // replace this owner; a supervising HTTP task can time out independently.
-    reap_content(&mut child).await;
+    match retirement {
+        Some(retirement) => retirement.retire(&mut child).await,
+        None => reap_content(&mut child).await,
+    }
     reply
 }
 
