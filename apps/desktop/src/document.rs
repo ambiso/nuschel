@@ -111,13 +111,10 @@ pub enum Block {
         source: Option<Arc<str>>,
     },
     /// A display formula: `source` as written (copied, read out, and shown
-    /// when the formula cannot be), `tex` for the math worker. `joined`:
-    /// written on the same line as the text before it, and after it (a
-    /// break of 0 there; copying adds no line break).
+    /// when the formula cannot be), `tex` for the math worker.
     Math {
         source: SharedString,
         tex: SharedString,
-        joined: (bool, bool),
     },
     /// The line breaks typed between the neighbouring blocks, or before the
     /// first or after the last (`nuschl_core::ContentBlock::Break`): drawn as
@@ -232,26 +229,14 @@ impl From<MessageDocument> for Document {
         if !document.breaks_valid() {
             document.blocks.retain(|block| !block.is_break());
         }
-        // Whether each block is written on the line of the block before it,
-        // and the block after it on its line: a break of 0 between them.
-        let zero = |index: Option<usize>| {
-            matches!(
-                index.and_then(|index| document.blocks.get(index)),
-                Some(ContentBlock::Break { count: 0 })
-            )
-        };
-        let joined: Vec<(bool, bool)> = (0..document.blocks.len())
-            .map(|index| (zero(index.checked_sub(1)), zero(Some(index + 1))))
-            .collect();
         Self {
             blocks: document
                 .blocks
                 .into_iter()
-                .enumerate()
-                .map(|(index, block)| match block {
+                .map(|block| match block {
                     ContentBlock::Text { text, spans, role } => text_block(text, spans, role),
                     ContentBlock::Code { language, runs } => code(language, runs),
-                    ContentBlock::Math { source, tex } => math_block(source, tex, joined[index]),
+                    ContentBlock::Math { source, tex } => math_block(source, tex),
                     ContentBlock::Break { count } => Block::Break(count),
                     ContentBlock::Image {
                         width,
@@ -378,14 +363,13 @@ fn text_block(text: String, spans: Vec<Span>, role: TextRole) -> Block {
 
 /// A display formula, or its source as a paragraph when its LaTeX is too
 /// long to send to the math worker.
-fn math_block(source: String, tex: String, joined: (bool, bool)) -> Block {
+fn math_block(source: String, tex: String) -> Block {
     if tex.len() > nuschl_ipc::math::MAX_TEX_BYTES || tex.trim().is_empty() {
         return text_block(source, Vec::new(), TextRole::Paragraph);
     }
     Block::Math {
         source: source.into(),
         tex: tex.into(),
-        joined,
     }
 }
 
@@ -937,20 +921,6 @@ mod tests {
                 },
             ],
         });
-        assert!(matches!(
-            document.blocks[2],
-            Block::Math {
-                joined: (true, true),
-                ..
-            }
-        ));
-        assert!(matches!(
-            document.blocks[5],
-            Block::Math {
-                joined: (false, false),
-                ..
-            }
-        ));
         assert_eq!(document.plain_text(), "so $$x$$ and\n$$y$$");
     }
 }
