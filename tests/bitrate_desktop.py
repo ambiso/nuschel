@@ -363,7 +363,13 @@ class DesktopBitrate:
     def timeline_pass(self, label, zoom, directory, channel):
         """Walk a channel's timeline from the newest entry up to the welcome,
         one entry per Up, measuring every laid-out node and the gutter pixels."""
-        self.press("tree item", channel)
+        # At high zoom the channel can be outside the tree's small viewport,
+        # where activating it does nothing: scroll it into view first.
+        item = self.node(channel, "tree item")
+        item.call("Component", "ScrollTo", "u", "0")
+        time.sleep(0.5)
+        assert item.call("Action", "DoAction", "i", "0")[0] is not False
+        time.sleep(0.4)
         welcome_name = f"Welcome to {channel}"
         timeline = self.node(f"Messages in #{channel}", "list")
         record = dict(focused=self.focus_timeline(timeline), steps=[], violations=[], controls=[],
