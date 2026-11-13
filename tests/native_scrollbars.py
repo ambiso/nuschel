@@ -8,6 +8,7 @@ Tests pixels and real pointer/keyboard input, not injected widget state.
 """
 import json
 import os
+import sqlite3
 import subprocess
 import time
 import uuid
@@ -21,6 +22,17 @@ from local_murmur import eventually
 
 
 _configure = fixture.configure
+
+
+class ScrollMurmur(fixture.OwnedMurmur):
+    def seed(self):
+        super().seed()
+        with sqlite3.connect(self.database) as database:
+            database.executemany(
+                "INSERT INTO channels (server_id, channel_id, parent_id, name, inheritacl)"
+                " VALUES (1, ?, 0, ?, 1)",
+                [(100 + index, f"Scrollbar room {index:02}") for index in range(20)],
+            )
 
 
 def configure(shell, root, output):
@@ -59,17 +71,6 @@ def actions(args, root, shell, application, bot, _murmur):
         first_rule = "@" + fields(checked[4][0])[5][0].decode()
         last_rule = "@" + fields(checked[4][-1])[5][0].decode()
         last_group = "@" + fields(checked[3][-1])[1][0].decode()
-        for index in range(20):
-            name = f"Scrollbar room {index:02}".encode()
-            admin.send(7, encode({2: [0], 3: [name], 8: [0]}))
-            for _ in range(200):
-                kind, value = admin.receive()
-                assert kind != 12, ("private channel create denied", value)
-                if kind == 7 and value.get(3) == [name]:
-                    break
-            else:
-                raise AssertionError("private channel create reply missing")
-            time.sleep(.4)
     finally:
         admin.close()
 
@@ -161,7 +162,7 @@ def actions(args, root, shell, application, bot, _murmur):
             capture_output=True, check=True, timeout=30).stdout
         value = subprocess.run([os.environ.get("TESSERACT", "tesseract"), "stdin", "stdout", "--psm", "7"],
             input=png, capture_output=True, check=True, timeout=30).stdout.decode().strip()
-        return value.replace(" ", "")
+        return value.replace(" ", "").rstrip("|")
 
     records = []
     for width, height, zoom, steps in [(1280, 800, 100, 0), (900, 700, 125, 2),
@@ -232,10 +233,18 @@ def actions(args, root, shell, application, bot, _murmur):
         focus(dialog)
         shell.click(*point(field))
         eventually(lambda: field.focused, "canvas intercepted input pointer focus")
-        shell.type("scroll-input")
-        shell.key("Home")
-        shell.key("End")
-        assert field.focused
+        shell.type("sample")
+        time.sleep(.2)
+        key_bounds = field.extents()
+        for key, text in [("Home", "A"), ("End", "B"), ("Left", "X"), ("Right", "Y")]:
+            shell.key(key)
+            time.sleep(.15)
+            shell.type(text)
+            time.sleep(.15)
+        assert field.focused and field.extents() == key_bounds, "editing keys moved the viewport"
+        edited = input_value(field, f"editing-keys-{zoom}")
+        assert edited == "AsampleXBY", edited
+        record["input_edit_keys"] = edited
         shell.drag(point(field, right=field.extents()[2]),
                    point(field, right=4 * zoom / 100))
         shell.type("selected-by-pointer")
@@ -298,6 +307,30 @@ def actions(args, root, shell, application, bot, _murmur):
     results = wait("14 results", "list")
     records.append({"search": bar(results, 100, "search")})
     shell.key("Escape")
+    # Open a real context menu from a visible row; no stale off-clip coordinates.
+    # Its occluding surface must keep wheel events away from background panels.
+    for zoom, steps in [(100, 0), (200, 5)]:
+        shell.chord("Control_L", "0")
+        shell.place("Nuschl", 40, 40, 1280 if zoom == 100 else 900, 800)
+        for _ in range(steps):
+            shell.chord("Control_L", "equal")
+            time.sleep(.1)
+        channels = wait("Channels")
+        shell.wheel(*point(channels), -80)
+        time.sleep(.3)
+        user = wait("Control sender", "tree item", prefix=True)
+        assert inside(user.extents(), channels.extents()), "context target not visible"
+        before = user.extents()
+        shell.click(*point(user), button=3)
+        menu = wait("Context menu", "menu")
+        shell.wheel(*point(menu), 80)
+        time.sleep(.3)
+        assert user.extents() == before, "context wheel scrolled background channel tree"
+        record = {"context_menu_zoom": zoom, "bounds": menu.extents(), "wheel_isolated": True}
+        if zoom == 200:
+            record["bar"] = bar(menu, zoom, "context-menu", inset=5)
+        records.append(record)
+        shell.key("Escape")
     (args.output / "native-scrollbars.json").write_text(json.dumps(records, indent=2) + "\n")
     return {"native_scrollbars": records, "private_loopback_only": True}
 
@@ -305,4 +338,5 @@ def actions(args, root, shell, application, bot, _murmur):
 if __name__ == "__main__":
     fixture.actions = actions
     fixture.configure = configure
+    fixture.OwnedMurmur = ScrollMurmur
     fixture.main()
