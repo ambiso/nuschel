@@ -24,7 +24,8 @@ its §9. The desktop importer for external pack links follows that spec.
   another conversation gets a new object under a new key.
 - **Commitment:** files/1's root `R` binds key, length and ciphertext, so an
   object opens to one image (key commitment as in Albertini et al., USENIX
-  Security 2022), and message franking (#274) binds the sender. Stickers need no crypto of their own.
+  Security 2022), and message franking (#274) binds the sender. Stickers
+  need no crypto of their own.
 - **A server learns** sizes, timing and which conversation an object belongs
   to. In E2EE conversations it cannot link one sticker across conversations
   or tell a sticker from another image. A `history/1` server reads keys and
