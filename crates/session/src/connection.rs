@@ -18,6 +18,7 @@ use nuschl_protocol::{
         self, v1,
         version::{Standing, Version},
     },
+    plugin,
     voice::{self, UdpMessage, VoicePacket},
 };
 use prost::Message;
@@ -72,6 +73,7 @@ mod kind {
     pub const REQUEST_BLOB: u16 = 23;
     pub const SERVER_CONFIG: u16 = 24;
     pub const SUGGEST_CONFIG: u16 = 25;
+    pub const PLUGIN_DATA_TRANSMISSION: u16 = 26;
 }
 
 const MAX_BLOB_REQUEST: usize = 64;
@@ -132,6 +134,93 @@ pub struct PendingChat {
     pub conversation: [u8; 16],
     pub key: [u8; 16],
     pub content: String,
+}
+
+/// Plugin data another client sent us (`PluginDataTransmission`): opaque
+/// bytes, never interpreted here. The sender's identity is what this
+/// connection knew of it when the packet arrived, so a later occupant of the
+/// same session number never inherits it. The certificate hash is the
+/// server's claim, not proof: a higher layer authenticates content itself.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct IncomingPluginData {
+    pub sender: u32,
+    pub sender_instance: u64,
+    pub sender_user_id: Option<u32>,
+    pub sender_certificate_hash: Option<String>,
+    pub payload: plugin::Payload,
+}
+
+/// Receivers tolerated in plugin data from the server, which stock servers
+/// clear: this bounds what is read for it ([`plugin::max_body`], 4,951 bytes).
+const MAX_RECEIVED_RECEIVERS: usize = 512;
+
+/// Our plugin data's local admission bucket: two a second, a burst of ten.
+/// Murmur's default bucket (4 a second, burst 15) drains whole tokens and
+/// restarts its timer only when one drained, so it is guaranteed to drain
+/// only about two a second; this stays within that. It is best effort: a
+/// server configured lower (the shipped `mumble-server.ini` suggests 1 a
+/// second, burst 5) still drops what this admits, and nothing acknowledges
+/// delivery.
+struct PluginRate {
+    level: f64,
+    at: Instant,
+}
+
+impl PluginRate {
+    const BURST: f64 = 10.0;
+    const PER_SECOND: f64 = 2.0;
+    fn new() -> Self {
+        Self {
+            level: 0.0,
+            at: Instant::now(),
+        }
+    }
+    /// Admit one message now, or say in how many milliseconds one fits.
+    fn admit(&mut self, now: Instant) -> Result<(), u64> {
+        let leaked = now.saturating_duration_since(self.at).as_secs_f64() * Self::PER_SECOND;
+        self.level = (self.level - leaked).max(0.0);
+        self.at = now;
+        let excess = self.level + 1.0 - Self::BURST;
+        if excess > 0.0 {
+            return Err((excess / Self::PER_SECOND * 1000.0).ceil().max(1.0) as u64);
+        }
+        self.level += 1.0;
+        Ok(())
+    }
+}
+
+/// What plugin data one connection may surface: a second's worth of items
+/// and bytes, refilled continuously. A hostile server cannot make plugin
+/// data crowd out the connection's other events beyond this.
+struct PluginReceive {
+    items: f64,
+    bytes: f64,
+    at: Instant,
+}
+
+impl PluginReceive {
+    const ITEMS: f64 = 64.0;
+    const BYTES: f64 = 64.0 * 1024.0;
+    fn new() -> Self {
+        Self {
+            items: Self::ITEMS,
+            bytes: Self::BYTES,
+            at: Instant::now(),
+        }
+    }
+    fn admit(&mut self, size: usize, now: Instant) -> bool {
+        let elapsed = now.saturating_duration_since(self.at).as_secs_f64();
+        self.at = now;
+        self.items = (self.items + elapsed * Self::ITEMS).min(Self::ITEMS);
+        self.bytes = (self.bytes + elapsed * Self::BYTES).min(Self::BYTES);
+        let size = size as f64;
+        if self.items < 1.0 || self.bytes < size {
+            return false;
+        }
+        self.items -= 1.0;
+        self.bytes -= size;
+        true
+    }
 }
 
 /// Request ids the session uses itself; frontends use smaller ones.
@@ -229,6 +318,14 @@ pub enum SessionEvent {
     Outbox {
         sent: usize,
         total: usize,
+    },
+    /// Plugin data from another client (never in the `nuschl/` namespace).
+    PluginData(IncomingPluginData),
+    /// Whether our plugin data `request` was admitted and handed to the
+    /// connection. `Ok` is not delivery: there is no acknowledgement.
+    PluginDataAdmission {
+        request: u64,
+        result: Result<(), plugin::Refusal>,
     },
 }
 
@@ -367,6 +464,18 @@ pub enum Command {
         target: u32,
         packet: VoicePacket,
     },
+    /// Plugin data to up to [`MAX_ACTION_TARGETS`] receivers, each named by
+    /// session and presence instance, answered by `PluginDataAdmission`. The
+    /// whole send is refused if any receiver left or was replaced; frontends
+    /// also send it scoped, so the actor checks the authority too.
+    PluginData {
+        request: u64,
+        receivers: Vec<(u32, u64)>,
+        payload: plugin::Payload,
+    },
+    /// Whether plugin data from the server is decoded and surfaced at all
+    /// (off by default; while off it is skipped undecoded).
+    AcceptPluginData(bool),
     Disconnect,
 }
 
@@ -569,6 +678,9 @@ impl Command {
                     .saturating_add(descriptions.len())
                     <= MAX_ACTION_TARGETS
             }
+            Self::PluginData { receivers, .. } => {
+                !receivers.is_empty() && receivers.len() <= MAX_ACTION_TARGETS
+            }
             Self::SetVoiceTarget { targets, .. } | Self::Whisper { targets, .. } => {
                 targets.len() <= 32
                     && targets
@@ -635,6 +747,9 @@ impl Command {
             }
             Self::RequestStats(session) => {
                 users.insert(*session);
+            }
+            Self::PluginData { receivers, .. } => {
+                users.extend(receivers.iter().map(|(session, _)| *session));
             }
             Self::RequestBlobs {
                 textures,
@@ -1171,10 +1286,12 @@ pub async fn run(
     let mut datagram = vec![0; udp::MAX_DATAGRAM];
     let (reader, mut writer) = tokio::io::split(stream);
     let (frames_tx, mut frames) = mpsc::channel(32);
+    let plugin_dropped = std::sync::Arc::new(AtomicU64::new(0));
+    let skipped = plugin_dropped.clone();
     let read_task = tokio::spawn(async move {
         let mut reader = reader;
         loop {
-            let frame = read_control(&mut reader).await;
+            let frame = read_control(&mut reader, &skipped).await;
             let failed = frame.is_err();
             if frames_tx.send(frame).await.is_err() || failed {
                 break;
@@ -1212,6 +1329,7 @@ pub async fn run(
             rejoin: options.channel,
             outbox: Outbox::new(options.message_rate),
             resend: options.resend,
+            plugin_dropped,
             ..State::default()
         };
         state.restore_voice_route(options.voice_route.clone());
@@ -1367,6 +1485,13 @@ pub async fn run(
                         _ => None,
                     };
                     let preview_id = preview::command_id(&command);
+                    let plugin_request = match &command {
+                        Command::Scoped { command, .. } => match command.as_ref() {
+                            Command::PluginData { request, .. } => Some(*request),
+                            _ => None,
+                        },
+                        _ => None,
+                    };
                     let admin_refusal = match &command {
                         Command::Scoped {authority,command} => {
                             let request=match command.as_ref() {Command::QueryAclDraft {request,channel}=>Some((*request,*channel,false)),Command::LookupAccount {request,channel,..}=>Some((*request,*channel,true)),_=>None};
@@ -1383,6 +1508,12 @@ pub async fn run(
                     let Some(command) = state.authorize(command) else {
                         if let Some(id) = preview_id {
                             preview::refused(id, &events).await?;
+                            continue;
+                        }
+                        // A receiver left (or its number now belongs to someone else)
+                        // while the send was queued: refused, never re-addressed.
+                        if let Some(request) = plugin_request {
+                            state.plugin_admission(request, Err(plugin::Refusal::ReceiverChanged), &events);
                             continue;
                         }
                         if let Some((request,account,reason))=admin_refusal {
@@ -1739,6 +1870,13 @@ struct State {
     subscribed: BTreeSet<u32>,
     next_request: u64,
     resend: Vec<PendingChat>,
+    plugin_rate: PluginRate,
+    accept_plugin_data: bool,
+    plugin_receive: PluginReceive,
+    /// Plugin data dropped on this connection: oversized frames (counted by
+    /// the reader), undecodable or unknown-sender messages, over the receive
+    /// budget, or with no room in the event channel.
+    plugin_dropped: std::sync::Arc<AtomicU64>,
 }
 impl Default for State {
     fn default() -> Self {
@@ -1778,6 +1916,10 @@ impl Default for State {
             subscribed: BTreeSet::new(),
             next_request: 0,
             resend: Vec::new(),
+            plugin_rate: PluginRate::new(),
+            accept_plugin_data: false,
+            plugin_receive: PluginReceive::new(),
+            plugin_dropped: Default::default(),
         }
     }
 }
@@ -2079,6 +2221,114 @@ impl State {
             resync: crypt.resync,
         }
     }
+    /// Our plugin data, checked as stock Mumble checks it (a server that
+    /// relays it, receivers it knows) plus this connection's policy and each
+    /// receiver's presence, then admitted by the local bucket: charged once,
+    /// only when it is queued.
+    fn send_plugin_data(
+        &mut self,
+        receivers: &[(u32, u64)],
+        payload: plugin::Payload,
+    ) -> Result<(), plugin::Refusal> {
+        use plugin::Refusal;
+        // An end-to-end server carries nothing in plaintext between clients
+        // (docs/e2ee.md §10, answer 7).
+        if self.encrypted_server() {
+            return Err(Refusal::EndToEnd);
+        }
+        if payload.is_reserved() {
+            return Err(Refusal::Reserved);
+        }
+        // Servers before Mumble 1.4 do not relay it (API_v_1_x_x.cpp).
+        if self.version < (1 << 48) | (4 << 32) {
+            return Err(Refusal::ServerTooOld);
+        }
+        if receivers.is_empty() || receivers.len() > MAX_ACTION_TARGETS {
+            return Err(Refusal::Receivers(MAX_ACTION_TARGETS));
+        }
+        let mut sessions = BTreeSet::new();
+        for &(session, instance) in receivers {
+            if instance == 0 || self.users.get(&session).map(|user| user.instance) != Some(instance)
+            {
+                return Err(Refusal::ReceiverChanged);
+            }
+            sessions.insert(session);
+        }
+        self.plugin_rate
+            .admit(Instant::now())
+            .map_err(|retry_after_ms| Refusal::RateLimited { retry_after_ms })?;
+        let message = plugin::PluginData {
+            sender: self.own_session,
+            receivers: sessions.into_iter().collect(),
+            payload,
+        }
+        .into_message();
+        self.queue(kind::PLUGIN_DATA_TRANSMISSION, &message);
+        Ok(())
+    }
+
+    /// Report a send's admission without ever waiting for the event channel.
+    fn plugin_admission(
+        &self,
+        request: u64,
+        result: Result<(), plugin::Refusal>,
+        events: &mpsc::Sender<SessionEvent>,
+    ) {
+        if events
+            .try_send(SessionEvent::PluginDataAdmission { request, result })
+            .is_err()
+        {
+            self.plugin_dropped.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// Plugin data from the server. Skipped undecoded unless someone asked
+    /// for it, we are logged in and the server is not end to end; then
+    /// budgeted, bounded before it is decoded, and surfaced with its sender's
+    /// identity as known right now, without waiting for the event channel.
+    /// Nothing here interprets the bytes, and the reserved namespace has no
+    /// generic consumer. Nothing in it can end the connection.
+    fn plugin_data(&mut self, frame: &ControlFrame, events: &mpsc::Sender<SessionEvent>) {
+        if !self.accept_plugin_data || self.own_session.is_none() || self.encrypted_server() {
+            return;
+        }
+        let counter = std::sync::Arc::clone(&self.plugin_dropped);
+        let dropped = || {
+            counter.fetch_add(1, Ordering::Relaxed);
+        };
+        if !self
+            .plugin_receive
+            .admit(frame.payload.len(), Instant::now())
+        {
+            return dropped();
+        }
+        let Ok(message) = plugin::PluginData::decode(&frame.payload, MAX_RECEIVED_RECEIVERS) else {
+            return dropped();
+        };
+        if message.payload.is_reserved() {
+            return;
+        }
+        // Stock clients ignore data without a sender they know; one sent to
+        // ourselves is ours.
+        let Some(sender) = message
+            .sender
+            .and_then(|session| self.users.get(&session))
+            .filter(|user| user.instance != 0)
+        else {
+            return dropped();
+        };
+        let incoming = IncomingPluginData {
+            sender: sender.session,
+            sender_instance: sender.instance,
+            sender_user_id: sender.user_id,
+            sender_certificate_hash: sender.certificate_hash.clone(),
+            payload: message.payload,
+        };
+        if events.try_send(SessionEvent::PluginData(incoming)).is_err() {
+            dropped();
+        }
+    }
+
     fn queue<M: Message>(&mut self, kind: u16, message: &M) {
         // Murmur limits our own user state only; others' are counted too.
         if matches!(
@@ -2601,9 +2851,17 @@ impl State {
         command: Command,
         events: &mpsc::Sender<SessionEvent>,
     ) -> Result<(), Error> {
+        if let Command::AcceptPluginData(accept) = command {
+            self.accept_plugin_data = accept;
+            return Ok(());
+        }
         if !self.logged_in() {
             if let Some(id) = preview::command_id(&command) {
                 return preview::refused(id, events).await;
+            }
+            if let Command::PluginData { request, .. } = command {
+                self.plugin_admission(request, Err(plugin::Refusal::NotConnected), events);
+                return Ok(());
             }
             return emit(
                 events,
@@ -2656,7 +2914,16 @@ impl State {
                     .await?;
                 }
             }
+            Command::PluginData {
+                request,
+                receivers,
+                payload,
+            } => {
+                let result = self.send_plugin_data(&receivers, payload);
+                self.plugin_admission(request, result, events);
+            }
             Command::Scoped { .. }
+            | Command::AcceptPluginData(_)
             | Command::Disconnect
             | Command::Voice { .. }
             | Command::SelectVoiceTarget(_)
@@ -4472,7 +4739,8 @@ impl State {
                     self.nuschl(event, events).await?;
                 }
             }
-            _ => { /* Optional messages (e.g. plugin data) are framed and ignored. */ }
+            kind::PLUGIN_DATA_TRANSMISSION => self.plugin_data(&frame, events),
+            _ => { /* Optional messages are framed and ignored. */ }
         }
         Ok(())
     }
@@ -4897,23 +5165,51 @@ pub async fn write_control(
     .map_err(|_| Error::Timeout("writing control frame"))??;
     Ok(())
 }
-async fn read_control(reader: &mut (impl AsyncRead + Unpin)) -> Result<ControlFrame, Error> {
-    let mut header = [0; 6];
-    timeout(Duration::from_secs(30), reader.read_exact(&mut header))
-        .await
-        .map_err(|_| Error::Timeout("waiting for server traffic"))??;
-    let size = u32::from_be_bytes([header[2], header[3], header[4], header[5]]) as usize;
-    if size > MAX_CONTROL_BYTES {
-        return Err(Error::Protocol("oversized control frame".into()));
+/// The next frame. Plugin data larger than any message accepted from the
+/// server ([`plugin::max_body`] for [`MAX_RECEIVED_RECEIVERS`]) is read past
+/// through a fixed buffer and counted in `skipped`: a stock server forwards
+/// the unknown fields a sender adds, so one peer must not be able to end our
+/// connection with them.
+async fn read_control(
+    reader: &mut (impl AsyncRead + Unpin),
+    skipped: &AtomicU64,
+) -> Result<ControlFrame, Error> {
+    loop {
+        let mut header = [0; 6];
+        timeout(Duration::from_secs(30), reader.read_exact(&mut header))
+            .await
+            .map_err(|_| Error::Timeout("waiting for server traffic"))??;
+        let kind = u16::from_be_bytes([header[0], header[1]]);
+        let size = u32::from_be_bytes([header[2], header[3], header[4], header[5]]) as usize;
+        if size > MAX_CONTROL_BYTES {
+            return Err(Error::Protocol("oversized control frame".into()));
+        }
+        if kind == kind::PLUGIN_DATA_TRANSMISSION && size > plugin::max_body(MAX_RECEIVED_RECEIVERS)
+        {
+            timeout(Duration::from_secs(10), async {
+                let mut scratch = [0_u8; 4096];
+                let mut remaining = size;
+                while remaining > 0 {
+                    let wanted = remaining.min(scratch.len());
+                    reader.read_exact(&mut scratch[..wanted]).await?;
+                    remaining -= wanted;
+                }
+                Ok::<_, std::io::Error>(())
+            })
+            .await
+            .map_err(|_| Error::Timeout("reading control frame"))??;
+            skipped.fetch_add(1, Ordering::Relaxed);
+            continue;
+        }
+        let mut payload = vec![0; size];
+        timeout(Duration::from_secs(10), reader.read_exact(&mut payload))
+            .await
+            .map_err(|_| Error::Timeout("reading control frame"))??;
+        return Ok(ControlFrame {
+            kind,
+            payload: Bytes::from(payload),
+        });
     }
-    let mut payload = vec![0; size];
-    timeout(Duration::from_secs(10), reader.read_exact(&mut payload))
-        .await
-        .map_err(|_| Error::Timeout("reading control frame"))??;
-    Ok(ControlFrame {
-        kind: u16::from_be_bytes([header[0], header[1]]),
-        payload: Bytes::from(payload),
-    })
 }
 
 /// For the `client_messages` libFuzzer target in `fuzz/`: the session's state
@@ -5155,7 +5451,9 @@ mod tests {
             );
             let (tx, mut rx) = mpsc::channel(32);
             let task = tokio::spawn(async move {
-                tx.send(read_control(&mut reader).await).await.unwrap();
+                tx.send(read_control(&mut reader, &AtomicU64::new(0)).await)
+                    .await
+                    .unwrap();
             });
             assert!(matches!(
                 initial_login_error(original, false, &mut rx).await,
@@ -7137,7 +7435,7 @@ mod tests {
     async fn rejects_oversized_frame_before_body_allocation() {
         let mut input = &[0_u8, 1, 255, 255, 255, 255][..];
         assert!(matches!(
-            read_control(&mut input).await,
+            read_control(&mut input, &AtomicU64::new(0)).await,
             Err(Error::Protocol(_))
         ));
     }
@@ -7928,5 +8226,562 @@ mod delayed_action_authority_tests {
         assert_eq!(reconnected.voice_target, 31);
         assert_eq!(reconnected.voice_route.target(), 31);
         assert!(reconnected.outgoing_voice(packet()).is_none());
+    }
+}
+
+#[cfg(test)]
+mod plugin_data_tests {
+    use super::*;
+    use plugin::Refusal;
+
+    const V1_5: u64 = (1 << 48) | (5 << 32);
+
+    fn connected() -> State {
+        let mut state = State {
+            own_session: Some(1),
+            version: V1_5,
+            accept_plugin_data: true,
+            ..State::default()
+        };
+        for (session, instance, user_id, hash) in [
+            (1, 11, Some(101), "own"),
+            (2, 22, Some(202), "a2"),
+            (3, 33, None, "b3"),
+        ] {
+            state.users.insert(
+                session,
+                User {
+                    session,
+                    instance,
+                    user_id,
+                    certificate_hash: Some(hash.into()),
+                    ..User::default()
+                },
+            );
+        }
+        state
+    }
+
+    fn incoming(sender: Option<u32>, data_id: Option<&str>, data: Option<&[u8]>) -> ControlFrame {
+        ControlFrame {
+            kind: kind::PLUGIN_DATA_TRANSMISSION,
+            payload: proto::PluginDataTransmission {
+                sender_session: sender,
+                receiver_sessions: vec![],
+                data: data.map(<[u8]>::to_vec),
+                data_id: data_id.map(str::to_owned),
+            }
+            .encode_to_vec()
+            .into(),
+        }
+    }
+
+    fn payload(data_id: &str, data: &[u8]) -> plugin::Payload {
+        plugin::Payload::new(data_id.into(), data.to_vec()).unwrap()
+    }
+
+    fn send(request: u64, receivers: Vec<(u32, u64)>, data_id: &str) -> Command {
+        Command::PluginData {
+            request,
+            receivers,
+            payload: payload(data_id, b"\x01\x02"),
+        }
+    }
+
+    fn drain(rx: &mut mpsc::Receiver<SessionEvent>) -> Vec<SessionEvent> {
+        std::iter::from_fn(|| rx.try_recv().ok()).collect()
+    }
+
+    fn received(events: Vec<SessionEvent>) -> Vec<IncomingPluginData> {
+        events
+            .into_iter()
+            .filter_map(|event| match event {
+                SessionEvent::PluginData(data) => Some(data),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn admissions(events: &[SessionEvent]) -> Vec<(u64, Result<(), Refusal>)> {
+        events
+            .iter()
+            .filter_map(|event| match event {
+                SessionEvent::PluginDataAdmission { request, result } => {
+                    Some((*request, result.clone()))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn dropped(state: &State) -> u64 {
+        state.plugin_dropped.load(Ordering::Relaxed)
+    }
+
+    #[tokio::test]
+    async fn received_plugin_data_carries_the_senders_identity_at_arrival() {
+        let mut state = connected();
+        let (tx, mut rx) = mpsc::channel(64);
+        state
+            .handle(
+                incoming(Some(2), Some("game"), Some(b"\x00\xff".as_slice())),
+                &tx,
+            )
+            .await
+            .unwrap();
+        // Present but empty data and data ID are valid, as stock servers
+        // forward them; data we sent ourselves is ours.
+        state
+            .handle(incoming(Some(3), Some(""), Some(b"".as_slice())), &tx)
+            .await
+            .unwrap();
+        state
+            .handle(incoming(Some(1), Some("self"), Some(b"me".as_slice())), &tx)
+            .await
+            .unwrap();
+        // Session 2 is taken over by someone else: their packets carry their
+        // own identity, the earlier one keeps the first occupant's.
+        state.users.insert(
+            2,
+            User {
+                session: 2,
+                instance: 99,
+                certificate_hash: Some("other".into()),
+                ..User::default()
+            },
+        );
+        state
+            .handle(
+                incoming(Some(2), Some("game"), Some(b"next".as_slice())),
+                &tx,
+            )
+            .await
+            .unwrap();
+        let received = received(drain(&mut rx));
+        let identity = |data: &IncomingPluginData| {
+            (
+                data.sender,
+                data.sender_instance,
+                data.sender_user_id,
+                data.sender_certificate_hash.clone(),
+            )
+        };
+        assert_eq!(
+            received.iter().map(identity).collect::<Vec<_>>(),
+            [
+                (2, 22, Some(202), Some("a2".into())),
+                (3, 33, None, Some("b3".into())),
+                (1, 11, Some(101), Some("own".into())),
+                (2, 99, None, Some("other".into())),
+            ]
+        );
+        assert_eq!(received[0].payload, payload("game", b"\x00\xff"));
+        assert_eq!(received[1].payload, payload("", b""));
+        assert_eq!(received[3].payload, payload("game", b"next"));
+        assert!(!format!("{received:?}").contains("next"));
+        assert_eq!(dropped(&state), 0);
+    }
+
+    #[tokio::test]
+    async fn unusable_plugin_data_is_dropped_and_counted_never_fatal() {
+        let (tx, mut rx) = mpsc::channel(64);
+        let long_id = "i".repeat(101);
+        let not_utf8 = ControlFrame {
+            kind: kind::PLUGIN_DATA_TRANSMISSION,
+            payload: vec![0x08, 2, 0x1a, 0, 0x22, 1, 0xff].into(),
+        };
+        let mut state = connected();
+        for frame in [
+            incoming(None, Some("id"), Some(b"x".as_slice())),
+            incoming(Some(9), Some("id"), Some(b"x".as_slice())),
+            incoming(Some(2), None, Some(b"x".as_slice())),
+            incoming(Some(2), Some("id"), None),
+            incoming(Some(2), Some("id"), Some(&[0; 1001][..])),
+            incoming(Some(2), Some(long_id.as_str()), Some(b"x".as_slice())),
+            not_utf8,
+            ControlFrame {
+                kind: kind::PLUGIN_DATA_TRANSMISSION,
+                payload: Bytes::from_static(&[0xff]),
+            },
+        ] {
+            state.handle(frame, &tx).await.unwrap();
+        }
+        assert_eq!(dropped(&state), 8);
+        // The reserved namespace has no generic consumer: not surfaced, and
+        // not a failure either.
+        state
+            .handle(
+                incoming(Some(2), Some("nuschl/signal"), Some(b"x".as_slice())),
+                &tx,
+            )
+            .await
+            .unwrap();
+        assert_eq!(dropped(&state), 8);
+        assert!(drain(&mut rx).is_empty());
+    }
+
+    #[tokio::test]
+    async fn plugin_data_is_skipped_undecoded_unless_wanted_and_allowed() {
+        let (tx, mut rx) = mpsc::channel(64);
+        // Garbage would count as dropped if it were decoded.
+        let garbage = || ControlFrame {
+            kind: kind::PLUGIN_DATA_TRANSMISSION,
+            payload: Bytes::from_static(&[0xff, 0xff]),
+        };
+        let mut off = State {
+            accept_plugin_data: false,
+            ..connected()
+        };
+        let mut early = State {
+            own_session: None,
+            ..connected()
+        };
+        let mut encrypted = State {
+            extension: Some(vec![
+                nuschl::capability::KT.into(),
+                nuschl::capability::MLS.into(),
+                nuschl::capability::E2EE.into(),
+            ]),
+            ..connected()
+        };
+        for state in [&mut off, &mut early, &mut encrypted] {
+            state.handle(garbage(), &tx).await.unwrap();
+            state
+                .handle(incoming(Some(2), Some("id"), Some(b"x".as_slice())), &tx)
+                .await
+                .unwrap();
+            assert_eq!(dropped(state), 0);
+        }
+        assert!(drain(&mut rx).is_empty());
+        // The opt-in is a command, taken even before login.
+        early
+            .command(Command::AcceptPluginData(false), &tx)
+            .await
+            .unwrap();
+        assert!(!early.accept_plugin_data);
+        off.command(Command::AcceptPluginData(true), &tx)
+            .await
+            .unwrap();
+        off.handle(incoming(Some(2), Some("id"), Some(b"x".as_slice())), &tx)
+            .await
+            .unwrap();
+        assert_eq!(received(drain(&mut rx)).len(), 1);
+        assert!(drain(&mut rx).is_empty());
+    }
+
+    #[tokio::test]
+    async fn received_plugin_data_never_waits_and_is_budgeted() {
+        // A full event channel: dropped and counted, the session goes on.
+        let (tx, mut rx) = mpsc::channel(1);
+        tx.try_send(SessionEvent::Notice("busy".into())).unwrap();
+        let mut state = connected();
+        state
+            .handle(incoming(Some(2), Some("id"), Some(b"x".as_slice())), &tx)
+            .await
+            .unwrap();
+        assert_eq!(dropped(&state), 1);
+        drain(&mut rx);
+        // An exhausted receive budget drops before decoding.
+        state.plugin_receive.items = 0.0;
+        state.plugin_receive.at = Instant::now();
+        state
+            .handle(incoming(Some(2), Some("id"), Some(b"x".as_slice())), &tx)
+            .await
+            .unwrap();
+        assert_eq!(dropped(&state), 2);
+        assert!(drain(&mut rx).is_empty());
+        // The budget itself: a second of items or bytes, refilled continuously.
+        let start = Instant::now();
+        let mut budget = PluginReceive {
+            items: PluginReceive::ITEMS,
+            bytes: PluginReceive::BYTES,
+            at: start,
+        };
+        assert_eq!((0..100).filter(|_| budget.admit(10, start)).count(), 64);
+        let later = start + Duration::from_millis(500);
+        assert_eq!((0..100).filter(|_| budget.admit(10, later)).count(), 32);
+        let much_later = later + Duration::from_secs(60);
+        assert_eq!(
+            (0..100).filter(|_| budget.admit(1100, much_later)).count(),
+            59,
+            "64 KiB of 1,100-byte messages"
+        );
+    }
+
+    #[tokio::test]
+    async fn sends_reach_named_receivers_once_and_report_admission() {
+        let mut state = connected();
+        let (tx, mut rx) = mpsc::channel(64);
+        state
+            .command(send(5, vec![(3, 33), (2, 22), (3, 33)], "game"), &tx)
+            .await
+            .unwrap();
+        assert_eq!(admissions(&drain(&mut rx)), [(5, Ok(()))]);
+        let [(kind, body)] = state.outbound.as_slice() else {
+            panic!("one frame: {:?}", state.outbound.len());
+        };
+        assert_eq!(*kind, kind::PLUGIN_DATA_TRANSMISSION);
+        let sent = plugin::PluginData::decode(body, 2).unwrap();
+        assert_eq!(sent.sender, Some(1));
+        assert_eq!(sent.receivers, [2, 3]);
+        assert_eq!(sent.payload, payload("game", b"\x01\x02"));
+        // Present-empty fields are sent as present; we may send to ourselves.
+        state.outbound.clear();
+        state
+            .command(
+                Command::PluginData {
+                    request: 6,
+                    receivers: vec![(1, 11)],
+                    payload: payload("", b""),
+                },
+                &tx,
+            )
+            .await
+            .unwrap();
+        let message =
+            proto::PluginDataTransmission::decode(state.outbound[0].1.as_slice()).unwrap();
+        assert_eq!(
+            (message.data, message.data_id, message.receiver_sessions),
+            (Some(vec![]), Some(String::new()), vec![1])
+        );
+        assert_eq!(admissions(&drain(&mut rx)), [(6, Ok(()))]);
+    }
+
+    #[tokio::test]
+    async fn sends_are_refused_locally_with_a_typed_reason() {
+        let (tx, mut rx) = mpsc::channel(64);
+        let mut state = connected();
+        let too_many: Vec<(u32, u64)> = (0..=MAX_ACTION_TARGETS as u32).map(|s| (s, 1)).collect();
+        for command in [
+            send(1, vec![(9, 1)], "game"),
+            send(2, vec![(2, 22), (3, 34)], "game"),
+            send(3, vec![(2, 0)], "game"),
+            send(4, vec![], "game"),
+            send(5, too_many, "game"),
+            send(6, vec![(2, 22)], "nuschl/rtc"),
+        ] {
+            state.command(command, &tx).await.unwrap();
+        }
+        let mut old = State {
+            version: (1 << 48) | (3 << 32),
+            ..connected()
+        };
+        old.command(send(7, vec![(2, 22)], "game"), &tx)
+            .await
+            .unwrap();
+        let mut encrypted = State {
+            extension: Some(vec![nuschl::capability::E2EE.into()]),
+            ..connected()
+        };
+        encrypted
+            .command(send(8, vec![(2, 22)], "game"), &tx)
+            .await
+            .unwrap();
+        let mut early = State {
+            own_session: None,
+            ..connected()
+        };
+        early
+            .command(send(9, vec![(2, 22)], "game"), &tx)
+            .await
+            .unwrap();
+        // A full bucket: refused with a hint, nothing charged or queued.
+        let mut limited = connected();
+        limited.plugin_rate.level = PluginRate::BURST;
+        limited.plugin_rate.at = Instant::now();
+        limited
+            .command(send(10, vec![(2, 22)], "game"), &tx)
+            .await
+            .unwrap();
+        let reported = admissions(&drain(&mut rx));
+        let changed = Err(Refusal::ReceiverChanged);
+        assert_eq!(
+            reported[..9],
+            [
+                (1, changed.clone()),
+                (2, changed.clone()),
+                (3, changed),
+                (4, Err(Refusal::Receivers(MAX_ACTION_TARGETS))),
+                (5, Err(Refusal::Receivers(MAX_ACTION_TARGETS))),
+                (6, Err(Refusal::Reserved)),
+                (7, Err(Refusal::ServerTooOld)),
+                (8, Err(Refusal::EndToEnd)),
+                (9, Err(Refusal::NotConnected)),
+            ]
+        );
+        let (10, Err(Refusal::RateLimited { retry_after_ms })) = &reported[9] else {
+            panic!("{:?}", reported[9]);
+        };
+        assert!((1..=500).contains(retry_after_ms), "{retry_after_ms}");
+        for state in [&state, &old, &encrypted, &early, &limited] {
+            assert!(state.outbound.is_empty());
+        }
+        assert!(limited.plugin_rate.level <= PluginRate::BURST);
+    }
+
+    #[test]
+    fn the_local_bucket_admits_its_burst_then_two_a_second() {
+        let start = Instant::now();
+        let mut rate = PluginRate {
+            level: 0.0,
+            at: start,
+        };
+        assert_eq!((0..20).filter(|_| rate.admit(start).is_ok()).count(), 10);
+        assert_eq!(rate.admit(start), Err(500));
+        let later = start + Duration::from_millis(1250);
+        assert_eq!((0..5).filter(|_| rate.admit(later).is_ok()).count(), 2);
+        assert_eq!(rate.admit(later), Err(250));
+        let much_later = later + Duration::from_secs(3600);
+        assert_eq!(
+            (0..20).filter(|_| rate.admit(much_later).is_ok()).count(),
+            10
+        );
+    }
+
+    /// Murmur's `LeakyBucket::ratelimit` (`ServerUser.cpp`): whole tokens
+    /// drained from integer milliseconds, the timer restarted only when one
+    /// drained, a message limited when it would exceed the burst.
+    struct MurmurBucket {
+        per_second: i64,
+        burst: i64,
+        tokens: i64,
+        since_ms: i64,
+    }
+
+    impl MurmurBucket {
+        fn limited(&mut self, now_ms: i64) -> bool {
+            let drain = (now_ms - self.since_ms) * self.per_second / 1000;
+            if drain > 0 {
+                self.since_ms = now_ms;
+            }
+            self.tokens = (self.tokens - drain).max(0);
+            let limited = self.tokens > self.burst - 1;
+            if !limited {
+                self.tokens += 1;
+            }
+            limited
+        }
+    }
+
+    #[test]
+    fn the_local_bucket_never_overruns_murmurs_default_bucket() {
+        // Attempts at these times (ms); every one the local bucket admits must
+        // pass Murmur's default bucket (4 a second, burst 15).
+        let alternating: Vec<i64> = (0..2000)
+            .flat_map(|step| std::iter::repeat_n(step * 499, if step % 2 == 0 { 2 } else { 1 }))
+            .collect();
+        let flood: Vec<i64> = (0..120_000).collect();
+        let bursts: Vec<i64> = (0..60)
+            .flat_map(|burst| std::iter::repeat_n(burst * 4_999, 12))
+            .collect();
+        let jittered: Vec<i64> = (0..20_000)
+            .map(|step| step * 251 + (step * 7919) % 97)
+            .collect();
+        for (name, schedule) in [
+            ("alternating 2 and 1 every 499 ms", alternating),
+            ("one attempt every millisecond", flood),
+            ("bursts of 12 every 5 s", bursts),
+            ("jittered 251 ms", jittered),
+        ] {
+            let start = Instant::now();
+            let mut local = PluginRate {
+                level: 0.0,
+                at: start,
+            };
+            let mut murmur = MurmurBucket {
+                per_second: 4,
+                burst: 15,
+                tokens: 0,
+                since_ms: 0,
+            };
+            let mut admitted = 0;
+            for &at in &schedule {
+                let now = start + Duration::from_millis(at as u64);
+                if local.admit(now).is_ok() {
+                    admitted += 1;
+                    assert!(!murmur.limited(at), "{name}: Murmur dropped at {at} ms");
+                }
+            }
+            let seconds = (schedule.last().unwrap() / 1000).max(1);
+            assert!(
+                admitted >= seconds.min(schedule.len() as i64 / 2),
+                "{name}: {admitted}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_queued_send_never_reaches_a_reused_session() {
+        let mut state = connected();
+        let (tx, mut rx) = mpsc::channel(64);
+        let authority = CommandAuthority {
+            subject: None,
+            own: (1, 11),
+            users: vec![(2, 22)],
+            channels: vec![],
+            conversations: vec![],
+            accounts: vec![],
+        };
+        let scoped = |receivers| Command::Scoped {
+            authority: authority.clone(),
+            command: Box::new(send(1, receivers, "game")),
+        };
+        let Some(admitted) = state.authorize(scoped(vec![(2, 22)])) else {
+            panic!("a current receiver is authorised");
+        };
+        // A receiver the authority does not cover is never added.
+        assert!(state.authorize(scoped(vec![(2, 22), (3, 33)])).is_none());
+        // The receiver's number now belongs to someone else: the authority
+        // fails, and a command already past it is refused by its own pair.
+        state.users.get_mut(&2).unwrap().instance = 23;
+        assert!(state.authorize(scoped(vec![(2, 22)])).is_none());
+        state.command(admitted, &tx).await.unwrap();
+        assert_eq!(
+            admissions(&drain(&mut rx)),
+            [(1, Err(Refusal::ReceiverChanged))]
+        );
+        assert!(state.outbound.is_empty());
+        // More receivers than an authority may name never get that far.
+        let many: Vec<(u32, u64)> = (0..=MAX_ACTION_TARGETS as u32).map(|s| (s, 1)).collect();
+        assert!(send(1, many, "game").targets().is_none());
+        assert!(send(1, vec![], "game").targets().is_none());
+    }
+
+    #[tokio::test]
+    async fn oversized_plugin_frames_are_skipped_without_buffering() {
+        let limit = plugin::max_body(MAX_RECEIVED_RECEIVERS);
+        assert_eq!(limit, plugin::max_body(0) + 7 * 512);
+        let skipped = AtomicU64::new(0);
+        let frame = |size: usize| {
+            let mut bytes = Vec::new();
+            bytes.extend(kind::PLUGIN_DATA_TRANSMISSION.to_be_bytes());
+            bytes.extend((size as u32).to_be_bytes());
+            bytes.extend(vec![0; size]);
+            bytes
+        };
+        // Up to stock Mumble's frame limit: read past, the next frame follows.
+        let mut input = frame(limit + 1);
+        input.extend(frame(MAX_CONTROL_BYTES));
+        input.extend([0, 3, 0, 0, 0, 1, 9]);
+        let frame_after = read_control(&mut input.as_slice(), &skipped).await.unwrap();
+        assert_eq!(
+            (frame_after.kind, frame_after.payload.as_ref()),
+            (3, &[9][..])
+        );
+        assert_eq!(skipped.load(Ordering::Relaxed), 2);
+        // One at the limit is kept for the decoder to judge.
+        let kept = read_control(&mut frame(limit).as_slice(), &skipped)
+            .await
+            .unwrap();
+        assert_eq!(kept.payload.len(), limit);
+        // A truncated one ends the connection like any short frame.
+        let mut truncated = frame(limit + 1);
+        truncated.truncate(100);
+        assert!(
+            read_control(&mut truncated.as_slice(), &skipped)
+                .await
+                .is_err()
+        );
+        assert_eq!(skipped.load(Ordering::Relaxed), 2);
     }
 }

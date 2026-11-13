@@ -6,6 +6,9 @@
 //!   accepted, with small size limits; anything else closes the connection;
 //! - after it, every frame is size-checked by type from its header before the
 //!   body is buffered, then handed to [`State::handle`](crate::state::State).
+//!   Plugin data above its fixed ceiling is read past and dropped, as Murmur
+//!   drops it, rather than closing the connection; a frame above stock
+//!   Mumble's frame limit, or a connection that ends inside one, still closes.
 //!
 //! A writer task drains the connection's byte-bounded queue ([`Link`]).
 use crate::{
@@ -16,8 +19,11 @@ use crate::{
     server::Server,
     state::{Link, Peer},
 };
-use bytes::{Bytes, BytesMut};
-use nuschl_protocol::{ControlFrame, control as proto, decode_control_limited, kind, relay};
+use bytes::{Buf as _, Bytes, BytesMut};
+use nuschl_protocol::{
+    ControlFrame, HEADER_BYTES, MAX_CONTROL_BYTES, control as proto, decode_control_limited, kind,
+    plugin, relay,
+};
 use prost::Message as _;
 use std::{
     io,
@@ -50,6 +56,11 @@ fn pre_authentication_limit(kind: u16) -> Option<usize> {
     }
 }
 
+/// Receivers that plugin data may name and still be buffered: the session
+/// budget of a large server plus Murmur's slack, whatever `max_users` says.
+/// The handler applies Murmur's own limit (connected users plus 20).
+pub const PLUGIN_FRAME_RECEIVERS: usize = 16_384 + plugin::RECEIVER_SLACK;
+
 /// Body limits after authentication, by type, before the body is buffered.
 /// Element counts are checked again after decoding.
 pub fn body_limit(settings: &Settings, kind: u16) -> Option<usize> {
@@ -68,7 +79,7 @@ pub fn body_limit(settings: &Settings, kind: u16) -> Option<usize> {
             kind::BAN_LIST => 4 * 1024 * 1024,
             kind::USER_LIST => 512 * 1024,
             kind::VOICE_TARGET => 8 * 1024,
-            kind::PLUGIN_DATA_TRANSMISSION => 2 * 1024,
+            kind::PLUGIN_DATA_TRANSMISSION => plugin::max_body(PLUGIN_FRAME_RECEIVERS),
             kind::UDP_TUNNEL => relay::MAX_PLAIN + nuschl_protocol::crypt::HEADER,
             kind::QUERY_USERS => 64 * 1024,
             kind::REQUEST_BLOB | kind::PING | kind::CRYPT_SETUP | kind::PERMISSION_QUERY => {
@@ -96,11 +107,55 @@ async fn read_frame(
         match decode_control_limited(buffer, &limit) {
             Ok(Some(frame)) => return Ok(Some(frame)),
             Ok(None) => {}
-            Err(error) => return Err(io::Error::other(error)),
+            Err(error) => {
+                // Only a type this phase accepts can be too large; anything
+                // unexpected (before authentication) still closes.
+                let oversized = match error {
+                    nuschl_protocol::Error::TooLarge => oversized_plugin_data(buffer),
+                    nuschl_protocol::Error::Unexpected(_) => None,
+                };
+                let Some(size) = oversized else {
+                    return Err(io::Error::other(error));
+                };
+                buffer.advance(HEADER_BYTES);
+                discard(reader, buffer, size).await?;
+                continue;
+            }
         }
         buffer.reserve(16 * 1024);
         if reader.read_buf(buffer).await? == 0 {
             return Ok(None);
+        }
+    }
+}
+
+/// The body size of plugin data at the head of `buffer` whose header says it
+/// is too large to buffer yet within stock Mumble's frame limit: Murmur reads
+/// such a message and drops it, so the connection survives it here too.
+fn oversized_plugin_data(buffer: &BytesMut) -> Option<usize> {
+    let header = buffer.get(..HEADER_BYTES)?;
+    let size = u32::from_be_bytes([header[2], header[3], header[4], header[5]]) as usize;
+    (u16::from_be_bytes([header[0], header[1]]) == kind::PLUGIN_DATA_TRANSMISSION
+        && size <= MAX_CONTROL_BYTES)
+        .then_some(size)
+}
+
+/// Read past `size` bytes, holding no more than one read at a time.
+async fn discard(
+    reader: &mut (impl AsyncRead + Unpin),
+    buffer: &mut BytesMut,
+    mut size: usize,
+) -> io::Result<()> {
+    loop {
+        let skipped = size.min(buffer.len());
+        buffer.advance(skipped);
+        size -= skipped;
+        if size == 0 {
+            return Ok(());
+        }
+        buffer.reserve(16 * 1024);
+        if reader.read_buf(buffer).await? == 0 {
+            return Err(io::ErrorKind::UnexpectedEof.into());
         }
     }
 }

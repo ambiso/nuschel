@@ -85,6 +85,16 @@ pub enum Request {
         request_id: u64,
         token: [u8; 16],
     },
+    /// Plugin data to these receivers, each a session and its presence
+    /// instance, answered by its admission
+    /// ([`ServerEvent::PluginDataAdmission`](crate::input::ServerEvent)). Only
+    /// through [`Platform::request_metadata`], whose authority names the same
+    /// presences ([`Client::send_plugin_data`](crate::Client::send_plugin_data)).
+    PluginData {
+        request: u64,
+        receivers: Vec<(u32, u64)>,
+        payload: nuschl_protocol::plugin::Payload,
+    },
 }
 
 /// Where a conversation of a Nuschl server is kept in local history: the
@@ -188,6 +198,12 @@ pub trait Platform {
         cache: Option<CacheKey>,
         page: Page,
     ) -> Result<(), String>;
+    /// Retire earlier history pages for this server. This does not cancel
+    /// sends, edits, deletions or cryptographic state. Adapters without a
+    /// native page registry rely on the ticket checked by the client.
+    fn cancel_history(&self, server: &str, epoch: u64) {
+        let _ = (server, epoch);
+    }
     fn change_message(&self, change: ChangeRequest) -> Result<(), String>;
     /// Render untrusted Mumble HTML in the content worker.
     fn render_html(&self, server: String, generation: u64, key: RenderKey, source: String);
@@ -206,6 +222,11 @@ pub trait Platform {
         query: String,
         after: Option<SearchCursor>,
     ) -> Result<(), String>;
+    /// Whether every connection, now and after reconnects, decodes and
+    /// reports plugin data. A platform without plugin data ignores it.
+    fn accept_plugin_data(&self, accept: bool) {
+        let _ = accept;
+    }
 }
 
 impl<T: Platform + ?Sized> Platform for std::sync::Arc<T> {
@@ -236,6 +257,9 @@ impl<T: Platform + ?Sized> Platform for std::sync::Arc<T> {
     fn cancel_link_preview(&self, id: crate::preview::RequestId) {
         (**self).cancel_link_preview(id)
     }
+    fn accept_plugin_data(&self, accept: bool) {
+        (**self).accept_plugin_data(accept)
+    }
     fn request_metadata(
         &self,
         server: &str,
@@ -263,6 +287,9 @@ impl<T: Platform + ?Sized> Platform for std::sync::Arc<T> {
         page: Page,
     ) -> Result<(), String> {
         (**self).server_history(server, conversation, ticket, cache, page)
+    }
+    fn cancel_history(&self, server: &str, epoch: u64) {
+        (**self).cancel_history(server, epoch)
     }
     fn change_message(&self, change: ChangeRequest) -> Result<(), String> {
         (**self).change_message(change)
