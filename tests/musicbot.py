@@ -842,6 +842,10 @@ def main():
                 command(link, "add", kind="album", library=1, id="a1", index=None)
                 heard_alice = audio_from(alice, dj, 20)
                 heard_bob = audio_from(bob, dj2, 5)
+                # The lobby may first end the transmission it had before it
+                # switched to this queue: a lone terminator, then the song.
+                if len(heard_bob) == 1 and heard_bob[0]["end"]:
+                    heard_bob = audio_from(bob, dj2, 5)
                 assert len(heard_alice) >= 280 and len(heard_bob) >= 280, (len(heard_alice), len(heard_bob))
                 assert heard_alice[-1]["end"] and heard_bob[-1]["end"]
                 packets = [Counter(bytes(packet["opus"]) for packet in heard) for heard in (heard_alice, heard_bob)]
