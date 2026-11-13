@@ -118,6 +118,24 @@ PORT` (or `with_local_murmur.py <mumble-server> tui_loopback.py <binaries> --por
 and one in plain lines: certificate on first use, joining through Ctrl+K, sending and
 receiving, and on nuschld registering, typing, editing, deleting, search, a direct
 conversation and unread counts.
+`tls_drop.py <binaries> --root DIR` loses TLS connections while one loopback
+`nuschld` keeps running. Relays owned by the test sit between it and `nuschl-tui
+--plain` (Ada, who reconnects by herself) or `nuschl-cli` (Cleo, who does not). They
+reset the connection and refuse reconnections, or silently discard traffic one way
+or both, while Bob writes directly. It checks that the reconnection reaches the same
+server process (pid, start time, log) and shows the gap line. It also checks that
+what was said meanwhile appears once, in order, in Ada's reopened timeline, compared
+with a server page. Text typed during the loss is refused while reconnecting, and is
+resent under its idempotency key and stored once after a silent loss. The JSON
+client gives no outcome before it exits. Cleo, started again, pages `after` her last
+seq until `more_after` is false, covering every seq to the head. Negative controls:
+a send retried under its key keeps its seq, but under a new key it is stored twice
+and must fail the exactly-once check; `--control no-drop` must fail the reconnection
+checks. Runs, failed ones too, stay in DIR (`results.json`). The relay discards
+bytes but keeps both sockets healthy, so kernel TCP timeouts and real packet loss
+are not exercised. Against main 32f66817 (2026-11-13) the client never fills a gap in
+an already loaded server-history timeline after reconnecting in process: `/older`
+and reopening do not, a restarted client does. Those checks fail.
 
 Deterministic voice reordering, not yet in the VM run: `with_local_murmur.py
 <mumble-server> udp_reorder.py <binaries> --port PORT --opus-library LIB` (or
