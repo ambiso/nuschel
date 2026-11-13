@@ -106,6 +106,23 @@ def actions(args, root, shell, application, bot, _murmur):
         return {"bounds": node.extents(), "painted_thumb": [min(rows), max(rows)],
                 "thumb_x_from_right": right, "png": shot.name}
 
+    def input_value(node, name):
+        # Native Entry currently has no AT-SPI Text interface. Locate by its
+        # accessible name, then read only its rendered value as other fixtures
+        # do for text with no accessible counterpart. Never use the clipboard.
+        shell.move(0, 0)
+        time.sleep(.2)
+        shot = args.output / f"{name}.png"
+        shell.screenshot(shot)
+        ox, oy = origin()
+        x, y, width, height = node.extents()
+        png = subprocess.run([os.environ.get("MAGICK", "magick"), str(shot), "-crop",
+            f"{width-2}x{height-2}+{ox+x+1}+{oy+y+1}", "+repage", "-resize", "200%", "png:-"],
+            capture_output=True, check=True, timeout=30).stdout
+        value = subprocess.run([os.environ.get("TESSERACT", "tesseract"), "stdin", "stdout", "--psm", "7"],
+            input=png, capture_output=True, check=True, timeout=30).stdout.decode().strip()
+        return value.replace(" ", "")
+
     records = []
     for width, height, zoom, steps in [(1280, 800, 100, 0), (900, 700, 125, 2),
                                       (1000, 800, 150, 3), (1000, 800, 200, 5)]:
@@ -151,7 +168,7 @@ def actions(args, root, shell, application, bot, _murmur):
         shell.click(*point(target))
         target_field = eventually(lambda: next((node for node, role, name, _ in items(application)
             if name == "ACL rule target" and role == "entry"), None), "rule input absent")
-        eventually(lambda: target_field.call("Text", "GetText", "ii", "0", "-1")[0] == "scroll-rule-005",
+        eventually(lambda: input_value(target_field, f"selected-rule-{zoom}") == "scroll-rule-005",
                    "canvas intercepted a rule pointer selection")
         wait("Remove rule", "push button")
         focus(owner, dialog)
@@ -181,7 +198,7 @@ def actions(args, root, shell, application, bot, _murmur):
         shell.drag(point(field, right=field.extents()[2] - 4 * zoom / 100),
                    point(field, right=4 * zoom / 100))
         shell.type("selected-by-pointer")
-        eventually(lambda: field.call("Text", "GetText", "ii", "0", "-1")[0] == "selected-by-pointer",
+        eventually(lambda: input_value(field, f"selected-input-{zoom}") == "selected-by-pointer",
                    "canvas intercepted input text selection")
         done = wait("Done", "push button")
         focus(done, dialog)
