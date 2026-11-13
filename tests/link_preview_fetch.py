@@ -92,7 +92,9 @@ def reply(stream, body=b"", status="200 OK", mime="text/html", extra=b""):
 
 
 class Server(socketserver.ThreadingTCPServer):
-    allow_reuse_address = False
+    # Sequential fixture services may rebind through TCP TIME_WAIT. The VM
+    # driver independently requires the previous unit's processes to retire.
+    allow_reuse_address = True
     daemon_threads = False
     block_on_close = True
     request_queue_size = 4
