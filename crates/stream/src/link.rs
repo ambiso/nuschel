@@ -7,8 +7,10 @@
 //! https://<host>/share#v=1&k=<S>&p=<P>    opened by the sharer only
 //! ```
 //!
-//! S and P are 32 bytes in unpadded base64url. Parsing is strict: one canonical form,
-//! at most [`Link::MAX_LEN`] bytes.
+//! S and P are 32 bytes in unpadded base64url. The host is the configured stream host,
+//! in lowercase, with an optional port. Parsing accepts one canonical form of at most
+//! [`Link::MAX_LEN`] bytes, on that host only: page code served from the link's origin
+//! sees S.
 
 use std::fmt;
 
@@ -21,9 +23,9 @@ pub(crate) const LABEL: &str = "nuschl/stream/v2";
 const ENCODED_SECRET_LEN: usize = 43;
 
 /// A parsed watch or share link. `Debug` leaves out the secrets.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(PartialEq, Eq)]
 pub struct Link {
-    origin: String,
+    host: String,
     secret: Secret,
     publisher: Option<Secret>,
 }
@@ -31,29 +33,35 @@ pub struct Link {
 impl Link {
     pub const MAX_LEN: usize = 512;
 
-    /// A new share link on `origin` (`https://host[:port]`) with fresh S and P.
-    pub fn generate<R: TryCryptoRng + ?Sized>(origin: &str, rng: &mut R) -> Result<Self, Error> {
-        check_origin(origin)?;
+    /// A new share link on the stream host (`host[:port]`) with fresh S and P.
+    pub fn generate<R: TryCryptoRng + ?Sized>(host: &str, rng: &mut R) -> Result<Self, Error> {
+        check_host(host)?;
         Ok(Self {
-            origin: origin.to_owned(),
+            host: host.to_owned(),
             secret: Secret::random(rng)?,
             publisher: Some(Secret::random(rng)?),
         })
     }
 
-    pub fn parse(link: &str) -> Result<Self, Error> {
+    /// Parses a link on the stream host `host`.
+    pub fn parse(link: &str, host: &str) -> Result<Self, Error> {
         if link.len() > Self::MAX_LEN {
             return Err(Error::TooLong);
         }
-        let (page, fragment) = link
+        check_host(host)?;
+        let page = link
+            .strip_prefix("https://")
+            .and_then(|rest| rest.strip_prefix(host))
+            .and_then(|rest| rest.strip_prefix('/'))
+            .ok_or(Error::Malformed("link origin"))?;
+        let (page, fragment) = page
             .split_once('#')
             .ok_or(Error::Malformed("link fragment"))?;
-        let (origin, share) = match page.rsplit_once('/') {
-            Some((origin, "watch")) => (origin, false),
-            Some((origin, "share")) => (origin, true),
+        let share = match page {
+            "watch" => false,
+            "share" => true,
             _ => return Err(Error::Malformed("link page")),
         };
-        check_origin(origin)?;
         let mut params = fragment.split('&');
         match params.next() {
             Some("v=1") => {}
@@ -68,14 +76,14 @@ impl Link {
             return Err(Error::Malformed("link parameters"));
         }
         Ok(Self {
-            origin: origin.to_owned(),
+            host: host.to_owned(),
             secret,
             publisher,
         })
     }
 
-    pub fn origin(&self) -> &str {
-        &self.origin
+    pub fn host(&self) -> &str {
+        &self.host
     }
 
     pub fn secret(&self) -> &Secret {
@@ -89,14 +97,14 @@ impl Link {
 
     /// The link to post: S only.
     pub fn watch_url(&self) -> String {
-        format!("{}/watch#v=1&k={}", self.origin, encode(&self.secret))
+        format!("https://{}/watch#v=1&k={}", self.host, encode(&self.secret))
     }
 
     pub fn share_url(&self) -> Option<String> {
         let publisher = self.publisher.as_ref()?;
         Some(format!(
-            "{}/share#v=1&k={}&p={}",
-            self.origin,
+            "https://{}/share#v=1&k={}&p={}",
+            self.host,
             encode(&self.secret),
             encode(publisher)
         ))
@@ -110,22 +118,27 @@ impl Link {
 impl fmt::Debug for Link {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Link")
-            .field("origin", &self.origin)
+            .field("host", &self.host)
             .field("share", &self.publisher.is_some())
             .finish_non_exhaustive()
     }
 }
 
-/// `https://` and a host with an optional port; nothing else.
-fn check_origin(origin: &str) -> Result<(), Error> {
-    let host = origin
-        .strip_prefix("https://")
-        .ok_or(Error::Malformed("link scheme"))?;
-    let allowed = |c: char| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | ':' | '[' | ']');
-    if host.is_empty() || !host.chars().all(allowed) {
-        return Err(Error::Malformed("link host"));
+/// Lowercase DNS labels, then an optional `:port` of 1–5 digits.
+fn check_host(host: &str) -> Result<(), Error> {
+    let (name, port) = host.split_once(':').unwrap_or((host, "1"));
+    let label = |label: &str| {
+        !label.is_empty()
+            && label
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+    };
+    let port_ok = (1..=5).contains(&port.len()) && port.bytes().all(|b| b.is_ascii_digit());
+    if name.split('.').all(label) && port_ok {
+        Ok(())
+    } else {
+        Err(Error::Malformed("link host"))
     }
-    Ok(())
 }
 
 fn decode_param(param: Option<&str>, name: &str) -> Result<Secret, Error> {
@@ -160,7 +173,7 @@ pub struct LinkKeys {
 impl LinkKeys {
     pub fn derive(secret: &Secret) -> Self {
         let prk = hkdf_extract(LABEL.as_bytes(), secret.expose());
-        let expand = |name: &str| Secret::from_bytes(*hkdf_expand(&prk, label(name).as_bytes()));
+        let expand = |name: &str| Secret(hkdf_expand(&prk, label(name).as_bytes()));
         Self {
             stream_id: *hkdf_expand(&prk, label("stream id").as_bytes()),
             admit_key: expand("admit"),

@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: EUPL-1.2
 [package]
 name = "nuschl-stream"
-description = "Screen-share keys: watch links, the X-Wing HPKE-PSK key exchange, rekeying and SFrame (docs/screen-share-plan.md §3)"
+description = "Screen-share key agreement: watch links, the X-Wing HPKE-PSK exchange and rekeying (docs/screen-share-plan.md §3)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -12,8 +12,6 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
-# SFrame's AES-128-GCM (RFC 9605 suite 0x0004). libcrux's AES is pre-verification.
-aes-gcm = { version = "0.11.1", default-features = false, features = ["aes", "zeroize"] }
 base64ct = "1.8.3"
 # The X-Wing HPKE suite and libcrux code of crates/identity/src/hpke.rs. No system RNG:
 # callers pass one, so the crate builds unchanged for wasm32.
@@ -21,7 +19,6 @@ hpke-rs = "0.8.0"
 hpke-rs-libcrux = { version = "0.8.0", default-features = false }
 libcrux-chacha20poly1305 = "0.0.10"
 libcrux-hkdf = "0.0.9"
-libcrux-hmac = "0.0.9"
 # 0.0.10 fixes RUSTSEC-2026-0330 and RUSTSEC-2026-0331.
 libcrux-kem = { version = "0.0.10", default-features = false }
 libcrux-sha2 = "0.0.9"

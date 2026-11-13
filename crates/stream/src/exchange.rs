@@ -1,22 +1,23 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! The sharer's and the viewers' key-exchange state machines (wire format in the crate
 //! documentation). The sharer grants only fresh epochs: [`Sharer::rekey`] moves every
-//! viewer to K_{e+1} and grants K_{e+1} to the queued requests, so a newcomer receives
+//! viewer to K_{e+1} and grants K_{e+1} to the approved requests, so a newcomer receives
 //! only keys created after it joined.
 
+use std::fmt;
+
 use hpke_rs::hpke_types::{AeadAlgorithm, KdfAlgorithm, KemAlgorithm};
-use hpke_rs::{Context, Hpke, HpkePrivateKey, HpkePublicKey, Mode};
-use hpke_rs_libcrux::{HpkeLibcrux, HpkeLibcruxPrng};
+use hpke_rs::{Context, Hpke, HpkePrivateKey, Mode};
+use hpke_rs_libcrux::HpkeLibcrux;
 use libcrux_kem::Algorithm::XWingKemDraft06;
-use rand_core::TryCryptoRng;
+use rand_core::{TryCryptoRng, TryRng};
 use subtle::ConstantTimeEq as _;
-use zeroize::Zeroizing;
+use zeroize::{Zeroize as _, Zeroizing};
 
 use crate::credentials::{Binding, CredentialCache, Fingerprint, VerifiableBinding};
 use crate::link::{LinkKeys, label};
-use crate::media::EpochKey;
 use crate::wire::{Reader, put_opaque16};
-use crate::{Error, MAX_KEY_MESSAGE, Secret, hmac_sha256, random, sha256};
+use crate::{Error, MAX_KEY_MESSAGE, Secret, hkdf_expand, random, sha256};
 
 const VERSION: u8 = 1;
 /// KEM X-Wing, KDF HKDF-SHA256, AEAD ChaCha20-Poly1305, SFrame AES_128_GCM_SHA256_128.
@@ -24,20 +25,27 @@ const SUITE: [u8; 8] = [0x64, 0x7a, 0x00, 0x01, 0x00, 0x03, 0x00, 0x04];
 const PUBLIC_KEY_LEN: usize = 1216;
 const ENC_LEN: usize = 1120;
 const AEAD_TAG_LEN: usize = 16;
-const SEALED_KEY_LEN: usize = EpochKey::LEN + AEAD_TAG_LEN;
+const EPOCH_KEY_LEN: usize = 4 + 32;
+const SEALED_KEY_LEN: usize = EPOCH_KEY_LEN + AEAD_TAG_LEN;
 
 /// How far ahead a request's `not_after` may be: its lifetime plus a minute of clock
 /// difference between viewer and sharer.
 pub const REQUEST_LIFETIME_MS: u64 = 60_000;
 const MAX_NOT_AFTER_MS: u64 = 2 * REQUEST_LIFETIME_MS;
-/// The shortest time between two epochs.
+/// The shortest time between two epochs, unless the clock stepped back.
 pub const MIN_EPOCH_INTERVAL_MS: u64 = 1_000;
+/// When to send a rekey's messages a second time.
+pub const RESEND_AFTER_MS: u64 = 500;
+/// When to switch the encryptors to a new epoch, counted from the first send.
+pub const SWITCH_AFTER_MS: u64 = 1_000;
 /// Requests waiting for the next rekey.
 pub const MAX_PENDING: usize = 32;
 /// Viewers holding keys, plus pending requests.
 pub const MAX_VIEWERS: usize = 256;
 /// Request nonces remembered until their `not_after`.
-const MAX_SEEN: usize = 256;
+pub const MAX_SEEN: usize = 256;
+/// Rekeys a viewer may have missed and still catch up.
+const MAX_MISSED_REKEYS: u64 = 64;
 
 pub(crate) const REQUEST: u8 = 1;
 pub(crate) const GRANT: u8 = 2;
@@ -48,7 +56,68 @@ pub(crate) const NEED_CREDENTIALS: u8 = 5;
 pub type ViewerId = [u8; 16];
 
 // -------------------------------------------------------------------------------------
-// Envelope and bodies
+// Epoch keys
+
+/// The sharer's key for one epoch; [`Sharer::rekey`] returns it once. Hand it to one
+/// `nuschl_sframe::SendKey`: a second set of encryptors for the same epoch repeats
+/// AES-GCM nonces.
+pub struct SendKey {
+    epoch: u32,
+    key: Secret,
+}
+
+impl SendKey {
+    pub fn epoch(&self) -> u32 {
+        self.epoch
+    }
+
+    pub fn into_parts(self) -> (u32, Zeroizing<[u8; 32]>) {
+        (self.epoch, self.key.into_inner())
+    }
+}
+
+/// A viewer's key for one epoch, for decryption.
+pub struct ReceiveKey {
+    epoch: u32,
+    key: Secret,
+}
+
+impl ReceiveKey {
+    pub fn epoch(&self) -> u32 {
+        self.epoch
+    }
+
+    pub fn expose(&self) -> &[u8; 32] {
+        self.key.expose()
+    }
+}
+
+impl fmt::Debug for SendKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "SendKey(epoch {})", self.epoch)
+    }
+}
+
+impl fmt::Debug for ReceiveKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "ReceiveKey(epoch {})", self.epoch)
+    }
+}
+
+fn encode_epoch_key(epoch: u32, key: &Secret) -> Zeroizing<Vec<u8>> {
+    Zeroizing::new([&epoch.to_be_bytes()[..], key.expose()].concat())
+}
+
+fn decode_epoch_key(bytes: &[u8]) -> Result<ReceiveKey, Error> {
+    let mut reader = Reader::new(bytes);
+    let epoch = reader.u32()?;
+    let key = Secret(Zeroizing::new(reader.array()?));
+    reader.finish()?;
+    Ok(ReceiveKey { epoch, key })
+}
+
+// -------------------------------------------------------------------------------------
+// Envelope, bodies and HPKE
 
 pub(crate) fn seal_message<R: TryCryptoRng + ?Sized>(
     keys: &LinkKeys,
@@ -133,6 +202,23 @@ impl<'a> Request<'a> {
     }
 }
 
+fn binding_digest(
+    keys: &LinkKeys,
+    viewer: &ViewerId,
+    nonce: &[u8; 32],
+    not_after: u64,
+    public_key: &[u8],
+) -> [u8; 32] {
+    sha256(&[
+        label("binding").as_bytes(),
+        keys.stream_id(),
+        viewer,
+        nonce,
+        &not_after.to_be_bytes(),
+        public_key,
+    ])
+}
+
 pub(crate) fn transcript(request: &[u8], sharer_nonce: &[u8; 32]) -> [u8; 32] {
     sha256(&[
         label("transcript").as_bytes(),
@@ -143,47 +229,105 @@ pub(crate) fn transcript(request: &[u8], sharer_nonce: &[u8; 32]) -> [u8; 32] {
     ])
 }
 
-/// HPKE with a DRBG seeded from the caller's RNG.
-fn hpke<R: TryCryptoRng + ?Sized>(rng: &mut R) -> Result<Hpke<HpkeLibcrux>, Error> {
-    let seed = Zeroizing::new(random(rng)?);
-    let prng = HpkeLibcruxPrng::try_from_seed(*seed).map_err(|_| Error::Randomness)?;
-    Ok(Hpke::new_with_rng(
-        Mode::Psk,
-        KemAlgorithm::XWingDraft06,
-        KdfAlgorithm::HkdfSha256,
-        AeadAlgorithm::ChaCha20Poly1305,
-        prng,
-    ))
-}
-
 fn hpke_info(transcript: &[u8; 32]) -> Vec<u8> {
     [label("grant").as_bytes(), transcript].concat()
 }
 
-/// The confirmations and the rekey channel key, from the HPKE exporter.
-struct Exports {
-    confirm_sharer: [u8; 32],
-    confirm_viewer: [u8; 32],
-    channel: Secret,
+/// hpke-rs needs a PRNG type. This crate draws X-Wing's encapsulation randomness from
+/// the caller's RNG itself, and the receiver and the key schedule draw none.
+pub(crate) struct NoRandomness;
+
+impl TryRng for NoRandomness {
+    type Error = fmt::Error;
+
+    fn try_next_u32(&mut self) -> Result<u32, fmt::Error> {
+        Err(fmt::Error)
+    }
+
+    fn try_next_u64(&mut self) -> Result<u64, fmt::Error> {
+        Err(fmt::Error)
+    }
+
+    fn try_fill_bytes(&mut self, _: &mut [u8]) -> Result<(), fmt::Error> {
+        Err(fmt::Error)
+    }
 }
 
-impl Exports {
-    fn new(context: &Context<HpkeLibcrux>, transcript: &[u8; 32]) -> Result<Self, Error> {
-        let export = |name: &str| -> Result<Secret, Error> {
-            let bytes = Zeroizing::new(
-                context
-                    .export(label(name).as_bytes(), 32)
-                    .map_err(|_| Error::Authentication)?,
-            );
-            Ok(Secret::from_bytes(bytes[..].try_into().expect("32 bytes")))
-        };
-        let confirm = |name| export(name).map(|key| hmac_sha256(key.expose(), transcript));
-        Ok(Self {
-            confirm_sharer: confirm("confirm sharer->viewer")?,
-            confirm_viewer: confirm("confirm viewer->sharer")?,
-            channel: export("channel sharer->viewer")?,
-        })
-    }
+impl TryCryptoRng for NoRandomness {}
+
+pub(crate) type HpkeContext = Context<HpkeLibcrux<NoRandomness>>;
+/// `(psk, psk_id)` selects PSK mode; the KAT uses base mode.
+pub(crate) type Psk<'a> = Option<(&'a [u8], &'a [u8])>;
+
+fn hpke(psk: Psk<'_>) -> Hpke<HpkeLibcrux<NoRandomness>> {
+    let mode = if psk.is_some() { Mode::Psk } else { Mode::Base };
+    Hpke::new_with_rng(
+        mode,
+        KemAlgorithm::XWingDraft06,
+        KdfAlgorithm::HkdfSha256,
+        AeadAlgorithm::ChaCha20Poly1305,
+        NoRandomness,
+    )
+}
+
+/// X-Wing EncapsulateDerand with `eseed`, then the HPKE key schedule: what hpke-rs's
+/// `setup_sender` does, with the caller's randomness. Returns `enc` and the context.
+pub(crate) fn hpke_sender(
+    public_key: &[u8],
+    eseed: &[u8; 64],
+    info: &[u8],
+    psk: Psk<'_>,
+) -> Result<(Vec<u8>, HpkeContext), Error> {
+    let public = libcrux_kem::PublicKey::decode(XWingKemDraft06, public_key)
+        .map_err(|_| Error::InvalidPublicKey)?;
+    let (shared, enc) = public
+        .encapsulate_derand(eseed)
+        .map_err(|_| Error::InvalidPublicKey)?;
+    let shared = Zeroizing::new(shared.encode());
+    let (key, id) = psk.unwrap_or_default();
+    let context = hpke(psk)
+        .key_schedule(&shared, info, key, id)
+        .map_err(|_| Error::InvalidPublicKey)?;
+    Ok((enc.encode(), context))
+}
+
+pub(crate) fn hpke_receiver(
+    kem_seed: &[u8; 32],
+    enc: &[u8],
+    info: &[u8],
+    psk: Psk<'_>,
+) -> Result<HpkeContext, Error> {
+    // hpke-rs zeroizes its private key type on drop.
+    let private = HpkePrivateKey::new(kem_seed.to_vec());
+    hpke(psk)
+        .setup_receiver(
+            enc,
+            &private,
+            info,
+            psk.map(|p| p.0),
+            psk.map(|p| p.1),
+            None,
+        )
+        .map_err(|_| Error::Authentication)
+}
+
+fn export(context: &HpkeContext, name: &str) -> Result<Secret, Error> {
+    let bytes = Zeroizing::new(
+        context
+            .export(label(name).as_bytes(), 32)
+            .map_err(|_| Error::Authentication)?,
+    );
+    Ok(Secret(Zeroizing::new(
+        bytes[..].try_into().expect("32 bytes"),
+    )))
+}
+
+/// The next channel key; the caller drops the current one.
+fn ratchet(channel: &Secret) -> Secret {
+    Secret(hkdf_expand(
+        channel.expose(),
+        label("channel ratchet").as_bytes(),
+    ))
 }
 
 fn channel_nonce(counter: u64) -> [u8; 12] {
@@ -201,8 +345,10 @@ fn rekey_header(viewer: &ViewerId, counter: u64) -> Vec<u8> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ViewerState {
-    /// Waiting for the next rekey.
+    /// Waiting for [`Sharer::approve`].
     Requested,
+    /// Waiting for the next rekey.
+    Approved,
     /// Holds the current epoch; its key confirmation has not arrived.
     Granted,
     Confirmed,
@@ -210,8 +356,8 @@ pub enum ViewerState {
 
 #[derive(Debug)]
 pub enum SharerEvent {
-    /// A viewer asked to join and waits for the next [`Sharer::rekey`]. A binding is
-    /// for the identity layer to verify; [`Sharer::remove`] turns the request down.
+    /// A viewer asked to join. Verify the binding against its digest, then call
+    /// [`Sharer::approve`]; without a binding policy, approve at once.
     Requested {
         viewer: ViewerId,
         binding: Option<VerifiableBinding>,
@@ -224,17 +370,27 @@ pub enum SharerEvent {
     Confirmed(ViewerId),
 }
 
+/// What [`Sharer::rekey`] produces: send `messages`, each to its viewer, then switch to
+/// `key` as the crate documentation describes.
+#[derive(Debug)]
+pub struct Rekey {
+    pub key: SendKey,
+    pub messages: Vec<(ViewerId, Vec<u8>)>,
+}
+
 struct Pending {
     viewer: ViewerId,
     body: Vec<u8>,
     not_after: u64,
+    approved: bool,
 }
 
 struct Granted {
     viewer: ViewerId,
+    /// The key for Rekey number `counter + 1`.
     channel: Secret,
     counter: u64,
-    confirm_viewer: [u8; 32],
+    confirm: Secret,
     confirmed: bool,
     /// The request's `not_after`: an unconfirmed viewer is dropped at the next rekey
     /// after it.
@@ -243,8 +399,8 @@ struct Granted {
 
 pub struct Sharer {
     keys: LinkKeys,
-    epoch: EpochKey,
-    epoch_started: u64,
+    epoch: u32,
+    last_rekey: Option<u64>,
     pending: Vec<Pending>,
     viewers: Vec<Granted>,
     seen: Vec<([u8; 32], u64)>,
@@ -252,34 +408,28 @@ pub struct Sharer {
 }
 
 impl Sharer {
-    /// Starts at epoch 1, which no viewer ever receives.
-    pub fn new<R: TryCryptoRng + ?Sized>(
-        keys: LinkKeys,
-        credentials: CredentialCache,
-        now: u64,
-        rng: &mut R,
-    ) -> Result<Self, Error> {
-        Ok(Self {
+    /// A sharer without an epoch; the first [`Sharer::rekey`] creates epoch 1.
+    pub fn new(keys: LinkKeys, credentials: CredentialCache) -> Self {
+        Self {
             keys,
-            epoch: EpochKey::random(1, rng)?,
-            epoch_started: now,
+            epoch: 0,
+            last_rekey: None,
             pending: Vec::new(),
             viewers: Vec::new(),
             seen: Vec::new(),
             credentials,
-        })
-    }
-
-    /// The key to encrypt media with.
-    pub fn epoch(&self) -> &EpochKey {
-        &self.epoch
+        }
     }
 
     pub fn viewers(&self) -> impl Iterator<Item = (ViewerId, ViewerState)> + '_ {
-        let pending = self
-            .pending
-            .iter()
-            .map(|p| (p.viewer, ViewerState::Requested));
+        let pending = self.pending.iter().map(|p| {
+            let state = if p.approved {
+                ViewerState::Approved
+            } else {
+                ViewerState::Requested
+            };
+            (p.viewer, state)
+        });
         let granted = self.viewers.iter().map(|v| {
             let state = if v.confirmed {
                 ViewerState::Confirmed
@@ -334,22 +484,32 @@ impl Sharer {
         let viewer = request.viewer;
         let binding = match &request.binding {
             None => None,
-            Some(binding) => match self.credentials.resolve(binding)? {
-                Ok(binding) => Some(binding),
-                Err(missing) => {
-                    let mut reply = viewer.to_vec();
-                    reply.push(u8::try_from(missing.len()).expect("at most 4"));
-                    reply.extend(missing.iter().flatten());
-                    let message = seal_message(&self.keys, NEED_CREDENTIALS, &reply, rng)?;
-                    return Ok(SharerEvent::NeedCredentials { viewer, message });
+            Some(binding) => {
+                let digest = binding_digest(
+                    &self.keys,
+                    &viewer,
+                    &request.nonce,
+                    request.not_after,
+                    request.public_key,
+                );
+                match self.credentials.resolve(binding, digest)? {
+                    Ok(binding) => Some(binding),
+                    Err(missing) => {
+                        let mut reply = viewer.to_vec();
+                        reply.push(u8::try_from(missing.len()).expect("at most 4"));
+                        reply.extend(missing.iter().flatten());
+                        let message = seal_message(&self.keys, NEED_CREDENTIALS, &reply, rng)?;
+                        return Ok(SharerEvent::NeedCredentials { viewer, message });
+                    }
                 }
-            },
+            }
         };
         let not_after = request.not_after;
         self.pending.push(Pending {
             viewer,
             body,
             not_after,
+            approved: false,
         });
         Ok(SharerEvent::Requested { viewer, binding })
     }
@@ -367,11 +527,22 @@ impl Sharer {
         if granted.confirmed {
             return Err(Error::Replay);
         }
-        if !bool::from(granted.confirm_viewer.ct_eq(&confirm)) {
+        if !bool::from(granted.confirm.expose().ct_eq(&confirm)) {
             return Err(Error::Authentication);
         }
         granted.confirmed = true;
         Ok(SharerEvent::Confirmed(viewer))
+    }
+
+    /// Lets the next [`Sharer::rekey`] grant this request.
+    pub fn approve(&mut self, viewer: &ViewerId) -> Result<(), Error> {
+        let pending = self
+            .pending
+            .iter_mut()
+            .find(|pending| pending.viewer == *viewer)
+            .ok_or(Error::UnknownViewer)?;
+        pending.approved = true;
+        Ok(())
     }
 
     /// Turns down a request or removes a viewer; the next [`Sharer::rekey`] locks it
@@ -383,34 +554,44 @@ impl Sharer {
         before != self.pending.len() + self.viewers.len()
     }
 
-    /// Starts the next epoch: a Rekey for every viewer, then a KeyGrant for every queued
-    /// request, each with the viewer it is for. Viewers whose confirmation is overdue
-    /// and expired requests are dropped first.
+    /// Starts the next epoch: a Rekey for every viewer, then a KeyGrant for every
+    /// approved request. Viewers whose confirmation is overdue and expired requests are
+    /// dropped first; unapproved requests wait. Refused within
+    /// [`MIN_EPOCH_INTERVAL_MS`] of the last rekey, unless the clock stepped back.
     pub fn rekey<R: TryCryptoRng + ?Sized>(
         &mut self,
         now: u64,
         rng: &mut R,
-    ) -> Result<Vec<(ViewerId, Vec<u8>)>, Error> {
-        if now < self.epoch_started.saturating_add(MIN_EPOCH_INTERVAL_MS) {
+    ) -> Result<Rekey, Error> {
+        if let Some(last) = self.last_rekey
+            && (last..last.saturating_add(MIN_EPOCH_INTERVAL_MS)).contains(&now)
+        {
             return Err(Error::TooSoon);
         }
-        let epoch = self.epoch.epoch().checked_add(1).ok_or(Error::Exhausted)?;
-        let key = EpochKey::random(epoch, rng)?;
+        let epoch = self.epoch.checked_add(1).ok_or(Error::Exhausted)?;
+        let key = Secret::random(rng)?;
         self.viewers
             .retain(|granted| granted.confirmed || granted.not_after >= now);
         self.pending.retain(|pending| pending.not_after >= now);
+        if self
+            .viewers
+            .iter()
+            .any(|granted| granted.counter == u64::MAX)
+        {
+            return Err(Error::Exhausted);
+        }
 
-        let mut grants = Vec::with_capacity(self.pending.len());
-        let mut granted = Vec::with_capacity(self.pending.len());
-        for pending in &self.pending {
-            let (message, viewer) = self.grant(pending, &key, rng)?;
+        let plaintext = encode_epoch_key(epoch, &key);
+        let mut grants = Vec::new();
+        let mut granted = Vec::new();
+        for pending in self.pending.iter().filter(|pending| pending.approved) {
+            let (message, viewer) = self.grant(pending, &plaintext, rng)?;
             grants.push((pending.viewer, message));
             granted.push(viewer);
         }
         let mut messages = Vec::with_capacity(self.viewers.len() + grants.len());
-        let plaintext = key.encode();
         for viewer in &mut self.viewers {
-            viewer.counter = viewer.counter.checked_add(1).ok_or(Error::Exhausted)?;
+            viewer.counter += 1;
             let header = rekey_header(&viewer.viewer, viewer.counter);
             let mut sealed = [0; SEALED_KEY_LEN];
             libcrux_chacha20poly1305::encrypt(
@@ -421,56 +602,61 @@ impl Sharer {
                 &channel_nonce(viewer.counter),
             )
             .expect("buffer sized for key and tag");
+            viewer.channel = ratchet(&viewer.channel);
             let body = [&header[..], &sealed].concat();
             messages.push((viewer.viewer, seal_message(&self.keys, REKEY, &body, rng)?));
         }
         messages.extend(grants);
-        self.pending.clear();
+        self.pending.retain(|pending| !pending.approved);
         self.viewers.extend(granted);
-        self.epoch = key;
-        self.epoch_started = now;
-        Ok(messages)
+        self.epoch = epoch;
+        self.last_rekey = Some(now);
+        Ok(Rekey {
+            key: SendKey { epoch, key },
+            messages,
+        })
     }
 
     fn grant<R: TryCryptoRng + ?Sized>(
         &self,
         pending: &Pending,
-        key: &EpochKey,
+        epoch_key: &[u8],
         rng: &mut R,
     ) -> Result<(Vec<u8>, Granted), Error> {
         let request = Request::decode(&pending.body)?;
         let sharer_nonce: [u8; 32] = random(rng)?;
+        let eseed = Zeroizing::new(random::<64, R>(rng)?);
         let transcript = transcript(&pending.body, &sharer_nonce);
-        let (enc, mut context) = hpke(rng)?
-            .setup_sender(
-                &HpkePublicKey::new(request.public_key.to_vec()),
-                &hpke_info(&transcript),
-                Some(self.keys.psk.expose()),
-                Some(&self.keys.psk_id()),
-                None,
-            )
-            .map_err(|_| Error::InvalidPublicKey)?;
+        let psk_id = self.keys.psk_id();
+        let (enc, mut context) = hpke_sender(
+            request.public_key,
+            &eseed,
+            &hpke_info(&transcript),
+            Some((self.keys.psk.expose(), &psk_id)),
+        )?;
         let sealed = context
-            .seal(&[], &key.encode())
+            .seal(&[], epoch_key)
             .map_err(|_| Error::Authentication)?;
-        let exports = Exports::new(&context, &transcript)?;
-        let body = [
-            &pending.viewer[..],
-            &sharer_nonce,
-            &enc,
-            &sealed,
-            &exports.confirm_sharer,
-        ]
-        .concat();
+        let body = [&pending.viewer[..], &sharer_nonce, &enc, &sealed].concat();
         let granted = Granted {
             viewer: pending.viewer,
-            channel: exports.channel,
+            channel: export(&context, "channel sharer->viewer")?,
             counter: 0,
-            confirm_viewer: exports.confirm_viewer,
+            confirm: export(&context, "confirm viewer->sharer")?,
             confirmed: false,
             not_after: pending.not_after,
         };
         Ok((seal_message(&self.keys, GRANT, &body, rng)?, granted))
+    }
+}
+
+impl fmt::Debug for Sharer {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Sharer")
+            .field("epoch", &self.epoch)
+            .field("pending", &self.pending.len())
+            .field("viewers", &self.viewers.len())
+            .finish_non_exhaustive()
     }
 }
 
@@ -481,45 +667,47 @@ impl Sharer {
 pub enum ViewerEvent {
     /// The first key; send `ack` to the sharer.
     Granted {
-        key: EpochKey,
+        key: ReceiveKey,
         ack: Vec<u8>,
     },
-    Rekeyed(EpochKey),
+    Rekeyed(ReceiveKey),
     /// The sharer lacks these credentials: join again with them inline.
     NeedCredentials(Vec<Fingerprint>),
 }
 
-/// One join: a fresh X-Wing key pair, used for this request only.
-pub struct Viewer {
+/// A join before its request is sealed: the identity layer signs
+/// [`JoinDraft::binding_digest`], which covers pk_v.
+pub struct JoinDraft {
     keys: LinkKeys,
     id: ViewerId,
-    request: Vec<u8>,
+    nonce: [u8; 32],
     not_after: u64,
     kem_seed: Secret,
-    hpke: Hpke<HpkeLibcrux>,
-    channel: Option<(Secret, u64)>,
-    epoch: u32,
+    public_key: Vec<u8>,
 }
 
-impl Viewer {
-    /// Returns the viewer and its KeyRequest, valid for [`REQUEST_LIFETIME_MS`].
-    pub fn join<R: TryCryptoRng + ?Sized>(
-        keys: LinkKeys,
+impl JoinDraft {
+    pub fn binding_digest(&self) -> [u8; 32] {
+        binding_digest(
+            &self.keys,
+            &self.id,
+            &self.nonce,
+            self.not_after,
+            &self.public_key,
+        )
+    }
+
+    /// Seals the KeyRequest, valid for [`REQUEST_LIFETIME_MS`].
+    pub fn finish<R: TryCryptoRng + ?Sized>(
+        self,
         binding: Option<&Binding>,
-        now: u64,
         rng: &mut R,
-    ) -> Result<(Self, Vec<u8>), Error> {
-        let id: ViewerId = random(rng)?;
-        let nonce: [u8; 32] = random(rng)?;
-        let kem_seed = Secret::random(rng)?;
-        let (_, public_key) = libcrux_kem::key_gen_derand(XWingKemDraft06, kem_seed.expose())
-            .map_err(|_| Error::Randomness)?;
-        let not_after = now.saturating_add(REQUEST_LIFETIME_MS);
+    ) -> Result<(Viewer, Vec<u8>), Error> {
         let mut request = [
-            &id[..],
-            &nonce,
-            &not_after.to_be_bytes(),
-            &public_key.encode(),
+            &self.id[..],
+            &self.nonce,
+            &self.not_after.to_be_bytes(),
+            &self.public_key,
         ]
         .concat();
         let mut encoded_binding = Vec::new();
@@ -527,18 +715,69 @@ impl Viewer {
             binding.encode(&mut encoded_binding)?;
         }
         put_opaque16(&mut request, &encoded_binding)?;
-        let message = seal_message(&keys, REQUEST, &request, rng)?;
-        let viewer = Self {
-            hpke: hpke(rng)?,
-            keys,
-            id,
-            request,
-            not_after,
-            kem_seed,
-            channel: None,
-            epoch: 0,
+        let message = seal_message(&self.keys, REQUEST, &request, rng)?;
+        let named = binding.map(|b| b.fingerprints.clone()).unwrap_or_default();
+        let viewer = Viewer {
+            keys: self.keys,
+            id: self.id,
+            state: State::Joining {
+                request,
+                not_after: self.not_after,
+                kem_seed: self.kem_seed,
+                named,
+            },
         };
         Ok((viewer, message))
+    }
+}
+
+enum State {
+    Joining {
+        request: Vec<u8>,
+        not_after: u64,
+        kem_seed: Secret,
+        named: Vec<Fingerprint>,
+    },
+    /// Holds the key for Rekey number `counter + 1`, and nothing that opens the grant.
+    Granted {
+        channel: Secret,
+        counter: u64,
+        epoch: u32,
+    },
+    /// The sharer asked for credentials; this join is over.
+    Refused,
+}
+
+/// One join: a fresh X-Wing key pair, used for this request only.
+pub struct Viewer {
+    keys: LinkKeys,
+    id: ViewerId,
+    state: State,
+}
+
+impl Viewer {
+    /// Draws the viewer id, nonce and X-Wing key pair.
+    pub fn prepare<R: TryCryptoRng + ?Sized>(
+        keys: LinkKeys,
+        now: u64,
+        rng: &mut R,
+    ) -> Result<JoinDraft, Error> {
+        let id = random(rng)?;
+        let nonce = random(rng)?;
+        let kem_seed = Secret::random(rng)?;
+        let (private, public) = libcrux_kem::key_gen_derand(XWingKemDraft06, kem_seed.expose())
+            .map_err(|_| Error::Randomness)?;
+        if let libcrux_kem::PrivateKey::XWingKemDraft06(mut private) = private {
+            private.seed.zeroize();
+        }
+        Ok(JoinDraft {
+            keys,
+            id,
+            nonce,
+            not_after: now.saturating_add(REQUEST_LIFETIME_MS),
+            kem_seed,
+            public_key: public.encode(),
+        })
     }
 
     pub fn id(&self) -> ViewerId {
@@ -558,18 +797,23 @@ impl Viewer {
         if reader.array::<16>()? != self.id {
             return Err(Error::UnknownViewer);
         }
-        match (kind, self.channel.is_some()) {
-            (GRANT, false) => self.grant(reader, now, rng),
-            (REKEY, true) => self.rekey(reader),
-            (NEED_CREDENTIALS, false) => {
+        match (kind, &self.state) {
+            (GRANT, State::Joining { .. }) => self.grant(reader, now, rng),
+            (REKEY, State::Granted { .. }) => self.rekey(reader),
+            (NEED_CREDENTIALS, State::Joining { named, .. }) => {
                 let count = usize::from(reader.u8()?);
-                if count == 0 || count > Binding::MAX_CREDENTIALS {
-                    return Err(Error::Malformed("credential count"));
-                }
-                let missing = (0..count)
+                let missing: Vec<Fingerprint> = (0..count)
                     .map(|_| reader.array())
                     .collect::<Result<_, _>>()?;
                 reader.finish()?;
+                let named_once = missing
+                    .iter()
+                    .enumerate()
+                    .all(|(i, f)| named.contains(f) && !missing[..i].contains(f));
+                if missing.is_empty() || !named_once {
+                    return Err(Error::Unexpected);
+                }
+                self.state = State::Refused;
                 Ok(ViewerEvent::NeedCredentials(missing))
             }
             _ => Err(Error::Unexpected),
@@ -582,85 +826,153 @@ impl Viewer {
         now: u64,
         rng: &mut R,
     ) -> Result<ViewerEvent, Error> {
+        let State::Joining {
+            request,
+            not_after,
+            kem_seed,
+            ..
+        } = &self.state
+        else {
+            return Err(Error::Unexpected);
+        };
         let sharer_nonce = reader.array()?;
         let enc = reader.take(ENC_LEN)?;
         let sealed = reader.take(SEALED_KEY_LEN)?;
-        let confirm: [u8; 32] = reader.array()?;
         reader.finish()?;
-        if now > self.not_after {
+        if now > *not_after {
             return Err(Error::Expired);
         }
-        let transcript = transcript(&self.request, &sharer_nonce);
-        let mut context = self
-            .hpke
-            .setup_receiver(
-                enc,
-                &HpkePrivateKey::new(self.kem_seed.expose().to_vec()),
-                &hpke_info(&transcript),
-                Some(self.keys.psk.expose()),
-                Some(&self.keys.psk_id()),
-                None,
-            )
-            .map_err(|_| Error::Authentication)?;
+        let transcript = transcript(request, &sharer_nonce);
+        let psk_id = self.keys.psk_id();
+        let mut context = hpke_receiver(
+            kem_seed.expose(),
+            enc,
+            &hpke_info(&transcript),
+            Some((self.keys.psk.expose(), &psk_id)),
+        )?;
         let plaintext = Zeroizing::new(
             context
                 .open(&[], sealed)
                 .map_err(|_| Error::Authentication)?,
         );
-        let exports = Exports::new(&context, &transcript)?;
-        if !bool::from(exports.confirm_sharer.ct_eq(&confirm)) {
-            return Err(Error::Authentication);
-        }
-        let key = EpochKey::decode(&plaintext)?;
-        let ack = [&self.id[..], &exports.confirm_viewer].concat();
+        let key = decode_epoch_key(&plaintext)?;
+        let confirm = export(&context, "confirm viewer->sharer")?;
+        let ack = [&self.id[..], confirm.expose()].concat();
         let ack = seal_message(&self.keys, ACK, &ack, rng)?;
-        self.channel = Some((exports.channel, 0));
-        self.epoch = key.epoch();
+        self.state = State::Granted {
+            channel: export(&context, "channel sharer->viewer")?,
+            counter: 0,
+            epoch: key.epoch,
+        };
         Ok(ViewerEvent::Granted { key, ack })
     }
 
     fn rekey(&mut self, mut reader: Reader<'_>) -> Result<ViewerEvent, Error> {
+        let State::Granted {
+            channel,
+            counter: last,
+            epoch,
+        } = &mut self.state
+        else {
+            return Err(Error::Unexpected);
+        };
         let counter = reader.u64()?;
         let sealed = reader.take(SEALED_KEY_LEN)?;
         reader.finish()?;
-        let (channel, last) = self.channel.as_mut().expect("checked by receive");
         if counter <= *last {
             return Err(Error::Replay);
         }
-        let mut plaintext = Zeroizing::new(vec![0; EpochKey::LEN]);
+        if counter - *last - 1 > MAX_MISSED_REKEYS {
+            return Err(Error::LimitReached);
+        }
+        let mut skipped = None;
+        for _ in *last + 1..counter {
+            skipped = Some(ratchet(skipped.as_ref().unwrap_or(channel)));
+        }
+        let key = skipped.as_ref().unwrap_or(channel);
+        let mut plaintext = Zeroizing::new(vec![0; EPOCH_KEY_LEN]);
         libcrux_chacha20poly1305::decrypt(
-            channel.expose(),
+            key.expose(),
             &mut plaintext,
             sealed,
             &rekey_header(&self.id, counter),
             &channel_nonce(counter),
         )
         .map_err(|_| Error::Authentication)?;
-        let key = EpochKey::decode(&plaintext)?;
-        if key.epoch() <= self.epoch {
+        let received = decode_epoch_key(&plaintext)?;
+        if received.epoch <= *epoch {
             return Err(Error::StaleEpoch);
         }
+        let next = ratchet(key);
+        *channel = next;
         *last = counter;
-        self.epoch = key.epoch();
-        Ok(ViewerEvent::Rekeyed(key))
+        *epoch = received.epoch;
+        Ok(ViewerEvent::Rekeyed(received))
     }
 }
 
-impl std::fmt::Debug for Viewer {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Debug for Viewer {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Viewer")
             .field("id", &self.id)
-            .field("epoch", &self.epoch)
             .finish_non_exhaustive()
     }
 }
 
-impl std::fmt::Debug for Sharer {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Sharer")
-            .field("epoch", &self.epoch.epoch())
-            .field("pending", &self.pending.len())
-            .field("viewers", &self.viewers.len())
-            .finish_non_exhaustive()
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tests::{T0, join, link, rng, sharer};
+
+    #[test]
+    fn epochs_and_counters_are_bounded() {
+        let link = link(40);
+        let mut sharer = sharer(&link);
+        sharer.epoch = u32::MAX;
+        assert_eq!(sharer.rekey(T0, &mut rng(1)).err(), Some(Error::Exhausted));
+
+        let mut sharer = self::sharer(&link);
+        join(&link, &mut sharer, T0, 41);
+        sharer.viewers[0].counter = u64::MAX;
+        assert_eq!(
+            sharer.rekey(T0 + 1000, &mut rng(2)).err(),
+            Some(Error::Exhausted)
+        );
+    }
+
+    /// L2: after a Rekey both sides hold only the next channel key, which opens no
+    /// earlier Rekey, and the viewer keeps nothing that opens its grant.
+    #[test]
+    fn channel_keys_ratchet_forward() {
+        let link = link(42);
+        let keys = link.keys();
+        let mut sharer = sharer(&link);
+        let (mut viewer, _, _) = join(&link, &mut sharer, T0, 43);
+        let mut rng = rng(44);
+        let mut sealed = Vec::new();
+        for now in [T0 + 1000, T0 + 2000] {
+            let message = sharer.rekey(now, &mut rng).unwrap().messages.remove(0).1;
+            assert!(viewer.receive(&message, now, &mut rng).is_ok());
+            let (_, body) = open_message(&keys, &message).unwrap();
+            sealed.push((
+                u64::from_be_bytes(body[16..24].try_into().unwrap()),
+                body[24..].to_vec(),
+            ));
+        }
+        let State::Granted { channel, .. } = &viewer.state else {
+            panic!("granted");
+        };
+        assert_eq!(channel.expose(), sharer.viewers[0].channel.expose());
+        for (counter, sealed) in &sealed {
+            let mut plaintext = [0; EPOCH_KEY_LEN];
+            let opened = libcrux_chacha20poly1305::decrypt(
+                channel.expose(),
+                &mut plaintext,
+                sealed,
+                &rekey_header(&viewer.id, *counter),
+                &channel_nonce(*counter),
+            );
+            assert!(opened.is_err(), "counter {counter}");
+        }
     }
 }

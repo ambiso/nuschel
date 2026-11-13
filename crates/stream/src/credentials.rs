@@ -75,6 +75,9 @@ impl Binding {
 /// layer to verify.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct VerifiableBinding {
+    /// What `call_binding` must sign: this request's [`crate::JoinDraft::binding_digest`],
+    /// computed by the sharer from the request it received.
+    pub digest: [u8; 32],
     pub call_binding: Vec<u8>,
     pub credentials: Vec<Vec<u8>>,
 }
@@ -140,6 +143,7 @@ impl CredentialCache {
     pub(crate) fn resolve(
         &mut self,
         binding: &Binding,
+        digest: [u8; 32],
     ) -> Result<Result<VerifiableBinding, Vec<Fingerprint>>, Error> {
         let inline: Vec<(Fingerprint, &Vec<u8>)> = binding
             .inline
@@ -173,6 +177,7 @@ impl CredentialCache {
         }
         Ok(if missing.is_empty() {
             Ok(VerifiableBinding {
+                digest,
                 call_binding: binding.call_binding.clone(),
                 credentials,
             })
