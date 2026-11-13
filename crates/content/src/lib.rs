@@ -907,6 +907,13 @@ mod tests {
                         .iter()
                         .all(|run| run.foreground == rendered[0].foreground)
                 );
+            } else {
+                assert!(
+                    rendered
+                        .iter()
+                        .any(|run| run.foreground != rendered[0].foreground),
+                    "Nix token case must retain syntax styles"
+                );
             }
         }
         assert!(matches!(
