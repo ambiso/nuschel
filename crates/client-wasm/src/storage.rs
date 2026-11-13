@@ -50,6 +50,11 @@ struct Context {
     generation: u64,
     identity: String,
 }
+/// Source facts captured at admission, never selected by a storage reply.
+pub(crate) struct SourceProvenance {
+    pub(crate) mode: SourceMode,
+    pub(crate) channel_instance: Option<u64>,
+}
 enum Pending {
     Append {
         context: Context,
@@ -120,8 +125,10 @@ impl Storage {
             target,
             peer,
             message,
-            SourceMode::Marked,
-            None,
+            SourceProvenance {
+                mode: SourceMode::Marked,
+                channel_instance: None,
+            },
         )
     }
     pub fn append_raw(
@@ -131,9 +138,12 @@ impl Storage {
         target: TextTarget,
         peer: Option<User>,
         message: IncomingMessage,
-        mode: SourceMode,
-        channel_instance: Option<u64>,
+        provenance: SourceProvenance,
     ) -> Result<(), String> {
+        let SourceProvenance {
+            mode,
+            channel_instance,
+        } = provenance;
         let charge = message
             .message
             .body

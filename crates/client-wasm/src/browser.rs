@@ -12,7 +12,7 @@ use crate::{
     image::{Destination, Images},
     session::{Event, Login, Session},
     snapshot,
-    storage::{RawCompletion, Storage, pending_document},
+    storage::{RawCompletion, SourceProvenance, Storage, pending_document},
     voice::{self, Route},
 };
 use nuschl_client::{
@@ -268,8 +268,10 @@ impl Shared {
                         target.clone(),
                         peer.clone(),
                         message.clone(),
-                        mode,
-                        channel_instance,
+                        SourceProvenance {
+                            mode,
+                            channel_instance,
+                        },
                     ) {
                         inputs.push_back(Input::HistoryError(reason));
                         self.deliveries.borrow_mut().push_back(RawCompletion {
@@ -314,10 +316,8 @@ impl Shared {
         if changed {
             self.wake();
         }
-        if audio_changed {
-            if let Some(callback) = self.audio_wake.borrow().as_ref() {
-                let _ = callback.call0(&JsValue::NULL);
-            }
+        if audio_changed && let Some(callback) = self.audio_wake.borrow().as_ref() {
+            let _ = callback.call0(&JsValue::NULL);
         }
         failure.map_or(Ok(()), |reason| Err(reason.into()))
     }
@@ -824,12 +824,11 @@ impl WebClient {
 
     /// Stop media while retaining the connection and channel presence for chat.
     pub fn stop_audio(&mut self) {
-        if let Some(view) = self.shared.voice.borrow().view() {
-            if let Some(index) = self.client.server_index(&view.server_id) {
-                if !self.client.servers[index].deafened {
-                    self.client.set_mute(index, true);
-                }
-            }
+        if let Some(view) = self.shared.voice.borrow().view()
+            && let Some(index) = self.client.server_index(&view.server_id)
+            && !self.client.servers[index].deafened
+        {
+            self.client.set_mute(index, true);
         }
         self.shared.voice.borrow_mut().clear();
         self.shared.voice_packets.borrow_mut().clear();
@@ -1069,24 +1068,21 @@ impl WebClient {
                 generation,
                 revision,
             } = &failure.origin
+                && let Some(source) = content_source(&self.client, &self.shared, &failure.origin)
+                && self
+                    .shared
+                    .welcomes
+                    .borrow_mut()
+                    .fail(server, *generation, revision, &source)
             {
-                if let Some(source) = content_source(&self.client, &self.shared, &failure.origin)
-                    && self.shared.welcomes.borrow_mut().fail(
-                        server,
-                        *generation,
-                        revision,
-                        &source,
-                    )
-                {
-                    self.shared.inputs.borrow_mut().push_back(Input::Server {
-                        server: server.clone(),
-                        generation: *generation,
-                        event: nuschl_client::input::ServerEvent::Welcome {
-                            source,
-                            document: pending_document(),
-                        },
-                    });
-                }
+                self.shared.inputs.borrow_mut().push_back(Input::Server {
+                    server: server.clone(),
+                    generation: *generation,
+                    event: nuschl_client::input::ServerEvent::Welcome {
+                        source,
+                        document: pending_document(),
+                    },
+                });
             }
         }
         if changed {
@@ -1224,35 +1220,34 @@ impl WebClient {
         if let Some(view) = &mut view {
             view.content_context = context;
         }
-        if let Some(view) = &mut view {
-            if let Some(server) = self
+        if let Some(view) = &mut view
+            && let Some(server) = self
                 .client
                 .servers
                 .iter()
                 .find(|server| server.id == view.server)
-                && let Some(channel) = server
-                    .channels
-                    .iter()
-                    .find(|channel| channel.id == view.channel)
-            {
-                for message in &mut view.messages {
-                    let origin = Origin::Message {
-                        server: server.id.clone(),
-                        generation: server.generation,
-                        channel: channel.id,
-                        instance: channel.instance,
-                        serial: message.serial.parse().unwrap_or(u64::MAX),
-                        revision: message.revision,
-                    };
-                    let jobs = self.shared.jobs.borrow();
-                    message.content_token = jobs.token(&origin).map(str::to_owned);
-                    message.content_failed = jobs.is_failed(&origin);
-                    if message.content_failed
-                        && crate::content_jobs::is_terminal_document(&message.document)
-                    {
-                        message.content_token = None;
-                        message.content_failed = false;
-                    }
+            && let Some(channel) = server
+                .channels
+                .iter()
+                .find(|channel| channel.id == view.channel)
+        {
+            for message in &mut view.messages {
+                let origin = Origin::Message {
+                    server: server.id.clone(),
+                    generation: server.generation,
+                    channel: channel.id,
+                    instance: channel.instance,
+                    serial: message.serial.parse().unwrap_or(u64::MAX),
+                    revision: message.revision,
+                };
+                let jobs = self.shared.jobs.borrow();
+                message.content_token = jobs.token(&origin).map(str::to_owned);
+                message.content_failed = jobs.is_failed(&origin);
+                if message.content_failed
+                    && crate::content_jobs::is_terminal_document(&message.document)
+                {
+                    message.content_token = None;
+                    message.content_failed = false;
                 }
             }
         }
@@ -1385,14 +1380,15 @@ impl WebClient {
         }
         if let (Some(previous), Some(current)) =
             (previous_lifetime, selected_lifetime(&self.client))
+            && previous.0 == current.0
+            && previous.2 == current.2
+            && previous != current
         {
-            if previous.0 == current.0 && previous.2 == current.2 && previous != current {
-                // Initial cached/offline channels and reconnects get a NEW
-                // storage request/ticket once the real wire lifetime is known.
-                // Never retarget an old reply or its already-posted render.
-                if let Err(error) = self.client.load_history(None) {
-                    self.client.handle(Input::HistoryError(error));
-                }
+            // Initial cached/offline channels and reconnects get a NEW
+            // storage request/ticket once the real wire lifetime is known.
+            // Never retarget an old reply or its already-posted render.
+            if let Err(error) = self.client.load_history(None) {
+                self.client.handle(Input::HistoryError(error));
             }
         }
         loop {
@@ -1420,15 +1416,14 @@ impl WebClient {
             self.recover_selected_content();
         }
         self.reconcile_voice();
-        if self.client.navigation.selection().is_none() {
-            if let Some(index) = self
+        if self.client.navigation.selection().is_none()
+            && let Some(index) = self
                 .client
                 .servers
                 .iter()
                 .position(|server| server.status == nuschl_client::server::Status::Connected)
-            {
-                let _ = self.client.open(index, 0);
-            }
+        {
+            let _ = self.client.open(index, 0);
         }
         let updates: Vec<snapshot::UpdateView> = self
             .client
@@ -1638,8 +1633,8 @@ impl WebClient {
                     peer,
                     message,
                 } => {
-                    if let TextTarget::Channel(id) = &target {
-                        if delivery.channel_instance.is_some_and(|instance| {
+                    if let TextTarget::Channel(id) = &target
+                        && delivery.channel_instance.is_some_and(|instance| {
                             self.client
                                 .servers
                                 .iter()
@@ -1648,9 +1643,9 @@ impl WebClient {
                                     state.channels.iter().find(|channel| channel.id == *id)
                                 })
                                 .is_none_or(|channel| channel.instance != instance)
-                        }) {
-                            continue;
-                        }
+                        })
+                    {
+                        continue;
                     }
                     let source = message.message.body.clone();
                     if let Some(receipt) = self.client.receive_message(

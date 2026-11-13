@@ -682,11 +682,10 @@ impl Jobs {
             .handles
             .iter_mut()
             .find_map(|(stored, handle)| stored.same_row(origin).then_some(handle))
+            && let Some(next) = self.next.checked_add(1)
         {
-            if let Some(next) = self.next.checked_add(1) {
-                self.next = next;
-                handle.used = next;
-            }
+            self.next = next;
+            handle.used = next;
         }
     }
 

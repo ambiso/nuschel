@@ -227,6 +227,60 @@ mod tests {
     }
 
     #[test]
+    fn failure_only_republishes_the_exact_undismissed_source() {
+        let mut cache = Welcomes::default();
+        let source = "<b>current welcome</b>";
+        cache.begin("one", 7, source);
+        let token = cache
+            .view("one", 7, Some(source), true)
+            .unwrap()
+            .token
+            .clone();
+        assert!(cache.complete("one", 7, &token, source, "rendered".into()));
+        assert!(cache.take_view("one", 7, Some(source), true).is_some());
+        let before = serde_json::to_value(cache.view("one", 7, Some(source), true)).unwrap();
+        for (id, generation, revision, body) in [
+            ("other", 7, token.as_str(), source),
+            ("one", 6, token.as_str(), source),
+            ("one", 7, "obsolete", source),
+            ("one", 7, token.as_str(), "replaced source"),
+        ] {
+            assert!(!cache.fail(id, generation, revision, body));
+            assert_eq!(
+                serde_json::to_value(cache.view("one", 7, Some(source), true)).unwrap(),
+                before
+            );
+            assert!(cache.take_view("one", 7, Some(source), true).is_none());
+        }
+        assert!(cache.fail("one", 7, &token, source));
+        let failed = cache.take_view("one", 7, Some(source), true).unwrap();
+        assert_eq!(failed.token, token);
+        assert!(failed.content_token.is_none());
+        assert_eq!(
+            serde_json::to_value(failed.document).unwrap(),
+            serde_json::json!({"blocks": [{"kind": "text", "text":
+                "[Server welcome unavailable. Reload to try again.]"}]})
+        );
+        assert!(cache.take_view("one", 7, Some(source), true).is_none());
+        assert!(cache.dismiss("one", 7, Some(source), &token));
+        assert!(!cache.fail("one", 7, &token, source));
+        assert!(cache.view("one", 7, Some(source), true).is_none());
+        assert!(cache.take_view("one", 7, Some(source), true).is_none());
+        cache.begin("one", 8, source);
+        let replacement = cache
+            .view("one", 8, Some(source), true)
+            .unwrap()
+            .token
+            .clone();
+        assert_ne!(replacement, token);
+        assert!(!cache.fail("one", 7, &token, source));
+        assert_eq!(
+            cache.view("one", 8, Some(source), true).unwrap().token,
+            replacement
+        );
+    }
+
+    #[test]
     fn aggregate_and_rendered_expansion_stay_bounded() {
         let mut cache = Welcomes::default();
         for i in 0..40 {
