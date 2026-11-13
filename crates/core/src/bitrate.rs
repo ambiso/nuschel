@@ -172,7 +172,7 @@ pub fn kbps(bits: u32) -> String {
 }
 
 fn kbps_number(bits: u32) -> String {
-    if bits % 1000 == 0 {
+    if bits.is_multiple_of(1000) {
         (bits / 1000).to_string()
     } else {
         format!("{:.1}", f64::from(bits) / 1000.)

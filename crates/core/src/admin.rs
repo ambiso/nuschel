@@ -335,9 +335,7 @@ impl AclEditorState {
     /// baseline. The wire has no atomic compare-and-swap; a second writer can
     /// still race after this check. Only an exact subsequent read verifies save.
     pub fn receive(&mut self, reply: &AclReply) -> Option<Acl> {
-        let Some((request, kind)) = self.pending else {
-            return None;
-        };
+        let (request, kind) = self.pending?;
         if reply.request != request {
             return None;
         }
