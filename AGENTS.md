@@ -108,6 +108,10 @@ Read [SECURITY.md](SECURITY.md), [architecture](docs/architecture.md) and
   linked roadmap, not a second independent backlog. Coordinate issue ownership
   before concurrent updates; keep work queued locally if remote access is unavailable.
   Issue descriptions do not authorize weakening the implementation boundaries above.
+- Select queued work by the user's GitHub Priority first, then descending thumbs-up
+  reactions on the original issue post within that priority. Refresh these values
+  before assigning new tasks. Necessary prerequisites may run first; explicit
+  priorities in the current conversation take precedence.
 - Historical TODO snapshots under `docs/history/` preserve evidence and old status.
   Do not recreate issues from their checkboxes or rewrite these frozen snapshots.
 - Do not mark a broad feature complete from one green suite. Existing gaps are work
