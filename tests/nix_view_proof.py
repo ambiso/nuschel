@@ -473,6 +473,14 @@ def start_system_bus(ctx):
     return process, directory
 
 
+def gdbus_uint32(reply):
+    """The value of a one-uint32 gdbus reply, printed as "(uint32 1234,)"."""
+    match = re.fullmatch(r"\(uint32 (\d+),\)", reply.strip())
+    if not match:
+        raise ValueError(f"unexpected gdbus reply: {reply!r}")
+    return int(match.group(1))
+
+
 def verify_private_compositor(shell, app, root):
     """Before any clipboard access: the Shell.Eval target, its bus and its
     display are the ones this scenario started. `root` is the dbus-run-session
@@ -489,7 +497,7 @@ def verify_private_compositor(shell, app, root):
                                     "/org/freedesktop/DBus", "--method",
                                     "org.freedesktop.DBus.GetConnectionUnixProcessID", name],
                                    env=env, capture_output=True, text=True, timeout=10, check=True).stdout
-            return int(re.search(r"(\d+)", reply).group(1))
+            return gdbus_uint32(reply)
         table = proc_table()
 
         def lineage(pid):
@@ -505,6 +513,7 @@ def verify_private_compositor(shell, app, root):
         runtime = shell.runtime.resolve()
         display = runtime / shell.DISPLAY
         bus_pid, shell_pid = owner("org.freedesktop.DBus"), owner("org.gnome.Shell")
+        record |= {"bus_daemon_pid": bus_pid, "compositor_pid": shell_pid}
         window_pid = int(shell.eval("(global.get_window_actors().map(a => a.meta_window)"
                                     ".find(w => (w.get_title() || '').startsWith('Nuschl')) || {get_pid: () => -1})"
                                     ".get_pid().toString()"))
@@ -515,7 +524,7 @@ def verify_private_compositor(shell, app, root):
             "compositor": {"pid": shell_pid, "lineage": lineage(shell_pid), "descends_from_root": descends(shell_pid),
                            "cmdline": [part.decode(errors="replace") for part in cmdline if part]},
             "display": {"socket": str(display), "is_socket": display.is_socket(),
-                        "owner_is_us": display.stat().st_uid == os.getuid(),
+                        "owner_is_us": display.exists() and display.stat().st_uid == os.getuid(),
                         "under_owned_wl": runtime.is_relative_to(wl)},
             "desktop": {"pid": app.pid, "window_pid": window_pid}}
         arguments = record["compositor"]["cmdline"]
@@ -1574,6 +1583,13 @@ def selftest():
     assert os.read(read_end, 100) == b"\x1b[?1;2c\x1b[0n\x1b[1;1R", answered
     os.close(read_end)
     assert len(answered) == 3
+    assert gdbus_uint32("(uint32 843120,)\n") == 843120
+    for reply in ("(int32 5,)", "(uint32 1, uint32 2)", ""):
+        try:
+            gdbus_uint32(reply)
+        except ValueError:
+            continue
+        raise AssertionError(reply)
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
         (root / "a.txt").write_text("a")
