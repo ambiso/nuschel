@@ -48,6 +48,14 @@ the long channel name's tooltip, from a crop of the screenshot.
 The fixture seeds channels in a stopped stock server database; the real server handles
 all protocol traffic.
 
+`native_scrollbars.py` accepts the same arguments as `acl_editor.py`. It uses
+that fixture's fresh profile, private GNOME compositor and loopback stock
+Murmur, seeds long rule/group lists through the protocol, and checks painted
+thumbs plus real wheel/drag/keyboard/pointer behavior at 100/125/150/200% zoom.
+It also exercises the shared Settings/font-list path. Pixel and geometry JSON
+is scoped to the actual tested Linux artifact; it does not prove physical
+platform or precise-touchpad behavior. No host clipboard or devices are used.
+
 ## Suites in the VM run
 
 | Script | What it proves |

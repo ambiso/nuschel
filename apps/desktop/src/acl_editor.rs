@@ -425,7 +425,17 @@ fn inspect_list(
         Inspect::Members(1) => "acl-inspect-exclusions",
         Inspect::Members(_) => "acl-inspect-inherited",
     };
-    let list = crate::dialogs::nested_virtual_list(id, token, &scroll, list, cx);
+    let list = crate::dialogs::nested_virtual_list(
+        id,
+        token,
+        &scroll,
+        list,
+        move |this| {
+            matches!(this.panel.as_ref(), Some(Panel::Acl { editor, .. })
+            if editor.token == token && editor.stale)
+        },
+        cx,
+    );
     let focus_on_key = focus.clone();
     layout::focusable_with_handle(
         SharedString::from(format!("acl-inspect-focus-{token}-{key}")),
@@ -450,6 +460,7 @@ fn inspect_list(
                         window.focus(&focus_on_key, cx);
                         inspect_select(editor, kind, next, id);
                         scroll.scroll_to_item(next, ScrollStrategy::Nearest);
+                        this.cancel_modal_scroll();
                         cx.stop_propagation();
                         cx.notify();
                     }
@@ -1222,7 +1233,17 @@ pub fn render(view: &ServerView, editor: &Editor, cx: &mut Context<Desktop>) -> 
     .track_scroll(&scroll)
     .h(px(ROW_HEIGHT * count.clamp(1, 6) as f32))
     .w_full();
-    let rules = crate::dialogs::nested_virtual_list("acl-rules", token, &scroll, rules, cx);
+    let rules = crate::dialogs::nested_virtual_list(
+        "acl-rules",
+        token,
+        &scroll,
+        rules,
+        move |this| {
+            matches!(this.panel.as_ref(), Some(Panel::Acl { editor, .. })
+            if editor.token == token && !editor.stale)
+        },
+        cx,
+    );
     body = body
         .child(note(
             "acl-rule-title",
@@ -1248,6 +1269,7 @@ pub fn render(view: &ServerView, editor: &Editor, cx: &mut Context<Desktop>) -> 
                     if let Some(next) = list_key(event, current, count) {
                         window.focus(&editor.rule_focus, cx);
                         selected_rule(this, token, next, window, cx);
+                        this.cancel_modal_scroll();
                         cx.stop_propagation();
                         cx.notify();
                     }
@@ -1725,8 +1747,17 @@ fn groups(view: &ServerView, editor: &Editor, cx: &mut Context<Desktop>) -> AnyE
     .track_scroll(&editor.group_scroll)
     .h(px(ROW_HEIGHT * count.clamp(1, 5) as f32))
     .w_full();
-    let list =
-        crate::dialogs::nested_virtual_list("acl-groups", token, &editor.group_scroll, list, cx);
+    let list = crate::dialogs::nested_virtual_list(
+        "acl-groups",
+        token,
+        &editor.group_scroll,
+        list,
+        move |this| {
+            matches!(this.panel.as_ref(), Some(Panel::Acl { editor, .. })
+                if editor.token == token && !editor.stale)
+        },
+        cx,
+    );
     let mut body = div()
         .min_w_0()
         .flex()
@@ -1750,6 +1781,7 @@ fn groups(view: &ServerView, editor: &Editor, cx: &mut Context<Desktop>) -> AnyE
                     if let Some(next) = list_key(event, current, count) {
                         window.focus(&editor.group_focus, cx);
                         select_group(this, token, next);
+                        this.cancel_modal_scroll();
                         cx.stop_propagation();
                         cx.notify();
                     }
@@ -1978,8 +2010,17 @@ fn member_list(
         1 => "acl-exclusions",
         _ => "acl-inherited",
     };
-    let list =
-        crate::dialogs::nested_virtual_list(id, token, &editor.member_scroll[kind], list, cx);
+    let list = crate::dialogs::nested_virtual_list(
+        id,
+        token,
+        &editor.member_scroll[kind],
+        list,
+        move |this| {
+            matches!(this.panel.as_ref(), Some(Panel::Acl { editor, .. })
+                if editor.token == token && !editor.stale && editor.selected_group == Some(group_key))
+        },
+        cx,
+    );
     let label = match kind {
         0 => "Local group members",
         1 => "Local group exclusions",
@@ -2023,6 +2064,7 @@ fn member_list(
                     window.focus(&editor.member_focus[kind], cx);
                     editor.member_selected[kind] = Some((next, members[next]));
                     editor.member_scroll[kind].scroll_to_item(next, ScrollStrategy::Nearest);
+                    this.cancel_modal_scroll();
                     cx.stop_propagation();
                     cx.notify();
                 } else if matches!(event.keystroke.key.as_str(), "enter" | "space") {

@@ -381,6 +381,7 @@ pub fn nested_virtual_list(
     version: u64,
     scroll: &UniformListScrollHandle,
     list: UniformList,
+    is_current: impl Fn(&Desktop) -> bool + 'static,
     cx: &mut Context<Desktop>,
 ) -> Stateful<Div> {
     let handle = scroll.0.borrow().base_handle.clone();
@@ -397,6 +398,9 @@ pub fn nested_virtual_list(
     }))
     .child(crate::layout::capture_scroll(cx.listener(
         move |this, event, window, cx| {
+            if !is_current(this) {
+                return;
+            }
             this.nested.register(id, version, handle.clone());
             this.scroll_modal(Some(id), event, window, cx)
         },

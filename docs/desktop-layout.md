@@ -45,6 +45,30 @@ child's target before passing it to the enclosing dialog. This does not continua
 while someone intentionally reads another part of the text. Modal dialogs use
 the same keyboard/focus contract with their existing smooth-scroll handle.
 
+Native scroll panels share `layout::scrollbar` and its twelve-logical-pixel
+content gutter. The native track stays visible while that axis overflows and
+is absent for short content. It uses the retained handle's viewport, so an
+ordinary panel can append it after its content without scrolling the track
+away or changing the unread sentinel/item indexes. Virtual lists use the same
+bar in `scroll_frame`; rows remain virtualized and keep their navigation handles.
+The rail keeps its original 72-pixel tile/decoration lane beside the gutter.
+
+Modal and nested settings panels, ACL rule/group/member and stale-draft lists,
+server/channel/chat panes, context menus, search, the quick switcher and emoji
+picker use this pattern. Nested virtual lists join the existing latched wheel
+routing through a capture-phase listener with normal occlusion. One wheel run
+moves one container, including at an edge. A thumb grab cancels easing before
+its first offset change; replacing an editor generation cannot transfer an old
+animation to the new handle. Keyboard/focus reveal and input editing retain
+their existing handlers. No continuous timer or full-content measurement is
+added by these helpers.
+
+`tests/native_scrollbars.py` accepts the ACL fixture's arguments and exercises
+actual painted thumbs, wheel routing, thumb dragging, row clicks, text input and
+focus reveal at 100/125/150/200% zoom under an owned private GNOME compositor and
+loopback Murmur. Its screenshots and JSON record the exercised artifact; it is
+not physical Windows/macOS or touchpad proof.
+
 GPUI dispatches focus listeners during its focus draw phase, where an immediate
 refresh does not schedule a new frame. The helper retains one reveal intent and
 schedules an ordinary next-frame refresh. A changed scroll offset schedules one

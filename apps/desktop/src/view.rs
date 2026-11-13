@@ -405,7 +405,8 @@ fn server_rail(this: &Desktop, selected: Option<usize>, cx: &mut Context<Desktop
         })
         .collect::<Vec<_>>();
     div()
-        .w(px(72.))
+        // Keep the existing72px tile/decoration lane beside the track gutter.
+        .w(px(72. + layout::SCROLLBAR_GUTTER))
         .h_full()
         .flex_shrink_0()
         .py_3()
