@@ -6,6 +6,7 @@
 //! A Web Worker can host it unchanged (no DOM is used).
 
 use crate::{
+    actions::{Catalog, ServerRef},
     content_broker::{ImageAdmission, ImageAdmissionState, ImageBegin, ImageSend, SourceMode},
     content_jobs::{Jobs, Origin},
     image::{Destination, Images},
@@ -337,9 +338,13 @@ impl Platform for BrowserPlatform {
         password: Option<String>,
         deafened: bool,
     ) -> Result<u64, String> {
-        self.disconnect(&bookmark.id);
         let shared = &self.0;
-        let generation = shared.generation.get() + 1;
+        let generation = shared
+            .generation
+            .get()
+            .checked_add(1)
+            .ok_or("Browser connection counter exhausted.")?;
+        self.disconnect(&bookmark.id);
         shared.generation.set(generation);
         let session = Rc::new(RefCell::new(Session::new(Login {
             host: bookmark.host.clone(),
@@ -533,6 +538,7 @@ pub struct WebClient {
     recovery: VecDeque<(Origin, SourceMode)>,
     recovery_selection: Option<(String, u64, u32, u64)>,
     recovery_until: u64,
+    catalog: Catalog,
 }
 
 #[wasm_bindgen]
@@ -580,6 +586,7 @@ impl WebClient {
             recovery: VecDeque::new(),
             recovery_selection: None,
             recovery_until: 0,
+            catalog: Catalog::default(),
         })
     }
 
@@ -613,10 +620,17 @@ impl WebClient {
             if bookmark.certificate_sha256 == saved.certificate_sha256 {
                 bookmark.cached_channels.clone_from(&saved.cached_channels);
             }
+            let stamp = self
+                .catalog
+                .reserve(self.client.servers.len(), Some(index))?;
             self.client.replace_server(index, bookmark);
+            self.catalog.commit(index, stamp);
             return Ok(index);
         }
-        Ok(self.client.add_server(bookmark))
+        let stamp = self.catalog.reserve(self.client.servers.len(), None)?;
+        let index = self.client.add_server(bookmark);
+        self.catalog.commit(index, stamp);
+        Ok(index)
     }
 
     /// Replace one bookmark explicitly; an address change never leaves a hidden duplicate.
@@ -640,7 +654,11 @@ impl WebClient {
         {
             return Err("This server and username are already saved.".into());
         }
+        let stamp = self
+            .catalog
+            .reserve(self.client.servers.len(), Some(index))?;
         self.client.replace_server(index, bookmark);
+        self.catalog.commit(index, stamp);
         self.reconcile_voice();
         Ok(index)
     }
@@ -803,13 +821,14 @@ impl WebClient {
         self.shared.voice_packets.borrow_mut().clear();
     }
 
-    pub fn remove_server(&mut self, index: usize) {
+    pub fn remove_server(&mut self, index: usize) -> Result<(), String> {
+        let server = self.client.servers.get(index).ok_or("Unknown server.")?;
+        let id = server.id.clone();
+        self.catalog.remove(index, self.client.servers.len())?;
         self.shared.images.borrow_mut().invalidate();
-        if let Some(server) = self.client.servers.get(index) {
-            let id = server.id.clone();
-            self.client.remove_server(&id);
-            self.reconcile_voice();
-        }
+        self.client.remove_server(&id);
+        self.reconcile_voice();
+        Ok(())
     }
 
     pub fn dismiss_notice(&mut self, index: usize) {
@@ -1203,6 +1222,29 @@ impl WebClient {
         serde_json::to_string(&view).unwrap_or_else(|_| "null".into())
     }
 
+    /// Original visible UI provenance. The fixed adapter validates this and
+    /// invokes its concrete existing method synchronously, without yielding.
+    pub fn validate_action(&self, call: String, proof: String) -> Result<(), String> {
+        let voice = self.shared.voice.borrow().view();
+        crate::actions::validate(
+            &self.client.servers,
+            &self.catalog,
+            self.client.selected_indices(),
+            voice.as_ref(),
+            &call,
+            &proof,
+        )
+    }
+
+    /// Explicit result authority for add/edit -> connect -> browse form chains;
+    /// normal old UI clicks must never substitute a newer reference by index.
+    pub fn server_reference(&self, index: usize) -> Result<String, String> {
+        let server = self.client.servers.get(index).ok_or("Unknown server.")?;
+        let catalog = self.catalog.get(index).ok_or("Unknown catalog entry.")?;
+        serde_json::to_string(&ServerRef::capture(server, catalog))
+            .map_err(|_| "Server reference could not be read.".into())
+    }
+
     /// IDs, never display positions: live connection indices stay unchanged.
     pub fn set_server_order(&mut self, raw: String) -> Result<bool, String> {
         if raw.len() > 64 * 1024 {
@@ -1243,7 +1285,9 @@ impl WebClient {
             )?;
             bookmark.cached_channels = old.cached_channels.into_iter().take(10_000).collect();
             if self.client.server_index(&bookmark.id).is_none() {
-                self.client.add_server(bookmark);
+                let stamp = self.catalog.reserve(self.client.servers.len(), None)?;
+                let index = self.client.add_server(bookmark);
+                self.catalog.commit(index, stamp);
             }
         }
         Ok(())
@@ -1379,6 +1423,11 @@ impl WebClient {
         let welcomes = self.shared.welcomes.borrow();
         for view in &mut views {
             let state = &self.client.servers[view.runtime_index];
+            view.catalog_instance = self
+                .catalog
+                .get(view.runtime_index)
+                .unwrap_or(0)
+                .to_string();
             view.welcome_token = welcomes
                 .view(
                     &state.id,
