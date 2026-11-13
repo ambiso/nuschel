@@ -126,23 +126,23 @@ pkgs.testers.runNixOSTest {
                 "GSETTINGS_BACKEND=memory", "LIBGL_ALWAYS_SOFTWARE=1",
                 "MAGICK=${pkgs.imagemagick}/bin/magick",
             ] + args)
-            status, log = machine.execute(command, timeout=300)
+            status, scenario_log = machine.execute(command, timeout=300)
             machine.succeed("install -d /tmp/preview-evidence/" + server)
             # Never export the retained profile, test TLS private keys or CA key.
             machine.execute("find " + shlex.quote(output) + " -maxdepth 1 -type f "
                 + "\\( -name '*.json' -o -name '*.png' -o -name '*.log' \\) "
                 + "-exec cp '{}' /tmp/preview-evidence/" + server + "/ \\;")
-            assert len(log) <= 1024 * 1024, "bounded scenario stdout exceeded 1MiB"
-            machine.succeed("printf %s " + shlex.quote(log) + " > /tmp/preview-evidence/" + server + "/scenario.log")
-            machine.copy_from_vm("/tmp/preview-evidence/" + server, server)
+            assert len(scenario_log) <= 1024 * 1024, "bounded scenario stdout exceeded 1MiB"
+            machine.succeed("printf %s " + shlex.quote(scenario_log) + " > /tmp/preview-evidence/" + server + "/scenario.log")
+            machine.copy_from_machine("/tmp/preview-evidence/" + server, server)
             if status != 0:
-                failures.append((server, status, log[-8000:]))
+                failures.append((server, status, scenario_log[-8000:]))
     finally:
         machine.execute("${python} -c 'import sys;sys.path.insert(0,\"${fixtureTests}\");from link_previews_desktop import control;control(\"stop\")'")
         machine.wait_until_fails("systemctl is-active --quiet nuschl-preview-peers.service")
-        machine.copy_from_vm("/var/lib/nuschl-preview-peers/peers.json", "peers.json")
+        machine.copy_from_machine("/var/lib/nuschl-preview-peers/peers.json", "peers.json")
         machine.succeed("(ip -4 route show table all; ip -6 route show table all; iptables-save; ip6tables-save) > /tmp/network-proof.txt")
-        machine.copy_from_vm("/tmp/network-proof.txt", "network-proof.txt")
+        machine.copy_from_machine("/tmp/network-proof.txt", "network-proof.txt")
     assert not failures, failures
   '';
 }

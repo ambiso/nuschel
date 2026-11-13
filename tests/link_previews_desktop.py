@@ -176,11 +176,8 @@ def desktop(args):
                 if line.startswith("welcome_text =") else line for line in lines) + "\n")
 
     def configure(_shell, root, _output):
-        # Explicit operator services are fixture inputs, never ambient proxies.
-        (root / "profile/config/link-previews.json").write_text(json.dumps({
-            "version": 1, "mode": "off", "proxy": "socks5://127.0.0.1:1080",
-            "dns": {"url": "https://resolver.preview.example/dns-query", "bootstrap": ["93.184.215.53"]},
-        }))
+        # Exercise the missing-file default, not an explicitly configured Off.
+        assert not (root / "profile/config/link-previews.json").exists()
         return {}
 
     def actions(_args, root, shell, application, receiver, _server):
@@ -286,6 +283,12 @@ def desktop(args):
         def events():
             snapshot = control("snapshot")
             assert not snapshot["overrun"]
+            # Cancellation may legitimately produce BrokenPipeError; retain
+            # those diagnostics. A synthetic peer's failed assertion is never
+            # an acceptable connection failure or successful test observation.
+            assertions = [event for event in snapshot["events"]
+                if event.get("kind") == "peer_error" and event.get("error") == "AssertionError"]
+            assert not assertions, assertions
             return snapshot["events"]
         def sent_by_reader():
             return [event for event in list(receiver.events) if event.get("kind") == "text"
@@ -328,6 +331,7 @@ def desktop(args):
 
         initial = len(events())
         assert initial == scene_start, "startup/receiver display unexpectedly contacted a synthetic peer"
+        assert not (root / "profile/config/link-previews.json").exists(), "startup wrote a default policy instead of preserving absence"
         assert image_pixels(sender_pid, args.output / "before-preview.png") < 300, "image pixel control is not discriminating"
         plain = f"off-{uuid.uuid4().hex[:8]} http://93.184.215.14/page "
         type_message(plain)
@@ -375,6 +379,7 @@ def desktop(args):
         # entire original text still goes in one ordinary message.
         removed = f"removed-{uuid.uuid4().hex[:8]} http://93.184.215.14/page "
         type_message(removed)
+        eventually(ready_card, "ready-card removal case never reached Ready")
         wait("Remove link preview", "push button")
         activate("Remove link preview")
         wait("Link preview removed")
@@ -396,6 +401,14 @@ def desktop(args):
         send_and_receive(delayed, False)
         mark("late_response_cannot_undo_remove")
 
+        # Explicit fixture operator services, not ambient proxy settings. The
+        # real UI save reloads this managed policy before applying the choice.
+        managed_path = root / "profile/config/managed-link-previews.json"
+        managed_bytes = json.dumps({
+            "version": 1, "mode": "proxy_required", "proxy": "socks5://127.0.0.1:1080",
+            "dns": {"url": "https://resolver.preview.example/dns-query", "bootstrap": ["93.184.215.53"]},
+        }).encode()
+        managed_path.write_bytes(managed_bytes)
         choose("Proxy required")
         before = events()
         proxy_text = f"proxy-{uuid.uuid4().hex[:8]} http://page.preview.example/page "
@@ -412,7 +425,9 @@ def desktop(args):
         choose("Off")
         sidecar = json.loads((root / "profile/config/link-previews.json").read_text())
         assert sidecar["mode"] == "off"
-        assert sidecar["proxy"] == "socks5://127.0.0.1:1080"
+        assert sidecar.get("proxy") is None and sidecar.get("dns") is None, "managed services were copied into user authority"
+        assert managed_path.read_bytes() == managed_bytes, "UI save changed the operator's route"
+        events()  # No synthetic peer assertion may hide at the scenario's end.
         mark("policy_persisted_without_copying_or_losing_service_settings")
         return {"server": args.server, "cases": cases, "modern_typed_preview": False,
             "production_tls_bypass": False, "host_devices": False}
