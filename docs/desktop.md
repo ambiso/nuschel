@@ -279,6 +279,19 @@ alone. A downgrade does not find the moved identity; copy
 
 ## Troubleshooting
 
+**Two title bars, or none (Linux).** On Wayland the compositor decides who draws the
+window frame, and Nuschl follows its answer: with server-side decorations it draws
+no frame or window controls, only its title strip. By default Nuschl states no
+preference, so the compositor's own setting applies (niri's `prefer-no-csd`, for
+example); GNOME always leaves the frame to Nuschl. On X11 Nuschl draws its own frame
+when a compositing manager runs, and leaves it to the window manager otherwise.
+To state a preference, start Nuschl with `--window-decorations server` (ask the
+compositor or window manager to draw it) or `client` (draw it in Nuschl), or set
+`NUSCHL_WINDOW_DECORATIONS`; the argument wins, and `auto` is the default. The
+compositor can still overrule either. On NixOS, set it for every user with
+`environment.sessionVariables.NUSCHL_WINDOW_DECORATIONS = "server";`. With Home
+Manager, use `programs.nuschl.windowDecorations` ([install.md](install.md)).
+
 **A broken configuration file.** Nuschl never overwrites a configuration file it
 cannot read: a broken `settings.json` or `servers.json` is renamed to
 `settings.json.invalid` (or `.invalid.1`, …), and the app starts without it and says

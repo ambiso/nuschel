@@ -54,10 +54,7 @@ mod voice;
 use std::{cell::RefCell, path::PathBuf, rc::Rc};
 
 use clap::{Parser, Subcommand};
-use gpui_kit::{
-    AppContext, Bounds, TitlebarOptions, WindowBounds, WindowDecorations, WindowOptions, point, px,
-    size,
-};
+use gpui_kit::{AppContext, Bounds, TitlebarOptions, WindowBounds, WindowOptions, point, px, size};
 use nuschl_session::config::Profile;
 
 #[derive(Parser)]
@@ -76,6 +73,11 @@ struct Arguments {
     /// (magic-wormhole); repeat for more files.
     #[arg(long = "offer", value_name = "FILE")]
     offers: Vec<PathBuf>,
+    /// Who should draw the window's frame on Linux; overrides
+    /// NUSCHL_WINDOW_DECORATIONS. Only a preference: on Wayland the compositor
+    /// decides, and with `auto` Nuschl states none.
+    #[arg(long, value_enum, value_name = "WHO")]
+    window_decorations: Option<chrome::DecorationChoice>,
     #[command(subcommand)]
     command: Option<Action>,
 }
@@ -178,6 +180,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .as_deref()
         .map(nuschl_session::config::MumbleUrl::parse)
         .transpose()?;
+    let decorations = arguments.window_decorations.unwrap_or_else(|| {
+        chrome::DecorationChoice::from_environment()
+            .unwrap_or_else(|problem| {
+                tracing::warn!("{problem}");
+                None
+            })
+            .unwrap_or_default()
+    });
     let runtime_handle = runtime.handle().clone();
     // GPUI owns the event loop; preserve startup errors until it returns so failed
     // launches also report failure to the invoking shell or process supervisor.
@@ -210,28 +220,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }),
                 // A request, not a decision: the compositor decides who decorates.
                 //
-                // Wayland: GPUI sends this through xdg-decoration `set_mode`, and the
-                // compositor answers in its `configure`, which may say CLIENT-SIDE
-                // despite this request, at startup or at any later time. GPUI then
-                // reports `Decorations::Client` and Nuschl draws its own frame, window
-                // controls and resize edges after all (see `chrome::frame`, which reads
-                // `window.window_decorations()` on every render). Without the
-                // xdg-decoration protocol (GNOME, Weston) GPUI treats the window as
-                // client-side from the start. A compositor that decorates (KDE) or asks
-                // clients to omit decorations (niri with prefer-no-csd, Sway) answers
-                // server-side, and Nuschl draws no frame or window controls.
+                // Wayland: GPUI sends this through xdg-decoration (`set_mode`, or
+                // `unset_mode` for no preference), and the compositor answers in its
+                // `configure`, which may say CLIENT-SIDE whatever was asked, at startup
+                // or at any later time. GPUI then reports `Decorations::Client` and
+                // Nuschl draws its own frame, window controls and resize edges (see
+                // `chrome::frame`, which reads `window.window_decorations()` on every
+                // render). Without the xdg-decoration protocol (GNOME, Weston) the
+                // window is client-side from the start. When the answer is server-side,
+                // Nuschl draws no frame or window controls.
                 //
-                // X11 has no such answer: a server-side request only hints through
-                // _MOTIF_WM_HINTS, and GPUI would report server-side even if the window
-                // manager drew nothing. So on X11 Nuschl asks for client-side and draws
-                // its own frame; GPUI falls back to server-side when no compositing
-                // manager runs or the window manager lacks _GTK_FRAME_EXTENTS, since a
-                // client-side frame needs both (transparent inset, resize extents).
-                window_decorations: Some(if cx.compositor_name() == "X11" {
-                    WindowDecorations::Client
-                } else {
-                    WindowDecorations::Server
-                }),
+                // The default, `auto`, states no preference on Wayland: a compositor
+                // honours an explicit client-side request even where its user asked
+                // apps to omit their decorations (niri's `prefer-no-csd`), and an
+                // explicit server-side one overrides compositors that prefer the app
+                // to draw them. On X11 it asks for client-side (see
+                // `DecorationChoice::request`).
+                window_decorations: Some(decorations.request(cx.compositor_name())),
                 window_min_size: Some(size(px(860.), px(520.))),
                 // GPUI draws inactive windows at 30 fps at most, and GNOME takes the
                 // keyboard focus for the length of an interactive resize: every resize
