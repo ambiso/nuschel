@@ -718,21 +718,25 @@ def desktop(args):
                     top = max(branch[1], modal[1], 0)
                     right = min(branch[0] + branch[2], modal[0] + modal[2], window[2])
                     bottom = min(branch[1] + branch[3], modal[1] + modal[3], window[3])
-                    x, y = row[0] + row[2] / 2, row[1] + row[3] / 2
-                    if row[2] > 0 and row[3] > 0 and left <= x < right and top <= y < bottom:
+                    tree_visible = (branch[2] > 0 and branch[3] > 0
+                        and left <= branch[0] and branch[0] + branch[2] <= right
+                        and top <= branch[1] and branch[1] + branch[3] <= bottom)
+                    if tree_visible and (row[2] > 0 and row[3] > 0
+                        and left <= row[0] and row[0] + row[2] <= right
+                        and top <= row[1] and row[1] + row[3] <= bottom):
                         return target
-                    visible_tree = left < right and top < bottom
-                    if visible_tree and (y < branch[1] or y >= branch[1] + branch[3]):
+                    if tree_visible:
+                        region = "channels"
                         pointer = ((left + right) / 2, (top + bottom) / 2)
-                        direction = -1 if y < branch[1] else 1
+                        direction = -1 if row[1] < top else 1
                     else:
-                        # The modal's reserved 12-logical-pixel gutter routes
-                        # this wheel step through the enclosing sheet region.
+                        region = "sheet"
+                        # The reserved gutter reveals the complete nested viewport.
                         pointer = (min(modal[0] + modal[2], window[2]) - 6 * saved_zoom(),
                             (max(modal[1], 0) + min(modal[1] + modal[3], window[3])) / 2)
-                        direction = -1 if y < max(modal[1], 0) else 1
+                        direction = -1 if branch[1] < max(modal[1], 0) else 1
                     trace = dict(target=name, attempt=attempt, row=row, tree=branch, modal=modal,
-                        client=window, pointer=pointer, direction=direction)
+                        client=window, region=region, pointer=pointer, direction=direction)
                     observation.setdefault("channel_wheel_reveal", []).append(trace)
                     assert len(observation["channel_wheel_reveal"]) <= 24
                     assert max(modal[0], 0) <= pointer[0] < min(modal[0] + modal[2], window[2])
@@ -740,6 +744,9 @@ def desktop(args):
                     shell.wheel(window[0] + round(pointer[0]), window[1] + round(pointer[1]), direction)
                     eventually(lambda: (target.extents(), tree.extents(), dialog.extents()) != (row, branch, modal),
                         "channel wheel step must move the requested region", timeout=max(.01, min(1, deadline - time.monotonic())))
+                    if region == "sheet":
+                        # A fresh gesture transfers routing after the 500 ms wheel latch.
+                        time.sleep(.6)
                 raise AssertionError("channel wheel reveal exceeded 12 steps")
             activate("Channels")
             wait("Channels and servers", "dialog")
