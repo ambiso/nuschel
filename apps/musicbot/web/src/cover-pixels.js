@@ -37,7 +37,8 @@ export function validatePixels(value, maximum = MAX_EDGE) {
 }
 
 async function fetchPixels(url, maximum, signal) {
-  const response = await fetch(url, { signal, cache: 'no-store', headers: { Accept: 'application/json' } });
+  // The server allows caching only for URLs that name the current library.
+  const response = await fetch(url, { signal, headers: { Accept: 'application/json' } });
   if (!response.ok || !/^application\/json(?:;|$)/i.test(response.headers.get('content-type') || '')) { await response.body?.cancel().catch(() => {}); throw Error('Cover unavailable'); }
   const limit = Math.ceil(maximum * maximum * 4 / 3) * 4 + 4096;
   const declared = response.headers.get('content-length');

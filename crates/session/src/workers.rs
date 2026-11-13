@@ -256,7 +256,34 @@ pub struct Media {
     pub events: mpsc::Receiver<LiveMediaEvent>,
     task: tokio::task::JoinHandle<()>,
 }
+/// Requests queued for one media worker. One worker plays every server's
+/// voice: room for a burst of packets from several talkers.
+const MEDIA_REQUESTS: usize = 256;
+const MEDIA_EVENTS: usize = 32;
 impl Media {
+    /// A worker reached in memory, with a real worker's queue sizes, instead
+    /// of a sandboxed process (a test double for the supervisor): the
+    /// requests it is sent, and where its events go. Nothing is started.
+    #[doc(hidden)]
+    pub fn in_memory() -> (
+        Self,
+        mpsc::Receiver<LiveMediaRequest>,
+        mpsc::Sender<LiveMediaEvent>,
+    ) {
+        let (commands, requests) = mpsc::channel(MEDIA_REQUESTS);
+        let (replies, events) = mpsc::channel(MEDIA_EVENTS);
+        let task = tokio::spawn(async {});
+        (
+            Self {
+                commands,
+                events,
+                task,
+            },
+            requests,
+            replies,
+        )
+    }
+
     pub fn start() -> Result<Self, Error> {
         let executable = sibling("nuschl-media-worker")?;
         let mut command = nuschl_ipc::host::media_sandbox_command(&executable)
@@ -277,10 +304,8 @@ impl Media {
             .stdout
             .take()
             .ok_or_else(|| Error::Worker("media stdout missing".into()))?;
-        // One worker plays every server's voice: room for a burst of packets
-        // from several talkers without crowding out control requests.
-        let (tx, mut rx) = mpsc::channel(256);
-        let (events_tx, events) = mpsc::channel(32);
+        let (tx, mut rx) = mpsc::channel(MEDIA_REQUESTS);
+        let (events_tx, events) = mpsc::channel(MEDIA_EVENTS);
         let task = tokio::spawn(async move {
             // The worker lives exactly as long as this task holds its containment.
             let _containment = containment;

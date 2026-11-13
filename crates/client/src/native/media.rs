@@ -182,6 +182,63 @@ fn capture_route_changed(old: &Link, next: &Link) -> bool {
     speaking_to(old) != speaking_to(next) || (speaking_to(next) && old.revision != next.revision)
 }
 
+/// Slots of the worker's one request queue kept for control: voice and sound
+/// effects take a slot only while more than this many are free, so a burst
+/// of either never crowds out push-to-talk, a deafen or a setting. One queue
+/// keeps the order: an `EndStream` still follows the voice queued before it.
+const CONTROL_RESERVE: usize = 64;
+
+/// Whether voice or a sound effect may be queued (see [`CONTROL_RESERVE`]).
+pub(super) fn admits_voice(media: &Media) -> bool {
+    media.commands.capacity() > CONTROL_RESERVE
+}
+
+/// Queue a control request for the worker, if one runs. A worker that
+/// stopped reading for long enough to fill the reserve is replaced, which
+/// closes its microphone and discards its queue, its packets leave no more
+/// (a new epoch), and the next worker starts from the current state. One
+/// that exited is restarted when its events end.
+fn send_control(
+    media: &mut Option<Media>,
+    epoch: &mut u64,
+    retry: &mut Instant,
+    request: LiveMediaRequest,
+) {
+    let full = media.as_ref().is_some_and(|worker| {
+        matches!(
+            worker.commands.try_send(request),
+            Err(mpsc::error::TrySendError::Full(_))
+        )
+    });
+    if full {
+        replace(media, epoch, retry);
+    }
+}
+
+/// Stop the worker; packets it sent leave no more, and the next one starts.
+fn replace(media: &mut Option<Media>, epoch: &mut u64, retry: &mut Instant) {
+    media.take();
+    *epoch += 1;
+    *retry = Instant::now();
+}
+
+/// Beyond the release tail, how long a worker's voice may still arrive after
+/// push-to-talk is released (its capture and packet pacing).
+const RELEASE_MARGIN: std::time::Duration = std::time::Duration::from_millis(100);
+
+/// Whether push-to-talk lets the worker's voice through now: always outside
+/// push-to-talk, else while the key is held or within the release tail of
+/// its latest release. A worker that has not applied a release yet (its
+/// queue is behind) cannot transmit past it.
+fn talk_allows(audio: &nuschl_core::audio::AudioSettings, keys: VoiceKeys, now: Instant) -> bool {
+    let tail = std::time::Duration::from_millis(audio.ptt_release_ms.min(2000).into());
+    audio.transmit != TransmitMode::PushToTalk
+        || keys.talk
+        || keys
+            .released
+            .is_some_and(|at| now <= at + tail + RELEASE_MARGIN)
+}
+
 /// Supervise the worker until the driver goes away.
 pub async fn run(
     inputs: (mpsc::UnboundedReceiver<Control>, mpsc::Receiver<Playback>),
@@ -207,6 +264,8 @@ async fn run_with_start(
     let mut planned = plan(std::iter::empty());
     let mut applied = settings.borrow().audio.clone();
     let mut talk_key = voice_keys.borrow().talk;
+    // Whether the voice that left has ended (see `talk_allows`).
+    let mut off_air = true;
     // The audio server that last worked, pinned for a while after a failure (see pinned_host).
     let mut audio_host: (Option<String>, Instant) = (None, Instant::now());
     // Sound effects for the next worker while this one is being replaced.
@@ -250,24 +309,21 @@ async fn run_with_start(
                     // Invalidate even a packet already in the worker's IPC
                     // queue before admitting another speaking destination.
                     // Replacing the process also discards its queued PCM.
-                    media.take();
-                    epoch += 1;
-                    retry = Instant::now();
+                    replace(&mut media, &mut epoch, &mut retry);
                 }
                 match message {
                     Control::Attach { server, generation, link, voice } => {
                         numbers = numbers.wrapping_add(1);
-                        if let Some(old) = streams.insert(server, Stream { generation, number: numbers, link, voice })
-                            && let Some(media) = &media {
-                            let _ = media.commands.try_send(LiveMediaRequest::EndStream { stream: old.number });
+                        if let Some(old) = streams.insert(server, Stream { generation, number: numbers, link, voice }) {
+                            send_control(&mut media, &mut epoch, &mut retry, LiveMediaRequest::EndStream { stream: old.number });
                         }
                     }
                     Control::Update { server, generation, link, cue } => {
                         // Routing follows at once; the worker after a moment.
                         if let Some(stream) = streams.get_mut(&server).filter(|stream| stream.generation == generation) {
-                            if link.deafened && !stream.link.deafened && let Some(media) = &media {
+                            if link.deafened && !stream.link.deafened {
                                 // What it had buffered is not played.
-                                let _ = media.commands.try_send(LiveMediaRequest::EndStream { stream: stream.number });
+                                send_control(&mut media, &mut epoch, &mut retry, LiveMediaRequest::EndStream { stream: stream.number });
                             }
                             stream.link = link;
                         }
@@ -275,9 +331,8 @@ async fn run_with_start(
                     }
                     Control::Detach { server, generation } => {
                         if streams.get(&server).is_some_and(|stream| stream.generation == generation)
-                            && let Some(stream) = streams.remove(&server)
-                            && let Some(media) = &media {
-                            let _ = media.commands.try_send(LiveMediaRequest::EndStream { stream: stream.number });
+                            && let Some(stream) = streams.remove(&server) {
+                            send_control(&mut media, &mut epoch, &mut retry, LiveMediaRequest::EndStream { stream: stream.number });
                         }
                     }
                     Control::Sound(sound) => cues.push((sound, false)),
@@ -307,12 +362,9 @@ async fn run_with_start(
                 if opened || closed || !next.listen {
                     // The microphone opens or closes with a new process; with
                     // nothing to listen to, none runs.
-                    media.take();
-                    epoch += 1;
-                    retry = Instant::now();
-                } else if (next.bitrate, next.loss_percent) != (planned.bitrate, planned.loss_percent)
-                    && let Some(media) = &media {
-                    configure(media, &applied, (next.bitrate, next.loss_percent), pinned_host(&audio_host));
+                    replace(&mut media, &mut epoch, &mut retry);
+                } else if (next.bitrate, next.loss_percent) != (planned.bitrate, planned.loss_percent) {
+                    send_control(&mut media, &mut epoch, &mut retry, configure(&applied, (next.bitrate, next.loss_percent), pinned_host(&audio_host)));
                 }
                 planned = next;
                 let current = settings.borrow();
@@ -330,6 +382,7 @@ async fn run_with_start(
             },
             Some(voice) = playback.recv() => {
                 if let (Some(media), Some(stream)) = (&media, streams.get(&voice.server))
+                    && admits_voice(media)
                     && stream.generation == voice.generation
                     && stream.link.voice_allowed
                     && !stream.link.deafened
@@ -349,11 +402,9 @@ async fn run_with_start(
                 let audio = settings.borrow_and_update().audio.clone();
                 if !audio.same_route(&applied) {
                     // New devices need new native streams: replace the worker.
-                    media.take();
-                    epoch += 1;
-                    retry = Instant::now();
-                } else if audio != applied && let Some(media) = &media {
-                    configure(media, &audio, (planned.bitrate, planned.loss_percent), pinned_host(&audio_host));
+                    replace(&mut media, &mut epoch, &mut retry);
+                } else if audio != applied {
+                    send_control(&mut media, &mut epoch, &mut retry, configure(&audio, (planned.bitrate, planned.loss_percent), pinned_host(&audio_host)));
                 }
                 applied = audio;
             },
@@ -361,10 +412,10 @@ async fn run_with_start(
                 if changed.is_err() { break; }
                 let keys = *voice_keys.borrow_and_update();
                 // The talk key's own changes reach the worker, with their sound.
-                if std::mem::replace(&mut talk_key, keys.talk) != keys.talk && let Some(media) = &media {
-                    let _ = media.commands.try_send(LiveMediaRequest::PushToTalk { active: keys.talk });
+                if std::mem::replace(&mut talk_key, keys.talk) != keys.talk {
+                    send_control(&mut media, &mut epoch, &mut retry, LiveMediaRequest::PushToTalk { active: keys.talk });
                     let current = settings.borrow();
-                    if planned.capture && current.audio.transmit == TransmitMode::PushToTalk {
+                    if let Some(media) = &media && planned.capture && current.audio.transmit == TransmitMode::PushToTalk {
                         play(media, &current, if keys.talk { Sound::TalkOn } else { Sound::TalkOff });
                     }
                 }
@@ -374,15 +425,16 @@ async fn run_with_start(
                 // Until the devices are open, nobody hears you yet.
                 broadcast(&streams, &events, |server, generation| Event::AudioStatus { server, generation, message: "Starting audio…".into() }).await;
                 match start() {
-                    Ok(worker) => {
-                        configure(&worker, &applied, (planned.bitrate, planned.loss_percent), pinned_host(&audio_host));
-                        let _ = worker.commands.try_send(LiveMediaRequest::SetState { epoch, muted: !planned.capture, deafened: false });
-                        let _ = worker.commands.try_send(LiveMediaRequest::PushToTalk { active: voice_keys.borrow().talk });
+                    // A worker that did not take its whole state is not kept.
+                    Ok(worker) if worker.commands.try_send(configure(&applied, (planned.bitrate, planned.loss_percent), pinned_host(&audio_host))).is_ok()
+                        && worker.commands.try_send(LiveMediaRequest::SetState { epoch, muted: !planned.capture, deafened: false }).is_ok()
+                        && worker.commands.try_send(LiveMediaRequest::PushToTalk { active: voice_keys.borrow().talk }).is_ok() => {
                         for (sound, requested) in pending.drain(..) {
                             if requested.elapsed() < MAX_SOUND_DELAY { play(&worker, &settings.borrow(), sound); }
                         }
                         media = Some(worker);
                     },
+                    Ok(_) => retry = Instant::now() + std::time::Duration::from_secs(2),
                     Err(error) => {
                         retry = Instant::now() + std::time::Duration::from_secs(3);
                         broadcast(&streams, &events, |server, generation| Event::AudioStatus { server, generation, message: error.to_string() }).await;
@@ -392,7 +444,18 @@ async fn run_with_start(
             event = async { media.as_mut().unwrap().events.recv().await }, if media.is_some() => match event {
                 Some(LiveMediaEvent::Packet { epoch: sent, opus, end, .. }) => {
                     // Only servers that are unmuted get it (each connection checks again).
-                    if sent != epoch || voice_keys.borrow().mute { continue; }
+                    let keys = *voice_keys.borrow();
+                    if sent != epoch || keys.mute { continue; }
+                    // Past a push-to-talk release and its tail, a silent
+                    // terminator ends the voice and nothing more leaves.
+                    let (opus, end) = if talk_allows(&applied, keys, Instant::now()) {
+                        off_air = end;
+                        (opus, end)
+                    } else if !std::mem::replace(&mut off_air, true) {
+                        (nuschl_core::audio::SILENT_OPUS.to_vec(), true)
+                    } else {
+                        continue;
+                    };
                     for stream in streams.values().filter(|stream| speaking_to(&stream.link)) {
                         let _ = stream.voice.try_send(Outgoing { revision: stream.link.revision, opus: opus.clone(), end });
                     }
@@ -759,6 +822,245 @@ mod tests {
         assert!(rates(&control).await.0 > moved);
         task.abort();
         let _ = task.await;
+    }
+
+    /// The real supervisor in push-to-talk mode with a release tail of
+    /// `TAIL_MS`, whose workers are in-memory doubles handed to the test.
+    struct Rig {
+        control: mpsc::UnboundedSender<Control>,
+        playback: mpsc::Sender<Playback>,
+        keys: watch::Sender<VoiceKeys>,
+        workers: mpsc::UnboundedReceiver<(
+            mpsc::Receiver<LiveMediaRequest>,
+            mpsc::Sender<LiveMediaEvent>,
+        )>,
+        _events: mpsc::Receiver<Event>,
+        _settings: watch::Sender<ClientSettings>,
+        task: tokio::task::JoinHandle<()>,
+    }
+
+    const WAIT: std::time::Duration = std::time::Duration::from_secs(2);
+    const TAIL_MS: u32 = 300;
+
+    fn push_to_talk() -> Rig {
+        let (control, input) = mpsc::unbounded_channel();
+        let (playback, playback_rx) = mpsc::channel(2048);
+        let (events, _events) = mpsc::channel(1024);
+        let mut current = ClientSettings::default();
+        current.audio.transmit = TransmitMode::PushToTalk;
+        current.audio.ptt_release_ms = TAIL_MS;
+        let (_settings, settings) = watch::channel(current);
+        let (keys, keys_rx) = watch::channel(VoiceKeys::default());
+        let (started, workers) = mpsc::unbounded_channel();
+        let task = tokio::spawn(run_with_start(
+            (input, playback_rx),
+            events,
+            (settings, keys_rx),
+            move || {
+                let (media, requests, replies) = Media::in_memory();
+                let _ = started.send((requests, replies));
+                Ok(media)
+            },
+        ));
+        Rig {
+            control,
+            playback,
+            keys,
+            workers,
+            _events,
+            _settings,
+            task,
+        }
+    }
+
+    /// The requests queued for a worker so far.
+    fn queued(requests: &mut mpsc::Receiver<LiveMediaRequest>) -> Vec<LiveMediaRequest> {
+        std::iter::from_fn(|| requests.try_recv().ok()).collect()
+    }
+
+    /// Wait until a worker's queue holds a request that `wanted` matches,
+    /// returning it and what came before.
+    async fn until(
+        requests: &mut mpsc::Receiver<LiveMediaRequest>,
+        wanted: impl Fn(&LiveMediaRequest) -> bool,
+    ) -> Vec<LiveMediaRequest> {
+        let mut seen = Vec::new();
+        loop {
+            let request = tokio::time::timeout(WAIT, requests.recv())
+                .await
+                .expect("worker request")
+                .expect("worker queue open");
+            let found = wanted(&request);
+            seen.push(request);
+            if found {
+                return seen;
+            }
+        }
+    }
+
+    /// Attach one unmuted server; its microphone share comes back. Returns
+    /// the started worker's queues and its packet epoch.
+    async fn talk_server(
+        rig: &mut Rig,
+    ) -> (
+        mpsc::Receiver<Outgoing>,
+        mpsc::Receiver<LiveMediaRequest>,
+        mpsc::Sender<LiveMediaEvent>,
+        u64,
+    ) {
+        let (voice, outgoing) = mpsc::channel(4096);
+        rig.control
+            .send(Control::Attach {
+                server: "one".into(),
+                generation: 1,
+                link: link(false, false, 40_000, 1),
+                voice,
+            })
+            .unwrap();
+        let (mut requests, replies) = tokio::time::timeout(WAIT, rig.workers.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        let start = until(&mut requests, |request| {
+            matches!(request, LiveMediaRequest::PushToTalk { .. })
+        })
+        .await;
+        let epoch = start
+            .iter()
+            .find_map(|request| match request {
+                LiveMediaRequest::SetState { epoch, muted, .. } => {
+                    assert!(!muted, "the talk server opens the microphone");
+                    Some(*epoch)
+                }
+                _ => None,
+            })
+            .expect("worker state");
+        (outgoing, requests, replies, epoch)
+    }
+
+    /// Voice packet `number` from the worker double, its number in the payload.
+    fn packet(epoch: u64, number: u16) -> LiveMediaEvent {
+        LiveMediaEvent::Packet {
+            epoch,
+            sequence: u64::from(number) * 2,
+            opus: number.to_be_bytes().to_vec(),
+            end: false,
+        }
+    }
+
+    /// Fill the worker's queue with incoming voice while it reads nothing,
+    /// until the supervisor has taken all of it.
+    async fn flood(rig: &Rig) {
+        for sequence in 0..2000_u64 {
+            rig.playback
+                .try_send(Playback {
+                    server: "one".into(),
+                    generation: 1,
+                    sender: 1 + (sequence % 8) as u32,
+                    sequence,
+                    opus: vec![0; 60],
+                    end: false,
+                    volume: 1.,
+                })
+                .unwrap();
+        }
+        taken(&rig.playback).await;
+    }
+
+    /// Wait until the supervisor has taken everything sent on `queue`.
+    async fn taken<T>(queue: &mpsc::Sender<T>) {
+        tokio::time::timeout(WAIT, async {
+            while queue.capacity() < queue.max_capacity() {
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+            }
+        })
+        .await
+        .expect("the supervisor takes it");
+    }
+
+    #[tokio::test]
+    async fn a_voice_flood_neither_loses_nor_outlasts_a_push_to_talk_release() {
+        let mut rig = push_to_talk();
+        let (mut outgoing, mut requests, replies, epoch) = talk_server(&mut rig).await;
+        let mut leaves = async |number| {
+            replies.send(packet(epoch, number)).await.unwrap();
+            let sent = tokio::time::timeout(WAIT, outgoing.recv()).await.unwrap();
+            sent.unwrap()
+        };
+        rig.keys.send_if_modified(|keys| keys.set_talk(true));
+        until(&mut requests, |request| {
+            matches!(request, LiveMediaRequest::PushToTalk { active: true })
+        })
+        .await;
+        assert_eq!(leaves(0).await.opus, 0_u16.to_be_bytes(), "held");
+        // The worker stops reading (busy, or its pipe is full) while voice
+        // from eight talkers keeps arriving; then the key is released.
+        flood(&rig).await;
+        rig.keys.send_if_modified(|keys| keys.set_talk(false));
+        let released = rig.keys.borrow().released.unwrap();
+        // The supervisor takes it while the worker still reads nothing: the
+        // release is queued behind that voice, not lost.
+        tokio::task::yield_now().await;
+        until(&mut requests, |request| {
+            matches!(request, LiveMediaRequest::PushToTalk { active: false })
+        })
+        .await;
+        // A worker that has not applied it yet keeps sending: its voice
+        // leaves within the tail, then one silent terminator, then nothing.
+        assert_eq!(leaves(1).await.opus, 1_u16.to_be_bytes(), "within the tail");
+        let tail = std::time::Duration::from_millis(TAIL_MS.into()) + RELEASE_MARGIN;
+        tokio::time::sleep_until(released + tail + std::time::Duration::from_millis(1)).await;
+        let ended = leaves(2).await;
+        assert!(ended.end && ended.opus == nuschl_core::audio::SILENT_OPUS);
+        replies.send(packet(epoch, 3)).await.unwrap();
+        taken(&replies).await;
+        assert!(
+            outgoing.try_recv().is_err(),
+            "nothing leaves after the tail"
+        );
+        rig.task.abort();
+        let _ = rig.task.await;
+    }
+
+    #[tokio::test]
+    async fn a_control_request_that_cannot_be_queued_replaces_the_worker() {
+        let mut rig = push_to_talk();
+        let (_outgoing, mut requests, _replies, epoch) = talk_server(&mut rig).await;
+        flood(&rig).await;
+        // The stalled worker misses more key changes than the reserve
+        // holds; the key ends released.
+        for press in 0..2 * CONTROL_RESERVE {
+            rig.keys
+                .send_if_modified(|keys| keys.set_talk(press % 2 == 0));
+            tokio::task::yield_now().await;
+        }
+        let replacement = tokio::time::timeout(WAIT, rig.workers.recv()).await;
+        let (mut next, _) = replacement
+            .expect("a control request was dropped and the stalled worker kept")
+            .unwrap();
+        let _ = queued(&mut requests);
+        assert!(requests.is_closed(), "the stalled worker is gone");
+        // The replacement starts from the current state, never a replayed
+        // press: the key is up.
+        let start = until(&mut next, |request| {
+            matches!(request, LiveMediaRequest::PushToTalk { .. })
+        })
+        .await;
+        assert!(start.iter().any(|request| matches!(
+            request,
+            LiveMediaRequest::SetState { epoch: newer, .. } if *newer > epoch
+        )));
+        let last = start
+            .into_iter()
+            .chain(queued(&mut next))
+            .filter_map(|request| match request {
+                LiveMediaRequest::PushToTalk { active } => Some(active),
+                _ => None,
+            })
+            .next_back();
+        assert_eq!(last, Some(false), "the replacement knows the key is up");
+        rig.task.abort();
+        let _ = rig.task.await;
     }
 
     #[test]
