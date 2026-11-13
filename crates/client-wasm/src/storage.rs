@@ -131,7 +131,7 @@ impl Storage {
             },
         )
     }
-    pub fn append_raw(
+    pub(crate) fn append_raw(
         &mut self,
         server: String,
         generation: u64,
