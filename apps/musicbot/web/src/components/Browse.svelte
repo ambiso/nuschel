@@ -38,12 +38,12 @@
       : route.view === "path" ? (matches.length ? `Blend: ${matches[0].track.title} → ${matches.at(-1).track.title}` : "Blend")
       : route.view === "song" ? data?.song?.title ?? (data ? "Song" : "Loading…")
       : detail?.name ?? "Loading…"));
-  const libraries = $derived(store.snapshot?.libraries ?? []);
+  const libraryKeys = $derived(store.snapshot?.library_keys ?? []);
   const libraryRoute = $derived(typeof route.library === "number");
-  const shareProblem = $derived(route.sharedLibrary != null || (libraryRoute && (!current || libraries[route.library] === undefined))
+  const shareProblem = $derived(route.sharedLibrary != null || (libraryRoute && (!current || libraryKeys[route.library] === undefined))
     ? "Sharing is available once the library is loaded."
-    : shareRoute(route, libraries) === null ? "Another library has the same name, so a shared link could not find this one." : null);
-  const link = $derived(shareProblem === null ? shareUrl(location.href, route, libraries) : null);
+    : shareRoute(route, libraryKeys) === null ? "Copy link is unavailable: another library has the same name and server, so a shared link could not tell them apart." : null);
+  const link = $derived(shareProblem === null ? shareUrl(location.href, route, libraryKeys) : null);
   let manualLink = $state(null);
 
   async function copyLink() {
@@ -83,9 +83,12 @@
           </select>
         </label>
       {/if}
-      <button class="share" disabled={link === null} aria-label="Copy link to this page" title={shareProblem ?? (link === null ? "This page cannot be shared." : "Copy a link for people who have their own link to this bot")} onclick={copyLink}><Icon name="link" size={18} /> Copy link</button>
+      <button class="share" disabled={link === null} aria-label="Copy link to this page" aria-describedby={shareProblem === null ? undefined : "share-problem"} title={shareProblem === null ? "Copy a link for people who have their own link to this bot" : undefined} onclick={copyLink}><Icon name="link" size={18} /> Copy link</button>
     </div>
   </div>
+  {#if shareProblem !== null}
+    <p id="share-problem" class="share-problem muted small">{shareProblem}</p>
+  {/if}
   {#if manualLink !== null}
     <div class="manual-link">
       <label class="muted small" for="share-link">Copy this link. It works for people who have their own link to this bot.</label>
@@ -202,6 +205,7 @@
   .heading-actions { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
   .share { display: inline-flex; align-items: center; gap: 0.35rem; white-space: nowrap; }
   .manual-link { display: grid; gap: 0.35rem; margin: -0.25rem 0 1rem; }
+  .share-problem { margin: -0.25rem 0 1rem; }
   .manual-link input { width: 100%; min-width: 0; }
   h1 { margin: 0; overflow-wrap: anywhere; }
   .sort select { max-width: 100%; }

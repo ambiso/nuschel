@@ -231,8 +231,9 @@ pub struct Library {
     stream_agent: ureq::Agent,
     /// OpenSubsonic extensions, asked once the server answers.
     extensions: OnceLock<HashSet<String>>,
-    /// Names this library's covers in caches; changes when the library does.
-    art_key: String,
+    /// Names this library in caches and shared links; changes when the
+    /// library's name or URL does.
+    key: String,
 }
 
 impl Library {
@@ -243,7 +244,7 @@ impl Library {
         Self {
             index,
             name: config.name.clone(),
-            art_key: hex(&Md5::digest(format!("{}\0{base}", config.name))[..8]),
+            key: hex(&Md5::digest(format!("{}\0{base}", config.name))[..8]),
             base,
             credentials,
             transcode: config.transcode.clone(),
@@ -255,8 +256,8 @@ impl Library {
     }
 
     /// A short hash of the name and URL, stable across restarts.
-    pub fn art_key(&self) -> &str {
-        &self.art_key
+    pub fn key(&self) -> &str {
+        &self.key
     }
 
     pub fn identity(&self) -> LibraryIdentity {

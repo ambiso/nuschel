@@ -45,7 +45,7 @@ export function query(path, params) {
 }
 
 /**
- * URL of a cover image `size` pixels wide. `key` is the library's `art_keys`
+ * URL of a cover image `size` pixels wide. `key` is the library's `library_keys`
  * entry; with it the browser may keep the answer, since the URL changes when
  * the library does.
  */

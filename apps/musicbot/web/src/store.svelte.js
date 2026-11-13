@@ -42,8 +42,9 @@ class Store {
 
   #browseSession = crypto.getRandomValues(new Uint32Array(4)).join("-");
   #browseController = null;
-  #libraryNames = [];
-  #libraryKey = null;
+  /** The latest state's `library_keys`, one per library. */
+  #libraryKeys = [];
+  #librarySignature = null;
   #source = null;
   #retry = null;
   #stateRequest = null;
@@ -92,12 +93,12 @@ class Store {
   #routeChanged() {
     let route = parseRoute(location.hash);
     if (route.sharedLibrary != null) {
-      // A shared link names its library; it waits (loading nothing) until a state gives the namespace.
+      // A shared link carries its library key; it waits (loading nothing) until a state gives the namespace.
       if (this.browseKey === null) {
         this.route = route;
         return;
       }
-      route = adoptSharedRoute(route, this.#libraryNames, this.browseKey);
+      route = adoptSharedRoute(route, this.#libraryKeys, this.browseKey);
     }
     this.#applyRoute(route, false);
   }
@@ -109,7 +110,7 @@ class Store {
   /** Shows `route` under the namespace rules; `push` adds a history entry instead of replacing it. */
   #applyRoute(route, push) {
     let library = typeof route.library === "number" ? route.library : this.library;
-    if (this.browseKey !== null && library >= this.#libraryNames.length) library = 0;
+    if (this.browseKey !== null && library >= this.#libraryKeys.length) library = 0;
     route = routeForNamespace(route, library, this.browseKey);
     if (typeof route.library === "number") this.library = route.library;
     this.#replaceRoute(route, push);
@@ -121,7 +122,7 @@ class Store {
    */
   #replaceRoute(route, push = false) {
     this.route = route;
-    const hash = addressRoute(route, this.#libraryNames);
+    const hash = addressRoute(route, this.#libraryKeys);
     if (location.hash === hash) return;
     if (push) history.pushState(history.state, "", hash);
     else history.replaceState(history.state, "", hash);
@@ -153,7 +154,7 @@ class Store {
 
   browseItemCurrent(item) {
     return !this.invalid && this.connection === "open"
-      && browseItemIsCurrent(item, this.browseKey, this.#libraryNames.length);
+      && browseItemIsCurrent(item, this.browseKey, this.#libraryKeys.length);
   }
 
   /** True when the latest state says library `library` supports OpenSubsonic sonic similarity. */
@@ -210,14 +211,14 @@ class Store {
   }
 
   #receive(state) {
-    const libraryKey = JSON.stringify(state.libraries);
-    const newNamespace = this.browseKey === null || libraryKey !== this.#libraryKey;
+    const librarySignature = JSON.stringify(state.library_keys);
+    const newNamespace = this.browseKey === null || librarySignature !== this.#librarySignature;
     const shared = newNamespace && this.route.sharedLibrary != null;
     if (newNamespace) {
-      const library = libraryForNamespace(this.#libraryNames, state.libraries, this.library);
+      const library = libraryForNamespace(this.#libraryKeys, state.library_keys, this.library);
       if (this.browseKey !== null) this.#invalidateBrowse();
-      this.#libraryNames = state.libraries;
-      this.#libraryKey = libraryKey;
+      this.#libraryKeys = state.library_keys;
+      this.#librarySignature = librarySignature;
       this.library = library;
       if (!shared) this.#replaceRoute(routeForLibrary(this.route, library));
     }
@@ -230,7 +231,7 @@ class Store {
       this.browseSignal = this.#browseController.signal;
       this.browseKey = `${this.#browseSession}:${this.browseEpoch}`;
       if (shared) {
-        const route = adoptSharedRoute(this.route, this.#libraryNames, this.browseKey);
+        const route = adoptSharedRoute(this.route, this.#libraryKeys, this.browseKey);
         if (typeof route.library === "number") this.library = route.library;
         this.#replaceRoute(route);
       }

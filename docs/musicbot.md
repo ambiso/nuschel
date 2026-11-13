@@ -20,7 +20,7 @@ browsers. People control what plays on a web page; they get their link by writin
   song's page: its details (track, disc, length, year, genre, format, play count),
   rating, the albums it appears on and, with sonic similarity, similar songs.
   Choose the destination queue in the player bar; the browser remembers the
-  selection for that link.
+  selection for the page (per public address and path).
 - **Sonic similarity.** Libraries with the OpenSubsonic `sonicSimilarity` extension
   offer **Similar songs** for library tracks and the playing song, plus **Blend
   into this song**: songs that lead from the playing song to a chosen one by how
@@ -104,21 +104,32 @@ contains no authenticated URL and is republished after reconnecting.
 
 Write `!web` to the bot, in its channel or privately. It answers privately with a
 link like `https://music.example.org/u/5f0c…/`. That link is your key, so keep it to
-yourself. Opening it stores the key in an HttpOnly cookie (90 days, `SameSite=Lax`,
-`Secure` for an https public address, scoped to the public address's path) and
-moves the browser to the public address, so the key never stays in the address
-bar. A person with a Mumble certificate keeps the same link; `!web new` replaces
+yourself. Opening it stores the key in an HttpOnly cookie for 90 days and moves
+the browser to the public address, so the key never stays in the address bar.
+The cookie is `SameSite=Lax` and scoped to the public address's path. Over HTTPS
+it is `Secure` and named `__Host-musicbot_link` (at `/`) or
+`__Secure-musicbot_link` (below a path); over plain HTTP it is `musicbot_link`.
+**Forget this browser** in the sidebar deletes it; the link itself stays valid.
+A person with a Mumble certificate keeps the same link; `!web new` replaces
 it, and the old one stops working. Without a certificate anybody could use the
 same name later, so every `!web` gives a new link. Links are kept in `tokens.json`
 in the state directory.
 
+Requests that use the cookie must come from the page itself. The bot refuses them
+with 403 when the browser's `Sec-Fetch-Site` is anything but `same-origin` or
+`none`, or when an `Origin` header names another origin than the public address.
+Open the page at the public address you configured; another host name for the
+same server is a different origin. Requests with the link in the path
+(`/u/<token>/…`, for scripts) do not use the cookie and are not checked this way.
+
 The address bar can be copied and pasted anywhere: it contains only the public
-address and the open view, such as `https://music.example.org/#/album/0/a1?library_name=Jazz`.
+address and the open view, such as `https://music.example.org/#/album/0/a1?library_key=480bdd6b67409016`.
 **Copy link** on library pages copies the same URL. Somebody who has opened their
-own link in that browser sees the view as themselves; libraries are matched by
-name, so different configurations still find the right one. Without a remembered
-link the page explains how to get one. A replaced or revoked link is forgotten the
-next time the page loads.
+own link in that browser sees the view as themselves. `library_key` is the
+library's key from the state, a hash of its configured name and URL, so the view
+finds the same library even when the configuration lists it at another position.
+Without a remembered link the page explains how to get one. A replaced or
+revoked link is forgotten the next time the page loads.
 
 A link grants everything the page does: controlling every queue, reading playback
 history, and streaming any queue's audio in a browser (only the server-wide cap of
@@ -137,7 +148,9 @@ controls all queues of the bot.
 
 Library detail links and drag actions belong to the current browser connection.
 A reconnect or library change clears old browse data and returns detail pages to
-a safe list. Expired detail URLs cannot send old IDs to a replacement backend.
+a safe list. Expired detail URLs cannot send old IDs to a replacement backend:
+a shared view names its library by key, and a key no current library has (its
+name or URL changed) opens the album list instead of the item.
 
 ## Running it
 
@@ -200,8 +213,10 @@ file names resolve beside the configuration, or in systemd's credentials directo
 The page speaks HTTP; put a TLS proxy in front of it. Assets and API URLs are
 relative to the public address, including when a proxy serves it under a path.
 For frontend development, run `npm run dev` in `apps/musicbot/web` through direnv,
-and open its `/u/<token>/` path once. Vite proxies that path and the API, art and
-licence requests to a bot on :8474, so the bot's cookie works for the dev page.
+and set the bot's `public_url` to the Vite address (`http://localhost:5173`), so
+the links point there and the page's origin passes the bot's same-origin check.
+Open the `/u/<token>/` link once. Vite proxies it and the API, art and licence
+requests to a bot on :8474, so the bot's cookie works for the dev page.
 
 Servers with a self-signed certificate need `certificate_sha256`, the SHA-256 of
 the server certificate. `channel` is the path from the root channel, so a
@@ -546,8 +561,9 @@ long track, seeking can take time; the player shows buffering while preparing it
 The page uses the endpoints below `api/` next to the public address and
 authenticates with the remembered link's cookie. Scripts can use the same
 endpoints below `/u/<token>/api/` instead; a token in the path never falls back to
-the cookie. POST bodies must be JSON, which cross-site forms cannot send, and the
-`SameSite=Lax` cookie is not sent on cross-site requests. `GET state` returns a
+the cookie. Cookie requests from another origin or site get 403 (see Links).
+POST bodies must be JSON, which cross-site forms cannot send. `POST forget` with
+`{}` answers 204 and deletes this browser's cookie. `GET state` returns a
 snapshot; `GET events` sends `event: state` SSE frames immediately, after changes,
 and roughly every two seconds for progress correction. Slow viewers receive the
 latest state when they can read again. Revoked links lose access to the stream.
@@ -610,19 +626,25 @@ Browsing uses `albums`, `album`, `artists`, `artist`, `playlists`, `playlist`, a
 `search` JSON endpoints. Library identity in requests is its current config index.
 Album lists accept `library`, `list`, and `page`; detail endpoints accept `library`
 and `id`. The authenticated `art/<library>/<id>?size=…&v=…` route returns
-`{"width":N,"height":N,"rgba":"<canonical base64 RGBA>"}`. Size is clamped to
-32–400. There are exactly these three fields, no encoded-file or source-URL
-authority. Invalid images return 404, busy workers (two jobs) or a missing
-worker return 503. Library failures preserve the existing redacted errors.
+`{"width":N,"height":N,"rgba":"<canonical base64 RGBA>"}`. Covers are made in
+edge lengths of 32, 64, 96, 128, 200, 300 and 400 pixels; a request gets the
+largest of these that is no larger than its `size`, so the page's few sizes share
+cache entries and worker jobs. There are exactly these three fields, no
+encoded-file or source-URL authority. Invalid images return 404, busy workers
+(two jobs) or a missing worker return 503. Library failures preserve the existing
+redacted errors.
 
 Successful answers are kept on disk in `covers/` below the state directory, up to
-`web.cover_cache_mib` MiB (64 by default; 0 turns the cache off and deletes the
-files). Entries are keyed by library, cover ID and size and are kept for at most
-24 hours; the least recently used leave first, and no single cover may take more
-than an eighth of the space. Every file holds its key and is checked again when
-read: a damaged file is deleted and fetched anew, and only well-formed pixels are
-served. A restart keeps the files and drops expired or unfinished ones. A cached
-cover needs no library call and no worker job. State/SSE includes `art_keys`, one short key per
+`web.cover_cache_mib` MiB (64 by default, at most 4096; 0 turns the cache off and
+deletes the files) and at most 4,096 covers. Entries are keyed by library, cover
+ID and size and are kept for at most 24 hours; the least recently used leave
+first, and no single cover may take more than an eighth of the space. Every file
+holds its key and is checked again when read; nothing past its indexed size is
+read. A damaged file is deleted and fetched anew, and only well-formed pixels are
+served. A restart keeps the files and drops expired, unfinished or excess ones. If
+the folder cannot be used the bot logs a warning and runs without the cache. A
+cached cover needs no library call and no worker job. State/SSE includes
+`library_keys`, one short key per
 library derived from its name and URL. With `v` set to that key the answer is
 `private, max-age=86400`, so the browser keeps it for a day. Without `v` it stays
 `private, no-store`. A `v` for another library (the configuration changed) gets

@@ -66,6 +66,7 @@ const COALESCE: Duration = Duration::from_millis(50);
 const INVALID_LINK: &str =
     "This link is not valid (any more). Send !web to the music bot in Mumble for a new one.";
 /// Remembers the browser's own link, so token-free shared URLs can open it.
+/// Over HTTPS the name carries the `__Host-` or `__Secure-` prefix.
 const LINK_COOKIE: &str = "musicbot_link";
 const LINK_COOKIE_MAX_AGE: u64 = 90 * 24 * 60 * 60;
 
@@ -93,29 +94,101 @@ pub fn router(bot: Arc<Bot>) -> Router {
         .route("/u/{token}/api/song", get(song))
         .route("/u/{token}/api/similar", get(similar))
         .route("/u/{token}/api/path", get(sonic_path))
-        .layer(axum::middleware::map_response(headers))
-        .with_state(bot);
-    // The outer router's layer runs before the inner routing, so the page's
-    // token-free requests can reach the per-link handlers.
+        .route("/u/{token}/api/forget", post(forget))
+        .with_state(bot.clone());
+    // The outer router's layers run before the inner routing, so the page's
+    // token-free requests can reach the per-link handlers. The header layer
+    // is outermost so refused page requests get the same headers.
     Router::new()
         .fallback_service(links)
-        .layer(axum::middleware::map_request(page_request))
+        .layer(axum::middleware::map_request_with_state(bot, page_request))
+        .layer(axum::middleware::map_response(headers))
+}
+
+/// What the public address means for the page: its origin and how the
+/// remembered link is stored.
+struct Site {
+    /// `scheme://host[:port]`, lower case, without a default port.
+    origin: Option<String>,
+    cookie: &'static str,
+    path: String,
+    secure: bool,
+}
+
+impl Site {
+    fn new(public_url: &str) -> Self {
+        let uri = public_url.parse::<axum::http::Uri>().ok();
+        let secure = uri
+            .as_ref()
+            .and_then(|uri| uri.scheme_str())
+            .is_some_and(|scheme| scheme.eq_ignore_ascii_case("https"));
+        let path = uri
+            .as_ref()
+            .map(|uri| uri.path().trim_end_matches('/').to_owned() + "/")
+            .filter(|path| {
+                path.bytes()
+                    .all(|byte| byte.is_ascii_graphic() && !matches!(byte, b';' | b','))
+            })
+            .unwrap_or_else(|| "/".to_owned());
+        // `__Host-` needs Secure and `Path=/`; `__Secure-` needs Secure.
+        let cookie = match (secure, path.as_str()) {
+            (true, "/") => "__Host-musicbot_link",
+            (true, _) => "__Secure-musicbot_link",
+            (false, _) => LINK_COOKIE,
+        };
+        Self {
+            origin: uri.as_ref().and_then(origin_of),
+            cookie,
+            path,
+            secure,
+        }
+    }
+}
+
+/// The normalized origin of an absolute URI, or `None` for anything else.
+fn origin_of(uri: &axum::http::Uri) -> Option<String> {
+    let scheme = uri.scheme_str()?.to_ascii_lowercase();
+    let host = uri.host()?.to_ascii_lowercase();
+    let default = match scheme.as_str() {
+        "https" => 443,
+        "http" => 80,
+        _ => return None,
+    };
+    Some(match uri.port_u16() {
+        Some(port) if port != default => format!("{scheme}://{host}:{port}"),
+        _ => format!("{scheme}://{host}"),
+    })
 }
 
 /// The page runs at the token-free root and authenticates with the browser's
 /// remembered link; the address bar never shows the key. Its relative requests
 /// become the per-link routes. Without a usable cookie they name no link and
 /// fail like an unknown one. Explicit `/u/<token>/` paths never use the cookie.
-async fn page_request(mut request: axum::extract::Request) -> axum::extract::Request {
+///
+/// The cookie is sent by the browser on its own, so page requests must come
+/// from the page itself: a `Sec-Fetch-Site` other than `same-origin` (or
+/// `none`, typed by the user) and an `Origin` other than the public one are
+/// refused. `SameSite=Lax` alone compares sites, not origins.
+async fn page_request(
+    State(bot): State<Arc<Bot>>,
+    mut request: axum::extract::Request,
+) -> Result<axum::extract::Request, ApiError> {
     let path = request.uri().path();
     let page_path = ["/api/", "/art/", "/assets/"]
         .iter()
         .any(|prefix| path.starts_with(prefix))
         || path == "/licenses";
     if !page_path {
-        return request;
+        return Ok(request);
     }
-    let token = remembered_link(request.headers())
+    let site = Site::new(&bot.config.web.public_url);
+    if !same_origin(request.headers(), &site) {
+        return Err(ApiError(
+            StatusCode::FORBIDDEN,
+            "requests from other sites cannot use this browser's link".to_owned(),
+        ));
+    }
+    let token = remembered_link(request.headers(), &site)
         .flatten()
         .unwrap_or(Uuid::nil());
     let rewritten = match request.uri().query() {
@@ -125,7 +198,23 @@ async fn page_request(mut request: axum::extract::Request) -> axum::extract::Req
     if let Ok(uri) = rewritten.parse() {
         *request.uri_mut() = uri;
     }
-    request
+    Ok(request)
+}
+
+fn same_origin(headers: &HeaderMap, site: &Site) -> bool {
+    let fetch_site = headers
+        .get_all(HeaderName::from_static("sec-fetch-site"))
+        .iter()
+        .all(|value| matches!(value.as_bytes(), b"same-origin" | b"none"));
+    let origin = headers.get_all(header::ORIGIN).iter().all(|value| {
+        let origin = value
+            .to_str()
+            .ok()
+            .and_then(|value| value.parse::<axum::http::Uri>().ok())
+            .and_then(|uri| origin_of(&uri));
+        origin.is_some() && origin == site.origin
+    });
+    fetch_site && origin
 }
 
 /// The link is a secret: no referrer, nothing from elsewhere, and nothing
@@ -229,7 +318,8 @@ async fn ask<T: Send + 'static>(
 /// The bot's public address: the page for a browser that opened its own link,
 /// otherwise how to get one. Shared views keep their URL fragment.
 async fn root(State(bot): State<Arc<Bot>>, headers: HeaderMap) -> Response {
-    match remembered_link(&headers) {
+    let site = Site::new(&bot.config.web.public_url);
+    match remembered_link(&headers, &site) {
         Some(Some(token)) if bot.tokens.is_valid(&token) => app_page(&bot).await,
         remembered => {
             let mut response = Html(
@@ -241,7 +331,7 @@ async fn root(State(bot): State<Arc<Bot>>, headers: HeaderMap) -> Response {
             if remembered.is_some() {
                 response
                     .headers_mut()
-                    .insert(header::SET_COOKIE, link_cookie(&bot, None));
+                    .insert(header::SET_COOKIE, link_cookie(&site, None));
             }
             response
         }
@@ -249,7 +339,7 @@ async fn root(State(bot): State<Arc<Bot>>, headers: HeaderMap) -> Response {
 }
 
 /// `None` without the cookie, `Some(None)` for a malformed value.
-fn remembered_link(headers: &HeaderMap) -> Option<Option<Uuid>> {
+fn remembered_link(headers: &HeaderMap, site: &Site) -> Option<Option<Uuid>> {
     headers
         .get_all(header::COOKIE)
         .iter()
@@ -257,38 +347,37 @@ fn remembered_link(headers: &HeaderMap) -> Option<Option<Uuid>> {
         .flat_map(|value| value.split(';'))
         .find_map(|pair| {
             let (name, value) = pair.trim().split_once('=')?;
-            (name == LINK_COOKIE).then(|| Uuid::parse_str(value).ok())
+            (name == site.cookie).then(|| Uuid::parse_str(value).ok())
         })
 }
 
 /// Remembers `token` (or forgets the link) below the configured public path.
-fn link_cookie(bot: &Bot, token: Option<&Uuid>) -> HeaderValue {
-    let public = &bot.config.web.public_url;
-    let path = public
-        .parse::<axum::http::Uri>()
-        .ok()
-        .map(|uri| uri.path().trim_end_matches('/').to_owned() + "/")
-        .filter(|path| {
-            path.bytes()
-                .all(|byte| byte.is_ascii_graphic() && !matches!(byte, b';' | b','))
-        })
-        .unwrap_or_else(|| "/".to_owned());
-    let secure = if public
-        .get(..8)
-        .is_some_and(|scheme| scheme.eq_ignore_ascii_case("https://"))
-    {
-        "; Secure"
-    } else {
-        ""
-    };
+fn link_cookie(site: &Site, token: Option<&Uuid>) -> HeaderValue {
+    let secure = if site.secure { "; Secure" } else { "" };
     let (value, max_age) = match token {
         Some(token) => (token.to_string(), LINK_COOKIE_MAX_AGE),
         None => (String::new(), 0),
     };
     HeaderValue::from_str(&format!(
-        "{LINK_COOKIE}={value}; Path={path}; Max-Age={max_age}; HttpOnly; SameSite=Lax{secure}"
+        "{}={value}; Path={}; Max-Age={max_age}; HttpOnly; SameSite=Lax{secure}",
+        site.cookie, site.path
     ))
     .expect("cookie built from a UUID and a checked path")
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Forget {}
+
+/// Forgets the link remembered in this browser; the link itself stays valid.
+/// JSON only, like the other POSTs.
+async fn forget(State(bot): State<Arc<Bot>>, Json(Forget {}): Json<Forget>) -> Response {
+    let site = Site::new(&bot.config.web.public_url);
+    (
+        StatusCode::NO_CONTENT,
+        [(header::SET_COOKIE, link_cookie(&site, None))],
+    )
+        .into_response()
 }
 
 async fn slash(Path(token): Path<String>) -> Result<Redirect, ApiError> {
@@ -323,9 +412,10 @@ async fn remember(State(bot): State<Arc<Bot>>, Path(token): Path<String>) -> Res
     };
     // Relative, like `slash`: the bot may be mounted below a proxy prefix.
     let mut response = Redirect::to("../../").into_response();
+    let site = Site::new(&bot.config.web.public_url);
     response
         .headers_mut()
-        .insert(header::SET_COOKIE, link_cookie(&bot, Some(&token)));
+        .insert(header::SET_COOKIE, link_cookie(&site, Some(&token)));
     response
 }
 
@@ -423,13 +513,27 @@ async fn asset(
 struct ArtQuery {
     #[serde(default = "default_art_size")]
     size: u32,
-    /// The library's `art_keys` entry from the state: proves the URL names
-    /// the current library, so the browser may keep the answer.
+    /// The library's `library_keys` entry from the state: proves the URL
+    /// names the current library, so the browser may keep the answer.
     v: Option<String>,
 }
 
 fn default_art_size() -> u32 {
     300
+}
+
+/// The edge lengths covers are made in. A request gets the largest step that
+/// fits, so the page's few sizes share cache entries and worker jobs, and its
+/// check that pixels are no larger than asked still holds.
+const COVER_SIZES: [u32; 7] = [32, 64, 96, 128, 200, 300, 400];
+
+fn snap_cover_size(requested: u32) -> u32 {
+    let wanted = requested.min(nuschl_ipc::MAX_THUMBNAIL_EDGE);
+    COVER_SIZES
+        .into_iter()
+        .rev()
+        .find(|size| *size <= wanted && *size <= nuschl_ipc::MAX_THUMBNAIL_EDGE)
+        .unwrap_or(COVER_SIZES[0])
 }
 
 #[derive(Serialize)]
@@ -472,7 +576,7 @@ async fn art(
     // kept by the browser under this library's covers.
     let versioned = match query.v.as_deref() {
         None => false,
-        Some(key) if key == source.art_key() => true,
+        Some(key) if key == source.key() => true,
         Some(_) => {
             return Err(ApiError(
                 StatusCode::NOT_FOUND,
@@ -480,8 +584,8 @@ async fn art(
             ));
         }
     };
-    let size = query.size.clamp(32, nuschl_ipc::MAX_THUMBNAIL_EDGE);
-    let key: CoverKey = (source.art_key().to_owned(), id, size);
+    let size = snap_cover_size(query.size);
+    let key: CoverKey = (source.key().to_owned(), id, size);
     let cached = bot.covers.get(&key).await;
     let body = match cached {
         Some(body) => body,
@@ -582,8 +686,8 @@ struct StateView {
     /// Per library, parallel to `libraries`: whether it is known to offer
     /// sonic similarity. Read from what is already known, never asked.
     sonic: Vec<bool>,
-    /// Per library: the `v` that lets the browser cache its covers.
-    art_keys: Vec<String>,
+    /// Per library: identifies it in shared links and cover URLs (`v`).
+    library_keys: Vec<String>,
     players: Vec<PlayerView>,
     channels: Vec<ChannelView>,
     rating_revision: u64,
@@ -702,10 +806,10 @@ fn snapshot(bot: &Bot, you: &str) -> StateView {
             .iter()
             .map(|library| library.supports_sonic_similarity_cached())
             .collect(),
-        art_keys: bot
+        library_keys: bot
             .libraries
             .iter()
-            .map(|library| library.art_key().to_owned())
+            .map(|library| library.key().to_owned())
             .collect(),
         players,
         channels,
@@ -1705,6 +1809,122 @@ mod tests {
             404
         );
 
+        // Page requests from another origin or site cannot use the cookie,
+        // for reading as well as for changes. The public origin is
+        // http://localhost; a default port is the same origin.
+        async fn status_with(
+            url: String,
+            headers: Vec<(&'static str, String)>,
+            body: Option<&'static str>,
+        ) -> u16 {
+            tokio::task::spawn_blocking(move || {
+                let agent: ureq::Agent = ureq::Agent::config_builder()
+                    .http_status_as_error(false)
+                    .timeout_global(Some(Duration::from_secs(2)))
+                    .build()
+                    .into();
+                match body {
+                    Some(body) => {
+                        let mut request =
+                            agent.post(&url).header("Content-Type", "application/json");
+                        for (name, value) in &headers {
+                            request = request.header(*name, value);
+                        }
+                        request.send(body).unwrap().status().as_u16()
+                    }
+                    None => {
+                        let mut request = agent.get(&url);
+                        for (name, value) in &headers {
+                            request = request.header(*name, value);
+                        }
+                        request.call().unwrap().status().as_u16()
+                    }
+                }
+            })
+            .await
+            .unwrap()
+        }
+        let from = |extra: &[(&'static str, &str)]| {
+            let mut headers = vec![("Cookie", cookie.clone())];
+            headers.extend(
+                extra
+                    .iter()
+                    .map(|(name, value)| (*name, (*value).to_owned())),
+            );
+            headers
+        };
+        for refused in [
+            &[("Origin", "https://evil.example")][..],
+            &[("Origin", "http://localhost:8080")],
+            &[("Origin", "null")],
+            &[("Sec-Fetch-Site", "cross-site")],
+            &[("Sec-Fetch-Site", "same-site")],
+            &[
+                ("Origin", "http://localhost"),
+                ("Sec-Fetch-Site", "same-site"),
+            ],
+        ] {
+            for (endpoint, body) in [
+                ("api/command", Some(command)),
+                ("api/state", None),
+                ("api/events", None),
+                ("api/listen?player=0", None),
+                ("api/forget", Some("{}")),
+            ] {
+                assert_eq!(
+                    status_with(format!("{base}/{endpoint}"), from(refused), body).await,
+                    403,
+                    "{endpoint} {refused:?}"
+                );
+            }
+        }
+        for allowed in [
+            &[
+                ("Origin", "http://LOCALHOST:80"),
+                ("Sec-Fetch-Site", "same-origin"),
+            ][..],
+            &[("Sec-Fetch-Site", "none")],
+        ] {
+            assert_eq!(
+                status_with(format!("{base}/api/command"), from(allowed), Some(command)).await,
+                400,
+                "{allowed:?}"
+            );
+        }
+        // Scripts with the link in the path are not page requests.
+        assert_eq!(
+            status_with(
+                format!("{base}/u/{token}/api/state"),
+                vec![("Origin", "https://evil.example".to_owned())],
+                None
+            )
+            .await,
+            200
+        );
+        // Forgetting clears the cookie and needs JSON.
+        let (status, _, set_cookie, _) = get(
+            format!("{base}/api/forget"),
+            Some(cookie.clone()),
+            Some("{}"),
+        )
+        .await;
+        assert_eq!(status, 204);
+        assert!(
+            set_cookie
+                .unwrap()
+                .starts_with(&format!("{LINK_COOKIE}=; Path=/; Max-Age=0"))
+        );
+        assert_eq!(
+            status_with(
+                format!("{base}/api/forget"),
+                vec![("Cookie", cookie.clone())],
+                None
+            )
+            .await,
+            405,
+            "a GET does nothing"
+        );
+
         // Renewal revokes the remembered link: the root forgets it.
         let viewer = owner(&bot, &token).ok().unwrap();
         bot.tokens.issue(viewer, true).unwrap();
@@ -1727,23 +1947,70 @@ mod tests {
     }
 
     #[test]
-    fn the_remembered_link_stays_below_the_public_path() {
-        let (_directory, mut bot, _) = test_bot("http://unused.invalid", 0);
+    fn the_remembered_link_stays_below_the_public_path_with_a_prefixed_name() {
         let token = Uuid::from_u128(7);
-        for (public, path, secure) in [
-            ("https://music.example.org/bot", "/bot/", true),
-            ("HTTPS://music.example.org/bot/", "/bot/", true),
-            ("http://music.example.org", "/", false),
-            ("https://music.example.org/a;b", "/", true),
+        for (public, name, path, secure, origin) in [
+            (
+                "https://music.example.org",
+                "__Host-musicbot_link",
+                "/",
+                true,
+                "https://music.example.org",
+            ),
+            (
+                "https://Music.example.org:443/bot",
+                "__Secure-musicbot_link",
+                "/bot/",
+                true,
+                "https://music.example.org",
+            ),
+            (
+                "HTTPS://music.example.org:8443/bot/",
+                "__Secure-musicbot_link",
+                "/bot/",
+                true,
+                "https://music.example.org:8443",
+            ),
+            (
+                "http://music.example.org",
+                "musicbot_link",
+                "/",
+                false,
+                "http://music.example.org",
+            ),
+            (
+                "https://music.example.org/a;b",
+                "__Host-musicbot_link",
+                "/",
+                true,
+                "https://music.example.org",
+            ),
         ] {
-            Arc::get_mut(&mut bot).unwrap().config.web.public_url = public.into();
-            let cookie = link_cookie(&bot, Some(&token)).to_str().unwrap().to_owned();
+            let site = Site::new(public);
+            assert_eq!(site.origin.as_deref(), Some(origin), "{public}");
+            let cookie = link_cookie(&site, Some(&token))
+                .to_str()
+                .unwrap()
+                .to_owned();
             assert!(
-                cookie.contains(&format!("; Path={path}; ")),
+                cookie.starts_with(&format!("{name}={token}; Path={path}; ")),
                 "{public}: {cookie}"
             );
             assert_eq!(cookie.ends_with("; Secure"), secure, "{public}: {cookie}");
+            let mut headers = HeaderMap::new();
+            let cookies = format!("other=x; {name}={token}");
+            headers.insert(header::COOKIE, cookies.parse().unwrap());
+            assert_eq!(remembered_link(&headers, &site), Some(Some(token)));
         }
+    }
+
+    #[test]
+    fn covers_are_made_in_a_few_sizes_never_larger_than_asked() {
+        let snapped: Vec<_> = [0, 31, 32, 63, 96, 127, 250, 300, 399, 400, 4000]
+            .into_iter()
+            .map(snap_cover_size)
+            .collect();
+        assert_eq!(snapped, [32, 32, 32, 32, 96, 96, 200, 300, 300, 400, 400]);
     }
     use subsonic::tests::Server;
 
@@ -2382,8 +2649,8 @@ mod tests {
             br#"{"subsonic-response":{"status":"failed","error":{"code":0}}}"#,
         );
         let (_directory, bot, token) = test_bot(&server.url, 1);
-        let art_key = bot.libraries[0].art_key().to_owned();
-        assert_eq!(snapshot(&bot, "x").art_keys, [art_key.as_str()]);
+        let art_key = bot.libraries[0].key().to_owned();
+        assert_eq!(snapshot(&bot, "x").library_keys, [art_key.as_str()]);
         let body = Bytes::from_static(br#"{"width":1,"height":1,"rgba":"AAAAAA=="}"#);
         bot.covers
             .insert(&(art_key.clone(), "cover".into(), 300), &body)

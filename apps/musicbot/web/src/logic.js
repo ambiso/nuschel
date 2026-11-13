@@ -115,7 +115,7 @@ function libraryIndex(text) {
  * `{ view: "artists" | "playlists", library }`,
  * `{ view: "album" | "artist" | "playlist" | "song" | "similar", library, id, namespace? }`,
  * `{ view: "path", library, from, to, namespace? }`, `{ view: "search", q }`.
- * A shared link (`library_name=`, see shareRoute) adds `sharedLibrary: name` to
+ * A shared link (`library_key=`, see shareRoute) adds `sharedLibrary: key` to
  * library routes instead of a namespace; adoptSharedRoute resolves it.
  * Unknown hashes give the queue view.
  */
@@ -134,7 +134,7 @@ export function parseRoute(hash) {
   } catch {
     return { view: "queue" };
   }
-  const shared = params.has("library_name") ? { sharedLibrary: params.get("library_name") } : null;
+  const shared = params.has("library_key") ? { sharedLibrary: params.get("library_key") } : null;
   const namespace = shared ?? (params.has("namespace") ? { namespace: params.get("namespace") } : {});
   switch (view) {
     case "channels":
@@ -217,7 +217,7 @@ export function routeForLibrary(route, library) {
   }
 }
 
-/** Keep a selected library by name only when that name is unambiguous in both namespaces. */
+/** Keep a selected library by key (`library_keys`) only when that key is unambiguous in both namespaces. */
 export function libraryForNamespace(previous, current, index) {
   const name = previous[index];
   if (name === undefined || previous.indexOf(name) !== previous.lastIndexOf(name)) return 0;
@@ -235,30 +235,33 @@ export function routeForNamespace(route, library, namespace) {
   return typeof route.library === "number" && route.library !== library ? { ...route, library } : route;
 }
 
-/** The index of `name` in `names`, or -1 when it is missing or ambiguous. */
-function uniqueLibraryIndex(names, name) {
-  const index = names.indexOf(name);
-  return index >= 0 && index === names.lastIndexOf(name) ? index : -1;
+/** The index of `key` in `keys`, or -1 when it is missing or ambiguous. */
+function uniqueLibraryIndex(keys, key) {
+  const index = keys.indexOf(key);
+  return index >= 0 && index === keys.lastIndexOf(key) ? index : -1;
 }
 
 /**
  * The hash for sharing `route` with other viewers: no namespace, and a route
- * with a library names it (`library_name=`) because each viewer's indexes may
- * differ. Null when the library index is invalid or its name is ambiguous.
+ * with a library carries its key (`library_key=`, from the state's
+ * `library_keys`) because each viewer's indexes may differ. The key changes
+ * with the library's name or URL, so an old link never sends its item ID to a
+ * different backend. Null when the library index is invalid or its key is
+ * shared with another library.
  */
-export function shareRoute(route, libraryNames) {
+export function shareRoute(route, libraryKeys) {
   const { namespace: _namespace, sharedLibrary: _shared, ...rest } = route;
   const hash = buildRoute(rest);
   if (typeof rest.library !== "number") return hash;
-  const name = libraryNames[rest.library];
-  if (name === undefined || uniqueLibraryIndex(libraryNames, name) !== rest.library) return null;
-  return `${hash}${hash.includes("?") ? "&" : "?"}${new URLSearchParams({ library_name: name })}`;
+  const key = libraryKeys[rest.library];
+  if (key === undefined || uniqueLibraryIndex(libraryKeys, key) !== rest.library) return null;
+  return `${hash}${hash.includes("?") ? "&" : "?"}${new URLSearchParams({ library_key: key })}`;
 }
 
-/** The address bar hash for `route`: the share format, or (ambiguous library name) the route without namespace. */
-export function addressRoute(route, libraryNames) {
+/** The address bar hash for `route`: the share format, or (ambiguous library key) the route without namespace. */
+export function addressRoute(route, libraryKeys) {
   const { namespace: _namespace, sharedLibrary: _shared, ...rest } = route;
-  return shareRoute(rest, libraryNames) ?? buildRoute(rest);
+  return shareRoute(rest, libraryKeys) ?? buildRoute(rest);
 }
 
 /**
@@ -272,20 +275,20 @@ export function shareRoot(href) {
 }
 
 /** The page URL for `route` that works for every viewer with their own link, or null when it cannot be shared. */
-export function shareUrl(href, route, libraryNames) {
-  const hash = shareRoute(route, libraryNames);
+export function shareUrl(href, route, libraryKeys) {
+  const hash = shareRoute(route, libraryKeys);
   return hash === null ? null : `${shareRoot(href)}${hash}`;
 }
 
 /**
- * Resolves a shared route's library name in this viewer's libraries once
- * `namespace` exists. A missing or ambiguous name falls back to the first
- * library's safe list.
+ * Resolves a shared route's library key in this viewer's libraries once
+ * `namespace` exists. A missing, unknown or duplicated key falls back to the
+ * first library's safe list.
  */
-export function adoptSharedRoute(route, libraryNames, namespace) {
+export function adoptSharedRoute(route, libraryKeys, namespace) {
   if (route.sharedLibrary == null || !namespace) return route;
   const { sharedLibrary, ...rest } = route;
-  const library = uniqueLibraryIndex(libraryNames, sharedLibrary);
+  const library = uniqueLibraryIndex(libraryKeys, sharedLibrary);
   if (library < 0) return routeForLibrary(rest, 0);
   return DETAIL_VIEWS.has(rest.view) ? { ...rest, library, namespace } : { ...rest, library };
 }
@@ -335,7 +338,11 @@ export function debounce(fn, ms) {
   return debounced;
 }
 
-/** localStorage key for the selected queue, per page root (one browser holds one remembered link per root). */
+/**
+ * localStorage key for the selected queue, per page path (normally the bot's
+ * public root). The path carries no token, so the choice belongs to this
+ * browser and root and outlives a change of remembered link.
+ */
 export function queueStorageKey(pathname) {
   return `nuschl-musicbot:queue:${pathname}`;
 }
