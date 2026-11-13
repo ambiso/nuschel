@@ -3,7 +3,7 @@
 # `nix build -f ci.nix`. Every flake check, the NixOS VM tests included,
 # except the release packaging proofs, which releases build.
 let
-  checks = (builtins.getFlake (toString ./.)).checks.${builtins.currentSystem};
+  checks = (builtins.getFlake ("git+file://" + toString ./.)).checks.${builtins.currentSystem};
 in
 builtins.removeAttrs checks [
   "distro-metadata"
