@@ -86,16 +86,18 @@ impl Facts {
             } else {
                 State::ListeningPending
             }
+        } else if self.server_muted {
+            // The server stopping you outranks your own mute: unmuting would
+            // not help (#199; the client keeps you muted meanwhile).
+            State::ServerMuted
+        } else if self.suppressed {
+            State::Suppressed
         } else if self.muted {
             if self.acknowledged {
                 State::Muted
             } else {
                 State::MutedPending
             }
-        } else if self.server_muted {
-            State::ServerMuted
-        } else if self.suppressed {
-            State::Suppressed
         } else if !self.transmit_budget {
             State::NoTransmitBudget
         } else if !self.acknowledged {
@@ -129,7 +131,7 @@ impl State {
             Self::Muted => "Microphone destination · muted",
             Self::MutedPending => "Microphone destination · muted · awaiting server",
             Self::ServerMuted => "Microphone destination · server muted",
-            Self::Suppressed => "Microphone destination · suppressed",
+            Self::Suppressed => "Can't speak here",
             Self::NoTransmitBudget => "Microphone unavailable: server bandwidth",
             Self::AwaitingAcknowledgement => "Microphone destination · awaiting server",
             Self::PushMuted => "Microphone destination · push to mute",
@@ -372,6 +374,51 @@ mod tests {
             assert!(facts.state().label().contains("awaiting server"));
         }
     }
+    /// #199: held muted where the server stops you, the status says why
+    /// rather than "muted", and never that the microphone is enabled.
+    #[test]
+    fn the_server_stopping_you_outranks_your_own_mute() {
+        for acknowledged in [true, false] {
+            let held = Facts {
+                muted: true,
+                acknowledged,
+                sending: true,
+                ..live()
+            };
+            for (facts, expected) in [
+                (
+                    Facts {
+                        suppressed: true,
+                        ..held
+                    },
+                    State::Suppressed,
+                ),
+                (
+                    Facts {
+                        server_muted: true,
+                        ..held
+                    },
+                    State::ServerMuted,
+                ),
+            ] {
+                assert_eq!(facts.state(), expected);
+                assert!(!facts.state().microphone_enabled());
+            }
+        }
+        assert_eq!(State::Suppressed.label(), "Can't speak here");
+        // Deafened still says deafened.
+        assert_eq!(
+            Facts {
+                deafened: true,
+                muted: true,
+                suppressed: true,
+                ..live()
+            }
+            .state(),
+            State::Deafened
+        );
+    }
+
     #[test]
     fn heading_does_not_promote_chat_only_or_unknown_codec_to_voice() {
         for state in [State::EndToEnd, State::Unsupported, State::Offline] {
