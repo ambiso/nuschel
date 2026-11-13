@@ -534,6 +534,8 @@ pub struct WebClient {
     recovery: VecDeque<(Origin, SourceMode)>,
     recovery_selection: Option<(String, u64, u32, u64)>,
     recovery_until: u64,
+    /// The selected lifetime whose rows were last recovered and rebound.
+    rekeyed: Option<(String, u64, u32, u64)>,
     catalog: Catalog,
 }
 
@@ -582,6 +584,7 @@ impl WebClient {
             recovery: VecDeque::new(),
             recovery_selection: None,
             recovery_until: 0,
+            rekeyed: None,
             catalog: Catalog::default(),
         })
     }
@@ -1371,12 +1374,10 @@ impl WebClient {
             let Some(input) = input else { break };
             self.client.handle(input);
         }
-        let mut reconnected = false;
         if let (Some(previous), Some(current)) =
             (previous_lifetime, selected_lifetime(&self.client))
         {
             if previous.0 == current.0 && previous.2 == current.2 && previous != current {
-                reconnected = true;
                 // Initial cached/offline channels and reconnects get a NEW
                 // storage request/ticket once the real wire lifetime is known.
                 // Never retarget an old reply or its already-posted render.
@@ -1401,9 +1402,12 @@ impl WebClient {
             .jobs
             .borrow_mut()
             .retain(|origin| content_resident(&self.client, &self.shared, origin));
-        if reconnected {
-            // Rebind verified derivatives of the visible conversation before
-            // the next snapshot; anything unverified is requested again.
+        // Rebind verified derivatives of the visible conversation before the
+        // next snapshot whenever its lifetime differs from the one last
+        // recovered. A reconnect can change the generation outside poll
+        // (connect), and a direct conversation keeps instance 0.
+        let visible = selected_lifetime(&self.client);
+        if visible.is_some() && visible != self.rekeyed {
             self.recover_selected_content();
         }
         self.reconcile_voice();
@@ -1481,6 +1485,7 @@ impl WebClient {
     fn recover_selected_content(&mut self) {
         self.recovery.clear();
         self.recovery_selection = selected_lifetime(&self.client);
+        self.rekeyed = self.recovery_selection.clone();
         self.recovery_until = now_ms().saturating_add(120_000);
         let Some((server, channel)) = self.client.selected_indices() else {
             return;

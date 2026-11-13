@@ -366,10 +366,13 @@ commands use at most 124), rehydration keeps at most eight content requests in
 flight, and an invalid codec reply is acknowledged as a terminal failure. If an
 ACK still cannot be delivered, the bridge keeps that credit charged and starts no
 further codec work. If a cancelled posted job is not acknowledged within 15
-seconds of active runtime, the SDK retires the preview lane for the page: credit
-stays held, waiting and new rows show a reload message, and no replacement
-capacity is created. That is a logical bound, not a wall-clock promise while a
-background tab is suspended.
+seconds, the SDK retires the preview lane for the page: credit stays held,
+waiting and new rows show a reload message, and no replacement capacity is
+created. These content deadlines use the SDK worker's `performance.now()`, which
+includes time a frozen or suspended tab could not run. After a resume they can
+therefore already have elapsed: posted rows fail with an explicit retry, and an
+unacknowledged cancelled job can retire the lane before its pending ACK is
+processed. That is a visible terminal state, not a background guarantee.
 
 The bridge gives the single content worker one job at a time, and the next only
 after the previous one has actually left the worker; a cancelled running job

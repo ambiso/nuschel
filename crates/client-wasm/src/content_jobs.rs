@@ -16,7 +16,10 @@ const QUEUE_DEADLINE_MS: u64 = 60_000;
 /// posted jobs one at a time in request order, so only that job can hold the
 /// codec. This is not the content worker's own execution deadline (in the UI).
 const EXECUTION_DEADLINE_MS: u64 = 12_000;
-/// Logical active-runtime bound for the ACK of a cancelled posted job.
+/// Bound for the ACK of a cancelled posted job. Like every deadline here it is
+/// measured with the SDK worker's `performance.now()`, which keeps advancing
+/// while a tab or worker is frozen or suspended: after resume it can already
+/// have elapsed before an imminent ACK is processed, and the lane then retires.
 const CANCEL_ACK_DEADLINE_MS: u64 = 15_000;
 /// A posted job that has not reached the head of the serial lane.
 const UNARMED: u64 = u64::MAX;
