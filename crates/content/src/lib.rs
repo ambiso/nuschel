@@ -19,6 +19,7 @@ use thiserror::Error;
 pub mod markdown;
 mod markup;
 pub mod math;
+pub mod preview;
 pub use markup::{MAX_LINKS, MAX_URL_BYTES, bare_urls};
 
 #[derive(Debug, Error)]

@@ -23488,6 +23488,10 @@ rec {
             packageId = "nuschl-core";
           }
           {
+            name = "nuschl-link-preview";
+            packageId = "nuschl-link-preview";
+          }
+          {
             name = "pulldown-cmark";
             packageId = "pulldown-cmark";
             usesDefaultFeatures = false;
@@ -23998,9 +24002,17 @@ rec {
             packageId = "nuschl-core";
           }
           {
+            name = "nuschl-legacy-html";
+            packageId = "nuschl-legacy-html";
+          }
+          {
             name = "serde";
             packageId = "serde";
             features = [ "derive" ];
+          }
+          {
+            name = "serde_json";
+            packageId = "serde_json";
           }
           {
             name = "thiserror";
@@ -24009,12 +24021,6 @@ rec {
           {
             name = "url";
             packageId = "url";
-          }
-        ];
-        devDependencies = [
-          {
-            name = "serde_json";
-            packageId = "serde_json";
           }
         ];
 
