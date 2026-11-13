@@ -7049,6 +7049,7 @@ dependencies = [
  "nuschl-client",
  "nuschl-core",
  "nuschl-ipc",
+ "nuschl-legacy-html",
  "nuschl-protocol",
  "nuschl-session",
  "nuschl-update",

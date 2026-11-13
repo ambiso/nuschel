@@ -23130,6 +23130,10 @@ rec {
             packageId = "nuschl-ipc";
           }
           {
+            name = "nuschl-legacy-html";
+            packageId = "nuschl-legacy-html";
+          }
+          {
             name = "nuschl-protocol";
             packageId = "nuschl-protocol";
           }

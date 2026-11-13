@@ -539,7 +539,7 @@ fn handle(
 
 /// `!web` sends the user their link privately; `!web new` replaces it.
 fn answer(bot: &Arc<Bot>, index: usize, commands: &mpsc::Sender<Command>, text: IncomingText) {
-    let words = plain_text(&text.body);
+    let words = nuschl_legacy_html::html_text(&text.body, ' ');
     let mut words = words.split_whitespace();
     if words.next() != Some("!web") {
         return;
@@ -575,29 +575,6 @@ fn answer(bot: &Arc<Bot>, index: usize, commands: &mpsc::Sender<Command>, text: 
         body,
         expected_peer: Some(peer.instance),
     });
-}
-
-/// The text of a message that may be Mumble HTML: tags dropped, the common
-/// entities decoded.
-fn plain_text(body: &str) -> String {
-    let mut text = String::with_capacity(body.len());
-    let mut in_tag = false;
-    for c in body.chars() {
-        match c {
-            '<' => in_tag = true,
-            '>' if in_tag => {
-                in_tag = false;
-                text.push(' ');
-            }
-            _ if !in_tag => text.push(c),
-            _ => {}
-        }
-    }
-    text.replace("&nbsp;", " ")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", "\"")
-        .replace("&amp;", "&")
 }
 
 #[cfg(test)]
@@ -691,12 +668,11 @@ mod tests {
     #[test]
     fn commands_in_mumble_html() {
         assert_eq!(
-            plain_text("<p>!web&nbsp;new</p>")
+            nuschl_legacy_html::html_text("<p>!web&nbsp;new</p>", ' ')
                 .split_whitespace()
                 .collect::<Vec<_>>(),
             ["!web", "new"]
         );
-        assert_eq!(plain_text("a &lt;b&gt; &amp;"), "a <b> &");
     }
 
     /// Real TLS sessions against an owned stock Mumble server on a loopback
