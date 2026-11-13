@@ -618,6 +618,9 @@ mod tests {
             deafened: false,
             can_transmit: false,
             bitrate: 128000,
+            requested_bitrate: 128000,
+            server_bandwidth: 0,
+            bitrate_limit: nuschl_core::bitrate::BitrateLimit::Requested,
         };
         p["voice"] = json!({"server_id":voice.server_id,"connection_generation":"5","voice_generation":"9","channel_id":0,"muted":false,"deafened":false});
         for method in ["toggle_mute", "toggle_deaf"] {
