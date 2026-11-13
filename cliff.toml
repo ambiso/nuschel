@@ -40,8 +40,11 @@ topo_order_commits = true
 sort_commits = "oldest"
 recurse_submodules = false
 commit_preprocessors = []
+# Breaking changes come first, before any type filter: a subject "!" or a
+# conventional BREAKING CHANGE / BREAKING-CHANGE footer, on any commit type.
 commit_parsers = [
     { message = "^[a-z]+(\\([^)]*\\))?!:", group = "<!-- 0 -->Breaking changes" },
+    { footer = "^BREAKING[ -]CHANGE:", group = "<!-- 0 -->Breaking changes" },
     { message = "^feat", group = "<!-- 1 -->Features" },
     { message = "^fix", group = "<!-- 2 -->Fixes" },
     { message = "^perf", group = "<!-- 3 -->Performance" },

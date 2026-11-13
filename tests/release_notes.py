@@ -211,6 +211,69 @@ class History(unittest.TestCase):
                           entry['curated_sha256']),
                          (None, self.c[1], 1, 'release/notes-0.1.0.md', sha256(curated.encode())))
 
+    def breaking_history(self, name, messages, config=None):
+        """Tagged base, then messages; renders with the real pinned git-cliff and the tagged config."""
+        repo = Repo(self.root / name)
+        repo.commit('chore: start', config or self.config)
+        repo.git('tag', 'v1.0.0')
+        commits = [repo.commit(message) for message in messages]
+        repo.git('tag', 'v1.1.0')
+        stage = self.root / (name + '-stage')
+        (stage / 'source').mkdir(parents=True)
+        (stage / 'source/cliff.toml').write_bytes(repo.blob(commits[-1]))
+        entry = local.stage_notes(repo.path, stage, 'v1.1.0', commits[-1], '1.1.0', self.flake)
+        return commits, (stage / 'notes/RELEASE-NOTES.md').read_text(), entry
+
+    def test_footer_only_breaking_changes_are_kept_on_any_type(self):
+        cases = (('refactor: change synthetic protocol', 'BREAKING CHANGE', 'Change synthetic protocol'),
+                 ('refactor(store): rename records', 'BREAKING-CHANGE', 'store: Rename records'),
+                 ('chore: drop legacy store', 'BREAKING CHANGE', 'Drop legacy store'),
+                 ('chore(deps): require newer runtime', 'BREAKING-CHANGE', 'deps: Require newer runtime'),
+                 ('test: change fixture protocol', 'BREAKING CHANGE', 'Change fixture protocol'))
+        for number, (subject, token, shown) in enumerate(cases):
+            with self.subTest(subject=subject, token=token):  # Breaking-only release histories.
+                commits, body, entry = self.breaking_history(
+                    'breaking-' + str(number), [subject + '\n\n' + token + ': incompatible synthetic change'])
+                self.assertEqual(body, '## Changes since v1.0.0\n\n### Breaking changes\n\n- ' + shown +
+                                 ' (' + commits[0][:12] + ')\n')
+                self.assertEqual((entry['previous_tag'], entry['commit_count']), ('v1.0.0', 1))
+        # Discriminating control: the reviewed pre-fix config dropped exactly these commits.
+        old = self.config.replace('    { footer = "^BREAKING[ -]CHANGE:", group = "<!-- 0 -->Breaking changes" },\n', '')
+        self.assertNotEqual(old, self.config)
+        with self.assertRaisesRegex(ValueError, 'git-cliff found no notable changes'):
+            self.breaking_history('breaking-old-config', ['refactor: change synthetic protocol\n\n'
+                                                          'BREAKING CHANGE: incompatible'], old)
+        commits, body, _ = self.breaking_history('breaking-only-mixed-forms', [
+            'refactor!: drop the v1 wire format', 'chore: remove old store\n\nBREAKING-CHANGE: unreadable',
+            'test: harmless'])
+        self.assertEqual(body, '## Changes since v1.0.0\n\n### Breaking changes\n\n'
+                         '- Drop the v1 wire format (' + commits[0][:12] + ')\n'
+                         '- Remove old store (' + commits[1][:12] + ')\n')
+
+    def test_mixed_history_groups_breaking_footers_before_type_filters(self):
+        commits, body, entry = self.breaking_history('mixed', [
+            'feat: add capture meter',
+            'refactor: rework storage\n\nBREAKING CHANGE: history databases are migrated',
+            'docs: describe the meter',
+            'fix: repair reconnect',
+            'chore: plain chore\n\nRefs: #2',
+            'refactor: harmless cleanup',
+            'chore(deps): bump runtime\n\nBREAKING-CHANGE: needs the newer runtime',
+            'fix(audio): change default device\n\nBREAKING CHANGE: device selection resets',
+            'feat(api)!: remove the v1 endpoint'])
+        c = {i + 1: commit[:12] for i, commit in enumerate(commits)}
+        self.assertEqual(body, '## Changes since v1.0.0\n\n'
+                         '### Breaking changes\n\n'
+                         '- Rework storage (' + c[2] + ')\n'
+                         '- deps: Bump runtime (' + c[7] + ')\n'
+                         '- audio: Change default device (' + c[8] + ')\n'
+                         '- api: Remove the v1 endpoint (' + c[9] + ')\n\n'
+                         '### Features\n\n'
+                         '- Add capture meter (' + c[1] + ')\n\n'
+                         '### Fixes\n\n'
+                         '- Repair reconnect (' + c[4] + ')\n')
+        self.assertEqual(entry['commit_count'], 9)
+
     def test_only_the_selected_tags_config_can_render_notes(self):
         tool_checkout = self.root / 'tool-checkout'
         tool_checkout.mkdir()

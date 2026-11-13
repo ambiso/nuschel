@@ -296,8 +296,8 @@ CLIFF = {'changelog': {'body': str, 'trim': bool, 'render_always': bool},
                  'protect_breaking_commits': bool, 'filter_commits': bool, 'tag_pattern': str,
                  'topo_order': bool, 'topo_order_commits': bool, 'sort_commits': str,
                  'recurse_submodules': bool, 'commit_preprocessors': list, 'commit_parsers': list}}
-CLIFF_ITEMS = {'commit_parsers': {'message': str, 'body': str, 'group': str, 'skip': bool,
-                                  'scope': str, 'default_scope': str},
+CLIFF_ITEMS = {'commit_parsers': {'message': str, 'body': str, 'footer': str, 'group': str,
+                                  'skip': bool, 'scope': str, 'default_scope': str},
                'commit_preprocessors': {'pattern': str, 'replace': str}}  # never replace_command
 # Remote metadata, environment, clock, randomness, local paths and diff statistics.
 CLIFF_TEMPLATE_DENIED = re.compile(r'\b(github|gitlab|gitea|bitbucket|azure_devops|remote|get_env|now|'
