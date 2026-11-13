@@ -203,7 +203,7 @@ fn retire_windows(old: Option<&Layout>, new: &Layout) -> io::Result<()> {
         // The unsafe Win32 adapter remains in a short-lived launch-stage process,
         // just as it does when starting a sandbox. No unsafe dependency enters
         // the session library or desktop. These arguments are local paths/names.
-        let worker = crate::workers::sibling("nuschl-storage-worker")?;
+        let worker = nuschl_sandbox::sibling("nuschl-storage-worker")?;
         let mut command = Command::new(worker);
         command
             .arg("--retire-nuschel-profile")

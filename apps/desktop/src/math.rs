@@ -299,7 +299,7 @@ fn evict(cache: &mut Cache) {
 /// The math worker's loop on the tokio runtime: one formula at a time,
 /// stopping the worker when idle.
 async fn serve(mut jobs: mpsc::Receiver<Job>) {
-    let executable = nuschl_session::workers::sibling("nuschl-math-worker")
+    let executable = nuschl_sandbox::sibling("nuschl-math-worker")
         .unwrap_or_else(|_| "nuschl-math-worker".into());
     let mut worker = MathWorker::new(executable);
     loop {

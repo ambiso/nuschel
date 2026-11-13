@@ -116,6 +116,16 @@ pub fn command(executable: &Path, role: Role, arguments: &[OsString]) -> Result<
     return windows::command(executable, role, arguments);
 }
 
+/// The executable `name` in the running executable's directory, where the
+/// workers are installed.
+pub fn sibling(name: &str) -> io::Result<std::path::PathBuf> {
+    let current = std::env::current_exe()?;
+    let parent = current
+        .parent()
+        .ok_or_else(|| io::Error::other("executable has no directory"))?;
+    Ok(parent.join(format!("{name}{}", std::env::consts::EXE_SUFFIX)))
+}
+
 /// OS containment applied to a worker after it starts, held for its lifetime.
 /// On Windows this is a job object that kills the worker's launch stage when
 /// Nuschl lets go of it (including when Nuschl itself exits); the launch

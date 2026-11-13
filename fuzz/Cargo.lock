@@ -3250,6 +3250,7 @@ dependencies = [
  "nuschl-ipc",
  "nuschl-legacy-html",
  "nuschl-protocol",
+ "nuschl-sandbox",
  "nuschl-session",
  "serde",
  "tokio",

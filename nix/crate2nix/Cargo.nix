@@ -23250,6 +23250,10 @@ rec {
             packageId = "nuschl-protocol";
           }
           {
+            name = "nuschl-sandbox";
+            packageId = "nuschl-sandbox";
+          }
+          {
             name = "nuschl-session";
             packageId = "nuschl-session";
           }
@@ -23305,6 +23309,11 @@ rec {
             packageId = "nuschl-protocol";
           }
           {
+            name = "nuschl-sandbox";
+            packageId = "nuschl-sandbox";
+            optional = true;
+          }
+          {
             name = "nuschl-session";
             packageId = "nuschl-session";
             optional = true;
@@ -23339,7 +23348,7 @@ rec {
         ];
         features = {
           "default" = [ "native" ];
-          "native" = [ "dep:nuschl-ipc" "dep:nuschl-session" "dep:tokio" "nuschl-core/uuid" ];
+          "native" = [ "dep:nuschl-ipc" "dep:nuschl-sandbox" "dep:nuschl-session" "dep:tokio" "nuschl-core/uuid" ];
         };
         resolvedDefaultFeatures = [ "default" "native" ];
       };
@@ -24829,6 +24838,10 @@ rec {
           {
             name = "nuschl-ipc";
             packageId = "nuschl-ipc";
+          }
+          {
+            name = "nuschl-sandbox";
+            packageId = "nuschl-sandbox";
           }
           {
             name = "nuschl-session";

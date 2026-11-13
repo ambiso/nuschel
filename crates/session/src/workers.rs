@@ -8,7 +8,7 @@ use nuschl_ipc::{
 };
 use nuschl_sandbox::{Role, Worker};
 use serde::{Serialize, de::DeserializeOwned};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     process::{ChildStdin, ChildStdout},
@@ -16,17 +16,9 @@ use tokio::{
     time::{Duration, timeout},
 };
 
-pub fn sibling(name: &str) -> std::io::Result<PathBuf> {
-    let current = std::env::current_exe()?;
-    let parent = current
-        .parent()
-        .ok_or_else(|| std::io::Error::other("executable has no directory"))?;
-    Ok(parent.join(format!("{name}{}", std::env::consts::EXE_SUFFIX)))
-}
-
 /// The sibling executable `name`, started confined as `role`.
 fn start(name: &str, role: Role) -> Result<Worker, Error> {
-    let command = nuschl_sandbox::command(&sibling(name)?, role, &[]);
+    let command = nuschl_sandbox::command(&nuschl_sandbox::sibling(name)?, role, &[]);
     let worker = command.and_then(nuschl_sandbox::spawn);
     worker.map_err(|error| Error::Worker(error.to_string()))
 }

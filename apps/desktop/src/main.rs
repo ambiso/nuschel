@@ -140,7 +140,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     #[cfg(target_os = "linux")]
     if let Some(Action::MediaSandbox) = arguments.command {
-        let worker = nuschl_session::workers::sibling("nuschl-media-worker")?;
+        let worker = nuschl_sandbox::sibling("nuschl-media-worker")?;
         let mut command = nuschl_sandbox::command(&worker, nuschl_sandbox::Role::Media, &[])?;
         let status = runtime.block_on(async { command.status().await })?;
         std::process::exit(status.code().unwrap_or(1));
@@ -148,7 +148,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     #[cfg(target_os = "linux")]
     if let Some(Action::TransferSandbox { file }) = &arguments.command {
-        let worker = nuschl_session::workers::sibling("nuschl-transfer-worker")?;
+        let worker = nuschl_sandbox::sibling("nuschl-transfer-worker")?;
         let role = nuschl_sandbox::Role::Transfer {
             file: file.as_deref(),
         };

@@ -22,18 +22,9 @@ pub struct VerifierPaths {
 }
 impl VerifierPaths {
     pub fn discover() -> Result<Self, Error> {
-        let executable = std::env::current_exe()?;
-        let directory = executable.parent().ok_or(Error::Verifier)?;
-        let path = |algorithm: Algorithm| {
-            directory.join(format!(
-                "{}{}",
-                algorithm.executable(),
-                std::env::consts::EXE_SUFFIX
-            ))
-        };
         Ok(Self {
-            ed25519: path(Algorithm::Ed25519),
-            mldsa44: path(Algorithm::MlDsa44),
+            ed25519: nuschl_sandbox::sibling(Algorithm::Ed25519.executable())?,
+            mldsa44: nuschl_sandbox::sibling(Algorithm::MlDsa44.executable())?,
         })
     }
 }
