@@ -89,6 +89,47 @@ licenses:
 
 audit:
     cargo deny check advisories
+    just audit-scope
+
+# deny.toml ignores RUSTSEC-2026-0173 only while proc-macro-error2's one resolved
+# edge is hax-lib-macros 0.3.7 under cfg(hax), which no Nuschl build sets
+# (docs/dependency-review.md). Runs offline: `cargo deny check` or another full
+# fetch must have downloaded the packages.
+# Fail unless proc-macro-error2 is reachable only via hax-lib-macros under cfg(hax).
+audit-scope:
+    #!/usr/bin/env python3
+    import json, subprocess, sys
+
+    expected = ["hax-lib-macros@0.3.7 cfg(hax)"]
+    command = ["cargo", "metadata", "--offline", "--locked", "--format-version", "1", "--all-features"]
+    result = subprocess.run(command, stdout=subprocess.PIPE)
+    if result.returncode != 0:
+        sys.exit("audit-scope: `" + " ".join(command) + "` failed")
+    metadata = json.loads(result.stdout)
+    packages = {package["id"]: package for package in metadata["packages"]}
+
+    def edge(node, kind):
+        package = packages[node["id"]]
+        label = package["name"] + "@" + package["version"]
+        if kind["kind"] is not None:
+            label += " " + kind["kind"]
+        return label + " " + (kind["target"] or "unconditional")
+
+    edges = sorted(
+        edge(node, kind)
+        for node in metadata["resolve"]["nodes"]
+        for dependency in node["deps"]
+        if packages[dependency["pkg"]]["name"] == "proc-macro-error2"
+        for kind in dependency["dep_kinds"]
+    )
+    if edges != expected:
+        sys.exit(
+            "audit-scope: deny.toml ignores RUSTSEC-2026-0173 (proc-macro-error2, unmaintained)"
+            f" only while its resolved edges are {expected}, but they are {edges}. Review the"
+            " new path before keeping the ignore, or remove it if no edge remains"
+            " (docs/dependency-review.md)."
+        )
+    print("audit-scope: proc-macro-error2 is reachable only through hax-lib-macros 0.3.7 under cfg(hax)")
 
 # Safe Rust needs no sanitizer, and the targets run about four times faster
 # without one. FUZZ_SANITIZER=address also checks the unsafe code in

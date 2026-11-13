@@ -103,6 +103,7 @@ advisories against the same packages are still checked.
 | [RUSTSEC-2026-0370](https://rustsec.org/advisories/RUSTSEC-2026-0370) | The same stack uses zvariant; functionality moved into zbus 6 |
 | [RUSTSEC-2026-0372](https://rustsec.org/advisories/RUSTSEC-2026-0372) | zvariant_derive moves with that coordinated zbus 6 migration |
 | [RUSTSEC-2026-0459](https://rustsec.org/advisories/RUSTSEC-2026-0459) | SQLite before 3.54 can return stale memory for a crafted database plus WAL; the storage worker opens only its own profile database. sqlx 0.9 caps libsqlite3-sys below the fixed 0.39: upgrade with the next sqlx release |
+| [RUSTSEC-2026-0173](https://rustsec.org/advisories/RUSTSEC-2026-0173) | proc-macro-error2's only edge is hax-lib-macros 0.3.7 under `cfg(hax)`, set only by hax verification builds. OpenMLS's libcrux provider compiles hax-lib 0.3.7 and its macros in dummy mode; nuschl-identity reaches them only through `cfg(hax)` core-models. Remove once core-models and the provider use hax-lib 0.4 or later |
 
 Revisit the corresponding entries whenever GPUI Kit or Syntect is upgraded. Do not
 add a workspace-direct dependency on these packages to exploit a transitive allowance.
@@ -126,3 +127,13 @@ crypto-bigint 0.7.10, newer than the fixed 0.7.6. Verify this on updates with
 `cargo tree --workspace --all-features --target all -i crypto-bigint@0.5.5`.
 This advisory is deliberately **not** ignored in `deny.toml`: if that older
 provider becomes reachable, `cargo deny check advisories` must fail.
+
+The [RUSTSEC-2026-0173](https://rustsec.org/advisories/RUSTSEC-2026-0173) exception
+is needed because cargo-deny's graph has no target filter, so it includes `cfg(hax)`
+edges. No shipped target compiles proc-macro-error2; verify this on updates with
+`cargo tree --workspace --all-features -e all -i proc-macro-error2 --target <triple>`,
+which prints nothing for each shipped target. The crate2nix graph enables the edge
+only for a `hax` target flag, which no build passes. `just audit-scope` (run by
+`just audit`) fails if any resolved edge into proc-macro-error2 other than
+hax-lib-macros 0.3.7 under `cfg(hax)` appears, or if that edge disappears: then
+review the new path, or remove the exception.
