@@ -652,11 +652,10 @@ async fn history_command(opened: &mut Opened, command: HistoryCommand) -> Result
             match output {
                 None => println!("{text}"),
                 Some(path) => {
-                    let mut options = std::fs::OpenOptions::new();
-                    options.write(true).create(true).truncate(true);
-                    #[cfg(unix)]
-                    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
-                    let mut file = options.open(&path)?;
+                    let mut file = crate::files::with_mode(0o600)
+                        .create(true)
+                        .truncate(true)
+                        .open(&path)?;
                     file.write_all(text.as_bytes())?;
                     file.write_all(b"\n")?;
                     eprintln!(

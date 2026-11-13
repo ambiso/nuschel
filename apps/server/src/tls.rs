@@ -29,7 +29,6 @@ use rustls::{
 };
 use std::{
     fmt,
-    io::Write,
     path::{Path, PathBuf},
     sync::{Arc, RwLock},
 };
@@ -218,21 +217,10 @@ impl ResolvesServerCert for Certificates {
 }
 
 fn write_atomically(path: &Path, contents: &[u8], mode: u32) -> Result<(), TlsError> {
-    let error = |source| TlsError::Write {
+    crate::files::write_atomically(path, contents, mode).map_err(|source| TlsError::Write {
         path: path.to_owned(),
         source,
-    };
-    let temporary = path.with_extension("tmp");
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
-    #[cfg(unix)]
-    std::os::unix::fs::OpenOptionsExt::mode(&mut options, mode);
-    #[cfg(not(unix))]
-    let _ = mode;
-    let mut file = options.open(&temporary).map_err(error)?;
-    file.write_all(contents).map_err(error)?;
-    file.sync_all().map_err(error)?;
-    std::fs::rename(&temporary, path).map_err(error)
+    })
 }
 
 /// Accept any client certificate (Mumble identities are self-signed); the

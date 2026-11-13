@@ -369,11 +369,7 @@ pub fn prepare_files(settings: &Settings, backend: &Backend) -> io::Result<()> {
     if let Backend::Sqlite { path, .. } = backend
         && !path.exists()
     {
-        let mut options = std::fs::OpenOptions::new();
-        options.write(true).create_new(true);
-        #[cfg(unix)]
-        std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
-        options.open(path)?;
+        crate::files::with_mode(0o600).create_new(true).open(path)?;
     }
     Ok(())
 }
