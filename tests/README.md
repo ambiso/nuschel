@@ -119,6 +119,20 @@ and one in plain lines: certificate on first use, joining through Ctrl+K, sendin
 receiving, and on nuschld registering, typing, editing, deleting, search, a direct
 conversation and unread counts.
 
+Deterministic voice reordering, not yet in the VM run: `with_local_murmur.py
+<mumble-server> udp_reorder.py <binaries> --port PORT --opus-library LIB` (or
+`with_local_nuschld.py <binaries> udp_reorder.py ...`). Each session CLI reaches the
+loopback server through its own in-process TCP/UDP relay, which delivers encrypted
+voice datagrams in fixed orders (adjacent pairs swapped, a reversed burst, one packet
+held behind 20 and behind 40 later ones, a bounded permutation from `--seed`, default
+107); pings pass unheld. Downstream it checks the order of the receiver's decrypted
+sequences and its OCB2 late/lost counters: the packet held beyond the 30-nonce window
+is dropped and counted as lost. Upstream it checks the server's counters (stock
+Murmur's `lost` does not return from 1 to 0 as crypt.rs's does) and that the server
+relays in arrival order. `--negative-control` relays in order and requires every
+reordering phase to fail. The CLI has no jitter buffer, so playout of the reordered
+stream is not covered (`media_live.py` feeds the media worker reordered packets directly).
+
 `windows_vm.py` installs Windows 11 Enterprise (evaluation ISO from Microsoft)
 unattended into a KVM guest with two vCPUs and drives it through a PowerShell agent
 in the desktop session, QMP screenshots, clicks and keys. The guest has no network
