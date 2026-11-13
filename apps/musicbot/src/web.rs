@@ -1149,7 +1149,9 @@ async fn command(
                 Kind::Album => library.album(&id).map(|(_, songs)| songs),
                 Kind::Playlist => library.playlist(&id).map(|(_, songs)| songs),
                 Kind::Song => library.song(&id).map(|song| vec![song]),
-                Kind::Similar => library.sonic_similar(&id).map(sonic),
+                Kind::Similar => library
+                    .sonic_similar(&id)
+                    .map(|matches| sonic(without_identical(matches, &id))),
                 Kind::Path => library.sonic_path(&id, &to).map(sonic),
             })
             .await?;
@@ -1178,6 +1180,18 @@ async fn command(
         }
     }
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Similar songs without those that sound exactly like the seed (other copies
+/// of the same recording) and without the seed itself, so adding them all
+/// does not queue the same song again and again.
+fn without_identical(matches: Vec<SonicMatch>, seed: &str) -> Vec<SonicMatch> {
+    matches
+        .into_iter()
+        .filter(|found| {
+            found.track.id != seed && found.similarity.is_none_or(|score| score < 1.0 - 1e-6)
+        })
+        .collect()
 }
 
 /// A path that starts with the song the queue is playing continues it: the
@@ -2714,6 +2728,26 @@ mod tests {
         assert!(continue_path(Vec::new(), Some((Some(&library), "s1")), &library).is_empty());
     }
 
+    #[test]
+    fn adding_similar_songs_skips_identical_copies_and_the_seed() {
+        let found = |id: &str, similarity: Option<f64>| SonicMatch {
+            track: fixture_track(id),
+            similarity,
+        };
+        let matches = vec![
+            found("seed", Some(1.0)),
+            found("copy", Some(1.0)),
+            found("close", Some(0.999)),
+            found("unscored", None),
+            found("far", Some(0.4)),
+        ];
+        let kept: Vec<_> = without_identical(matches, "seed")
+            .into_iter()
+            .map(|found| found.track.id)
+            .collect();
+        assert_eq!(kept, ["close", "unscored", "far"]);
+    }
+
     /// `open` offers sonic similarity; `plain` does not; `failing` offers it
     /// but rejects every call with a message carrying the backend secret.
     fn sonic_fixture(mode: &'static str) -> Server {
@@ -2732,7 +2766,8 @@ mod tests {
             } else if request.starts_with("GET /rest/getSong") {
                 r#"{"subsonic-response":{"status":"ok","song":{"id":"s1","title":"First"}}}"#
             } else if request.starts_with("GET /rest/getSonicSimilarTracks") {
-                r#"{"subsonic-response":{"status":"ok","sonicMatch":[{"entry":{"id":"s2","title":"Second"},"similarity":0.8}]}}"#
+                // The seed itself and another copy of it sound 100% alike.
+                r#"{"subsonic-response":{"status":"ok","sonicMatch":[{"entry":{"id":"s1","title":"First"},"similarity":1.0},{"entry":{"id":"s1-copy","title":"First"},"similarity":1.0},{"entry":{"id":"s2","title":"Second"},"similarity":0.8}]}}"#
             } else if request.starts_with("GET /rest/findSonicPath") {
                 r#"{"subsonic-response":{"status":"ok","sonicMatch":[{"entry":{"id":"s1","title":"First"},"similarity":1.0},{"entry":{"id":"s2","title":"Second"},"similarity":0.5}]}}"#
             } else {
@@ -2862,10 +2897,16 @@ mod tests {
         .0;
         assert_eq!((found.song.library, found.song.id.as_str()), (1, "s1"));
         let found = serde_json::to_value(&found).unwrap();
-        assert_eq!(found["matches"][0]["track"]["id"], "s2");
-        assert_eq!(found["matches"][0]["track"]["library"], 1);
-        assert_eq!(found["matches"][0]["similarity"], 0.8);
-        assert_eq!(found["matches"].as_array().unwrap().len(), 1);
+        // The list shows everything the library found.
+        let listed: Vec<_> = found["matches"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|found| found["track"]["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(listed, ["s1", "s1-copy", "s2"]);
+        assert_eq!(found["matches"][2]["track"]["library"], 1);
+        assert_eq!(found["matches"][2]["similarity"], 0.8);
 
         let path = sonic_path(
             State(bot.clone()),
@@ -2935,6 +2976,7 @@ mod tests {
         .await
         .ok()
         .unwrap();
+        // Adding them all skips the seed and its identical copy.
         assert_eq!(queue_ids(&bot), ["s2"]);
         // Nothing plays, so the path is queued from its start.
         command(
