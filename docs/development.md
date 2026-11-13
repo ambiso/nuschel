@@ -87,8 +87,8 @@ first. jj runs no git hooks: push bookmarks with `scripts/pr-push --bookmark NAM
 With plain git, `git config core.hooksPath .githooks` runs it before each push.
 
 Changes reach `main` only through pull requests from this repository's branches
-whose required checks pass. Pull requests from forks never run on the
-self-hosted runner; a maintainer pushes a reviewed fork branch here instead.
+whose required checks pass. The `ci` check fails pull requests from forks
+before checking them out; a maintainer pushes a reviewed fork branch here instead.
 Every workflow has a read-only token; CodeQL's `security-events: write`, to
 upload results, is the only exception.
 
