@@ -65,29 +65,42 @@ jobs:
           OVERRIDE_CORES: ${{ vars.NUSCHL_CI_CORES }}
           OVERRIDE_MAX_JOBS: ${{ vars.NUSCHL_CI_MAX_JOBS }}
         run: |
+          # The runner service's PATH is minimal: bash builtins, coreutils, grep, git and nix.
+          set -u
           fail() { printf '::error title=Runner preflight::%s\n' "$*"; exit 1; }
           note() { printf '%s\n' "$*" | tee -a "$GITHUB_STEP_SUMMARY"; }
-          nix_setting() { nix config show "$1" 2>/dev/null || nix show-config 2>/dev/null | sed -n "s/^$1 = //p"; }
-          free_gib() { df --output=avail -B1G "$1" 2>/dev/null | tail -n 1 | tr -d ' '; }
+          number() { [[ $2 =~ ^[0-9]+$ ]] || fail "Cannot determine $1 (got '$2')."; }
+          free_gib() { df --output=avail -B1G "$1" | tail -n 1 | tr -d ' '; }
 
           command -v nix >/dev/null 2>&1 ||
             fail "nix is not on PATH for runner user $(id -un). Install multi-user Nix on the runner host;" \
               'jobs never install it there.'
           nix_version=$(nix --version) || fail 'nix --version failed'
-          store_info=$(nix store info --json 2>/dev/null || nix store ping --json 2>/dev/null) ||
-            fail 'Cannot reach the Nix daemon/store as the runner user.'
-          sandbox=$(nix_setting sandbox)
+          store_info=$(nix store info --json) || fail 'Cannot reach the Nix daemon/store as the runner user.'
+          sandbox=$(nix config show sandbox) || fail "'nix config show' failed; Nix 2.20 or newer is required."
           [[ $sandbox == true || $sandbox == relaxed ]] ||
             fail "Nix sandbox is '$sandbox'; CI builds require 'sandbox = true'."
-          features=$(nix_setting system-features)
-          build_dir=$(nix_setting build-dir)
+          features=$(nix config show system-features)
+          build_dir=$(nix config show build-dir 2>/dev/null || true)
           [[ -n $build_dir && -d $build_dir ]] || build_dir=/tmp
 
           threads=$(nproc)
-          mem_gib=$(( $(awk '/^MemTotal:/ { print $2 }' /proc/meminfo) / 1048576 ))
-          avail_gib=$(( $(awk '/^MemAvailable:/ { print $2 }' /proc/meminfo) / 1048576 ))
+          mem_kib=
+          avail_kib=
+          while read -r key value _; do
+            case $key in
+              MemTotal:) mem_kib=$value ;;
+              MemAvailable:) avail_kib=$value ;;
+            esac
+          done < /proc/meminfo
+          number 'total memory' "$mem_kib"
+          number 'available memory' "$avail_kib"
+          mem_gib=$(( mem_kib / 1048576 ))
+          avail_gib=$(( avail_kib / 1048576 ))
           store_free=$(free_gib /nix/store)
           build_free=$(free_gib "$build_dir")
+          number 'free space in /nix/store' "$store_free"
+          number "free space in $build_dir" "$build_free"
 
           # Up to four parallel derivations, each with at least 4 threads and 8 GiB.
           jobs=${OVERRIDE_MAX_JOBS:-$(( threads / 4 ))}
@@ -98,23 +111,22 @@ jobs:
           fi
           [[ $jobs =~ ^[1-9][0-9]?$ ]] || fail "NUSCHL_CI_MAX_JOBS must be 1-99, not '$jobs'"
           cores=${OVERRIDE_CORES:-$(( threads / jobs ))}
-          (( cores >= 1 )) || cores=1
           [[ $cores =~ ^[1-9][0-9]{0,2}$ ]] || fail "NUSCHL_CI_CORES must be 1-999, not '$cores'"
 
+          # NixOS tests run inside the daemon's builders, which need these features;
+          # the runner service itself may not see /dev/kvm (systemd PrivateDevices).
           kvm=false
-          kvm_note='missing'
-          if [[ -c /dev/kvm ]]; then
-            kvm_note="present ($(stat -c '%A %U:%G' /dev/kvm))"
-            if [[ " $features " == *" kvm "* && " $features " == *" nixos-test "* ]]; then kvm=true; fi
-          fi
+          if [[ " $features " == *" kvm "* && " $features " == *" nixos-test "* ]]; then kvm=true; fi
+          kvm_note='not visible to the runner service'
+          if [[ -c /dev/kvm ]]; then kvm_note='visible to the runner service'; fi
 
           note '### Runner'
           note "- runner \`$RUNNER_NAME\` on $(uname -srm), user \`$(id -un)\`"
           note "- $nix_version, sandbox \`$sandbox\`, system-features \`$features\`"
-          note "- daemon trusts this user: \`$(grep -o '"trusted":[^,}]*' <<<"$store_info" || echo unknown)\`"
+          note "- Nix daemon store info: \`$store_info\`"
           note "- $threads threads, $mem_gib GiB memory ($avail_gib GiB available)"
           note "- free: /nix/store $store_free GiB, build dir \`$build_dir\` $build_free GiB"
-          note "- /dev/kvm $kvm_note; NixOS VM tests possible: $kvm"
+          note "- NixOS VM tests possible (daemon kvm + nixos-test): $kvm; /dev/kvm $kvm_note"
           note "- Nix builds use --max-jobs $jobs --cores $cores"
 
           if [[ $store_info == *'"trusted":1'* || $store_info == *'"trusted":true'* ]]; then
@@ -324,7 +336,7 @@ jobs:
       - name: Require KVM and the nixos-test system feature
         if: needs.preflight.outputs.kvm != 'true'
         run: |
-          echo '::error title=VM smoke test::This runner has no usable /dev/kvm with the kvm and nixos-test Nix system features.'
+          echo '::error title=VM smoke test::The Nix daemon on this runner lacks the kvm and nixos-test system features.'
           exit 1
 
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
