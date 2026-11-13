@@ -21,6 +21,8 @@ let
       name,
       check,
       node,
+      # Where the tested processes run; the busy loop joins them there.
+      slice,
       setup ? "",
       workers,
       tests,
@@ -40,7 +42,7 @@ let
             ${node}.start()
             ${node}.wait_for_unit("multi-user.target")
             ${setup}
-            one_core.run(${node}, ${builtins.toJSON tests}, ${toString runs},
+            one_core.run(${node}, ${builtins.toJSON tests}, ${toString runs}, "${slice}",
                          "${python} ${./bench/worker_cpu.py} ${lib.concatStringsSep " " workers}",
                          driver.out_dir, json.loads(open("${./bench/baseline.json}").read()).get("one_core", {}))
           '';
@@ -54,14 +56,22 @@ in
 {
   # Instructions per second of audio of the capture chain and Opus encoder, and
   # the echo reduction, on a fixed synthetic minute; fails above the baseline.
+  # Built on this machine: the baseline holds for one CPU model.
   instructions =
-    pkgs.runCommand "nuschl-bench-instructions" { nativeBuildInputs = [ pkgs.perf ]; }
+    pkgs.runCommand "nuschl-bench-instructions"
+      {
+        nativeBuildInputs = [ pkgs.perf ];
+        preferLocalBuild = true;
+        allowSubstitutes = false;
+      }
       "${python} ${./bench/instructions.py} ${nuschl}/bin/nuschl-media-worker ${./bench/baseline.json} $out";
 
   one-core = oneCore {
     name = "nuschl-one-core";
     check = flake.checks.${system}.vm-smoke;
     node = "client";
+    # su - tester
+    slice = "user.slice";
     workers = [ "nuschl-media-worker" ];
     tests = {
       media-jitter = mediaLive "jitter";
@@ -78,6 +88,8 @@ in
     name = "nuschl-one-core-musicbot";
     check = flake.checks.${system}.vm-musicbot;
     node = "machine";
+    # The bot's service and the test script (the driver's backdoor service).
+    slice = "system.slice";
     setup = ''
       machine.wait_for_open_port(64738)
       machine.wait_for_open_port(4533)

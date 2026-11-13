@@ -147,7 +147,7 @@ pub fn probe_route() -> Result<(), Box<dyn std::error::Error>> {
 pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let timing = Timing::new();
     timing.mark("worker_start");
-    let mut stats = crate::stats::Stats::new();
+    let mut stats = crate::stats::Stats::new(timing.enabled());
     let (mut first_processed, mut first_transmit, mut first_packet) = (true, true, true);
     let (tx, rx) = mpsc::sync_channel(256);
     let input_tx = tx.clone();
@@ -686,10 +686,14 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     timing.mark("first_packet");
                     first_packet = false;
                 }
-                stats.send(
-                    open.clock.now_shifted(Duration::ZERO, Duration::ZERO),
-                    transmit.queue.queued(),
-                );
+                // An end packet's frames after the gate closed are not queued.
+                if !packet.end {
+                    stats.send(
+                        open.clock.now_shifted(Duration::ZERO, Duration::ZERO),
+                        transmit.queue.queued(),
+                        transmit.queue.late,
+                    );
+                }
                 emit(
                     &mut output,
                     LiveMediaEvent::Packet {

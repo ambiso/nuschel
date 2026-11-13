@@ -28,11 +28,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if std::env::args().any(|argument| argument == "--live") {
         return live::run();
     }
-    if let Some(stage) = std::env::args()
-        .skip_while(|argument| argument != "--bench")
-        .nth(1)
-    {
-        return bench::run(&stage);
+    let mut bench = std::env::args().skip_while(|argument| argument != "--bench");
+    if bench.next().is_some() {
+        return bench::run(&bench.next().unwrap_or_default());
     }
     if std::env::args().any(|argument| argument == "--probe-route") {
         return live::probe_route();

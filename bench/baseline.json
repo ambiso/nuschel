@@ -6,7 +6,8 @@
       "opus_encode": 41834725,
       "total": 246596165
     },
-    "echo_reduction_db": 29.2
+    "echo_reduction_db": 29.2,
+    "cpu": "AMD Ryzen 9 5900X 12-Core Processor"
   },
   "one_core": {
     "desktop-recovery": {

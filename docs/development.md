@@ -112,19 +112,23 @@ Reviews check that a change is:
   chain (echo cancellation, noise suppression, speech detection, gain) and the Opus
   encoder. `perf stat -e instructions:u` counts user-space instructions per second
   of audio for each stage; the result also has the offline echo reduction. Repeated
-  runs of one build differ by less than 0.001%, so the build fails only when the
-  whole chain costs more than 5% over `bench/baseline.json`. Counts depend on the
-  CPU's SIMD support: compare runs on one machine.
+  runs of one build differ by less than 0.0001%, so the build fails when a stage
+  costs more than 5% over `bench/baseline.json`. Counts depend on the CPU, so the
+  build runs locally and refuses a baseline from another CPU model. To refresh the
+  baseline, copy `cpu` and `per_audio_second` from the printed result.
 - `one-core`, `one-core-musicbot`: existing VM tests (media_live's jitter, echo,
   double-talk and sounds checks, rtc_probe, desktop_recovery, the music bot's
-  playback) on a guest with one core and a busy loop, each `--arg runs N` times
-  (default 5). For each test: the pass rate and the workers' CPU seconds per second
-  alive. Where the test starts the media worker itself (media_live),
-  `NUSCHL_AUDIO_TIMING=1` makes it print `audio-stats` lines: capture gaps and
-  playback underruns per minute and capture-to-send latency percentiles (the sounds
-  check transmits continuously). media_live's jitter check adds silent 20 ms
-  playback windows per minute. Sandboxed workers do not receive that variable. The
-  results (`one-core.json`, each run's log) are printed beside the baseline.
+  playback) on a guest with one core, each `--arg runs N` times (default 5). A busy
+  loop runs in the tested processes' slice. For each test: the pass rate and the
+  workers' CPU seconds per second alive. Where the test starts the media worker
+  itself (media_live), `NUSCHL_AUDIO_TIMING=1` makes it print `audio-stats` lines:
+  capture gaps (late or missing capture callback intervals) and playback underruns
+  per minute, packets sent a period or more after their deadline, and
+  capture-to-send latency percentiles (the sounds check transmits continuously).
+  media_live's jitter check adds silent 20 ms playback windows per minute.
+  Sandboxed workers do not receive that variable. The results (`one-core.json`, each
+  run's log) are printed beside the baseline. desktop_recovery's reconnect after
+  the server restart fails often on one core (#263).
 
 ## Packages and cross builds
 

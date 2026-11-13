@@ -3,13 +3,14 @@
 a busy loop on the guest's only core. Per test: the pass rate, the workers' CPU
 seconds per second alive (bench/worker_cpu.py) and, from the media worker's
 `audio-stats` lines (apps/media-worker/src/stats.rs), capture gaps and playback
-underruns per minute and capture-to-send latency percentiles. Writes
-one-core.json and prints it beside the baseline; numbers, not a gate."""
+underruns, late packets and capture-to-send latency percentiles (nearest rank
+over 1 ms bins: "p50 29" is 29-30 ms). Writes one-core.json and prints the
+numbers beside the baseline."""
 import datetime
 import json
 import re
 
-STATS = re.compile(r"audio-stats pid=(\d+) capture_gaps=(\d+) underruns=(\d+) send_ms=(\S*)")
+STATS = re.compile(r"audio-stats pid=(\d+) capture_gaps=(\d+) underruns=(\d+) late_packets=(\d+) send_ms=(\S*)")
 JITTER = re.compile(r"Jitter buffer: (\d+) ms of audio, \d+ packets dropped, (\d+) silent 20 ms windows")
 
 
@@ -24,7 +25,7 @@ def percentile(histogram, fraction):
 
 
 def measure(machine, command, sampler):
-    machine.succeed(f"systemd-run --unit=worker-cpu --property=StandardOutput=truncate:/tmp/worker-cpu.json {sampler}")
+    machine.succeed(f"systemd-run --collect --unit=worker-cpu --property=StandardOutput=truncate:/tmp/worker-cpu.json {sampler}")
     status, output = machine.execute(f"{command} 2>&1", timeout=datetime.timedelta(hours=1))
     machine.succeed("systemctl stop worker-cpu")
     cpu = json.loads(machine.succeed("cat /tmp/worker-cpu.json") or "{}")
@@ -33,14 +34,15 @@ def measure(machine, command, sampler):
 
 
 def summarize(attempts):
-    cpu, gaps, underruns, histogram, played, silent = {}, 0, 0, {}, 0, 0
+    cpu, gaps, underruns, late, histogram, played, silent = {}, 0, 0, 0, {}, 0, 0
     for _, workers, stats, jitter, _ in attempts:
         for name, total in workers.items():
             for key in ("cpu_s", "alive_s"):
                 cpu.setdefault(name, {"cpu_s": 0., "alive_s": 0.})[key] += total[key]
-        for _, capture_gaps, output_underruns, send_ms in stats:
+        for _, capture_gaps, output_underruns, late_packets, send_ms in stats:
             gaps += int(capture_gaps)
             underruns += int(output_underruns)
+            late += int(late_packets)
             for entry in filter(None, send_ms.split(",")):
                 ms, count = map(int, entry.split(":"))
                 histogram[ms] = histogram.get(ms, 0) + count
@@ -58,6 +60,7 @@ def summarize(attempts):
             "capture_gaps_per_minute": round(gaps / media_minutes, 2) if media_minutes else None,
             "underruns_per_minute": round(underruns / media_minutes, 2) if media_minutes else None,
             "send_packets": sum(histogram.values()),
+            "late_packets": late,
             "send_ms": {f"p{p}": percentile(histogram, p / 100) for p in (50, 95, 99)},
         }
     if played:
@@ -65,8 +68,9 @@ def summarize(attempts):
     return result
 
 
-def run(machine, tests, runs, sampler, out_dir, baseline):
-    machine.succeed("systemd-run --unit=busy-loop sh -c 'while :; do :; done'")
+def run(machine, tests, runs, slice_, sampler, out_dir, baseline):
+    """The busy loop runs in the tested processes' slice, at the default CPU weight of its siblings."""
+    machine.succeed(f"systemd-run --slice={slice_} --unit=busy-loop sh -c 'while :; do :; done'")
     results = {}
     for name, command in tests.items():
         attempts = [measure(machine, command, sampler) for _ in range(runs)]

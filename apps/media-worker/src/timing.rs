@@ -30,6 +30,9 @@ impl Timing {
             capture_reported: AtomicBool::new(false),
         }))
     }
+    pub fn enabled(&self) -> bool {
+        self.0.enabled
+    }
     pub fn mark(&self, stage: &str) {
         if self.0.enabled {
             self.report(stage, self.0.start.elapsed().as_micros() as u64);
