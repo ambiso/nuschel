@@ -49,6 +49,18 @@ pub async fn fetch(
     if cancel.is_cancelled() {
         return Err(Unavailable::Network);
     }
+    // The new preview role has no cross-platform retirement proof yet.
+    // Reject before helper lookup or target DNS, rather than falling back.
+    if !cfg!(target_os = "linux") {
+        return Err(Unavailable::Network);
+    }
+    // Pure settings/target admission precedes this trusted local preflight.
+    // Missing containment must not trigger a target lookup or connection.
+    let _preflight = nuschl_ipc::host::preview_sandbox_command(
+        &executable,
+        &[std::ffi::OsString::from("--preview-fetch")],
+    )
+    .map_err(|_| Unavailable::Network)?;
     static CREDIT: OnceLock<Arc<Semaphore>> = OnceLock::new();
     let permit = CREDIT
         .get_or_init(|| Arc::new(Semaphore::new(1)))

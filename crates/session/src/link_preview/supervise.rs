@@ -15,10 +15,7 @@ use nuschl_link_preview::{
     policy::{Route, Target},
 };
 use std::{ffi::OsString, path::Path, process::Stdio, sync::Arc, time::Duration};
-use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
-    process::Child,
-};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 pub(super) async fn pipeline(
     executable: &Path,
@@ -209,20 +206,26 @@ pub(super) async fn http(
 ) -> Result<Response, Unavailable> {
     budget.check(cancel)?;
     let request = transport::get_request(url, purpose)?;
-    let mut socket = transport::open(route, endpoint, cancel, budget).await?;
-    io_stage(cancel, budget, 5, socket.write_all(&request)).await?;
-    budget.check(cancel)?;
-    let mut child = host::content_sandbox_command(executable, &[OsString::from("--preview-fetch")])
+    let mut child = host::preview_sandbox_command(executable, &[OsString::from("--preview-fetch")])
         .map_err(|_| Unavailable::Network)?
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .kill_on_drop(true)
         .spawn()
         .map_err(|_| Unavailable::Network)?;
-    let containment = host::contain(&child);
+    let mut retirement = host::preview_lifecycle::Retirement::new(&mut child);
     let result = async {
-        let _containment = containment.as_ref().map_err(|_| Unavailable::Network)?;
+        // Trusted bwrap status opens/retains the original namespace-init task
+        // handle BEFORE a socket or any untrusted input is admitted.
+        // Startup observation is already bounded by ready(). Ordinary cancel
+        // does not discard a partial trusted receipt: no TCP exists yet, no
+        // request bytes are sent, and the next check forbids all new work.
+        retirement.ready().await.map_err(|_| Unavailable::Network)?;
+        budget.check(cancel)?;
+        let mut socket = transport::open(route, endpoint, cancel, budget).await?;
+        io_stage(cancel, budget, 5, socket.write_all(&request)).await?;
+        budget.check(cancel)?;
         let mut input = child.stdin.take().ok_or(Unavailable::Malformed)?;
         let mut output = child.stdout.take().ok_or(Unavailable::Malformed)?;
         let mut replies = 0usize;
@@ -293,7 +296,10 @@ pub(super) async fn http(
     .await;
     // On every error the socket was dropped with the exchange future above,
     // before child retirement. kill_on_drop alone would not prove actual exit.
-    reap(&mut child).await;
+    drop(child.stdin.take());
+    // Wrapper exit alone is not namespace teardown. The tracker retains the
+    // original task handle and holds this actor/credit on unknown retirement.
+    retirement.retire(&mut child).await;
     result
 }
 
@@ -315,19 +321,4 @@ async fn reply(
     let mut bytes = vec![0; size];
     io_stage(cancel, budget, 5, output.read_exact(&mut bytes)).await?;
     wire::decode_reply(id, &bytes).map_err(|_| Unavailable::Malformed)
-}
-
-async fn reap(child: &mut Child) {
-    loop {
-        if matches!(child.try_wait(), Ok(Some(_))) {
-            return;
-        }
-        if child.kill().await.is_ok() {
-            return;
-        }
-        if child.wait().await.is_ok() {
-            return;
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
 }
