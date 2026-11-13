@@ -46,9 +46,10 @@ MORE = "+1 more in Connection info"
 
 class BitrateList(DesktopBitrate):
     def lines(self):
-        """Every accessible name in the Settings voice quality lines' forms."""
+        """Every accessible name in the Settings voice quality lines' forms
+        ("Tiny: not sending (server limit)" names no rate)."""
         return [name for _, _, role, name in self.nodes()
-                if role != "radio button" and ("kb/s" in name or name.startswith("+"))]
+                if role != "radio button" and ("kb/s" in name or name.startswith("+") or name.endswith("limit)"))]
 
     def settings(self, rate, custom):
         expected = BELOW + [MORE, f"2 other servers: {rate}"]
