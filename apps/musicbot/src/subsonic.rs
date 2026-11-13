@@ -17,6 +17,11 @@ pub(crate) const API_TIMEOUT: Duration = Duration::from_secs(30);
 const STREAM_READ_TIMEOUT: Duration = Duration::from_secs(30);
 /// OpenSubsonic extension names (`getOpenSubsonicExtensions`).
 const TRANSCODING: &str = "transcoding";
+const SONIC_SIMILARITY: &str = "sonicSimilarity";
+/// Songs asked for and kept from `getSonicSimilarTracks`.
+pub const SONIC_SIMILAR_COUNT: usize = 25;
+/// The most songs asked for and kept from `findSonicPath`, both ends included.
+pub const SONIC_PATH_COUNT: usize = 25;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -34,6 +39,8 @@ pub enum Error {
     NotImage(String),
     #[error("the server cannot send this song in a format the bot plays: {0}")]
     Undecodable(String),
+    #[error("the server does not offer the OpenSubsonic extension sonicSimilarity")]
+    NoSonicSimilarity,
 }
 
 impl Error {
@@ -51,6 +58,9 @@ impl Error {
             Self::NotImage(_) => "the music library sent a non-image response".into(),
             Self::Undecodable(_) => {
                 "the music library cannot send this song in a playable format".into()
+            }
+            Self::NoSonicSimilarity => {
+                "this music library does not support sonic similarity".into()
             }
         }
     }
@@ -174,6 +184,16 @@ pub struct SearchResult {
     pub songs: Vec<Track>,
     pub albums: Vec<Album>,
     pub artists: Vec<Artist>,
+}
+
+/// A song found by sonic similarity. The score belongs to this answer only and
+/// never to the persisted `Track`.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct SonicMatch {
+    pub track: Track,
+    /// How close to the query song, 0 to 1; `None` when the server gives no
+    /// usable score.
+    pub similarity: Option<f64>,
 }
 
 /// The audio of a song as it arrives.
@@ -356,6 +376,60 @@ impl Library {
 
     fn has_extension(&self, name: &str) -> bool {
         self.extensions().is_some_and(|known| known.contains(name))
+    }
+
+    /// Whether the extensions already known include `sonicSimilarity`. Never
+    /// asks the server; unknown extensions count as unsupported.
+    pub fn supports_sonic_similarity_cached(&self) -> bool {
+        self.extensions
+            .get()
+            .is_some_and(|known| known.contains(SONIC_SIMILARITY))
+    }
+
+    fn require_sonic_similarity(&self) -> Result<(), Error> {
+        if self.has_extension(SONIC_SIMILARITY) {
+            Ok(())
+        } else {
+            Err(Error::NoSonicSimilarity)
+        }
+    }
+
+    /// Songs that sound like `id`, most similar first.
+    pub fn sonic_similar(&self, id: &str) -> Result<Vec<SonicMatch>, Error> {
+        self.require_sonic_similarity()?;
+        let reply = self.call(
+            self.get("getSonicSimilarTracks")
+                .query("id", id)
+                .query("count", SONIC_SIMILAR_COUNT.to_string()),
+        )?;
+        Ok(self.sonic_matches(reply, SONIC_SIMILAR_COUNT))
+    }
+
+    /// Songs leading from `from` to `to` by sound, both ends included.
+    pub fn sonic_path(&self, from: &str, to: &str) -> Result<Vec<SonicMatch>, Error> {
+        self.require_sonic_similarity()?;
+        let reply = self.call(
+            self.get("findSonicPath")
+                .query("startSongId", from)
+                .query("endSongId", to)
+                .query("count", SONIC_PATH_COUNT.to_string()),
+        )?;
+        Ok(self.sonic_matches(reply, SONIC_PATH_COUNT))
+    }
+
+    fn sonic_matches(&self, reply: Reply, count: usize) -> Vec<SonicMatch> {
+        reply
+            .sonic_match
+            .into_iter()
+            .take(count)
+            .map(|found| SonicMatch {
+                track: found.entry.track(self.index),
+                // `-1` means the server cannot score; anything outside 0..1 is unusable.
+                similarity: found
+                    .similarity
+                    .filter(|similarity| (0.0..=1.0).contains(similarity)),
+            })
+            .collect()
     }
 
     pub fn search(&self, query: &str) -> Result<SearchResult, Error> {
@@ -755,6 +829,8 @@ struct Reply {
     #[serde(default)]
     open_subsonic_extensions: Vec<Extension>,
     transcode_decision: Option<TranscodeDecision>,
+    #[serde(default)]
+    sonic_match: Vec<SonicMatchEntry>,
 }
 
 #[derive(Deserialize)]
@@ -768,6 +844,13 @@ struct ApiError {
 #[derive(Deserialize)]
 struct Extension {
     name: String,
+}
+
+#[derive(Deserialize)]
+struct SonicMatchEntry {
+    entry: Song,
+    #[serde(default)]
+    similarity: Option<f64>,
 }
 
 #[derive(Deserialize)]
@@ -1082,7 +1165,7 @@ pub(crate) mod tests {
             })
         }
 
-        fn requests(&self) -> Vec<String> {
+        pub(crate) fn requests(&self) -> Vec<String> {
             self.requests.lock().unwrap().clone()
         }
     }
@@ -1124,6 +1207,11 @@ pub(crate) mod tests {
             }
         });
         let library = library(&server);
+        // Sonic calls only go out once the extension is known.
+        library
+            .extensions
+            .set(HashSet::from([SONIC_SIMILARITY.into()]))
+            .unwrap();
         let errors = [
             library.ping().err().unwrap(),
             library.search("song").err().unwrap(),
@@ -1134,6 +1222,8 @@ pub(crate) mod tests {
             library.album_list(AlbumList::Newest, 1, 0).err().unwrap(),
             library.playlist("playlist").err().unwrap(),
             library.playlists().err().unwrap(),
+            library.sonic_similar("song").err().unwrap(),
+            library.sonic_path("song", "other").err().unwrap(),
             library.cover_art("cover", 300).err().unwrap(),
             library
                 .scrobble("song", 1_700_000_000_123, false, None)
@@ -1150,7 +1240,7 @@ pub(crate) mod tests {
                 .all(|error| matches!(error, Error::Status(302)))
         );
         let requests = server.requests();
-        assert_eq!(requests.len(), 12);
+        assert_eq!(requests.len(), 14);
         assert!(
             requests
                 .iter()
@@ -1438,6 +1528,144 @@ pub(crate) mod tests {
         let playlist = parse_reply(body).unwrap().playlist.unwrap();
         assert_eq!(playlist.info.playlist(0).id, "3");
         assert_eq!(playlist.entry.len(), 1);
+    }
+
+    fn json(socket: &mut TcpStream, body: &str) {
+        write!(socket, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).unwrap();
+        socket.write_all(body.as_bytes()).unwrap();
+    }
+
+    fn sonic_server() -> Server {
+        Server::new(|request, socket| {
+            let matches = |count: usize| {
+                let scores = ["0.9", "-1", "null", "1.5", "1", "0"];
+                (0..count)
+                    .map(|index| {
+                        let score = scores.get(index).copied().unwrap_or("0.5");
+                        format!(r#"{{"entry":{{"id":{index},"title":"Song {index}"}},"similarity":{score}}}"#)
+                    })
+                    .chain([r#"{"entry":{"id":"unscored"}}"#.to_owned()])
+                    .collect::<Vec<_>>()
+                    .join(",")
+            };
+            let body = if request.starts_with("GET /rest/getOpenSubsonicExtensions") {
+                r#"{"subsonic-response":{"status":"ok","openSubsonicExtensions":[{"name":"sonicSimilarity","versions":[1]}]}}"#.to_owned()
+            } else if request.starts_with("GET /rest/getSonicSimilarTracks") {
+                format!(
+                    r#"{{"subsonic-response":{{"status":"ok","sonicMatch":[{}]}}}}"#,
+                    matches(SONIC_SIMILAR_COUNT + 4)
+                )
+            } else if request.starts_with("GET /rest/findSonicPath") {
+                format!(
+                    r#"{{"subsonic-response":{{"status":"ok","sonicMatch":[{}]}}}}"#,
+                    matches(3)
+                )
+            } else {
+                r#"{"subsonic-response":{"status":"failed","error":{"code":0}}}"#.to_owned()
+            };
+            json(socket, &body);
+        })
+    }
+
+    #[test]
+    fn sonic_replies_keep_order_truncate_and_only_keep_usable_scores() {
+        let server = sonic_server();
+        let config = serde_json::from_value(serde_json::json!({
+            "name": "Sonic", "url": server.url,
+        }))
+        .unwrap();
+        let library = Library::new(3, &config, Credentials::ApiKey("private-key".into()));
+        assert!(!library.supports_sonic_similarity_cached());
+
+        let similar = library.sonic_similar("seed").unwrap();
+        assert!(library.supports_sonic_similarity_cached());
+        assert_eq!(similar.len(), SONIC_SIMILAR_COUNT);
+        let ids: Vec<_> = similar
+            .iter()
+            .map(|found| found.track.id.as_str())
+            .collect();
+        assert_eq!(ids[..3], ["0", "1", "2"]);
+        assert_eq!(ids[SONIC_SIMILAR_COUNT - 1], "24");
+        assert!(similar.iter().all(|found| found.track.library == 3));
+        let scores: Vec<_> = similar.iter().map(|found| found.similarity).collect();
+        assert_eq!(
+            scores[..7],
+            [Some(0.9), None, None, None, Some(1.0), Some(0.0), Some(0.5)]
+        );
+        assert_eq!(
+            serde_json::to_value(&similar[1]).unwrap(),
+            serde_json::json!({
+                "track": serde_json::to_value(&similar[1].track).unwrap(),
+                "similarity": null,
+            })
+        );
+
+        let path = library.sonic_path("from", "to").unwrap();
+        let ids: Vec<_> = path.iter().map(|found| found.track.id.as_str()).collect();
+        assert_eq!(ids, ["0", "1", "2", "unscored"]);
+        assert_eq!(path[3].similarity, None);
+        assert_eq!(path[3].track.title, "unscored");
+
+        let requests = server.requests();
+        assert_eq!(requests.len(), 3, "extensions are asked once");
+        assert!(requests[1].starts_with("GET /rest/getSonicSimilarTracks?"));
+        assert!(requests[1].contains("&id=seed&count=25 "));
+        assert!(requests[2].starts_with("GET /rest/findSonicPath?"));
+        assert!(requests[2].contains("&startSongId=from&endSongId=to&count=25 "));
+    }
+
+    #[test]
+    fn sonic_calls_without_the_extension_never_reach_the_endpoints() {
+        for answer in ["plain", "other", "unreachable"] {
+            let server = Server::new(move |request, socket| {
+                if !request.starts_with("GET /rest/getOpenSubsonicExtensions") {
+                    json(
+                        socket,
+                        r#"{"subsonic-response":{"status":"ok","sonicMatch":[]}}"#,
+                    );
+                } else if answer == "plain" {
+                    json(
+                        socket,
+                        r#"{"subsonic-response":{"status":"failed","error":{"code":70}}}"#,
+                    );
+                } else if answer == "other" {
+                    json(
+                        socket,
+                        r#"{"subsonic-response":{"status":"ok","openSubsonicExtensions":[{"name":"transcoding","versions":[1]}]}}"#,
+                    );
+                } else {
+                    socket.write_all(b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
+                }
+            });
+            let library = library(&server);
+            for error in [
+                library.sonic_similar("song").err().unwrap(),
+                library.sonic_path("song", "other").err().unwrap(),
+            ] {
+                assert!(
+                    matches!(error, Error::NoSonicSimilarity),
+                    "{answer}: {error}"
+                );
+                assert_eq!(
+                    error.public_message(),
+                    "this music library does not support sonic similarity"
+                );
+            }
+            assert!(!library.supports_sonic_similarity_cached());
+            let requests = server.requests();
+            assert!(
+                requests
+                    .iter()
+                    .all(|request| request.starts_with("GET /rest/getOpenSubsonicExtensions")),
+                "{answer}"
+            );
+            // Known answers are kept; an unreachable server is asked again.
+            assert_eq!(
+                requests.len(),
+                if answer == "unreachable" { 2 } else { 1 },
+                "{answer}"
+            );
+        }
     }
 
     #[test]

@@ -5,7 +5,7 @@ import {
   formatDuration, totalDuration, interpolatePosition, pointerFraction, seekKeyTarget, seekSettled,
   gapIndex, moveTarget, applyMove, stepTarget, parseRoute, buildRoute, routeForLibrary, debounce,
   queueStorageKey, selectedQueue, encodeDragItem, decodeDragItem, handlesSpace,
-  mergeHistory, libraryForNamespace, routeForNamespace, browseItemIsCurrent,
+  mergeHistory, libraryForNamespace, routeForNamespace, browseItemIsCurrent, similarityPercent, sonicPathStart,
 } from "./logic.js";
 
 test("formatDuration", () => {
@@ -113,6 +113,20 @@ test("routes round trip, including awkward ids", () => {
       assert.deepEqual(parseRoute(hash), route);
     }
   }
+  for (const id of ids) {
+    const similar = { view: "similar", library: 2, id, namespace: "page:0" };
+    const hash = buildRoute(similar);
+    assert.equal(hash.indexOf("#", 1), -1, hash);
+    assert.equal(hash.split("?")[0].split("/").length, 4, hash);
+    assert.deepEqual(parseRoute(hash), similar);
+    for (const to of ids) {
+      const path = { view: "path", library: 1, from: id, to, namespace: "page:0" };
+      const pathHash = buildRoute(path);
+      assert.equal(pathHash.indexOf("#", 1), -1, pathHash);
+      assert.equal(pathHash.split("?")[0].split("/").length, 5, pathHash);
+      assert.deepEqual(parseRoute(pathHash), path);
+    }
+  }
   for (const route of [
     { view: "queue" },
     { view: "channels" },
@@ -135,6 +149,12 @@ test("parseRoute falls back on bad input", () => {
   assert.deepEqual(parseRoute("#/albums?library=-1&list=bogus"), { view: "albums", library: 0, list: "newest" });
   assert.deepEqual(parseRoute("#/artists?library=x"), { view: "artists", library: 0 });
   assert.deepEqual(parseRoute("#/album/zz/x"), { view: "album", library: 0, id: "x" });
+  assert.deepEqual(parseRoute("#/similar/0"), { view: "queue" });
+  assert.deepEqual(parseRoute("#/similar/0/a/b"), { view: "queue" });
+  assert.deepEqual(parseRoute("#/path/0/a"), { view: "queue" });
+  assert.deepEqual(parseRoute("#/path/0/a/b/c"), { view: "queue" });
+  assert.deepEqual(parseRoute("#/path/0/a/%E0%A4%A"), { view: "queue" });
+  assert.deepEqual(parseRoute("#/path/-3/a/b"), { view: "path", library: 0, from: "a", to: "b" });
 });
 
 test("routeForLibrary goes to the matching list view", () => {
@@ -143,6 +163,8 @@ test("routeForLibrary goes to the matching list view", () => {
   assert.deepEqual(routeForLibrary({ view: "artist", library: 0, id: "x" }, 1), { view: "artists", library: 1 });
   assert.deepEqual(routeForLibrary({ view: "playlist", library: 0, id: "x" }, 2), { view: "playlists", library: 2 });
   assert.deepEqual(routeForLibrary({ view: "queue" }, 1), { view: "queue" });
+  assert.deepEqual(routeForLibrary({ view: "similar", library: 0, id: "x", namespace: "n" }, 1), { view: "queue" });
+  assert.deepEqual(routeForLibrary({ view: "path", library: 0, from: "a", to: "b", namespace: "n" }, 0), { view: "queue" });
 });
 
 test("detail routes never carry old IDs into a restarted or remapped namespace", () => {
@@ -157,6 +179,42 @@ test("detail routes never carry old IDs into a restarted or remapped namespace",
     assert.deepEqual(routeForNamespace(parseRoute(buildRoute({ view, library: 1, id: original.id })), 1, "page-a:0"), safe);
     assert.deepEqual(routeForNamespace(route, 0, "page-a:0"), { ...safe, library: 0 });
   }
+});
+
+test("sonic routes never carry old song IDs into a restarted or remapped namespace", () => {
+  for (const original of [
+    { view: "similar", library: 1, id: "old/id?", namespace: "page-a:0" },
+    { view: "path", library: 1, from: "a/b", to: "c?d", namespace: "page-a:0" },
+  ]) {
+    const route = parseRoute(buildRoute(original));
+    assert.deepEqual(routeForNamespace(route, 1, "page-a:0"), original);
+    assert.deepEqual(routeForNamespace(route, 1, null), { view: "queue" });
+    assert.deepEqual(routeForNamespace(route, 1, "page-a:1"), { view: "queue" });
+    assert.deepEqual(routeForNamespace(route, 1, "page-b:0"), { view: "queue" });
+    const { namespace, ...unproved } = original;
+    assert.deepEqual(routeForNamespace(parseRoute(buildRoute(unproved)), 1, namespace), { view: "queue" });
+    assert.deepEqual(routeForNamespace(route, 0, "page-a:0"), { view: "queue" });
+  }
+});
+
+test("similarity percent hides unknown scores", () => {
+  assert.equal(similarityPercent(0.8), 80);
+  assert.equal(similarityPercent(0.456), 46);
+  assert.equal(similarityPercent(1), 100);
+  assert.equal(similarityPercent(0), 0);
+  assert.equal(similarityPercent(-1), null);
+  assert.equal(similarityPercent(1.2), null);
+  assert.equal(similarityPercent(null), null);
+  assert.equal(similarityPercent(undefined), null);
+  assert.equal(similarityPercent(NaN), null);
+});
+
+test("sonic path starts only from another song in the same library", () => {
+  assert.equal(sonicPathStart({ library: 1, id: "now" }, { library: 1, id: "there" }), "now");
+  assert.equal(sonicPathStart({ library: 1, id: "now" }, { library: 1, id: "now" }), null);
+  assert.equal(sonicPathStart({ library: 0, id: "now" }, { library: 1, id: "there" }), null);
+  assert.equal(sonicPathStart(null, { library: 1, id: "there" }), null);
+  assert.equal(sonicPathStart({ library: 1, id: "" }, { library: 1, id: "there" }), null);
 });
 
 test("library reordering follows only an unambiguous old name and drops detail IDs", () => {

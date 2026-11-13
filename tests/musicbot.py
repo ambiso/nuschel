@@ -198,6 +198,16 @@ def browse(link):
             assert response.headers.get_content_type() == "application/json", dict(response.headers)
             assert response.headers["Cache-Control"].startswith("private"), dict(response.headers)
         expect_error(link + f"art/{library}/missing", 404)
+    # Only Open (index 1) advertises sonicSimilarity; Plain refuses before asking.
+    expect_error(link + "api/similar?library=0&id=s1", 502, json_error=True)
+    expect_error(link + "api/path?library=0&from=s1&to=s2", 502, json_error=True)
+    similar = api(link, "similar", library=1, id="s1")
+    assert similar["song"]["id"] == "s1" and similar["song"]["library"] == 1, similar
+    assert [(found["track"]["id"], found["track"]["library"], found["similarity"])
+            for found in similar["matches"]] == [("s2", 1, 0.8)], similar
+    path = api(link, "path", library=1, **{"from": "s1", "to": "s2"})
+    assert [(found["track"]["id"], found["similarity"]) for found in path["matches"]] == [("s1", 1.0), ("s2", 0.5)], path
+    assert api(link)["sonic"] == [False, True]
     results = api(link, "search", q="sine")["results"]
     assert [result["name"] for result in results] == ["Plain", "Open"], results
     for result in results:

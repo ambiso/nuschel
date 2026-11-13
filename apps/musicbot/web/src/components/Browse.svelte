@@ -14,18 +14,28 @@
   let page = $state(0);
   const namespace = store.browseKey;
   const current = $derived(namespace !== null && namespace === store.browseKey && store.connection === "open" && !store.invalid);
+  const sonicView = $derived(route.view === "similar" || route.view === "path");
   const result = resource(() => {
     if (!current || (route.library != null && !store.browseItemCurrent({ library: route.library, namespace }))
-      || (route.id != null && route.namespace !== namespace)) return null;
+      || ((route.id != null || route.to != null) && route.namespace !== namespace)) return null;
     if (route.view === "search") return route.q.trim() ? query("api/search", { q: route.q }) : null;
     if (route.view === "albums") return query("api/albums", { library: route.library, list: route.list, page });
+    if (route.view === "path") return query("api/path", { library: route.library, from: route.from, to: route.to });
     return query(`api/${route.view}`, { library: route.library, ...(route.id == null ? {} : { id: route.id }) });
   }, () => store.browseSignal);
   const data = $derived(current ? result.data : null);
-  const detail = $derived(data?.[route.view] ?? null);
+  const detail = $derived(sonicView ? null : data?.[route.view] ?? null);
   const songs = $derived(data?.songs ?? []);
+  const matches = $derived(sonicView ? data?.matches ?? [] : []);
+  const matchSongs = $derived(matches.map((match) => match.track));
+  const sonicItem = $derived(route.view === "path"
+    ? { kind: "path", library: route.library, id: route.from, to: route.to, namespace }
+    : { kind: "similar", library: route.library, id: route.id, namespace });
   const titles = { albums: "Albums", artists: "Artists", playlists: "Playlists", search: "Search" };
-  const heading = $derived(titles[route.view] ?? detail?.name ?? "Loading…");
+  const heading = $derived(titles[route.view]
+    ?? (route.view === "similar" ? (data?.song ? `Similar to ${data.song.title}` : "Similar songs")
+      : route.view === "path" ? (matches.length ? `Sonic path: ${matches[0].track.title} → ${matches.at(-1).track.title}` : "Sonic path")
+      : detail?.name ?? "Loading…"));
 
   function changePage(next) {
     if (!current) return;
@@ -96,6 +106,19 @@
         </section>
       {/each}
       {#if !data.results.length}<p class="notice muted">No results.</p>{/if}
+    {:else if sonicView}
+      <div class="sonic-header">
+        {#if route.view === "similar" && data.song?.artist}
+          <p>{#if data.song.artist_id}<a href={buildRoute({ view: "artist", library: data.song.library, id: data.song.artist_id, namespace })}>{data.song.artist}</a>{:else}{data.song.artist}{/if}</p>
+        {/if}
+        <p class="muted metadata"><span>{matchSongs.length} tracks</span><span>{formatDuration(totalDuration(matchSongs))}</span></p>
+        <div class="detail-actions">
+          <button class="primary" disabled={!current || !store.player || !matches.length} onclick={() => store.add(store.selected, sonicItem)}><Icon name="add" /> Add all</button>
+          <button disabled={!current || !store.player || !matches.length} onclick={() => store.add(store.selected, sonicItem, 0)}><Icon name="next" /> Play all next</button>
+        </div>
+      </div>
+      <SongList songs={matchSongs} {namespace} covers similarities={matches.map((match) => match.similarity)} />
+      {#if !matches.length}<p class="notice muted">{route.view === "similar" ? "The library found no similar songs." : "The library found no sonic path between these songs."}</p>{/if}
     {:else if detail}
       <div class="detail-header" role="group" aria-label={detail.name} draggable={current && route.view !== "artist"} ondragstart={(event) => {
         if (route.view !== "artist") startItemDrag(event, route.view, detail.library, detail.id, detail.name, namespace);
@@ -144,5 +167,6 @@
   .detail-info { min-width: 0; }
   .metadata { display: flex; flex-wrap: wrap; gap: 0.7rem; }
   .detail-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+  .sonic-header { margin: 0 0 1.25rem; }
   @media (max-width: 600px) { .detail-header { gap: 1rem; align-items: flex-start; } .detail-art { width: 6.5rem; } .detail-actions { flex-direction: column; align-items: flex-start; } }
 </style>

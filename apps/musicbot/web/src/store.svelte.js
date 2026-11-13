@@ -138,6 +138,11 @@ class Store {
       && browseItemIsCurrent(item, this.browseKey, this.#libraryNames.length);
   }
 
+  /** True when the latest state says library `library` supports OpenSubsonic sonic similarity. */
+  supportsSonic(library) {
+    return this.snapshot?.sonic?.[library] === true;
+  }
+
   #connect() {
     if (!this.#running || this.invalid) return;
     clearTimeout(this.#retry);
@@ -349,7 +354,8 @@ class Store {
       this.toast("There is no queue to add to.");
       return;
     }
-    this.command({ command: "add", player, kind: item.kind, library: item.library, id: item.id, index }, this.browseSignal);
+    const to = item.to == null ? {} : { to: item.to };
+    this.command({ command: "add", player, kind: item.kind, library: item.library, id: item.id, ...to, index }, this.browseSignal);
   }
 
   attach(channel, player) {
