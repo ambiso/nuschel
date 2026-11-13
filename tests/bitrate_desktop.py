@@ -29,14 +29,18 @@ audio device, profile or recording is used. Checks and screenshots:
   * walking the Root and Lobby timelines entry by entry with the keyboard,
     every laid-out accessible node except push buttons stays inside the
     timeline, short of its scrollbar gutter. No text or image pixel lands
-    in that gutter.
+    in that gutter. The floating "Jump to latest" pill is an overlay, not
+    timeline content: its rows of the gutter are excluded and its own
+    bounds are recorded.
     Entries that are not laid out are 1x1 stand-ins with no real bounds;
     they are counted, not measured;
   * "You joined Lobby" is one line at 100 % and at most five lines at 175 %
     (the defect stacked it one glyph per line);
   * every voice destination's name and hang-up can be revealed inside the
-    voice card by focus, by the mouse wheel, and by Tab into the card then
-    End. A visible scrollbar thumb is painted whenever the card overflows;
+    voice card by focus, by the mouse wheel (turned to the end), and by Tab
+    into the card then End. A visible scrollbar thumb is painted whenever
+    the card overflows. Whether some intermediate wheel position shows the
+    last hang-up whole is recorded, not gated;
   * no interactive accessible node is unnamed.
 
     python3 tests/bitrate_desktop.py <binaries> --murmur <mumble-server> \\
@@ -60,7 +64,7 @@ import uuid
 import zlib
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from accessibility import INTERACTIVE, ROLES, Node, snapshot, start_registry  # noqa: E402
+from accessibility import FOCUSED, INTERACTIVE, ROLES, Node, snapshot, start_registry  # noqa: E402
 from bitrate_matrix import Bus, allowance, received  # noqa: E402
 from desktop_mumble import media_workers  # noqa: E402
 from gnome_session import GnomeSession  # noqa: E402
@@ -349,10 +353,26 @@ class DesktopBitrate:
         time.sleep(0.5)
 
         def focused():
-            info, children = self.tree()
-            items = [info[path][0] for path in children.get(timeline.path, [])
-                     if path in info and info[path][1] == "list item"]
-            return timeline.focused or any(item.focused for item in items[-3:])
+            # Focus anywhere in the timeline: the list itself (its newest
+            # entry active) or a tab stop inside an entry, such as an
+            # expandable run of activity, whose keys bubble to the list.
+            app = self.nuschl
+            data = app.bus("call", app.destination, "/org/a11y/atspi/cache", "org.a11y.atspi.Cache",
+                           "GetItems")[0]
+            children, states = {}, {}
+            for (_, path), _, (_, parent), _, _, _, _, _, _, state in data:
+                children.setdefault(parent, []).append(path)
+                states[path] = state[0]
+            stack, seen = [timeline.path], set()
+            while stack:
+                path = stack.pop()
+                if path in seen:
+                    continue
+                seen.add(path)
+                if states.get(path, 0) & FOCUSED:
+                    return True
+                stack.extend(children.get(path, []))
+            return False
         for _ in range(4):
             self.shell.chord("Shift_L", "Tab")
             time.sleep(0.5)
@@ -375,7 +395,7 @@ class DesktopBitrate:
         welcome_name = f"Welcome to {channel}"
         timeline = self.node(f"Messages in #{channel}", "list")
         record = dict(focused=self.focus_timeline(timeline), steps=[], violations=[], controls=[],
-                      joined_heights=[], not_laid_out=0, laid_out=0, top_reached=False)
+                      joined_heights=[], not_laid_out=0, laid_out=0, top_reached=False, pill=[])
         self.shell.key("End")
         time.sleep(0.6)
         for step in range(80):
@@ -410,7 +430,18 @@ class DesktopBitrate:
             self.shell.screenshot(shot)
             strip = (bx + right + 1, by + box[1], box[0] + box[2] - right - 1, box[3])
             width, height, raw = self.pixels(shot, strip)
-            bright = sum(1 for i in range(0, len(raw), 3) if max(raw[i:i + 3]) >= BRIGHT)
+            # The "Jump to latest" pill floats over the timeline while it is
+            # scrolled up. It is an overlay, not timeline content: its rows
+            # of the strip are excluded, and its own bounds are reported.
+            pill = next((self.extents(node) for node, role, name in info.values()
+                         if role == "push button" and name.endswith("Jump to latest")), None)
+            skip = range(0)
+            if pill and pill[2] > 1 and pill[3] > 1:
+                skip = range(pill[1] - box[1], pill[1] - box[1] + pill[3])
+                record["pill"].append(dict(step=step, extents=pill,
+                                           over=max(box[0] - pill[0], pill[0] + pill[2] - box[0] - box[2])))
+            bright = sum(1 for i in range(0, len(raw), 3)
+                         if (i // 3) // max(width, 1) not in skip and max(raw[i:i + 3]) >= BRIGHT)
             record["steps"].append(dict(step=step, timeline=box, gutter_strip=strip, gutter_pixels=width * height,
                                         bright_pixels=bright, png=shot.name))
             if welcome:
@@ -474,6 +505,15 @@ class DesktopBitrate:
         # Wheel: from the top, turn the wheel down over the card.
         self.shell.wheel(*centre, 12)
         record["wheel"] = revealed(last)
+        # Recorded, not gated: whether some wheel position, one click at a
+        # time from the top, shows the last hang-up whole.
+        to_top()
+        record["wheel_any"] = False
+        for _ in range(20):
+            self.shell.wheel(*centre, 1)
+            if revealed(last, timeout=1):
+                record["wheel_any"] = True
+                break
         self.park_pointer()
         # Focus: each name and each hang-up, as Tab would reach them.
         for node in links + hangups:
@@ -531,6 +571,7 @@ class DesktopBitrate:
                   f"{sum(len(walk['violations']) for walk in walks)} node overflows, "
                   f"{sum(s['bright_pixels'] for walk in walks for s in walk['steps'])} gutter pixels, "
                   f"'{JOINED}' {entry['joined_lines']} line(s), voice wheel {entry['voice']['wheel']} "
+                  f"(any position {entry['voice']['wheel_any']}) "
                   f"tab+end {entry['voice']['tab_end']} thumb {entry['voice']['thumb_rows']}", flush=True)
         self.shell.chord("Control_L", "0")
         failures = []
