@@ -103,9 +103,10 @@ Read [SECURITY.md](SECURITY.md), [architecture](docs/architecture.md) and
 ## Builds and resource use
 
 - A CI job is one command that runs the same locally: `nix build -f ci.nix` is
-  the `ci` check. Run it before pushing (`scripts/pre-pr`, or `scripts/pr-push`
-  for jj bookmarks). Workflows keep read-only tokens (`contents: read`); CodeQL's
-  `security-events: write`, to upload results, is the only exception.
+  the `ci` check. Run it before pushing as `scripts/pre-pr --cores 2 --max-jobs 2`
+  (`scripts/pr-push` does so for jj bookmarks). Workflows keep read-only tokens
+  (`contents: read`); CodeQL's `security-events: write`, to upload results, is
+  the only exception.
 - Prefer pinned Nix tooling and existing cached crate2nix per-crate build/test leaves.
   Keep working cross/fallback builders until a separate migration is verified.
 - Review dependency safety/licensing and regenerate via `just crate2nix` when needed;

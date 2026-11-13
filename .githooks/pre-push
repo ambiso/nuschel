@@ -1,4 +1,4 @@
 #!/bin/sh
 # SPDX-License-Identifier: EUPL-1.2
 # Opt in with `git config core.hooksPath .githooks`.
-exec scripts/pre-pr
+exec scripts/pre-pr --cores 2 --max-jobs 2

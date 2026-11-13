@@ -81,10 +81,11 @@ or platform-wide confinement.
 
 Pull requests to `main` and pushes to `main` run one command on the self-hosted
 runner, the `ci` check: `nix build -f ci.nix`, every flake check including the
-NixOS VM tests, except the release packaging proofs. Run the same command before
-pushing with `scripts/pre-pr`; Nix reads only tracked files, so commit new files
-first. jj runs no git hooks: push bookmarks with `scripts/pr-push --bookmark NAME`.
-With plain git, `git config core.hooksPath .githooks` runs it before each push.
+NixOS VM tests, except the release packaging proofs. Run the same command on the
+working copy before pushing with `scripts/pre-pr --cores 2 --max-jobs 2`; Nix
+reads only tracked files, so commit new files first. jj runs no git hooks: push
+bookmarks with `scripts/pr-push --bookmark NAME`. With plain git,
+`git config core.hooksPath .githooks` runs it before each push.
 
 Changes reach `main` only through pull requests from this repository's branches
 whose required checks pass. The `ci` check fails pull requests from forks
