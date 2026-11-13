@@ -26,7 +26,10 @@ driver without a guest. Neither proves guest behaviour; a full run's
 `nix build .#checks.x86_64-linux.vm-musicbot` exercises the packaged bot against
 stock Murmur and a local Subsonic fixture. `musicbot.py` checks shared/separate
 audio, channel-subscription playback, seeking, ducking, public comments, history pagination and restart recovery
-with reordered/removed libraries. The module test also checks actual codec child
+with reordered/removed libraries, the remembered-link cookie (redirect, same-origin
+refusals, forgetting), sonic similarity and paths, and the cover cache (no second
+library request, browser caching only for the current library key, covers kept
+across the restart). The module test also checks actual codec child
 PID/network namespaces, role arguments, credential/environment/FD absence and
 address-space bounds. Non-mutating checks under the service UID verify empty
 effective capabilities and unwritable host sysctl/sysrq paths. The fixture uses

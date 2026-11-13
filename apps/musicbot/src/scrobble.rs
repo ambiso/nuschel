@@ -414,6 +414,7 @@ mod tests {
             0,
             &config,
             Credentials::ApiKey("private-key".into()),
+            "key".into(),
         )])
     }
 

@@ -27,6 +27,16 @@ pub struct Web {
     pub listen: SocketAddr,
     /// Where users reach the web page; the links the bot hands out start with it.
     pub public_url: String,
+    /// Disk space for decoded covers in the state directory, in MiB, up to
+    /// [`MAX_COVER_CACHE_MIB`]; 0 turns the cache off.
+    #[serde(default = "default_cover_cache_mib")]
+    pub cover_cache_mib: u64,
+}
+
+pub const MAX_COVER_CACHE_MIB: u64 = 4096;
+
+fn default_cover_cache_mib() -> u64 {
+    64
 }
 
 #[derive(Debug, Deserialize)]
@@ -191,6 +201,11 @@ impl Config {
 
     fn validate(&self) -> Result<(), String> {
         validate_url(&self.web.public_url, "web.public_url")?;
+        if self.web.cover_cache_mib > MAX_COVER_CACHE_MIB {
+            return Err(format!(
+                "web.cover_cache_mib must be at most {MAX_COVER_CACHE_MIB}"
+            ));
+        }
         if !(6_000..=510_000).contains(&self.audio.bitrate) {
             return Err("audio.bitrate must be between 6000 and 510000".into());
         }
@@ -305,9 +320,9 @@ fn validate_tokens(tokens: &[String]) -> Result<(), String> {
 fn validate_url(value: &str, setting: &str) -> Result<(), String> {
     let valid = value.parse::<ureq::http::Uri>().ok().is_some_and(|uri| {
         matches!(uri.scheme_str(), Some("http" | "https"))
-            && uri
-                .authority()
-                .is_some_and(|authority| !authority.host().is_empty())
+            && uri.authority().is_some_and(|authority| {
+                !authority.host().is_empty() && !authority.as_str().contains('@')
+            })
             && uri
                 .path_and_query()
                 .is_none_or(|path| path.query().is_none())
@@ -317,7 +332,7 @@ fn validate_url(value: &str, setting: &str) -> Result<(), String> {
         Ok(())
     } else {
         Err(format!(
-            "{setting} must be an absolute http:// or https:// URL without a query or fragment"
+            "{setting} must be an absolute http:// or https:// URL without a user name, query or fragment"
         ))
     }
 }
