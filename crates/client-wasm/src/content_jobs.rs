@@ -9,7 +9,10 @@ use crate::content_broker::{
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
+use std::{
+    collections::BTreeMap,
+    io::{self, Write},
+};
 
 const QUEUE_DEADLINE_MS: u64 = 60_000;
 /// Progress wall limit for the oldest unacknowledged posted job. The UI runs
@@ -27,7 +30,36 @@ const MAX_FAILED_HANDLES: usize = 128;
 #[cfg(test)]
 const DEADLINE_MS: u64 = QUEUE_DEADLINE_MS;
 const MAX_HANDLES: usize = 4096;
+// Charge the serialized plain document retained in SDK snapshots, including
+// JSON escaping and its document wrapper. The UI's rich-document charge is
+// independent and does not bound this resident derivative.
 const MAX_PLAIN_BYTES: usize = 16 * 1024 * 1024;
+
+fn plain_document_bytes(text: &str) -> Result<usize, &'static str> {
+    struct Counter(usize);
+    impl Write for Counter {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            if bytes.len() > MAX_PLAIN_BYTES - self.0 {
+                return Err(io::Error::other("Plain document exceeds its byte limit."));
+            }
+            self.0 += bytes.len();
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+    // Use the actual snapshot document type rather than duplicating its JSON
+    // schema or escaping rules. Input was bounded by validate_render; only the
+    // plain string is copied, never an expanded serialized output buffer.
+    let document = nuschl_core::MessageDocument {
+        blocks: vec![nuschl_core::ContentBlock::text(text)],
+    };
+    let mut count = Counter(0);
+    serde_json::to_writer(&mut count, &document)
+        .map_err(|_| "Plain document could not be measured.")?;
+    Ok(count.0)
+}
 const TOO_LARGE: &str =
     "[This content exceeds the local 256 KiB preview limit. It cannot be previewed here.]";
 const EXHAUSTED: &str =
@@ -481,7 +513,7 @@ impl Jobs {
             &job.source,
             job.mode,
             token.clone(),
-            rendered.plain_text.len(),
+            plain_document_bytes(&rendered.plain_text)?,
             failed,
         );
         Ok(Some(Completion {
@@ -805,6 +837,123 @@ mod tests {
     const REPLY: &str = r#"{"marked_text":"ok","plain_text":"ok","document":{"blocks":[{"kind":"text","text":"ok"}]}}"#;
 
     #[test]
+    fn plain_document_charge_matches_serde_for_escaping_and_unicode() {
+        for text in ["", "ordinary", "\"\\\n\r\t", "\u{0}\u{1}\u{1f}", "漢🙂é"] {
+            let document = nuschl_core::MessageDocument {
+                blocks: vec![nuschl_core::ContentBlock::text(text)],
+            };
+            assert_eq!(
+                plain_document_bytes(text).unwrap(),
+                serde_json::to_vec(&document).unwrap().len()
+            );
+        }
+        assert!(plain_document_bytes("\u{1}").unwrap() > plain_document_bytes("x").unwrap());
+    }
+
+    #[test]
+    fn serialized_plain_charge_evicts_derivatives_without_replacing_sources() {
+        const ROWS: usize = 64;
+        let text = "\"".repeat(nuschl_core::MAX_CONTENT_BYTES);
+        let reply = serde_json::to_string(&serde_json::json!({
+            "marked_text": &text, "plain_text": &text,
+            "document": {"blocks": [{"kind":"text", "text": &text}]}
+        }))
+        .unwrap();
+        let ui_charge = validate_render(&reply).unwrap().retained_bytes;
+        let mut servers = resident_model(1, ROWS);
+        let mut jobs = Jobs::default();
+        let channel_id = servers[0].channels[0].id;
+        jobs.select(Some(("owned".into(), channel_id)));
+        let mut original = Vec::new();
+        for row in 0..ROWS {
+            let message = &mut servers[0].channels[0].timeline.messages[row];
+            message.source = text.clone();
+            message.source_format = Some(SourceMode::Plain);
+            message.outgoing = true;
+            let origin = model_origin(&servers[0], 0, row);
+            original.push(origin.clone());
+            jobs.request(origin.clone(), &text, SourceMode::Plain, 0)
+                .unwrap();
+            let work = jobs.take(0, |_, _| true);
+            let [Operation::Render { request, .. }] = work.as_slice() else {
+                panic!()
+            };
+            let completion = jobs
+                .complete(request, Some(&reply), 1, |candidate, source| {
+                    candidate == &origin && source == text
+                })
+                .unwrap()
+                .unwrap();
+            assert!(!completion.failed);
+            assert_eq!(completion.rendered.retained_bytes, ui_charge);
+            assert_eq!(completion.rendered.plain_text, text);
+            assert_eq!(completion.source, text);
+            assert_eq!(jobs.pending_bytes, 0);
+            assert!(jobs.pending.is_empty());
+            let (_, mode, digest) = jobs.origin(&completion.token).unwrap();
+            assert_eq!(mode, SourceMode::Plain);
+            assert_eq!(digest, <[u8; 32]>::from(Sha256::digest(text.as_bytes())));
+            apply_model(&jobs, &mut servers, completion);
+            assert!(jobs.plain_bytes <= MAX_PLAIN_BYTES);
+        }
+        let actual: usize = original
+            .iter()
+            .enumerate()
+            .filter(|(_, origin)| jobs.successful_row(origin))
+            .map(|(row, _)| {
+                serde_json::to_vec(&servers[0].channels[0].timeline.messages[row].document)
+                    .unwrap()
+                    .len()
+            })
+            .sum();
+        assert_eq!(jobs.plain_bytes, actual);
+        assert_eq!(ROWS * text.len(), MAX_PLAIN_BYTES);
+        assert_eq!(
+            jobs.handles.len(),
+            MAX_PLAIN_BYTES / plain_document_bytes(&text).unwrap()
+        );
+        assert!(!jobs.successful_row(&original[0]));
+        assert!(jobs.successful_row(original.last().unwrap()));
+        for (row, origin) in original.iter().enumerate() {
+            let message = &servers[0].channels[0].timeline.messages[row];
+            assert_eq!(model_origin(&servers[0], 0, row), *origin);
+            assert_eq!(message.source, text);
+            assert_eq!(message.source_format, Some(SourceMode::Plain));
+        }
+        // Serialize the actual snapshot row type, including placeholder rows.
+        // Source is not a snapshot field and cannot be truncated by eviction.
+        let timeline = crate::snapshot::TimelineView {
+            content_context: None,
+            instance: "9".into(),
+            peer: None,
+            server: "owned".into(),
+            channel: channel_id,
+            name: "fixture".into(),
+            loading: false,
+            has_older: false,
+            sending: false,
+            messages: servers[0].channels[0]
+                .timeline
+                .messages
+                .iter()
+                .enumerate()
+                .map(|(row, message)| crate::snapshot::MessageView {
+                    serial: message.serial.to_string(),
+                    revision: message.revision,
+                    content_token: jobs.token(&original[row]).map(str::to_owned),
+                    content_failed: false,
+                    author: message.author.clone(),
+                    at_ms: message.observed_at_ms,
+                    outgoing: message.outgoing,
+                    status: message.status.label(),
+                    document: message.document.clone(),
+                })
+                .collect(),
+        };
+        assert!(serde_json::to_vec(&timeline).unwrap().len() < 32 * 1024 * 1024);
+    }
+
+    #[test]
     fn cancellation_retains_actual_transport_credit_and_stale_reply_cannot_install() {
         let mut jobs = Jobs::default();
         for serial in 0..6 {
@@ -1096,7 +1245,13 @@ mod tests {
         model_message_mut(servers, &completion.origin).document = completion.rendered.document;
     }
     fn resident_plain_bytes(servers: &[nuschl_client::server::ServerState]) -> usize {
-        servers.iter().flat_map(|server|&server.channels).flat_map(|channel|&channel.timeline.messages).filter(|message|message.document.blocks.iter().any(|block|matches!(block,nuschl_core::ContentBlock::Text { text,.. } if text=="ok"))).count()*2
+        servers
+            .iter()
+            .flat_map(|server| &server.channels)
+            .flat_map(|channel| &channel.timeline.messages)
+            .filter(|message| message.document.blocks.iter().any(|block| matches!(block, nuschl_core::ContentBlock::Text { text, .. } if text == "ok")))
+            .map(|message| serde_json::to_vec(&message.document).unwrap().len())
+            .sum()
     }
     fn render_model(
         jobs: &mut Jobs,
@@ -1132,7 +1287,7 @@ mod tests {
             servers[0].channels[0].instance += 1;
             jobs.retain(|origin| origin.resident(&servers));
             assert_eq!(jobs.plain_bytes, resident_plain_bytes(&servers));
-            assert_eq!(jobs.plain_bytes, 4);
+            assert_eq!(jobs.plain_bytes, plain_document_bytes("ok").unwrap() * 2);
             let fresh = model_origin(&servers[0], 0, 0);
             assert_ne!(fresh, first);
             render_model(&mut jobs, &mut servers, fresh);
@@ -1142,7 +1297,7 @@ mod tests {
                 "new origin replaces SAME row charge instead of accumulating generations"
             );
             assert_eq!(jobs.plain_bytes, resident_plain_bytes(&servers));
-            assert_eq!(jobs.plain_bytes, 4);
+            assert_eq!(jobs.plain_bytes, plain_document_bytes("ok").unwrap() * 2);
             assert!(
                 jobs.token(&inactive).is_some(),
                 "inactive resident derivative remains charged despite old generation"
@@ -1150,7 +1305,7 @@ mod tests {
         }
         servers[0].channels[1].timeline.messages.clear();
         jobs.retain(|origin| origin.resident(&servers));
-        assert_eq!(jobs.plain_bytes, 2);
+        assert_eq!(jobs.plain_bytes, plain_document_bytes("ok").unwrap());
         assert_eq!(jobs.plain_bytes, resident_plain_bytes(&servers));
         servers[0].channels[0].timeline.messages[0].revision += 1;
         servers[0].channels[0].timeline.messages[0].document =
