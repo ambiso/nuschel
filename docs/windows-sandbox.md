@@ -275,7 +275,10 @@ Windows 11 Enterprise 25H2 (build 26200) in `tests/windows_vm.py`, two vCPUs, a 
 HDA sound card without a host backend, no network except forwards into host
 loopback. `crates/sandbox-windows/tests/confinement.rs` (see tests/README.md) starts
 itself through `nuschl_ipc::host`'s real commands as each worker kind and probes
-from the inside. Result on 2026-11-11, every worker kind:
+from the inside. The results below were produced by the supervisor code before
+`nuschl-sandbox` (`nuschl_ipc::host`'s per-role builders, revision 9546e083 and
+earlier); they have not been repeated with `nuschl_sandbox::command`. Result on
+2026-11-11, every worker kind:
 
 | Attempt | content | storage | crypto | media | transfer |
 | --- | --- | --- | --- | --- | --- |
