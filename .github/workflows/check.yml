@@ -1,6 +1,14 @@
 # SPDX-License-Identifier: EUPL-1.2
-# Builds, Clippy, unit/policy checks and the NixOS VM smoke test on the
-# repository's self-hosted runner, for every pushed commit range.
+# CI in three tiers on the repository's self-hosted runner (scripts/ci-tiers
+# lists each tier; scripts/pre-pr runs tier 1 locally):
+#   1. every push and pull request: Linux package builds, workspace Clippy and
+#      rustfmt, unit-test leaves, worker-boundary and policy checks, and build
+#      plus Clippy for each earlier commit of the pushed range;
+#   2. pushes to main, the nightly schedule, manual runs and pushes to ci/*
+#      branches: the NixOS VM fixtures;
+#   3. the nightly schedule, manual runs and ci/* pushes: release proofs.
+# Windows/macOS cross builds and release archives stay in build.yml (tags and
+# manual runs only). "CI result (pull_request)" is the check to require.
 #
 # Trust boundary: self-hosted jobs run ONLY for pushes to this repository,
 # schedules, manual dispatch, and pull requests whose head branch lives in this
@@ -20,6 +28,8 @@ on:
   push:
     branches: ["**"]
   pull_request:
+  schedule:
+    - cron: "23 1 * * *"
   workflow_dispatch:
 
 permissions:
@@ -27,7 +37,7 @@ permissions:
 
 # Superseded runs of a branch or pull request are cancelled; their commits are
 # checked again by the next run (Nix reuses everything that already finished).
-# Every push to main keeps its own run.
+# Every push to main and every scheduled run keeps its own run.
 concurrency:
   group: check-${{ github.event_name }}-${{ github.ref == 'refs/heads/main' && github.run_id || github.ref }}
   cancel-in-progress: true
@@ -47,7 +57,8 @@ jobs:
   preflight:
     name: Runner preflight
     if: >-
-      github.event_name == 'push' || github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'push' || github.event_name == 'schedule' ||
+      github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'pull_request' &&
        github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: [self-hosted, Linux, X64]
@@ -170,15 +181,14 @@ jobs:
              git cat-file -e "$candidate^{commit}" 2>/dev/null; then
             base=$(git merge-base "$candidate" "$head" || true)
           fi
-          earlier=()
+          range=()
           if [[ -n $base ]]; then
             mapfile -t range < <(git rev-list --first-parent "$base..$head")
-            # range[0] is the head; keep the newest MAX_EARLIER_COMMITS before it.
-            earlier=("${range[@]:1:$MAX_EARLIER_COMMITS}")
-            skipped=$(( ${#range[@]} - 1 - ${#earlier[@]} ))
-          else
-            skipped=0
           fi
+          # range[0] is the head; keep the newest MAX_EARLIER_COMMITS before it.
+          earlier=("${range[@]:1:$MAX_EARLIER_COMMITS}")
+          skipped=0
+          if (( ${#range[@]} > 1 )); then skipped=$(( ${#range[@]} - 1 - ${#earlier[@]} )); fi
           {
             echo '### Commits'
             echo "- head \`$head\`; base \`${base:-none}\`"
@@ -193,7 +203,8 @@ jobs:
     name: Build (Nix)
     needs: preflight
     if: >-
-      github.event_name == 'push' || github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'push' || github.event_name == 'schedule' ||
+      github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'pull_request' &&
        github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: [self-hosted, Linux, X64]
@@ -208,17 +219,21 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Build desktop, terminal, helpers, server, RTC probe, web relay and site
+      - name: Desktop, terminal, helpers, server, RTC probe, web relay and web site
         run: |
+          list=$(scripts/ci-tiers build)
+          [[ -n $list ]] || { echo "::error::scripts/ci-tiers build selected nothing"; exit 1; }
+          mapfile -t installables <<<"$list"
+          printf '%s\n' "${installables[@]}"
           nix build --no-link --print-out-paths -L --keep-going --cores "$CORES" --max-jobs "$MAX_JOBS" \
-            .#checks.x86_64-linux.build .#checks.x86_64-linux.server-build \
-            .#checks.x86_64-linux.rtc-build .#web-relay .#web-site
+            "${installables[@]}"
 
   clippy:
     name: Clippy and rustfmt
     needs: preflight
     if: >-
-      github.event_name == 'push' || github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'push' || github.event_name == 'schedule' ||
+      github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'pull_request' &&
        github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: [self-hosted, Linux, X64]
@@ -235,14 +250,19 @@ jobs:
 
       - name: Workspace Clippy with --all-targets --deny warnings, and rustfmt
         run: |
+          list=$(scripts/ci-tiers lint)
+          [[ -n $list ]] || { echo "::error::scripts/ci-tiers lint selected nothing"; exit 1; }
+          mapfile -t installables <<<"$list"
+          printf '%s\n' "${installables[@]}"
           nix build --no-link --print-out-paths -L --keep-going --cores "$CORES" --max-jobs "$MAX_JOBS" \
-            .#checks.x86_64-linux.clippy .#checks.x86_64-linux.fmt
+            "${installables[@]}"
 
   tests:
     name: Unit tests and policy checks
     needs: preflight
     if: >-
-      github.event_name == 'push' || github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'push' || github.event_name == 'schedule' ||
+      github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'pull_request' &&
        github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: [self-hosted, Linux, X64]
@@ -257,24 +277,21 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Every flake check except builds, Clippy, rustfmt and VMs
+      - name: Unit-test leaves, worker boundaries, dependency policy, crate2nix graph, modules
         run: |
-          # New unit-test leaves and policy checks are picked up automatically.
-          mapfile -t names < <(nix eval --raw .#checks.x86_64-linux --apply '
-            checks: builtins.concatStringsSep "\n" (builtins.filter
-              (name: !(builtins.elem name [ "build" "server-build" "rtc-build" "clippy" "fmt" ])
-                && builtins.substring 0 3 name != "vm-")
-              (builtins.attrNames checks))')
-          (( ${#names[@]} > 0 )) || { echo '::error::No flake checks selected'; exit 1; }
-          printf 'Checking: %s\n' "${names[*]}" | tee -a "$GITHUB_STEP_SUMMARY"
+          list=$(scripts/ci-tiers unit)
+          [[ -n $list ]] || { echo "::error::scripts/ci-tiers unit selected nothing"; exit 1; }
+          mapfile -t installables <<<"$list"
+          printf '%s\n' "${installables[@]}"
           nix build --no-link --print-out-paths -L --keep-going --cores "$CORES" --max-jobs "$MAX_JOBS" \
-            "${names[@]/#/.#checks.x86_64-linux.}"
+            "${installables[@]}"
 
   commits:
     name: Earlier commits (build, Clippy, rustfmt)
     needs: preflight
     if: >-
-      github.event_name == 'push' || github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'push' || github.event_name == 'schedule' ||
+      github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'pull_request' &&
        github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: [self-hosted, Linux, X64]
@@ -307,9 +324,10 @@ jobs:
             git log -1 --format='Checking %H %s' "$sha"
             flake="git+file://$GITHUB_WORKSPACE?rev=$sha"
             start=$SECONDS
-            if nix build --no-link --print-out-paths -L --keep-going --cores "$CORES" --max-jobs "$MAX_JOBS" \
-                "$flake#checks.x86_64-linux.build" "$flake#checks.x86_64-linux.server-build" \
-                "$flake#checks.x86_64-linux.clippy" "$flake#checks.x86_64-linux.fmt"; then
+            if list=$(scripts/ci-tiers --flake "$flake" build && scripts/ci-tiers --flake "$flake" lint) &&
+               mapfile -t installables <<<"$list" &&
+               nix build --no-link --print-out-paths -L --keep-going --cores "$CORES" --max-jobs "$MAX_JOBS" \
+                 "${installables[@]}"; then
               result=pass
             else
               result=FAIL
@@ -320,15 +338,15 @@ jobs:
           done
           (( failed == 0 ))
 
-  vm-smoke:
-    name: VM smoke test
+  vm:
+    name: NixOS VM fixtures (main, nightly)
     needs: [preflight, build]
     if: >-
-      github.event_name == 'push' || github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'pull_request' &&
-       github.event.pull_request.head.repo.full_name == github.repository)
+      github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'push' &&
+       (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/ci/')))
     runs-on: [self-hosted, Linux, X64]
-    timeout-minutes: 120
+    timeout-minutes: 240
     env:
       CORES: ${{ needs.preflight.outputs.cores }}
       MAX_JOBS: ${{ needs.preflight.outputs.max-jobs }}
@@ -336,7 +354,7 @@ jobs:
       - name: Require KVM and the nixos-test system feature
         if: needs.preflight.outputs.kvm != 'true'
         run: |
-          echo '::error title=VM smoke test::The Nix daemon on this runner lacks the kvm and nixos-test system features.'
+          echo '::error title=NixOS VM fixtures::The Nix daemon on this runner lacks the kvm and nixos-test system features.'
           exit 1
 
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
@@ -345,10 +363,53 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Desktop, server module and stock Mumble servers in NixOS VMs
+      - name: Each VM fixture, timed
         run: |
-          nix build --no-link --print-out-paths -L --cores "$CORES" --max-jobs "$MAX_JOBS" \
-            .#checks.x86_64-linux.vm-smoke
+          list=$(scripts/ci-tiers nightly)
+          [[ -n $list ]] || { echo "::error::scripts/ci-tiers nightly selected nothing"; exit 1; }
+          mapfile -t installables <<<"$list"
+          echo '| VM fixture | Result | Minutes |' >> "$GITHUB_STEP_SUMMARY"
+          echo '| --- | --- | --- |' >> "$GITHUB_STEP_SUMMARY"
+          failed=0
+          for installable in "${installables[@]}"; do
+            start=$SECONDS
+            if nix build --no-link --print-out-paths -L --cores "$CORES" --max-jobs "$MAX_JOBS" "$installable"; then
+              result=pass
+            else
+              result=FAIL
+              failed=$(( failed + 1 ))
+              echo "::error title=NixOS VM fixtures::${installable##*.} failed"
+            fi
+            echo "| ${installable##*.} | $result | $(( (SECONDS - start + 59) / 60 )) |" >> "$GITHUB_STEP_SUMMARY"
+          done
+          (( failed == 0 ))
+
+  release-proofs:
+    name: Release proofs (nightly)
+    needs: preflight
+    if: >-
+      github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/ci/'))
+    runs-on: [self-hosted, Linux, X64]
+    timeout-minutes: 240
+    env:
+      CORES: ${{ needs.preflight.outputs.cores }}
+      MAX_JOBS: ${{ needs.preflight.outputs.max-jobs }}
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          ref: ${{ needs.preflight.outputs.head }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Linux distribution packaging proofs
+        run: |
+          list=$(scripts/ci-tiers release)
+          [[ -n $list ]] || { echo "::error::scripts/ci-tiers release selected nothing"; exit 1; }
+          mapfile -t installables <<<"$list"
+          printf '%s\n' "${installables[@]}"
+          nix build --no-link --print-out-paths -L --keep-going --cores "$CORES" --max-jobs "$MAX_JOBS" \
+            "${installables[@]}"
 
   # Hosted and unprivileged: runs for every pull request, including forks.
   pr-lint:
@@ -375,13 +436,14 @@ jobs:
       - name: actionlint with shellcheck
         run: nix shell --inputs-from . nixpkgs#actionlint nixpkgs#shellcheck --command actionlint -color
 
-  # The one check to require: it runs for every event, fails for fork pull
-  # requests, and fails unless every applicable job above succeeded. A job
-  # skipped by `if:` would otherwise count as passing.
+  # The one check to require, as "CI result (pull_request)": it runs for every
+  # event, fails for fork pull requests, and fails unless every job that applies
+  # to the event succeeded. A job skipped by `if:` would otherwise count as
+  # passing. The event in its name keeps push and pull request results apart.
   result:
-    name: CI result
+    name: CI result (${{ github.event_name }})
     if: always()
-    needs: [preflight, build, clippy, tests, commits, vm-smoke, pr-lint]
+    needs: [preflight, build, clippy, tests, commits, vm, release-proofs, pr-lint]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions: {}
@@ -389,6 +451,7 @@ jobs:
       - name: Require every applicable check
         env:
           EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
           HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
           REPOSITORY: ${{ github.repository }}
           PREFLIGHT: ${{ needs.preflight.result }}
@@ -396,7 +459,8 @@ jobs:
           CLIPPY: ${{ needs.clippy.result }}
           TESTS: ${{ needs.tests.result }}
           COMMITS: ${{ needs.commits.result }}
-          VM_SMOKE: ${{ needs.vm-smoke.result }}
+          VM: ${{ needs.vm.result }}
+          RELEASE_PROOFS: ${{ needs.release-proofs.result }}
           PR_LINT: ${{ needs.pr-lint.result }}
         run: |
           if [[ $EVENT == pull_request && $HEAD_REPO != "$REPOSITORY" ]]; then
@@ -405,16 +469,26 @@ jobs:
             echo "::error title=Fork pull request::$message"
             exit 1
           fi
+          nightly=false
+          release=false
+          case $EVENT:$REF in
+            schedule:* | workflow_dispatch:*) nightly=true; release=true ;;
+            push:refs/heads/ci/*) nightly=true; release=true ;;
+            push:refs/heads/main) nightly=true ;;
+          esac
           status=0
-          require() {
-            printf '%-10s %s\n' "$1" "$2"
-            if [[ $2 != success ]]; then status=1; fi
+          expect() {
+            local name=$1 result=$2 applies=$3
+            printf '%-15s %-8s (required: %s)\n' "$name" "$result" "$applies"
+            if [[ $applies == true && $result != success ]]; then status=1; fi
+            if [[ $applies == false && $result != skipped ]]; then status=1; fi
           }
-          require preflight "$PREFLIGHT"
-          require build "$BUILD"
-          require clippy "$CLIPPY"
-          require tests "$TESTS"
-          require commits "$COMMITS"
-          require vm-smoke "$VM_SMOKE"
-          if [[ $EVENT == pull_request ]]; then require pr-lint "$PR_LINT"; fi
+          expect preflight "$PREFLIGHT" true
+          expect build "$BUILD" true
+          expect clippy "$CLIPPY" true
+          expect tests "$TESTS" true
+          expect commits "$COMMITS" true
+          expect vm "$VM" "$nightly"
+          expect release-proofs "$RELEASE_PROOFS" "$release"
+          expect pr-lint "$PR_LINT" "$([[ $EVENT == pull_request ]] && echo true || echo false)"
           exit "$status"
