@@ -952,9 +952,9 @@ deferred (D8).
   stay silent while deafened, since the driver suppresses sounds then. In the
   conversation in front of the user only the sound plays (`sounds::message`).
   `unread_mention` comes from structured mentions, not the heuristic (D9).
-- **Out of scope:** per-conversation notification levels (all / mentions / nothing) and
-  a "suppress role mentions" preference would need a settings sidecar. They are a
-  separate feature needing approval (D16).
+- **Out of scope:** notification levels (all / mentions / nothing) per server, with a
+  per-conversation override, and a "suppress role mentions" preference need a settings
+  sidecar. They are a separate feature, #210 (D16).
 
 ### 5.5 History and reconnect
 
@@ -1473,8 +1473,8 @@ Recommendations first. Owner-level decisions are marked (owner); integration mat
 - **D15** (owner) Limits: 20 distinct emoji and 5 per actor per message; 20 user and 2
   role mentions; 256 role recipients; 5 role mentions per hour (recommended starting
   values, generous in the spirit of `docs/extension.md:473-476`).
-- **D16** (owner) Per-conversation notification levels and a "suppress role mentions"
-  setting: a separate feature needing approval (not part of these issues).
+- **D16** (owner, decided 2026-11-13) Notification levels per server and per conversation,
+  and a "suppress role mentions" setting: a separate feature, #210.
 - **D17** Stock annotation receivers: everyone the text reaches, capped at 256
   (recommended), versus discovering Nuschl peers first (more traffic, more state).
 - **D18** No parent excerpt inside E2EE reply bodies (recommended): it would leak the
