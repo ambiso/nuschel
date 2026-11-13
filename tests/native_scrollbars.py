@@ -168,6 +168,7 @@ def actions(args, root, shell, application, bot, _murmur):
         shell.click(*point(target))
         target_field = eventually(lambda: next((node for node, role, name, _ in items(application)
             if name == "ACL rule target" and role == "entry"), None), "rule input absent")
+        focus(target_field, dialog)
         eventually(lambda: input_value(target_field, f"selected-rule-{zoom}") == "scroll-rule-005",
                    "canvas intercepted a rule pointer selection")
         wait("Remove rule", "push button")
