@@ -198,7 +198,8 @@ pub fn settings_rows(this: &Desktop, cx: &mut Context<Desktop>) -> Vec<AnyElemen
                     .text_color(color(TEXT_MUTED))
                     .child(
                         text!(fingerprint.clone().unwrap_or_else(|| {
-                            "Created when you first connect to a Nuschl server with key                              transparency."
+                            "Created when you first connect to a Nuschl server with key \
+                             transparency."
                                 .into()
                         }))
                         .with_id("kt-own-fingerprint"),
@@ -210,11 +211,13 @@ pub fn settings_rows(this: &Desktop, cx: &mut Context<Desktop>) -> Vec<AnyElemen
         && view.fingerprint.is_some()
     {
         let status = if view.recovery_pending {
-            "A recovery key was made with your identity. Write it down, or skip it: without              it, losing this device means a new identity."
+            "A recovery key was made with your identity. Write it down, or skip it: \
+             without it, losing this device means a new identity."
         } else if view.recoverable {
             "Recoverable with your recovery key."
         } else {
-            "No recovery key: losing this device means a new identity, which your contacts              see as a change."
+            "No recovery key: losing this device means a new identity, which your \
+             contacts see as a change."
         };
         rows.push(
             div()

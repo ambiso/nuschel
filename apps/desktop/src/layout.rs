@@ -236,25 +236,43 @@ pub fn scroll_region(
 /// must not occupy the track's hit area, including when its labels wrap.
 pub const SCROLLBAR_GUTTER: f32 = 12.;
 
+/// An anchor for overlays inside a scroll container. GPUI measures a scroll
+/// container's extent from every direct child's layout box, absolute ones
+/// included (`Div::prepaint`'s `content_size`). Taffy places an absolute child
+/// without insets at its static position, which in block layout is below the
+/// preceding in-flow content: a viewport-sized overlay appended after the
+/// content added a whole page of blank scrolling. Zero insets would instead
+/// start at the padding edge and add a padded region's top padding. A zero-size
+/// box at the static position lies within the content's extent in block and
+/// flex containers alike; children take their geometry from a retained
+/// handle, never from this box.
+fn overlay_anchor() -> Div {
+    div().absolute().size(px(0.))
+}
+
 /// One native scrollbar style for ordinary and virtualized scroll handles.
-/// The kit positions this absolute element at the handle's actual viewport,
-/// even when appended inside moving content. Always means visible *when it
-/// overflows*: the kit omits both track and thumb for a non-scrollable axis.
+/// The kit paints and hit-tests the bar at the handle's actual viewport, even
+/// when appended inside moving content; its own layout box (the full size of
+/// its parent) is held in a zero-size anchor so it never adds scroll extent.
+/// Always means visible *when it overflows*: the kit omits both track and
+/// thumb for a non-scrollable axis.
 pub fn scrollbar<H: ScrollbarHandle + Clone>(
     id: impl Into<ElementId>,
     handle: &H,
     background: Token,
-) -> Scrollbar {
-    Scrollbar::vertical(handle)
-        .id(id)
-        .mode(ScrollbarMode::Always)
-        .styles(|styles| {
-            styles
-                .track(|track| track.width(px(8.)).bg(color(background).into()))
-                .thumb(|thumb| thumb.width(px(4.)).bg(color(BORDER_STRONG)).radius(px(2.)))
-                .thumb_hover(|thumb| thumb.bg(color(TEXT_FAINT)))
-                .thumb_active(|thumb| thumb.bg(color(TEXT_MUTED)))
-        })
+) -> Div {
+    overlay_anchor().child(
+        Scrollbar::vertical(handle)
+            .id(id)
+            .mode(ScrollbarMode::Always)
+            .styles(|styles| {
+                styles
+                    .track(|track| track.width(px(8.)).bg(color(background).into()))
+                    .thumb(|thumb| thumb.width(px(4.)).bg(color(BORDER_STRONG)).radius(px(2.)))
+                    .thumb_hover(|thumb| thumb.bg(color(TEXT_FAINT)))
+                    .thumb_active(|thumb| thumb.bg(color(TEXT_MUTED)))
+            }),
+    )
 }
 
 /// Virtual lists cannot contain a sibling overlay themselves. This finite
@@ -307,7 +325,8 @@ fn scroll_events(
 ) -> impl IntoElement {
     canvas(
         // An absolute child's layout origin moves with its scroll parent.
-        // Resolve from the retained viewport so its gutter remains interactive.
+        // Resolve from the retained viewport so its gutter remains interactive;
+        // the layout box itself is an inert overlay anchor (no scroll extent).
         move |_, window, _| window.insert_hitbox(handle.bounds(), HitboxBehavior::Normal),
         move |_, hitbox, window, _| {
             window.on_mouse_event(move |event: &ScrollEvent, phase, window, cx| {
@@ -318,7 +337,7 @@ fn scroll_events(
         },
     )
     .absolute()
-    .inset_0()
+    .size(px(0.))
 }
 
 /// The same keyboard/focus contract for a caller-owned scroll handle (dialogs
@@ -373,6 +392,8 @@ pub fn scrollable(id: &'static str, label: &'static str, handle: ScrollHandle) -
         .track_scroll(&handle)
         // Establish an autoscroll scope before prepainting descendants; a
         // request from a preceding sibling must not scroll this region.
+        // At its static position, like `overlay_anchor`: an inset of zero
+        // would extend the scroll extent over a padded region's top padding.
         .child(
             canvas(
                 move |_, window, _| {
@@ -381,8 +402,6 @@ pub fn scrollable(id: &'static str, label: &'static str, handle: ScrollHandle) -
                 |_, _, _, _| {},
             )
             .absolute()
-            .top_0()
-            .left_0()
             .size(px(0.)),
         )
         .on_key_down(move |event, window, cx| {
@@ -428,4 +447,231 @@ pub fn notices(window: &mut Window, cx: &mut App, notices: Vec<AnyElement>) -> A
             .children(notices),
     )
     .into_any_element()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::{Path, PathBuf};
+
+    /// Source indentation that leaked into the text of an ordinary string
+    /// literal, as 1-based lines. Wrapping is GPUI's job (module docs), so
+    /// interface text never needs runs of spaces: a long literal continues
+    /// with `\` at the line end, which drops the next line's indentation.
+    /// Two defects are found: three or more spaces between visible
+    /// characters, and a line break in the source followed by indentation.
+    /// Escapes such as `\n` are deliberate and raw strings are verbatim by
+    /// choice, so neither is reported; comments and character literals are
+    /// skipped.
+    fn leaks(source: &str) -> Vec<(usize, String)> {
+        let chars: Vec<char> = source.chars().collect();
+        let after_ident = |index: usize| {
+            index
+                .checked_sub(1)
+                .and_then(|previous| chars.get(previous))
+                .is_some_and(|c| c.is_alphanumeric() || *c == '_')
+        };
+        let mut found = Vec::new();
+        let (mut index, mut line) = (0, 1);
+        while let Some(&c) = chars.get(index) {
+            let next = chars.get(index + 1).copied();
+            if c == '\n' {
+                line += 1;
+                index += 1;
+            } else if c == '/' && next == Some('/') {
+                while chars.get(index).is_some_and(|c| *c != '\n') {
+                    index += 1;
+                }
+            } else if c == '/' && next == Some('*') {
+                let mut depth = 0_usize;
+                while let Some(&c) = chars.get(index) {
+                    let next = chars.get(index + 1).copied();
+                    if c == '/' && next == Some('*') {
+                        depth += 1;
+                        index += 2;
+                    } else if c == '*' && next == Some('/') {
+                        depth -= 1;
+                        index += 2;
+                        if depth == 0 {
+                            break;
+                        }
+                    } else {
+                        line += usize::from(c == '\n');
+                        index += 1;
+                    }
+                }
+            } else if !after_ident(index)
+                && let Some(end) = raw_string_end(&chars, index)
+            {
+                line += chars[index..end].iter().filter(|c| **c == '\n').count();
+                index = end;
+            } else if c == '"' {
+                let start = line;
+                let mut text = String::new();
+                let mut indented = false;
+                index += 1;
+                while let Some(&c) = chars.get(index) {
+                    index += 1;
+                    match c {
+                        '"' => break,
+                        '\\' => {
+                            let escaped = chars.get(index).copied();
+                            index += 1;
+                            match escaped {
+                                // A continuation: Rust drops the line break
+                                // and all of the next line's leading space.
+                                Some('\n') => {
+                                    line += 1;
+                                    while let Some(&c) = chars.get(index)
+                                        && c.is_whitespace()
+                                    {
+                                        line += usize::from(c == '\n');
+                                        index += 1;
+                                    }
+                                }
+                                Some('n' | 'r' | 't') => text.push('\n'),
+                                // Any other escape stands for visible text.
+                                _ => text.push('x'),
+                            }
+                        }
+                        '\n' => {
+                            line += 1;
+                            indented |= matches!(chars.get(index), Some(' ' | '\t'));
+                            text.push('\n');
+                        }
+                        c => text.push(c),
+                    }
+                }
+                if indented || spaced(&text) {
+                    found.push((start, text));
+                }
+            } else if c == '\'' {
+                // A character literal, or a lifetime/label (left as code).
+                index += match (next, chars.get(index + 2)) {
+                    (Some('\\'), _) => chars
+                        .get(index + 3..)
+                        .and_then(|rest| rest.iter().position(|c| *c == '\''))
+                        .map_or(1, |close| close + 4),
+                    (Some(_), Some('\'')) => 3,
+                    _ => 1,
+                };
+            } else {
+                index += 1;
+            }
+        }
+        found
+    }
+
+    /// The end of a raw (byte or C) string literal starting at `index`.
+    fn raw_string_end(chars: &[char], index: usize) -> Option<usize> {
+        let mut at = index + usize::from(matches!(chars.get(index), Some('b' | 'c')));
+        if chars.get(at) != Some(&'r') {
+            return None;
+        }
+        at += 1;
+        let hashes = chars.get(at..)?.iter().take_while(|c| **c == '#').count();
+        at += hashes;
+        if chars.get(at) != Some(&'"') {
+            return None;
+        }
+        let closing = |at: usize| {
+            chars.get(at) == Some(&'"')
+                && chars
+                    .get(at + 1..at + 1 + hashes)
+                    .is_some_and(|tail| tail.iter().all(|c| *c == '#'))
+        };
+        Some(
+            (at + 1..chars.len())
+                .find(|at| closing(*at))
+                .map_or(chars.len(), |at| at + 1 + hashes),
+        )
+    }
+
+    /// Three or more spaces between two visible characters.
+    fn spaced(text: &str) -> bool {
+        let (mut run, mut after_visible) = (0, false);
+        for c in text.chars() {
+            if c == ' ' {
+                run += 1;
+                continue;
+            }
+            if after_visible && run >= 3 && !c.is_whitespace() {
+                return true;
+            }
+            (run, after_visible) = (0, !c.is_whitespace());
+        }
+        false
+    }
+
+    fn sources(directory: &Path, found: &mut Vec<PathBuf>) {
+        let entries = std::fs::read_dir(directory)
+            .unwrap_or_else(|error| panic!("reading {}: {error}", directory.display()));
+        for entry in entries {
+            let path = entry.expect("source directory entry").path();
+            if path.is_dir() {
+                sources(&path, found);
+            } else if path.extension().is_some_and(|extension| extension == "rs") {
+                found.push(path);
+            }
+        }
+    }
+
+    #[test]
+    fn finds_leaked_indentation_only_in_ordinary_literals() {
+        // A raw string itself, so this fixture does not trip the scan below.
+        let source = r##"fn f<'a>(x: &'a str) -> char {
+    let quote = '"';
+    let escaped = '\'';
+    let unicode = '\u{1F600}';
+    // "a comment          with spaces"
+    /* "nested /* block */          comment" */
+    let raw = r#"aligned     "columns""#;
+    let byte_raw = br"also     verbatim";
+    let escapes = "one\n   two\tthree \"quoted\" \\";
+    let continued = "key \
+                     transparency";
+    let leaked = "key                     transparency";
+    let broken = "first line
+        second line";
+    let byte = b"bytes     too";
+    let two = "Two  spaces after a period.";
+    'x'
+}
+"##;
+        let found: Vec<usize> = leaks(source).into_iter().map(|(line, _)| line).collect();
+        assert_eq!(found, [12, 13, 15]);
+    }
+
+    #[test]
+    fn desktop_strings_carry_no_source_indentation() {
+        let manifest = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        // Cargo runs tests in the package root, as does crate2nix's runner.
+        let root = if manifest.is_dir() {
+            manifest
+        } else {
+            PathBuf::from("src")
+        };
+        let mut files = Vec::new();
+        sources(&root, &mut files);
+        files.sort();
+        for expected in ["main.rs", "identity.rs", "layout.rs", "voice/status.rs"] {
+            assert!(
+                files.iter().any(|file| file.ends_with(expected)),
+                "{expected} was not scanned under {}",
+                root.display()
+            );
+        }
+        let mut problems = Vec::new();
+        for file in &files {
+            let source = std::fs::read_to_string(file)
+                .unwrap_or_else(|error| panic!("reading {}: {error}", file.display()));
+            for (line, text) in leaks(&source) {
+                problems.push(format!("{}:{line}: {text:?}", file.display()));
+            }
+        }
+        assert!(
+            problems.is_empty(),
+            "indentation inside string literals:\n{}",
+            problems.join("\n")
+        );
+    }
 }
