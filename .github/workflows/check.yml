@@ -1,0 +1,408 @@
+# SPDX-License-Identifier: EUPL-1.2
+# Builds, Clippy, unit/policy checks and the NixOS VM smoke test on the
+# repository's self-hosted runner, for every pushed commit range.
+#
+# Trust boundary: self-hosted jobs run ONLY for pushes to this repository,
+# schedules, manual dispatch, and pull requests whose head branch lives in this
+# repository. Fork pull requests never reach the self-hosted runner from this
+# file; they get the hosted lint job and a failing "CI result" that asks a
+# maintainer to push the reviewed branch here. A fork can edit this file in its
+# pull request, so these `if:` gates are not the enforcement point on their
+# own: the repository's fork approval policy and the runner's job-started hook
+# are (see the pull request that added this workflow).
+#
+# No secrets, no write permission, no stored credentials, and every Nix build
+# runs in the daemon's sandbox. Nix is never installed on the self-hosted
+# runner by a job; the preflight fails if it is missing.
+name: Check
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Superseded runs of a branch or pull request are cancelled; their commits are
+# checked again by the next run (Nix reuses everything that already finished).
+# Every push to main keeps its own run.
+concurrency:
+  group: check-${{ github.event_name }}-${{ github.ref == 'refs/heads/main' && github.run_id || github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  NIX_CONFIG: |
+    extra-experimental-features = nix-command flakes
+    accept-flake-config = false
+  # Earlier commits of a range checked besides its head (build, Clippy, rustfmt).
+  MAX_EARLIER_COMMITS: "8"
+
+jobs:
+  preflight:
+    name: Runner preflight
+    if: >-
+      github.event_name == 'push' || github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' &&
+       github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: [self-hosted, Linux, X64]
+    timeout-minutes: 15
+    outputs:
+      cores: ${{ steps.runner.outputs.cores }}
+      max-jobs: ${{ steps.runner.outputs.max-jobs }}
+      kvm: ${{ steps.runner.outputs.kvm }}
+      head: ${{ steps.range.outputs.head }}
+      earlier: ${{ steps.range.outputs.earlier }}
+    steps:
+      - name: Check Nix, KVM, memory and disk
+        id: runner
+        env:
+          OVERRIDE_CORES: ${{ vars.NUSCHL_CI_CORES }}
+          OVERRIDE_MAX_JOBS: ${{ vars.NUSCHL_CI_MAX_JOBS }}
+        run: |
+          fail() { printf '::error title=Runner preflight::%s\n' "$*"; exit 1; }
+          note() { printf '%s\n' "$*" | tee -a "$GITHUB_STEP_SUMMARY"; }
+          nix_setting() { nix config show "$1" 2>/dev/null || nix show-config 2>/dev/null | sed -n "s/^$1 = //p"; }
+          free_gib() { df --output=avail -B1G "$1" 2>/dev/null | tail -n 1 | tr -d ' '; }
+
+          command -v nix >/dev/null 2>&1 ||
+            fail "nix is not on PATH for runner user $(id -un). Install multi-user Nix on the runner host;" \
+              'jobs never install it there.'
+          nix_version=$(nix --version) || fail 'nix --version failed'
+          store_info=$(nix store info --json 2>/dev/null || nix store ping --json 2>/dev/null) ||
+            fail 'Cannot reach the Nix daemon/store as the runner user.'
+          sandbox=$(nix_setting sandbox)
+          [[ $sandbox == true || $sandbox == relaxed ]] ||
+            fail "Nix sandbox is '$sandbox'; CI builds require 'sandbox = true'."
+          features=$(nix_setting system-features)
+          build_dir=$(nix_setting build-dir)
+          [[ -n $build_dir && -d $build_dir ]] || build_dir=/tmp
+
+          threads=$(nproc)
+          mem_gib=$(( $(awk '/^MemTotal:/ { print $2 }' /proc/meminfo) / 1048576 ))
+          avail_gib=$(( $(awk '/^MemAvailable:/ { print $2 }' /proc/meminfo) / 1048576 ))
+          store_free=$(free_gib /nix/store)
+          build_free=$(free_gib "$build_dir")
+
+          # Up to four parallel derivations, each with at least 4 threads and 8 GiB.
+          jobs=${OVERRIDE_MAX_JOBS:-$(( threads / 4 ))}
+          if [[ -z $OVERRIDE_MAX_JOBS ]]; then
+            (( jobs > mem_gib / 8 )) && jobs=$(( mem_gib / 8 ))
+            (( jobs > 4 )) && jobs=4
+            (( jobs < 1 )) && jobs=1
+          fi
+          [[ $jobs =~ ^[1-9][0-9]?$ ]] || fail "NUSCHL_CI_MAX_JOBS must be 1-99, not '$jobs'"
+          cores=${OVERRIDE_CORES:-$(( threads / jobs ))}
+          (( cores >= 1 )) || cores=1
+          [[ $cores =~ ^[1-9][0-9]{0,2}$ ]] || fail "NUSCHL_CI_CORES must be 1-999, not '$cores'"
+
+          kvm=false
+          kvm_note='missing'
+          if [[ -c /dev/kvm ]]; then
+            kvm_note="present ($(stat -c '%A %U:%G' /dev/kvm))"
+            if [[ " $features " == *" kvm "* && " $features " == *" nixos-test "* ]]; then kvm=true; fi
+          fi
+
+          note '### Runner'
+          note "- runner \`$RUNNER_NAME\` on $(uname -srm), user \`$(id -un)\`"
+          note "- $nix_version, sandbox \`$sandbox\`, system-features \`$features\`"
+          note "- daemon trusts this user: \`$(grep -o '"trusted":[^,}]*' <<<"$store_info" || echo unknown)\`"
+          note "- $threads threads, $mem_gib GiB memory ($avail_gib GiB available)"
+          note "- free: /nix/store $store_free GiB, build dir \`$build_dir\` $build_free GiB"
+          note "- /dev/kvm $kvm_note; NixOS VM tests possible: $kvm"
+          note "- Nix builds use --max-jobs $jobs --cores $cores"
+
+          if [[ $store_info == *'"trusted":1'* || $store_info == *'"trusted":true'* ]]; then
+            printf '::warning title=Runner preflight::%s\n' \
+              "The Nix daemon trusts runner user $(id -un); a job could change substituters or sandbox settings."
+          fi
+          (( store_free >= 20 )) || fail "Only $store_free GiB free in /nix/store; at least 20 GiB is required."
+          (( build_free >= 8 )) ||
+            fail "Only $build_free GiB free in the Nix build directory $build_dir; at least 8 GiB is required."
+
+          {
+            printf 'cores=%s\n' "$cores"
+            printf 'max-jobs=%s\n' "$jobs"
+            printf 'kvm=%s\n' "$kvm"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Select the commits to check
+        id: range
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          BEFORE: ${{ github.event.before }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          head=$(git rev-parse HEAD)
+          # The range starts where this push or pull request left main.
+          candidate=
+          case $EVENT:$REF in
+            pull_request:*) candidate=$PR_BASE ;;
+            push:refs/heads/main) candidate=$BEFORE ;;
+            push:*) candidate=$(git rev-parse --verify --quiet refs/remotes/origin/main || true) ;;
+          esac
+          base=
+          if [[ $candidate =~ ^[0-9a-f]{40}$ && $candidate != 0000000000000000000000000000000000000000 ]] &&
+             git cat-file -e "$candidate^{commit}" 2>/dev/null; then
+            base=$(git merge-base "$candidate" "$head" || true)
+          fi
+          earlier=()
+          if [[ -n $base ]]; then
+            mapfile -t range < <(git rev-list --first-parent "$base..$head")
+            # range[0] is the head; keep the newest MAX_EARLIER_COMMITS before it.
+            earlier=("${range[@]:1:$MAX_EARLIER_COMMITS}")
+            skipped=$(( ${#range[@]} - 1 - ${#earlier[@]} ))
+          else
+            skipped=0
+          fi
+          {
+            echo '### Commits'
+            echo "- head \`$head\`; base \`${base:-none}\`"
+            echo "- earlier first-parent commits checked: ${#earlier[@]}; beyond the cap of $MAX_EARLIER_COMMITS: $skipped"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          if (( skipped > 0 )); then
+            printf '::warning title=Commit range::%s\n' "$skipped older commits of this range are not checked individually."
+          fi
+          printf 'head=%s\nearlier=%s\n' "$head" "${earlier[*]}" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build (Nix)
+    needs: preflight
+    if: >-
+      github.event_name == 'push' || github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' &&
+       github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: [self-hosted, Linux, X64]
+    timeout-minutes: 240
+    env:
+      CORES: ${{ needs.preflight.outputs.cores }}
+      MAX_JOBS: ${{ needs.preflight.outputs.max-jobs }}
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          ref: ${{ needs.preflight.outputs.head }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Build desktop, terminal, helpers, server, RTC probe, web relay and site
+        run: |
+          nix build --no-link --print-out-paths -L --keep-going --cores "$CORES" --max-jobs "$MAX_JOBS" \
+            .#checks.x86_64-linux.build .#checks.x86_64-linux.server-build \
+            .#checks.x86_64-linux.rtc-build .#web-relay .#web-site
+
+  clippy:
+    name: Clippy and rustfmt
+    needs: preflight
+    if: >-
+      github.event_name == 'push' || github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' &&
+       github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: [self-hosted, Linux, X64]
+    timeout-minutes: 240
+    env:
+      CORES: ${{ needs.preflight.outputs.cores }}
+      MAX_JOBS: ${{ needs.preflight.outputs.max-jobs }}
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          ref: ${{ needs.preflight.outputs.head }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Workspace Clippy with --all-targets --deny warnings, and rustfmt
+        run: |
+          nix build --no-link --print-out-paths -L --keep-going --cores "$CORES" --max-jobs "$MAX_JOBS" \
+            .#checks.x86_64-linux.clippy .#checks.x86_64-linux.fmt
+
+  tests:
+    name: Unit tests and policy checks
+    needs: preflight
+    if: >-
+      github.event_name == 'push' || github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' &&
+       github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: [self-hosted, Linux, X64]
+    timeout-minutes: 240
+    env:
+      CORES: ${{ needs.preflight.outputs.cores }}
+      MAX_JOBS: ${{ needs.preflight.outputs.max-jobs }}
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          ref: ${{ needs.preflight.outputs.head }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Every flake check except builds, Clippy, rustfmt and VMs
+        run: |
+          # New unit-test leaves and policy checks are picked up automatically.
+          mapfile -t names < <(nix eval --raw .#checks.x86_64-linux --apply '
+            checks: builtins.concatStringsSep "\n" (builtins.filter
+              (name: !(builtins.elem name [ "build" "server-build" "rtc-build" "clippy" "fmt" ])
+                && builtins.substring 0 3 name != "vm-")
+              (builtins.attrNames checks))')
+          (( ${#names[@]} > 0 )) || { echo '::error::No flake checks selected'; exit 1; }
+          printf 'Checking: %s\n' "${names[*]}" | tee -a "$GITHUB_STEP_SUMMARY"
+          nix build --no-link --print-out-paths -L --keep-going --cores "$CORES" --max-jobs "$MAX_JOBS" \
+            "${names[@]/#/.#checks.x86_64-linux.}"
+
+  commits:
+    name: Earlier commits (build, Clippy, rustfmt)
+    needs: preflight
+    if: >-
+      github.event_name == 'push' || github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' &&
+       github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: [self-hosted, Linux, X64]
+    timeout-minutes: 360
+    env:
+      CORES: ${{ needs.preflight.outputs.cores }}
+      MAX_JOBS: ${{ needs.preflight.outputs.max-jobs }}
+      EARLIER: ${{ needs.preflight.outputs.earlier }}
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          ref: ${{ needs.preflight.outputs.head }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check each earlier commit of the range
+        run: |
+          read -r -a commits <<<"$EARLIER"
+          if (( ${#commits[@]} == 0 )); then
+            echo 'No earlier commits in this range; the other jobs check its head.' | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          {
+            echo '| Commit | Result | Minutes |'
+            echo '| --- | --- | --- |'
+          } >> "$GITHUB_STEP_SUMMARY"
+          failed=0
+          for sha in "${commits[@]}"; do
+            [[ $sha =~ ^[0-9a-f]{40}$ ]] || { echo "::error::Unexpected commit id"; exit 1; }
+            git log -1 --format='Checking %H %s' "$sha"
+            flake="git+file://$GITHUB_WORKSPACE?rev=$sha"
+            start=$SECONDS
+            if nix build --no-link --print-out-paths -L --keep-going --cores "$CORES" --max-jobs "$MAX_JOBS" \
+                "$flake#checks.x86_64-linux.build" "$flake#checks.x86_64-linux.server-build" \
+                "$flake#checks.x86_64-linux.clippy" "$flake#checks.x86_64-linux.fmt"; then
+              result=pass
+            else
+              result=FAIL
+              failed=$(( failed + 1 ))
+              echo "::error title=Earlier commit::$sha failed its build, Clippy or rustfmt check"
+            fi
+            echo "| \`${sha:0:12}\` | $result | $(( (SECONDS - start + 59) / 60 )) |" >> "$GITHUB_STEP_SUMMARY"
+          done
+          (( failed == 0 ))
+
+  vm-smoke:
+    name: VM smoke test
+    needs: [preflight, build]
+    if: >-
+      github.event_name == 'push' || github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' &&
+       github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: [self-hosted, Linux, X64]
+    timeout-minutes: 120
+    env:
+      CORES: ${{ needs.preflight.outputs.cores }}
+      MAX_JOBS: ${{ needs.preflight.outputs.max-jobs }}
+    steps:
+      - name: Require KVM and the nixos-test system feature
+        if: needs.preflight.outputs.kvm != 'true'
+        run: |
+          echo '::error title=VM smoke test::This runner has no usable /dev/kvm with the kvm and nixos-test Nix system features.'
+          exit 1
+
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          ref: ${{ needs.preflight.outputs.head }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Desktop, server module and stock Mumble servers in NixOS VMs
+        run: |
+          nix build --no-link --print-out-paths -L --cores "$CORES" --max-jobs "$MAX_JOBS" \
+            .#checks.x86_64-linux.vm-smoke
+
+  # Hosted and unprivileged: runs for every pull request, including forks.
+  pr-lint:
+    name: Formatting and workflow lint (hosted)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+
+      - uses: cachix/install-nix-action@2126ae7fc54c9df00dd18f7f18754393182c73cd # v31.9.1
+        with:
+          extra_nix_config: |
+            cores = 2
+            max-jobs = 2
+
+      - name: rustfmt and the generated crate2nix graph
+        run: |
+          nix build --no-link -L --cores 2 --max-jobs 2 \
+            .#checks.x86_64-linux.fmt .#checks.x86_64-linux.crate2nix-current
+
+      - name: actionlint with shellcheck
+        run: nix shell --inputs-from . nixpkgs#actionlint nixpkgs#shellcheck --command actionlint -color
+
+  # The one check to require: it runs for every event, fails for fork pull
+  # requests, and fails unless every applicable job above succeeded. A job
+  # skipped by `if:` would otherwise count as passing.
+  result:
+    name: CI result
+    if: always()
+    needs: [preflight, build, clippy, tests, commits, vm-smoke, pr-lint]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Require every applicable check
+        env:
+          EVENT: ${{ github.event_name }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          REPOSITORY: ${{ github.repository }}
+          PREFLIGHT: ${{ needs.preflight.result }}
+          BUILD: ${{ needs.build.result }}
+          CLIPPY: ${{ needs.clippy.result }}
+          TESTS: ${{ needs.tests.result }}
+          COMMITS: ${{ needs.commits.result }}
+          VM_SMOKE: ${{ needs.vm-smoke.result }}
+          PR_LINT: ${{ needs.pr-lint.result }}
+        run: |
+          if [[ $EVENT == pull_request && $HEAD_REPO != "$REPOSITORY" ]]; then
+            message='Builds, Clippy, tests and VMs run only on the self-hosted runner, never for forks.'
+            message+=' After review, a maintainer pushes the branch to this repository and opens a pull request from it.'
+            echo "::error title=Fork pull request::$message"
+            exit 1
+          fi
+          status=0
+          require() {
+            printf '%-10s %s\n' "$1" "$2"
+            if [[ $2 != success ]]; then status=1; fi
+          }
+          require preflight "$PREFLIGHT"
+          require build "$BUILD"
+          require clippy "$CLIPPY"
+          require tests "$TESTS"
+          require commits "$COMMITS"
+          require vm-smoke "$VM_SMOKE"
+          if [[ $EVENT == pull_request ]]; then require pr-lint "$PR_LINT"; fi
+          exit "$status"
