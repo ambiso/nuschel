@@ -72,10 +72,16 @@ def actions(args, root, shell, application, bot, _murmur):
                        f"focused {node.name} was not revealed")
         time.sleep(.15)
 
+    def park_pointer():
+        # Deliver a real leave move inside the app. Leaving the Wayland surface
+        # entirely need not dispatch another mouse move to dismiss a tooltip.
+        ox, oy = origin()
+        shell.move(ox + 100, oy + 20)
+
     def bar(node, zoom, name):
         # Independently locate the painted thumb in its reserved gutter. Read
         # only the owned screenshot; no UI-internal scroll offset is consulted.
-        shell.move(0, 0)
+        park_pointer()
         time.sleep(.3)
         shot = args.output / f"{name}-{zoom}.png"
         shell.screenshot(shot)
@@ -110,7 +116,7 @@ def actions(args, root, shell, application, bot, _murmur):
         # Native Entry currently has no AT-SPI Text interface. Locate by its
         # accessible name, then read only its rendered value as other fixtures
         # do for text with no accessible counterpart. Never use the clipboard.
-        shell.move(0, 0)
+        park_pointer()
         time.sleep(.2)
         shot = args.output / f"{name}.png"
         shell.screenshot(shot)
