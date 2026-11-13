@@ -247,7 +247,9 @@ module's imports and memory maximum, then runs production content modules under
 strict same-origin CSP with synthetic images, a real canvas and malicious
 resource canaries. It uses the confined browser wrapper from
 `tests/web_audio.py --prepare-only`; no host clipboard or physical devices are
-needed. Exact native/WASM/browser results are recorded in the handoff once run.
+needed. SOURCE is the repository checkout and CODEC the output of
+`nix build .#web-content-wasm`; the fixture writes `proof.json` (module imports,
+memory, CSP and request observations) to OUTPUT. The first results follow.
 
 The initial exact Nix codec build and the three native boundary tests passed.
 The generated WASM was 3,741,531 bytes, with 35 initial memory pages and an
@@ -300,20 +302,27 @@ reuse, resource canaries and no host devices. The generated module still has
 35 initial/4096 maximum memory pages (256 MiB); its bytes match the previously
 reviewed codec. This bounds WASM linear memory, not total process/caller memory.
 
-Final proofs, exact source/artifact hashes and invocations are recorded in
-`~/.cache/nuschl-content-retirement/handoff.json`; `browser-final/proof.json`
-contains the deadline/late-reply observations and `positive/proof.json` retains
-the original codec/canary gate. These scoped producer checks do not establish
-full attachment/broker operation or platform-independent browser scheduling.
+To reproduce: `node --test tests/web_content.unit.mjs`, then
+`node tests/web_content_retirement.browser.mjs SOURCE CODEC WRAPPER PLAYWRIGHT OUTPUT`
+with CODEC from `nix build .#web-content-wasm` and WRAPPER from
+`tests/web_audio.py --prepare-only`. It runs the normal and throwing-terminate
+pages and writes per-mode screenshots plus `proof.json` (deadline and late-reply
+observations) to OUTPUT, or `failure.json` on failure;
+`tests/web_content.browser.mjs` remains the original codec/canary gate. The
+results above come from those two fixtures on the generated codec described in
+this section. These scoped producer checks do not establish full
+attachment/broker operation or platform-independent browser scheduling.
 
 The private scheduling state machine is shared with formula rendering in
 `worker-owner.js` (checkpoint `87fae40c`). This shares implementation, not worker
 ownership, input validators, budgets or caches. The content facade still has one
 distinct page owner, eight jobs / 16 MiB, original eight-second job and
 fifteen-second startup deadlines, and no automatic fatal-owner replacement.
-After extraction all seventeen content units and the complete actual-WASM
-code/image/canary plus normal/throwing-termination browser proofs pass again;
-see `~/.cache/nuschl-math-retirement/content-browser/proof.json`.
+After extraction all seventeen content units (`node --test
+tests/web_content.unit.mjs`) and both actual-WASM browser fixtures,
+`tests/web_content.browser.mjs` (code/image/canary) and
+`tests/web_content_retirement.browser.mjs` (normal/throwing termination), pass
+again on that checkpoint.
 
 ## Broker integration evidence
 
