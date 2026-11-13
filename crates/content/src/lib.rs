@@ -346,8 +346,9 @@ struct Highlighter {
 
 // Trusted generated data only. Generation parses the pinned upstream YAML;
 // normal workers load only this binary asset, never YAML or user-selected grammars.
-fn content_syntaxes(bytes: &[u8]) -> Result<SyntaxSet, Error> {
-    syntect::dumps::from_uncompressed_data(bytes).map_err(|_| Error::InvalidSyntaxBundle)
+fn content_syntaxes() -> Result<SyntaxSet, Error> {
+    syntect::dumps::from_uncompressed_data(include_bytes!("../assets/default-nix.packdump"))
+        .map_err(|_| Error::InvalidSyntaxBundle)
 }
 
 impl ContentRenderer {
@@ -364,7 +365,7 @@ impl ContentRenderer {
             .themes
             .remove("base16-ocean.dark")
             .ok_or(Error::MissingTheme)?;
-        let syntaxes = content_syntaxes(include_bytes!("../assets/default-nix.packdump"))?;
+        let syntaxes = content_syntaxes()?;
         Ok(self
             .highlighter
             .get_or_init(|| Highlighter { syntaxes, theme }))
@@ -917,10 +918,6 @@ mod tests {
                 );
             }
         }
-        assert!(matches!(
-            content_syntaxes(b"not a syntax bundle"),
-            Err(Error::InvalidSyntaxBundle)
-        ));
         let fence = "```nix\n";
         let tail = "\n```";
         let long = format!(
