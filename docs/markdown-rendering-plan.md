@@ -148,6 +148,7 @@ CommonMark" by accident:
 | Reference links resolve against definitions, which produce no output | both literal (D7) |
 | Headings 1–6 | 1–3 (4–6 drawn as 3) |
 | Nested quotes, lists in quotes | one `Quote` role (nesting flattened); an item inside a quote is an item, its quote styling is lost (model gap, D10) |
+| A block quote's `>` may be followed directly by text (`>text` quotes) | a `>` run quotes only when a space, a tab or the line's end follows it; `>text`, `>w<`, `>:3` and `>>x` are text (a deliberate variant for chat emoticons, issue #190) |
 | No math | `$…$`, `$$…$$` and `math` fences (`docs/math.md`) |
 
 ## Lines
