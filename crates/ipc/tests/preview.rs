@@ -49,13 +49,19 @@ fn fake_worker() {
     if body == b"descendant" || body == b"descendant-live" {
         // A real namespace descendant which closes every protocol pipe. The
         // wrapper's initial command can exit while PID1 must still reap this.
-        std::process::Command::new(std::env::current_exe().unwrap())
+        let mut descendant = std::process::Command::new(std::env::current_exe().unwrap())
             .arg("--owned-descendant")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
             .unwrap();
+        // Main still exits without joining this thread, orphaning the live
+        // descendant for the namespace-retirement test. If it exits first,
+        // retain its Child and reap it rather than leaving a zombie behind.
+        std::thread::spawn(move || {
+            let _ = descendant.wait();
+        });
     }
     let mut reply = Envelope::new(
         request.request_id,
@@ -343,10 +349,9 @@ fn main() {
         fake_worker();
         return;
     }
-    assert!(
-        cfg!(target_os = "linux"),
-        "this confinement fixture requires Linux"
-    );
+    if !cfg!(target_os = "linux") {
+        panic!("this confinement fixture requires Linux");
+    }
     let worker = std::env::args_os()
         .nth(1)
         .expect("actual content worker path");

@@ -54,7 +54,7 @@ impl SendId {
 
 fn allocate_send_id(next: &std::sync::atomic::AtomicU64) -> Option<SendId> {
     use std::sync::atomic::Ordering;
-    next.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| {
+    next.try_update(Ordering::Relaxed, Ordering::Relaxed, |id| {
         if id == 0 { None } else { id.checked_add(1) }
     })
     .ok()
