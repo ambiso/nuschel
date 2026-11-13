@@ -1,12 +1,15 @@
 {
   pkgs,
   nuschl,
+  nativeFetchTest,
+  contentWorker,
   sourceIdentity,
   fixtureTests ? ./.,
 }:
 let
   python = "${pkgs.python3}/bin/python3";
   fixture = "${fixtureTests}/link_previews_desktop.py";
+  nativeDirectory = "/var/lib/nuschl-preview-native";
   setupPeers = pkgs.writeShellScript "nuschl-preview-test-peers-setup" ''
     set -eu
     test -f /run/nuschl-preview-dedicated-vm
@@ -69,6 +72,71 @@ pkgs.testers.runNixOSTest {
     virtualisation.memorySize = 4096;
     virtualisation.cores = 2;
     # No passthrough or virgl option: only the VM's software graphics device.
+    systemd.services.nuschl-preview-native-peers = {
+      description = "Private native preview test peers";
+      serviceConfig = {
+        User = "tester";
+        Group = "users";
+        ExecStart = "${pkgs.coreutils}/bin/env -i PATH=${pkgs.iproute2}/bin HOME=/var/empty LANG=C.UTF-8 ${python} ${fixture} native-peers --directory ${nativeDirectory}";
+        WorkingDirectory = nativeDirectory;
+        CapabilityBoundingSet = [ "CAP_NET_BIND_SERVICE" ];
+        AmbientCapabilities = [ "CAP_NET_BIND_SERVICE" ];
+        NoNewPrivileges = true;
+        Delegate = false;
+        ProtectControlGroups = true;
+        ProtectHome = true;
+        ProtectSystem = "strict";
+        ReadWritePaths = [ nativeDirectory ];
+        Restart = "no";
+        KillMode = "control-group";
+        RuntimeMaxSec = 180;
+        TimeoutStopSec = 20;
+        MemoryMax = "256M";
+        TasksMax = 32;
+        LimitCPU = 30;
+        LimitFSIZE = 1048576;
+        LimitCORE = 0;
+        UMask = "0077";
+        StandardOutput = "append:${nativeDirectory}/peers.log";
+        StandardError = "inherit";
+      };
+    };
+    systemd.services.nuschl-preview-native-test = {
+      description = "Actual native preview privacy cases";
+      serviceConfig = {
+        Type = "oneshot";
+        RemainAfterExit = true;
+        User = "tester";
+        Group = "users";
+        ExecStart = "${pkgs.coreutils}/bin/env -i PATH=${
+          pkgs.lib.makeBinPath [
+            pkgs.bubblewrap
+            pkgs.util-linux
+          ]
+        } HOME=/var/empty LANG=C.UTF-8 TMPDIR=${nativeDirectory}/tmp NUSCHL_PREVIEW_FIXTURE=${nativeDirectory} NUSCHL_PREVIEW_WORKER=${contentWorker}/bin/nuschl-content-worker ${nativeFetchTest}/bin/nuschl-preview-fetch-test --ignored --exact link_preview::tests::actual_fetch_privacy --nocapture --test-threads=1";
+        WorkingDirectory = nativeDirectory;
+        CapabilityBoundingSet = "";
+        AmbientCapabilities = "";
+        NoNewPrivileges = true;
+        Delegate = false;
+        ProtectControlGroups = true;
+        ProtectHome = true;
+        ProtectSystem = "strict";
+        ReadWritePaths = [ nativeDirectory ];
+        Restart = "no";
+        KillMode = "control-group";
+        TimeoutStartSec = 90;
+        TimeoutStopSec = 20;
+        MemoryMax = "1G";
+        TasksMax = 64;
+        LimitCPU = 30;
+        LimitFSIZE = 1048576;
+        LimitCORE = 0;
+        UMask = "0077";
+        StandardOutput = "append:${nativeDirectory}/test.log";
+        StandardError = "inherit";
+      };
+    };
     systemd.services.nuschl-preview-peers = {
       description = "Synthetic preview peers inside the isolated test VM";
       path = [ pkgs.iproute2 ];
@@ -85,7 +153,9 @@ pkgs.testers.runNixOSTest {
     };
   };
   testScript = ''
+    import json
     import shlex
+    from datetime import timedelta
 
     start_all()
     machine.wait_for_unit("multi-user.target")
@@ -97,6 +167,59 @@ pkgs.testers.runNixOSTest {
     for address in ("93.184.215.14", "93.184.215.53", "93.184.215.99"):
         machine.succeed(f"ip addr add {address}/32 dev lo")
     machine.succeed("touch /run/nuschl-preview-dedicated-vm")
+    native_directory = "${nativeDirectory}"
+    machine.succeed(f"test ! -e {native_directory} && install -d -m0700 -o tester -g users {native_directory} {native_directory}/tmp")
+    machine.succeed("runuser -u tester -- ${python} -c 'import json,os;open(\"${nativeDirectory}/vm-identity.json\",\"x\").write(json.dumps({\"net_inode\":os.stat(\"/proc/self/ns/net\").st_ino}))'")
+    native_units = ("nuschl-preview-native-test.service", "nuschl-preview-native-peers.service")
+    native_pids = {}
+    native_groups = {}
+    native_retirement = []
+    try:
+        machine.succeed("systemctl start nuschl-preview-native-peers.service")
+        machine.wait_until_succeeds(f"test -f {native_directory}/peers-ready.json", timeout=timedelta(seconds=15))
+        peer_group = machine.succeed("systemctl show -p ControlGroup --value nuschl-preview-native-peers.service").strip()
+        assert peer_group == "/system.slice/nuschl-preview-native-peers.service", peer_group
+        native_groups[native_units[1]] = peer_group
+        peer_ready = json.loads(machine.succeed(f"test $(stat -c%s {native_directory}/peers-ready.json) -le 32768 && cat {native_directory}/peers-ready.json"))
+        assert type(peer_ready["pid"]) is int and peer_ready["pid"] > 0
+        assert machine.succeed("systemctl show -p ExecMainPID --value nuschl-preview-native-peers.service").strip() == str(peer_ready["pid"])
+        native_pids[native_units[1]] = peer_ready["pid"]
+        native_status, native_log = machine.execute("systemctl start nuschl-preview-native-test.service", timeout=timedelta(seconds=120))
+        assert len(native_log) <= 16384, "bounded native launcher output exceeded"
+        machine.succeed("printf %s " + shlex.quote(native_log) + f" > {native_directory}/launcher.log")
+        test_pid = machine.succeed("systemctl show -p ExecMainPID --value nuschl-preview-native-test.service").strip()
+        assert test_pid.isdecimal() and int(test_pid) > 0, test_pid
+        native_pids[native_units[0]] = int(test_pid)
+        assert native_status == 0, native_log
+        authority = json.loads(machine.succeed(f"test $(stat -c%s {native_directory}/test-process-authority.json) -le 16384 && cat {native_directory}/test-process-authority.json"))
+        assert authority["cgroup"] == "0::/system.slice/nuschl-preview-native-test.service\n", authority
+        native_groups[native_units[0]] = authority["cgroup"].split("::", 1)[1].rstrip("\n")
+        result = json.loads(machine.succeed(f"test $(stat -c%s {native_directory}/fetch-result.json) -le 65536 && cat {native_directory}/fetch-result.json"))
+        assert result["passed"] is True and len(result["checks"]) == 13, result
+    finally:
+        # Requesting stop is insufficient: admission below also requires the
+        # original nondelegated kernel cgroups empty/removed and leaders gone.
+        stop_status, stop_log = machine.execute("systemctl stop " + " ".join(native_units), timeout=timedelta(seconds=60))
+        assert len(stop_log) <= 16384, "bounded native stop output exceeded"
+        machine.succeed("printf %s " + shlex.quote(stop_log) + f" > {native_directory}/stop.log")
+        machine.succeed(f"sha256sum ${nativeFetchTest}/bin/nuschl-preview-fetch-test ${contentWorker}/bin/nuschl-content-worker ${fixture} ${fixtureTests}/link_preview_fetch.py > {native_directory}/artifacts.sha256")
+        machine.succeed("printf %s " + shlex.quote("${sourceIdentity}") + f" > {native_directory}/source-identity.txt")
+        machine.succeed(f"(ip -4 route show table all; ip -6 route show table all; iptables-save; ip6tables-save) > {native_directory}/routes.txt")
+        machine.succeed("install -d /tmp/preview-native-evidence")
+        for name in ("launcher.log", "stop.log", "test.log", "peers.log", "fetch-result.json", "test-process-authority.json", "peers-ready.json", "peers.json", "artifacts.sha256", "source-identity.txt", "routes.txt"):
+            machine.succeed(f"if test -f {native_directory}/{name}; then test $(stat -c%s {native_directory}/{name}) -le 1048576 && cp {native_directory}/{name} /tmp/preview-native-evidence/; fi")
+        machine.copy_from_machine("/tmp/preview-native-evidence", "native")
+        assert stop_status == 0, stop_log
+        for unit in native_units:
+            group = "/sys/fs/cgroup/system.slice/" + unit
+            machine.wait_until_succeeds(f"test ! -d {group} || grep -qx 'populated 0' {group}/cgroup.events", timeout=timedelta(seconds=15))
+            pid = native_pids.get(unit)
+            if pid is not None:
+                machine.wait_until_succeeds(f"test ! -e /proc/{pid}", timeout=timedelta(seconds=15))
+            native_retirement.append({"unit": unit, "original_group": native_groups.get(unit), "kernel_group": group, "leader_pid": pid, "kernel_empty_or_removed": True, "leader_absent": pid is not None})
+        machine.succeed("printf %s " + shlex.quote(json.dumps(native_retirement)) + f" > {native_directory}/retirement.json")
+        machine.copy_from_machine(f"{native_directory}/retirement.json", "native-retirement.json")
+    assert all(item["leader_absent"] for item in native_retirement), native_retirement
     machine.succeed("systemctl start nuschl-preview-peers.service")
     machine.wait_until_succeeds("test -f /var/lib/nuschl-preview-peers/ready.json")
     machine.succeed("install -d -m0700 -o tester -g users /home/tester/.cache/lp /home/tester/.cache/lp/tmp /home/tester/.cache/lp/wl")

@@ -846,6 +846,23 @@
               inherit pkgs;
               nuschl = package;
               sourceIdentity = self.rev or self.outPath;
+              contentWorker = crates.project.workspaceMembers."nuschl-content-worker".build;
+              # Export the actual cached test ELF without running its private
+              # network fixture in a build sandbox or rewriting its bytes.
+              nativeFetchTest =
+                (crates.project.workspaceMembers."nuschl-session".build.override {
+                  runTests = true;
+                  testPreRun = ''
+                    case "$f" in
+                      */nuschl_session-*)
+                        test ! -e "$out/bin/nuschl-preview-fetch-test"
+                        install -Dm0555 "$f" "$out/bin/nuschl-preview-fetch-test"
+                        ;;
+                    esac
+                    continue
+                  '';
+                }).test.overrideAttrs
+                  { dontFixup = true; };
             };
           }
         );

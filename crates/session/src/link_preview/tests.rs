@@ -253,11 +253,19 @@ async fn actual_fetch_privacy() {
             "test actor must have a nonroot {name}"
         );
     }
+    let mut cgroup = String::new();
+    std::fs::File::open("/proc/self/cgroup")
+        .unwrap()
+        .take(4097)
+        .read_to_string(&mut cgroup)
+        .unwrap();
+    assert!(cgroup.len() <= 4096);
     write_new(
         &directory.join("test-process-authority.json"),
         &serde_json::to_vec_pretty(&json!({
             "CapEff": field("CapEff"), "CapPrm": field("CapPrm"), "CapAmb": field("CapAmb"),
             "NoNewPrivs": field("NoNewPrivs"), "Uid": field("Uid"), "Gid": field("Gid"),
+            "cgroup": cgroup,
             "scope": "Actual ignored test process before DNS/socket/worker admission"
         }))
         .unwrap(),
