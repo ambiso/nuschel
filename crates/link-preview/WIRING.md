@@ -18,7 +18,9 @@ shared-file hunks for the integrator; it refines `docs/link-previews-plan.md`.
 
 Manifest edges in place: nuschl-content → nuschl-link-preview,
 nuschl-link-preview → nuschl-legacy-html, serde_json a normal dependency of
-nuschl-link-preview.
+nuschl-link-preview; `fuzz/Cargo.lock` refreshed for them. The content worker and
+the web WASM closures now include the third-party `ipnet` 2.12.2 (MIT OR
+Apache-2.0); release notices pick it up from the graph.
 
 ## Remaining shared-file hunks (none made here)
 
@@ -50,9 +52,9 @@ Line numbers at `733cc124`; owners as in the plan.
 6. **`flake.nix` checks (Root)**: `link-preview-unit` and a content unit leaf, each
    `.build.override { runTests = true; testInputs = [ pkgs.python3 ]; }` for
    link-preview: its projection test parses the output with Python's expat.
-7. **Fuzz (Root manifest)**: `preview_html` over `nuschl_content::preview` (no new edge;
-   the fuzz lock needs refreshing for the new edges), `preview_projection` over
-   `projection::project` (fuzz → nuschl-link-preview edge).
+7. **Fuzz (Root manifest)**: `preview_html` over `nuschl_content::preview` (no new
+   edge), `preview_projection` over `projection::project` (fuzz → nuschl-link-preview
+   edge).
 8. **Docs (Root)**: `docs/link-previews.md` status; a SECURITY.md fuzzing row; the note
    that extraction runs only in the content worker (and the content WASM worker,
    which is not an OS sandbox).
@@ -60,8 +62,11 @@ Line numbers at `733cc124`; owners as in the plan.
 ## Decisions taken here, for codex
 
 - Managed sidecar: `cap` makes the mode the narrower of user and managed
-  (Off < ProxyRequired < Direct); a managed proxy or resolver replaces the user's; an
-  unreadable, malformed or newer managed file means Off. Isolated in `cap`.
+  (Off < ProxyRequired < Direct), so it never loosens Off; a managed proxy or resolver
+  replaces the user's. An unreadable, malformed or newer managed file, or one naming an
+  invalid proxy or resolver, means Off with a `Problem`; ProxyRequired without a
+  complete configuration fetches nothing and says why. The mode rule is isolated in
+  `cap`; the caller must pass only the managed file from administrator locations.
 - Strict UTF-8: other declared encodings give no preview.
 - The projection carries no `alt` attribute; alternative text stays in the typed model.
 
