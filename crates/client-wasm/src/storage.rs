@@ -739,6 +739,8 @@ mod tests {
             },
         )
     }
+    /// A completion's validation of its original server, connection and certificate.
+    type Current = Box<dyn Fn(&str, u64, &str) -> bool>;
     /// The browser adapter's validation: same server, connection and certificate.
     fn connection(server: &'static str, generation: u64) -> impl Fn(&str, u64, &str) -> bool {
         move |id, old_generation, identity| {
@@ -793,7 +795,7 @@ mod tests {
             .collect();
         // Reconnected, removed and re-added under a fresh connection, or the
         // pinned certificate changed: the original pending context is not current.
-        let checks: [Box<dyn Fn(&str, u64, &str) -> bool>; 3] = [
+        let checks: [Current; 3] = [
             Box::new(connection("server", 5)),
             Box::new(connection("other", 4)),
             Box::new(|id: &str, generation: u64, identity: &str| {
