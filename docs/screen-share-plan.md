@@ -79,6 +79,12 @@ Status: plan, 2026-11-13, against main 8781be09. It folds in the frozen #139 sig
 **Sizes and authentication profile (to be frozen with S0a's exact numbers):**
 - **Key-message cap: 16 KiB.** The owner first raised it to 8 KiB, then (2026-11-13: "larger limit then") further, so the hybrid signing certificate travels inline as well. It is a Nuschl-chosen bound on the SFU WebSocket, not an external constraint. S0a measured, in one binary frame: binding plus hybrid certificate 8,908 B, KeyRequest with it about 10.3 KB; without the certificate the worst case is 5,124 B.
 - **Both profiles fit in one message, certificate included.** The default profile is an Ed25519 leaf binding (about 334 B) plus pk_v (1,216 B). The hybrid profile is a hybrid binding (3,471 B) plus its signing certificate plus pk_v (1,216 B) or enc (1,120 B). No multipart is needed, and no separate certificate fetch.
+- **Certificates by fingerprint (owner, 2026-11-13: "clients can cache keys and we only send a fingerprint").** A binding names the signing certificate by its fingerprint (SHA-256 of the exact certificate bytes), not inline.
+  - **Cache hit:** the receiver already caches it, keyed by identity and signing generation, so only the fingerprint travels.
+  - **Cache miss:** the receiver answers `NeedCertificate{fingerprint}`, and the sender then sends the certificate inline (within the 16 KiB cap), or the receiver fetches it from key transparency. A certificate whose hash doesn't match the fingerprint is rejected.
+  - **Bounds:** the cache is bounded by entries and bytes, with eviction, and is per device.
+  - **Revocation:** revocation and key-transparency status are still checked for cached certificates.
+  - **Privacy:** bindings, fingerprints and certificates travel only inside the S-keyed signalling encryption (`signal_key`), so the SFU never learns who is watching.
 - **No silent downgrade:** a policy that requires the hybrid binding never falls back to classical; it refuses.
 - Configuration: the same suite as `crates/identity/src/hpke.rs:35-43` (X-Wing / HKDF-SHA256 / ChaCha20-Poly1305).
 
