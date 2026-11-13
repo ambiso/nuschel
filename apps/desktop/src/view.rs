@@ -4139,7 +4139,8 @@ fn copy_code_button(
 
 #[cfg(test)]
 mod viewport_tests {
-    use super::*;
+    use super::{CONTROL_HEIGHT, PaneLayout, RAIL_WIDTH, SPLITTER_WIDTH};
+    use gpui_kit::{px, size};
 
     #[test]
     fn viewport_preserves_editor_timeline_and_pane_preference() {
