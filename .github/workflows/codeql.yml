@@ -1,0 +1,113 @@
+# SPDX-License-Identifier: EUPL-1.2
+# CodeQL code scanning (advanced setup), replacing the repository's default
+# setup with the same languages, query suite and triggers. No secrets and no
+# build: every language is extracted from source (build-mode none). The only
+# write authority is uploading results to code scanning.
+# Scope: .github/codeql/codeql-config.yml and the filter step below.
+name: CodeQL
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "41 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: codeql-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [actions, javascript-typescript, python, rust]
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+
+      - uses: github/codeql-action/init@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+          config-file: ./.github/codeql/codeql-config.yml
+
+      # Same category as the default setup, so alerts keep their identity.
+      # Results are uploaded below, after filtering.
+      - uses: github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        with:
+          category: /language:${{ matrix.language }}
+          upload: failure-only
+          output: ${{ runner.temp }}/codeql-sarif
+
+      # Test harnesses deliberately use synthetic passwords and keys, write them
+      # to private temporary files for --password-file, print test output, talk
+      # TLS to their own loopback fixtures with self-signed certificates, and
+      # recompute stock Mumble's SHA-1 certificate digest and Subsonic's MD5
+      # token. These rules are dropped only under the test trees below; the same
+      # rules still report everywhere else, and every other rule reports in
+      # tests too. A result whose path is absent or not relative is kept.
+      - name: Drop listed rules in test trees only
+        env:
+          SARIF_DIR: ${{ runner.temp }}/codeql-sarif
+        run: |
+          python3 -I - "$SARIF_DIR" <<'EOF'
+          import collections, json, pathlib, re, sys
+
+          TEST_TREES = re.compile(
+              r"^(tests/|apps/[^/]+/tests/|crates/[^/]+/tests/|crates/identity/src/tests/)"
+          )
+          RULES = {
+              "js/disabling-certificate-validation",
+              "py/clear-text-storage-sensitive-data",
+              "py/insecure-protocol",
+              "py/weak-sensitive-data-hashing",
+              "rust/cleartext-logging",
+              "rust/hard-coded-cryptographic-value",
+          }
+
+          files = sorted(pathlib.Path(sys.argv[1]).glob("*.sarif"))
+          if not files:
+              sys.exit("no SARIF output to filter")
+          for file in files:
+              sarif = json.loads(file.read_text(encoding="utf-8"))
+              dropped = collections.Counter()
+              for run in sarif["runs"]:
+                  kept = []
+                  for result in run.get("results", []):
+                      rule = result.get("ruleId") or result.get("rule", {}).get("id")
+                      try:
+                          uri = result["locations"][0]["physicalLocation"]["artifactLocation"]["uri"]
+                      except (KeyError, IndexError, TypeError):
+                          uri = ""
+                      if rule in RULES and TEST_TREES.match(uri):
+                          dropped[rule] += 1
+                      else:
+                          kept.append(result)
+                  if "results" in run:
+                      run["results"] = kept
+              file.write_text(json.dumps(sarif), encoding="utf-8")
+              print(f"{file.name}: dropped {sum(dropped.values())} test-tree results {dict(dropped)}")
+          EOF
+
+      - uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        with:
+          sarif_file: ${{ runner.temp }}/codeql-sarif
+          category: /language:${{ matrix.language }}
