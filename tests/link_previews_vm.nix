@@ -84,7 +84,6 @@ pkgs.testers.runNixOSTest {
     };
   };
   testScript = ''
-    import json
     import shlex
 
     start_all()
