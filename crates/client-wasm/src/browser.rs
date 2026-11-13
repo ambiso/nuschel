@@ -12,7 +12,10 @@ use crate::{
     image::{Destination, Images},
     session::{Event, Login, Session},
     snapshot,
-    storage::{RawCompletion, SourceProvenance, Storage, pending_document},
+    storage::{
+        HealthEvent, HistoryHealth, RawCompletion, SAVE_FAILED, SaveOutcome, SaveResult,
+        SourceProvenance, Storage, pending_document,
+    },
     voice::{self, Route},
 };
 use nuschl_client::{
@@ -60,6 +63,8 @@ struct Shared {
     talking: RefCell<HashMap<(String, u64, u32), f64>>,
     storage: RefCell<Storage>,
     deliveries: RefCell<VecDeque<RawCompletion>>,
+    /// History-save status of each server's live connection.
+    history: RefCell<HistoryHealth>,
     jobs: RefCell<Jobs>,
     images: RefCell<Images>,
     welcomes: RefCell<crate::welcome::Welcomes>,
@@ -72,6 +77,14 @@ impl Shared {
         if let Some(callback) = self.wake.borrow().as_ref() {
             let _ = callback.call0(&JsValue::NULL);
         }
+    }
+
+    /// Whether `generation` is still this server's live transport connection.
+    fn live(&self, server: &str, generation: u64) -> bool {
+        self.connections
+            .borrow()
+            .get(server)
+            .is_some_and(|connection| connection.generation == generation)
     }
 
     /// Send what the session queued, and report what it said.
@@ -273,7 +286,17 @@ impl Shared {
                             channel_instance,
                         },
                     ) {
-                        inputs.push_back(Input::HistoryError(reason));
+                        // Only this live connection's first refusal is a notice,
+                        // in its original place; later ones are counted status.
+                        if self.live(&server, generation)
+                            && self.history.borrow_mut().observe(
+                                &server,
+                                generation,
+                                HealthEvent::Busy,
+                            )
+                        {
+                            inputs.push_back(Input::HistoryError(reason));
+                        }
                         self.deliveries.borrow_mut().push_back(RawCompletion {
                             inputs: vec![Input::Message {
                                 server,
@@ -286,6 +309,7 @@ impl Shared {
                             live_mode: Some(mode),
                             channel_instance,
                             stored_modes: Default::default(),
+                            save: None,
                         });
                     }
                     continue;
@@ -417,6 +441,9 @@ impl Platform for BrowserPlatform {
 
     fn disconnect(&self, server: &str) {
         self.0.welcomes.borrow_mut().remove(server);
+        // Reconnect, disconnect, replacement and removal end this connection's
+        // status; a late result for it then fails the liveness check.
+        self.0.history.borrow_mut().forget(server);
         if let Some(connection) = self.0.connections.borrow_mut().remove(server) {
             connection.socket.set_onopen(None);
             connection.socket.set_onmessage(None);
@@ -567,6 +594,7 @@ impl WebClient {
             talking: RefCell::new(HashMap::new()),
             storage: RefCell::new(Storage::default()),
             deliveries: RefCell::new(VecDeque::new()),
+            history: RefCell::new(HistoryHealth::default()),
             jobs: RefCell::new(Jobs::default()),
             images: RefCell::new(Images::default()),
             welcomes: RefCell::new(crate::welcome::Welcomes::default()),
@@ -1479,6 +1507,11 @@ impl WebClient {
                     state.status == nuschl_client::server::Status::Connected,
                 )
                 .map(|v| v.token.clone());
+            view.history = self
+                .shared
+                .history
+                .borrow()
+                .view(&state.id, state.generation);
         }
         serde_json::to_string(&views).unwrap_or_else(|_| "[]".into())
     }
@@ -1622,7 +1655,28 @@ impl WebClient {
         }
     }
 
+    /// A validated Append changes only its own connection's status, and only
+    /// while that connection is still live. Its first failure is the notice,
+    /// at the position its per-row history input used to occupy.
+    fn admit_save(&mut self, save: &SaveResult) {
+        if save.outcome == SaveOutcome::Saved {
+            self.client.handle(Input::HistoryRecovered);
+        }
+        if self.shared.live(&save.server, save.generation)
+            && self.shared.history.borrow_mut().observe(
+                &save.server,
+                save.generation,
+                HealthEvent::Outcome(save.outcome),
+            )
+        {
+            self.client.handle(Input::HistoryError(SAVE_FAILED.into()));
+        }
+    }
+
     fn admit_delivery(&mut self, delivery: RawCompletion) {
+        if let Some(save) = &delivery.save {
+            self.admit_save(save);
+        }
         for input in delivery.inputs {
             match input {
                 Input::Message {

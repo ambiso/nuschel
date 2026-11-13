@@ -26,6 +26,9 @@ pub struct ServerView {
     /// `disconnected`, `connecting` or `connected`.
     pub status: &'static str,
     pub notice: Option<String>,
+    /// History-save status of the current connection, filled by the browser
+    /// adapter; absent while every row of that connection was saved.
+    pub history: Option<crate::storage::HistoryHealthView>,
     /// Opaque current welcome lease; the document arrives once in an update.
     pub welcome_token: Option<String>,
     /// The certificate waiting for the user's decision.
@@ -124,6 +127,7 @@ fn server_views<'a>(servers: impl Iterator<Item = (usize, &'a ServerState)>) -> 
                 Status::Connected => "connected",
             },
             notice: server.notice.clone(),
+            history: None,
             welcome_token: None,
             certificate: server
                 .certificate
@@ -273,6 +277,23 @@ mod tests {
         assert_eq!(
             view.catalog_instance, "0",
             "only the browser catalog owner can fill a valid entry lifetime"
+        );
+    }
+
+    #[test]
+    fn history_status_is_absent_by_default_and_keeps_exact_counts() {
+        let server =
+            ServerState::new(bookmark("owned", "127.0.0.1", 64738, "fixture", None).unwrap());
+        let views = servers(&[server]);
+        assert!(views[0].history.is_none());
+        let value = serde_json::to_value(&views[0]).unwrap();
+        assert_eq!(value["history"], serde_json::Value::Null);
+        let mut health = crate::storage::HistoryHealth::default();
+        health.observe("owned", 3, crate::storage::HealthEvent::Busy);
+        let view = health.view("owned", 3).unwrap();
+        assert_eq!(
+            serde_json::to_value(&view).unwrap(),
+            serde_json::json!({"saving": "busy", "not_saved": "1"})
         );
     }
 

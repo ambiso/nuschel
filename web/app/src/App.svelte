@@ -67,6 +67,15 @@
   const rows = $derived(selected ? channelRows(selected.channels, expanded, selected.id) : []);
   const currentChannel = $derived(selected?.channels.find((channel) => channel.id === timeline?.channel));
   const ownUser = $derived(selected?.users.find((user) => user.session === selected.own_session));
+  // Current save availability, then this connection's rows that were not saved.
+  const historyHealth = $derived.by(() => {
+    const history = selected?.history;
+    if (!history || !/^[0-9]{1,20}$/.test(history.not_saved)) return "";
+    const current = history.saving === "available" ? "Local history is saving new messages again."
+      : history.saving === "busy" ? "Local history is busy; new messages may not be saved."
+      : history.saving === "failing" ? "Local history cannot save new messages in this browser." : "Local history may not save new messages.";
+    return `${current} ${history.not_saved} ${history.not_saved === "1" ? "message" : "messages"} on this connection ${history.not_saved === "1" ? "was" : "were"} not saved.`;
+  });
   import { voiceProcessing } from "./voice-processing.js";
   const processingRows = $derived(voiceProcessing(audioState?.processing));
   const selectedVoiceChannel = $derived(selected?.channels.find((channel) => channel.id === ownUser?.channel));
@@ -425,6 +434,7 @@
       <div class="server-connection"><span class:connected={selected.status === "connected"} class="connection-dot"></span><span class="status" role="status">{labels[selected.status]}</span>{#if !clientUnavailable}<button class="control-button" class:emphasis={selected.status === "disconnected"} disabled={!loaded} onclick={() => act(selected.status === "disconnected" ? "connect" : "disconnect", selectedIndex)}>{selected.status === "disconnected" ? "Connect" : "Disconnect"}</button>{/if}</div>
       <p class="security" title="TLS protects the connection; this server can read legacy chat.">{@render icon("unlock")}<span>Server can read chat</span><span class="transport">TLS</span></p>
       {#if selected.notice}<div class="notice" role="status"><span>{selected.notice}</span>{#if capabilities.includes("dismiss_notice")}<button class="icon-button" aria-label="Dismiss notice" onclick={() => act("dismiss_notice",selectedIndex)}>{@render icon("close")}</button>{/if}</div>{/if}
+      {#if historyHealth}<div class="notice" role="status"><span>{historyHealth}</span></div>{/if}
       {#if selected.certificate}<div class="certificate" role="alert"><strong>{selected.pin ? "Certificate changed" : "Verify server identity"}</strong><p>Compare this fingerprint with the server owner before trusting it.</p><code>{selected.certificate}</code><button class="primary" onclick={() => act("accept_certificate",selectedIndex,selected.certificate)}>Trust this certificate</button></div>{/if}
       <div class="section-label"><span>CHANNELS</span><span>{selected.channels.length}</span></div>
       {#if channelUnread.above}<button class="unread-jump" onclick={() => scrollUnread(channelScroll,"above")}>↑ Unread channels above</button>{/if}
