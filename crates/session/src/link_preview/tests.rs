@@ -133,6 +133,78 @@ async fn wait_event(kind: &str) {
     }
 }
 
+async fn actual_stream_quota(worker: &Path, restart: bool) {
+    use nuschl_ipc::{host, preview_fetch as wire};
+    use std::{ffi::OsString, process::Stdio};
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+    let mut child = host::preview_sandbox_command(worker, &[OsString::from("--preview-fetch")])
+        .unwrap()
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut retirement = host::preview_lifecycle::Retirement::new(&mut child);
+    let result = async {
+        retirement
+            .ready()
+            .await
+            .map_err(|error| error.to_string())?;
+        let mut input = child.stdin.take().ok_or("missing input")?;
+        let mut output = child.stdout.take().ok_or("missing output")?;
+        let start = wire::Request::Start {
+            schema: wire::SCHEMA,
+            purpose: wire::Purpose::Document,
+        };
+        let count = if restart { 2 } else { wire::MAX_CHUNKS + 2 };
+        for id in 1..=count {
+            let chunk = wire::Request::Chunk {
+                data: wire::encode_data(if id == 2 {
+                    b"HTTP/1.1 200 OK\r\nX-Padding: "
+                } else {
+                    b"x"
+                }),
+                eof: false,
+            };
+            let frame =
+                wire::encode_request(id as u64, if id == 1 || restart { &start } else { &chunk })
+                    .map_err(|error| error.to_string())?;
+            input
+                .write_all(&frame)
+                .await
+                .map_err(|error| error.to_string())?;
+            let size = output.read_u32().await.map_err(|error| error.to_string())? as usize;
+            if !(1..=1024).contains(&size) {
+                return Err("unexpected quota reply size".to_owned());
+            }
+            let mut bytes = vec![0; size];
+            output
+                .read_exact(&mut bytes)
+                .await
+                .map_err(|error| error.to_string())?;
+            let reply = wire::decode_reply(id as u64, &bytes).map_err(|error| error.to_string())?;
+            let expected = if restart {
+                wire::Failure::Malformed
+            } else {
+                wire::Failure::TooLarge
+            };
+            if id == count {
+                if !matches!(reply, wire::Reply::Rejected(reason) if reason == expected) {
+                    return Err(format!("quota not enforced: {reply:?}"));
+                }
+            } else if !matches!(reply, wire::Reply::More) {
+                return Err(format!("premature quota response: {reply:?}"));
+            }
+        }
+        Ok::<(), String>(())
+    };
+    // Preserve the same original namespace handle on success, error, timeout.
+    let outcome = tokio::time::timeout(Duration::from_secs(8), result).await;
+    drop(child.stdin.take());
+    retirement.retire(&mut child).await;
+    outcome.expect("stream quota deadline").unwrap();
+}
+
 /// Requires the reviewed private network namespace wrapper and real content
 /// worker. No other ignored test may use TEST_ROOT concurrently.
 #[tokio::test(flavor = "current_thread")]
@@ -178,6 +250,12 @@ async fn actual_fetch_privacy() {
     assert_eq!(admissions(), before);
     assert_eq!(events(), peers);
     checked!("Off and incomplete ProxyRequired perform zero DNS/socket/child/offline admission");
+
+    actual_stream_quota(&worker, false).await;
+    actual_stream_quota(&worker, true).await;
+    checked!(
+        "Actual isolated HTTP worker rejects chunk 513 and second Start without budget reset; tracked retirement awaited"
+    );
 
     let card = request(
         &worker,
