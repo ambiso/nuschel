@@ -290,6 +290,24 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
+    async fn a_consumer_held_frame_precedes_even_confirmed_completion() {
+        let Controlled {
+            mut decoding,
+            sender: _sender,
+            terminal,
+            finish,
+        } = controlled();
+        terminal.send(Ok(())).unwrap();
+        finish.send(Ok(())).unwrap();
+        while !decoding.worker.is_finished() {
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(decoding.poll_outcome(true).await, None);
+        assert!(decoding.retired());
+        assert_eq!(decoding.poll_outcome(false).await, Some(Ok(())));
+    }
+
+    #[tokio::test]
     async fn panicked_supervisor_does_not_confirm_retirement() {
         let Controlled {
             mut decoding,

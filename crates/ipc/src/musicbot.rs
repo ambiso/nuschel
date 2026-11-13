@@ -1192,22 +1192,34 @@ mod tests {
         let process = client.process.take().unwrap();
         let (entered, started) = oneshot::channel();
         let (release, read_release) = std::sync::mpsc::channel();
+        struct BlockedRead {
+            entered: Option<oneshot::Sender<()>>,
+            release: std::sync::mpsc::Receiver<()>,
+        }
+        impl Read for BlockedRead {
+            fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+                self.entered.take().unwrap().send(()).unwrap();
+                self.release.recv().unwrap();
+                Err(io::Error::other("controlled late network failure"))
+            }
+        }
+        let flag = Arc::new(AtomicBool::new(false));
+        let pumping_flag = flag.clone();
+        let (chunks, _receiver) = mpsc::channel(2);
         let pumping = tokio::task::spawn_blocking(move || {
-            entered.send(()).unwrap();
-            read_release.recv().unwrap();
-            Err("late network failure".to_owned())
+            pump(
+                BlockedRead {
+                    entered: Some(entered),
+                    release: read_release,
+                },
+                chunks,
+                &pumping_flag,
+            )
         });
         started.await.unwrap();
         let (terminal, ready) = oneshot::channel();
         let mut owner = tokio::spawn(async move {
-            finish_decode(
-                process,
-                pumping,
-                Arc::new(AtomicBool::new(false)),
-                Ok(()),
-                &mut Some(terminal),
-            )
-            .await
+            finish_decode(process, pumping, flag, Ok(()), &mut Some(terminal)).await
         });
         assert_eq!(
             tokio::time::timeout(Duration::from_secs(1), ready)
@@ -1219,15 +1231,25 @@ mod tests {
         assert!(!owner.is_finished());
         assert!(Path::new(&format!("/proc/{pid}")).exists());
         gate.notify_one();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while Path::new(&format!("/proc/{pid}")).exists() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
         assert!(
-            tokio::time::timeout(Duration::from_millis(30), &mut owner)
+            tokio::time::timeout(Duration::from_millis(20), &mut owner)
                 .await
                 .is_err()
         );
         // The read is independently still owned even after real process exit.
         assert!(!Path::new(&format!("/proc/{pid}")).exists());
         release.send(()).unwrap();
-        assert_eq!(owner.await.unwrap(), Err("late network failure".into()));
+        assert_eq!(
+            owner.await.unwrap(),
+            Err("the music library audio download failed".into())
+        );
     }
 
     #[test]
