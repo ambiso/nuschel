@@ -2269,6 +2269,7 @@ async fn reply_page(
                     .await;
                 return;
             }
+            let scanned_bytes = nuschl_protocol::nuschl::history_page_bytes(&page);
             let credits = pending_replies(pending).render_credits.clone();
             let Ok(credit) = credits.try_acquire_owned() else {
                 let _ = events
@@ -2361,6 +2362,7 @@ async fn reply_page(
                             server: asked.server.clone(),
                             ticket: asked.ticket.clone(),
                             scanned_through,
+                            scanned_bytes,
                             head,
                             changes: projected,
                         }))
@@ -2413,20 +2415,7 @@ fn valid_catchup_page(page: &v1::HistoryPage, requested: Page) -> bool {
             .messages
             .last()
             .is_none_or(|message| message.seq <= page.head)
-        && page
-            .messages
-            .iter()
-            .try_fold(0usize, |bytes, message| {
-                let author = message.author.as_ref().map_or(0, |author| {
-                    author.name.len().saturating_add(author.account.len())
-                });
-                bytes
-                    .checked_add(message.content.len())?
-                    .checked_add(message.mls.len())?
-                    .checked_add(message.archive.len())?
-                    .checked_add(author)
-            })
-            .is_some_and(|bytes| bytes <= nuschl_protocol::nuschl::MAX_PAGE_BYTES)
+        && catchup_page_bytes(page).is_some()
         && page
             .messages
             .iter()
@@ -2436,6 +2425,27 @@ fn valid_catchup_page(page: &v1::HistoryPage, requested: Page) -> bool {
             .windows(2)
             .all(|pair| pair[0].seq < pair[1].seq)
         && (!page.more_after || !page.messages.is_empty())
+}
+
+/// Account the decoded page, including its validated metadata.
+/// The server's soft content budget excludes authors and always admits the
+/// nearest row, even when that one row exceeds the ordinary page budget.
+fn catchup_page_bytes(page: &v1::HistoryPage) -> Option<usize> {
+    use nuschl_protocol::nuschl;
+    if page.messages.len() > 50 || !page.messages.iter().all(nuschl::valid_message) {
+        return None;
+    }
+    let body = page.messages.iter().try_fold(0usize, |bytes, message| {
+        bytes
+            .checked_add(message.content.len())?
+            .checked_add(message.mls.len())?
+            .checked_add(message.archive.len())
+    })?;
+    if body > nuschl::MAX_PAGE_BYTES && page.messages.len() != 1 {
+        return None;
+    }
+    let bytes = nuschl::history_page_bytes(page);
+    (bytes <= nuschl::server_limit(nuschl::kind::HISTORY_PAGE)).then_some(bytes)
 }
 
 /// Project the mutation rows of one bounded page using the same ChangeJob
@@ -4753,6 +4763,72 @@ mod reply_owner_tests {
         }];
         assert!(!valid_catchup_page(&raw, Page::After(3)));
     }
+    #[test]
+    fn recovery_accepts_full_content_pages_and_the_existing_large_singleton_contract() {
+        use nuschl_protocol::nuschl;
+        let mut raw = page(1, &ASKED);
+        raw.head = 7;
+        raw.messages = (4..=7)
+            .map(|seq| v1::Message {
+                seq,
+                content: "x".repeat(nuschl::MAX_CONTENT_BYTES),
+                author: Some(v1::Author {
+                    name: "a".repeat(nuschl::MAX_NAME_BYTES),
+                    account: vec![1; 16],
+                    ..Default::default()
+                }),
+                ..Default::default()
+            })
+            .collect();
+        assert!(valid_catchup_page(&raw, Page::After(3)));
+        assert_eq!(
+            catchup_page_bytes(&raw),
+            Some(nuschl::history_page_bytes(&raw))
+        );
+        assert!(nuschl::history_page_bytes(&raw) > nuschl::MAX_PAGE_BYTES);
+        raw.messages.truncate(1);
+        raw.messages[0].format = v1::Format::LegacyHtml as i32;
+        raw.messages[0].content = "x".repeat(nuschl::MAX_LEGACY_CONTENT_BYTES);
+        assert!(valid_catchup_page(&raw, Page::After(3)));
+        assert_eq!(
+            catchup_page_bytes(&raw),
+            Some(nuschl::history_page_bytes(&raw))
+        );
+        raw.messages[0].content.push('x');
+        assert!(!valid_catchup_page(&raw, Page::After(3)));
+        raw.messages[0].content.clear();
+        raw.messages[0].format = v1::Format::MlsHandshake as i32;
+        raw.messages[0].mls = vec![0; nuschl::MAX_MLS_HANDSHAKE_BYTES];
+        raw.messages[0].archive = vec![0; nuschl::MAX_MLS_APPLICATION_BYTES];
+        assert!(valid_catchup_page(&raw, Page::After(3)));
+        assert_eq!(
+            catchup_page_bytes(&raw),
+            Some(nuschl::history_page_bytes(&raw))
+        );
+        raw.messages[0].mls.push(0);
+        assert!(!valid_catchup_page(&raw, Page::After(3)));
+        raw.messages[0].mls.clear();
+        raw.messages[0].author.as_mut().unwrap().name.push('a');
+        assert!(!valid_catchup_page(&raw, Page::After(3)));
+    }
+
+    #[test]
+    fn recovery_rejects_multiple_large_rows_in_one_soft_budget_page() {
+        use nuschl_protocol::nuschl;
+        let mut raw = page(1, &ASKED);
+        raw.head = 5;
+        raw.messages = (4..=5)
+            .map(|seq| v1::Message {
+                seq,
+                format: v1::Format::LegacyHtml as i32,
+                content: "x".repeat(nuschl::MAX_PAGE_BYTES),
+                ..Default::default()
+            })
+            .collect();
+        assert!(raw.messages.iter().all(nuschl::valid_message));
+        assert!(!valid_catchup_page(&raw, Page::After(3)));
+    }
+
     #[test]
     fn retiring_page_owners_bounds_registry_and_readd_never_revives_old_admissions() {
         let pending: Pending = Default::default();

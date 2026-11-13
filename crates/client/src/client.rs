@@ -27,6 +27,8 @@ use nuschl_core::{
 use nuschl_protocol::nuschl::{self, v1};
 use std::collections::{BTreeMap, BTreeSet};
 
+const MAX_RECOVERY_BYTES: usize = 4 * 1024 * 1024;
+
 /// Cosmetic labels never change account IDs or ACL completeness. Bound scan,
 /// deduplication, command count and attempts for both legacy and draft replies.
 fn fetch_acl_names(
@@ -497,6 +499,7 @@ impl Client {
                     .expect("checked above");
                 progress.resume_at_ms = None;
                 progress.pages = 0;
+                progress.batch_bytes = 0;
                 progress.started_ms = None;
                 progress.batch_start = progress.through;
                 if let Err(error) = self.resume_history(index, position, false) {
@@ -1251,7 +1254,7 @@ impl Client {
         position: usize,
         explicit: bool,
     ) -> Result<(), String> {
-        const MAX_RECOVERY_PAGES: u8 = 16; // 800 raw rows, at most 4 MiB of page bodies.
+        const MAX_RECOVERY_PAGES: u8 = 16; // At most 800 raw rows per batch.
         const RECOVERY_MS: u64 = 30_000;
         let server = &mut self.servers[index];
         let channel = &mut server.channels[position];
@@ -1270,6 +1273,7 @@ impl Client {
         };
         if explicit {
             progress.pages = 0;
+            progress.batch_bytes = 0;
             progress.started_ms = None;
             progress.batch_start = progress.through;
             progress.resume_at_ms = None;
@@ -1289,7 +1293,14 @@ impl Client {
             return Ok(());
         }
         let started = *progress.started_ms.get_or_insert(self.now_ms);
+        // The next page can contain an allowed large singleton. Reserve the
+        // existing whole-frame maximum before asking, so actual canonical
+        // page bodies cannot exceed 4 MiB in one batch, including metadata.
         if progress.pages >= MAX_RECOVERY_PAGES
+            || progress
+                .batch_bytes
+                .checked_add(nuschl::server_limit(nuschl::kind::HISTORY_PAGE))
+                .is_none_or(|bytes| bytes > MAX_RECOVERY_BYTES)
             || self.now_ms.saturating_sub(started) >= RECOVERY_MS
         {
             progress.resume_at_ms = Some(self.now_ms.saturating_add(250));
@@ -1840,6 +1851,7 @@ impl Client {
                 server,
                 ticket,
                 scanned_through,
+                scanned_bytes,
                 head,
                 changes,
             } => {
@@ -1864,6 +1876,9 @@ impl Client {
                     .get_mut(&ticket.conversation.channel)
                     .expect("checked above");
                 if scanned_through < progress.through
+                    || progress.response_end.is_some()
+                    || scanned_bytes > nuschl::server_limit(nuschl::kind::HISTORY_PAGE)
+                    || scanned_bytes > MAX_RECOVERY_BYTES.saturating_sub(progress.batch_bytes)
                     || head < scanned_through
                     || head < progress.through
                     || progress.target_head.is_some_and(|target| head < target)
@@ -1872,6 +1887,7 @@ impl Client {
                 }
                 progress.target_head.get_or_insert(head);
                 progress.response_end = Some(scanned_through);
+                progress.batch_bytes += scanned_bytes;
                 for (seq, change) in changes {
                     self.apply_change(&server, conversation, seq, change);
                 }
@@ -5317,6 +5333,7 @@ mod tests {
             server: server.clone(),
             ticket: ticket.clone(),
             scanned_through: end,
+            scanned_bytes: 1024,
             head,
             changes,
         });
@@ -5328,6 +5345,154 @@ mod tests {
             next_before: None,
             next_after: next,
         });
+    }
+
+    fn recovery_sized_answer(
+        client: &mut Client,
+        recorder: &Recorder,
+        raw: v1::HistoryPage,
+        rows: Vec<IncomingMessage>,
+    ) {
+        let (server, ticket, page) = recorder.pages.lock().unwrap().last().unwrap().clone();
+        let end = raw.messages.last().unwrap().seq as i64;
+        client.handle(Input::HistoryChanges {
+            server: server.clone(),
+            ticket: ticket.clone(),
+            scanned_through: end,
+            scanned_bytes: nuschl::history_page_bytes(&raw),
+            head: raw.head as i64,
+            changes: vec![],
+        });
+        client.handle(Input::HistoryWindow {
+            server,
+            ticket,
+            page,
+            messages: rows,
+            next_before: None,
+            next_after: raw.more_after.then_some(end),
+        });
+    }
+
+    #[test]
+    fn recovery_large_singletons_keep_later_rows_reachable_within_the_same_byte_budget() {
+        for encrypted in [false, true] {
+            let (mut client, recorder, id) = recovery_client();
+            recovery_reconnect(&mut client, &id, false);
+            let message = if encrypted {
+                v1::Message {
+                    seq: 4,
+                    kind: v1::message::Kind::Void as i32,
+                    format: v1::Format::MlsHandshake as i32,
+                    mls: vec![0; nuschl::MAX_MLS_HANDSHAKE_BYTES],
+                    ..Default::default()
+                }
+            } else {
+                v1::Message {
+                    seq: 4,
+                    format: v1::Format::LegacyHtml as i32,
+                    content: "x".repeat(nuschl::MAX_LEGACY_CONTENT_BYTES),
+                    ..Default::default()
+                }
+            };
+            assert!(nuschl::valid_message(&message));
+            let mut shown = recovery_row(4);
+            shown.message.body.clone_from(&message.content);
+            recovery_sized_answer(
+                &mut client,
+                &recorder,
+                v1::HistoryPage {
+                    messages: vec![message],
+                    head: 5,
+                    more_after: true,
+                    ..Default::default()
+                },
+                if encrypted { vec![] } else { vec![shown] },
+            );
+            let progress = &client.servers[0].history_progress[&2];
+            assert_eq!(progress.through, 4);
+            assert!(progress.needed && !progress.paused);
+            assert!(progress.batch_bytes <= MAX_RECOVERY_BYTES);
+            if encrypted {
+                assert_eq!(progress.resume_at_ms, Some(250));
+                assert!(progress.request.is_none());
+                client.set_time(249);
+                assert!(client.servers[0].history_progress[&2].request.is_none());
+                client.set_time(250);
+            }
+            assert_eq!(
+                recorder.pages.lock().unwrap().last().unwrap().2,
+                Page::After(4)
+            );
+            recovery_sized_answer(
+                &mut client,
+                &recorder,
+                v1::HistoryPage {
+                    messages: vec![v1::Message {
+                        seq: 5,
+                        content: "later small row".into(),
+                        ..Default::default()
+                    }],
+                    head: 5,
+                    ..Default::default()
+                },
+                vec![recovery_row(5)],
+            );
+            let progress = &client.servers[0].history_progress[&2];
+            assert_eq!(progress.through, 5);
+            assert!(!progress.needed);
+            let (_, position) = client.selected_indices().unwrap();
+            assert!(
+                client.servers[0].channels[position]
+                    .timeline
+                    .messages
+                    .iter()
+                    .any(|row| row.seq == Some(5))
+            );
+        }
+    }
+
+    #[test]
+    fn recovery_reserves_each_possible_page_and_rejects_excess_or_duplicate_byte_accounting() {
+        let (mut client, recorder, id) = recovery_client();
+        recovery_reconnect(&mut client, &id, false);
+        let (_, ticket, _) = recorder.pages.lock().unwrap().last().unwrap().clone();
+        let report = |scanned_bytes| Input::HistoryChanges {
+            server: id.clone(),
+            ticket: ticket.clone(),
+            scanned_through: 4,
+            scanned_bytes,
+            head: 5,
+            changes: vec![],
+        };
+        client.handle(report(nuschl::server_limit(nuschl::kind::HISTORY_PAGE) + 1));
+        assert_eq!(client.servers[0].history_progress[&2].batch_bytes, 0);
+        assert!(
+            client.servers[0].history_progress[&2]
+                .response_end
+                .is_none()
+        );
+        let maximum = nuschl::server_limit(nuschl::kind::HISTORY_PAGE);
+        client.handle(report(maximum));
+        client.handle(report(maximum));
+        assert_eq!(client.servers[0].history_progress[&2].batch_bytes, maximum);
+        client.handle(Input::HistoryWindow {
+            server: id,
+            ticket: ticket.clone(),
+            page: Page::After(3),
+            messages: vec![recovery_row(4)],
+            next_before: None,
+            next_after: Some(4),
+        });
+        let progress = &client.servers[0].history_progress[&2];
+        assert!(progress.batch_bytes <= MAX_RECOVERY_BYTES);
+        assert!(progress.request.is_none());
+        assert_eq!(progress.resume_at_ms, Some(250));
+        client.set_time(250);
+        assert_eq!(client.servers[0].history_progress[&2].batch_bytes, 0);
+        assert_eq!(
+            recorder.pages.lock().unwrap().last().unwrap().2,
+            Page::After(4)
+        );
     }
 
     #[test]
@@ -5542,6 +5707,7 @@ mod tests {
             server: id.clone(),
             ticket: old.1.clone(),
             scanned_through: 999,
+            scanned_bytes: 1024,
             head: 999,
             changes: vec![(
                 1,
