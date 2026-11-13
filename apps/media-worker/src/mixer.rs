@@ -50,6 +50,37 @@ struct Speaker {
     /// Gain of the preceding successfully decoded packet, also used for loss.
     volume: f32,
     last_packet: Instant,
+    flow: Flow,
+}
+
+/// Whether decoded audio is reaching the mix (issue #206). Only the edges of
+/// an underrun fade; every other sample is the decoder's, at its packet gain.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Flow {
+    /// The decoder is new or reset: nothing has played since the speaker
+    /// appeared or its transmission ended, and nothing needs to fade.
+    Stopped,
+    Playing,
+    /// Playout ran dry mid-transmission and faded out. The decoder still
+    /// carries that waveform, so whatever plays next fades in.
+    Underrun,
+}
+
+/// Raised-cosine ramp over the first 10 ms of interleaved stereo: up from
+/// silence when `rising`, else down to silence.
+fn fade(samples: &mut [f32], rising: bool) {
+    for (index, frame) in samples
+        .as_chunks_mut::<2>()
+        .0
+        .iter_mut()
+        .take(FRAME)
+        .enumerate()
+    {
+        let up = 0.5 - 0.5 * (std::f32::consts::PI * (index as f32 + 0.5) / FRAME as f32).cos();
+        let gain = if rising { up } else { 1. - up };
+        frame[0] *= gain;
+        frame[1] *= gain;
+    }
 }
 
 impl Speaker {
@@ -63,6 +94,7 @@ impl Speaker {
             pcm: VecDeque::with_capacity(MAX_DECODED),
             volume: 1.,
             last_packet: now,
+            flow: Flow::Stopped,
         })
     }
 
@@ -75,10 +107,15 @@ impl Speaker {
                     {
                         self.jitter.observe_frames((count / FRAME) as u64);
                         self.volume = opus.gain;
-                        self.extend(&scratch[..2 * count]);
+                        // A terminator straight after an underrun only ends
+                        // audio that has already faded out.
+                        if !(end && self.flow == Flow::Underrun) {
+                            self.play(&mut scratch[..2 * count]);
+                        }
                     }
                     if end {
                         let _ = self.decoder.reset_state();
+                        self.flow = Flow::Stopped;
                     }
                 }
                 Pull::Lost { fec, frames } => {
@@ -88,14 +125,34 @@ impl Speaker {
                         None => self.decoder.decode(&[], size, scratch),
                     };
                     if let Ok(count) = decoded {
-                        self.extend(&scratch[..2 * count]);
+                        self.play(&mut scratch[..2 * count]);
                     } else {
                         break;
                     }
                 }
-                Pull::Idle => break,
+                Pull::Idle => {
+                    // Ran dry mid-waveform: continue it with 10 ms of
+                    // concealment that fades to silence, instead of a step.
+                    if self.flow == Flow::Playing {
+                        self.flow = Flow::Underrun;
+                        if let Ok(count) = self.decoder.decode(&[], FRAME, scratch) {
+                            fade(&mut scratch[..2 * count], false);
+                            self.extend(&scratch[..2 * count]);
+                        }
+                    }
+                    break;
+                }
             }
         }
+    }
+
+    /// Queue decoded or concealed audio, fading in when it resumes an underrun.
+    fn play(&mut self, samples: &mut [f32]) {
+        if self.flow == Flow::Underrun {
+            fade(samples, true);
+        }
+        self.flow = Flow::Playing;
+        self.extend(samples);
     }
 
     fn extend(&mut self, samples: &[f32]) {
@@ -178,6 +235,7 @@ impl Mixer {
         {
             speaker.jitter = JitterBuffer::default();
             let _ = speaker.decoder.reset_state();
+            speaker.flow = Flow::Stopped;
         }
         speaker.last_packet = now;
         speaker.jitter.push(
@@ -274,7 +332,7 @@ pub fn finish(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use opus_pure::{Application, MAX_PACKET_BYTES, OpusEncoder};
+    use opus_pure::{Application, MAX_PACKET_BYTES, OpusEncoder, RateControl};
 
     #[test]
     fn malformed_framing_is_rejected_before_speaker_or_timing_mutation() {
@@ -367,6 +425,312 @@ mod tests {
         speaker.volume = gain;
         speaker.extend(&frames.iter().flatten().copied().collect::<Vec<_>>());
         mixer.speakers.insert(key, speaker);
+    }
+
+    /// 20 ms stereo packets of synthetic music, encoded like the music bot's:
+    /// a chord with overtones, a bass line and a melody with soft attacks.
+    fn music(count: usize) -> Vec<Vec<u8>> {
+        let mut encoder = OpusEncoder::new(48_000, 2, Application::Audio).unwrap();
+        encoder.rate_control = RateControl::ConstrainedVbr;
+        encoder.bitrate_bps = 96_000;
+        let mut packet = [0_u8; MAX_PACKET_BYTES];
+        let wave = |hz: f32, t: f32| (std::f32::consts::TAU * hz * t).sin();
+        (0..count)
+            .map(|index| {
+                let samples: Vec<f32> = (0..2 * FRAME)
+                    .flat_map(|n| {
+                        let t = (index * 2 * FRAME + n) as f32 / 48_000.;
+                        let note = [440., 494., 554., 659.][(t * 4.) as usize % 4];
+                        let attack = (t * 4.).fract();
+                        let envelope = (attack * 40.).min(1.) * (1. - 0.6 * attack);
+                        let chord: f32 = [220., 277.18, 329.63]
+                            .iter()
+                            .map(|hz| wave(*hz, t) + 0.3 * wave(2. * hz, t))
+                            .sum();
+                        let bass = 0.2 * wave(110., t);
+                        [
+                            0.08 * chord + bass + 0.15 * envelope * wave(note, t),
+                            0.06 * chord + bass + 0.12 * envelope * wave(1.5 * note, t),
+                        ]
+                    })
+                    .collect();
+                let size = encoder.encode(&samples, 2 * FRAME, &mut packet).unwrap();
+                packet[..size].to_vec()
+            })
+            .collect()
+    }
+
+    /// One packet of a speaker, queued when the virtual clock reaches `at` ms.
+    struct Arrival {
+        at: u64,
+        sequence: u64,
+        opus: Vec<u8>,
+        end: bool,
+        volume: f32,
+    }
+
+    /// Mix `ticks` 10 ms frames of one speaker on a virtual clock.
+    fn clocked(arrivals: &[Arrival], ticks: u64) -> Vec<[f64; 2]> {
+        let start = Instant::now();
+        let mut mixer = Mixer::default();
+        let mut output = Vec::new();
+        let mut next = 0;
+        for tick in 0..ticks {
+            while let Some(arrival) = arrivals.get(next).filter(|a| a.at <= 10 * tick) {
+                let voice = Voice {
+                    stream: 1,
+                    sender: 1,
+                    sequence: arrival.sequence,
+                    opus: arrival.opus.clone(),
+                    end: arrival.end,
+                    volume: arrival.volume,
+                };
+                mixer
+                    .push(voice, start + Duration::from_millis(arrival.at))
+                    .unwrap();
+                next += 1;
+            }
+            let mut wide = [[0.; 2]; FRAME];
+            mixer.mix(&mut wide);
+            output.extend(wide);
+        }
+        output
+    }
+
+    /// The speaker's decoder on its own, as an independent oracle.
+    fn plain() -> OpusDecoder {
+        let mut decoder = OpusDecoder::new(48_000, 2).unwrap();
+        decoder.set_phase_inversion_disabled(true);
+        decoder
+    }
+
+    /// Decode a packet, or conceal `frames` when `opus` is empty.
+    fn decoded(decoder: &mut OpusDecoder, opus: &[u8], frames: usize) -> Vec<f32> {
+        let mut pcm = vec![0.; 2 * MAX_PACKET_SAMPLES];
+        let count = decoder.decode(opus, frames, &mut pcm).unwrap();
+        pcm.truncate(2 * count);
+        pcm
+    }
+
+    /// Recover the 20 ms before `next` from its in-band FEC.
+    fn recovered(decoder: &mut OpusDecoder, next: &[u8]) -> Vec<f32> {
+        let mut pcm = vec![0.; 2 * MAX_PACKET_SAMPLES];
+        let count = decoder.decode_fec(next, 2 * FRAME, &mut pcm).unwrap();
+        pcm.truncate(2 * count);
+        pcm
+    }
+
+    /// The specified 10 ms raised-cosine edge: up from or down to silence.
+    fn ramped(mut pcm: Vec<f32>, rising: bool) -> Vec<f32> {
+        for (index, frame) in pcm.chunks_exact_mut(2).take(480).enumerate() {
+            let up = 0.5 - 0.5 * (std::f32::consts::PI * (index as f32 + 0.5) / 480.).cos();
+            for sample in frame {
+                *sample *= if rising { up } else { 1. - up };
+            }
+        }
+        pcm
+    }
+
+    /// Raw stereo at `volume`, with the same arithmetic as `Mixer::mix`.
+    fn gained(pcm: &[f32], volume: f32) -> Vec<[f64; 2]> {
+        let wide = |sample: f32| 0. + f64::from(sample) * f64::from(volume);
+        pcm.as_chunks::<2>()
+            .0
+            .iter()
+            .map(|frame| frame.map(wide))
+            .collect()
+    }
+
+    /// Where `expected` lies in `output` after nothing but silence from `from`:
+    /// every one of its samples must be bit-identical. Returns its end.
+    fn find(output: &[[f64; 2]], from: usize, expected: &[[f64; 2]]) -> usize {
+        let silent = |frames: &[[f64; 2]]| frames.iter().take_while(|v| **v == [0.; 2]).count();
+        let start = from + silent(&output[from..]) - silent(expected);
+        let actual = &output[start..start + expected.len()];
+        let differs = actual
+            .iter()
+            .zip(expected)
+            .position(|(a, b)| a.map(f64::to_bits) != b.map(f64::to_bits));
+        assert_eq!(differs, None, "first difference after {start} frames");
+        start + expected.len()
+    }
+
+    #[test]
+    fn an_underrun_fades_out_and_the_resumed_stream_fades_in() {
+        // Packets 0..15 arrive on time, then the sender stalls for 300 ms:
+        // playout fades to silence and back instead of stepping (issue #206).
+        let arrivals: Vec<Arrival> = tone(40, 0.5)
+            .into_iter()
+            .enumerate()
+            .map(|(index, opus)| Arrival {
+                at: 20 * index as u64 + if index < 15 { 0 } else { 300 },
+                sequence: 2 * index as u64,
+                opus,
+                end: false,
+                volume: 1.,
+            })
+            .collect();
+        let left: Vec<f64> = clocked(&arrivals, 140)
+            .iter()
+            .map(|frame| frame[0])
+            .collect();
+        let silent = left
+            .chunks(FRAME)
+            .filter(|frame| frame.iter().all(|v| *v == 0.));
+        assert!(silent.count() > 12, "the stall must underrun");
+        // A 0.5 sine at 440 Hz changes by at most 0.029 per sample.
+        let step = left
+            .windows(2)
+            .map(|pair| (pair[1] - pair[0]).abs())
+            .fold(0., f64::max);
+        assert!(step < 0.05, "{step}");
+    }
+
+    #[test]
+    fn an_underrun_changes_only_its_two_10_ms_edges() {
+        // Music packets 0..20 arrive on time, then the sender stalls for 300 ms
+        // and sends 20..40, the last as its terminator. The jitter buffer
+        // conceals 40 ms as before and runs dry; 10 ms more concealment fades
+        // out, and the resumed packet fades in over its first 10 ms. Every
+        // other sample is the decoder's own at its packet's gain.
+        let packets = music(40);
+        let volume = |index: usize| [1., 0.5, 2.][index % 3];
+        let arrivals: Vec<Arrival> = packets
+            .iter()
+            .enumerate()
+            .map(|(index, opus)| Arrival {
+                at: 20 * index as u64 + if index < 20 { 0 } else { 300 },
+                sequence: 2 * index as u64,
+                opus: opus.clone(),
+                end: index == 39,
+                volume: volume(index),
+            })
+            .collect();
+        let output = clocked(&arrivals, 160);
+        let mut decoder = plain();
+        let mut before = Vec::new();
+        for (index, opus) in packets[..20].iter().enumerate() {
+            before.extend(gained(
+                &decoded(&mut decoder, opus, MAX_PACKET_SAMPLES),
+                volume(index),
+            ));
+        }
+        for _ in 0..2 {
+            before.extend(gained(&decoded(&mut decoder, &[], 2 * FRAME), volume(19)));
+        }
+        let tail = ramped(decoded(&mut decoder, &[], FRAME), false);
+        before.extend(gained(&tail, volume(19)));
+        let mut after = Vec::new();
+        for (index, opus) in packets.iter().enumerate().skip(20) {
+            let pcm = decoded(&mut decoder, opus, MAX_PACKET_SAMPLES);
+            let pcm = if index == 20 { ramped(pcm, true) } else { pcm };
+            after.extend(gained(&pcm, volume(index)));
+        }
+        let resumed = find(&output, 0, &before);
+        assert!(
+            output[resumed..resumed + 20 * FRAME]
+                .iter()
+                .all(|v| *v == [0.; 2])
+        );
+        let end = find(&output, resumed, &after);
+        assert!(output[end..].iter().all(|frame| *frame == [0.; 2]));
+        // The edges are 10 ms long and stay strictly between silence and unity.
+        let ramp = ramped(vec![1.; 2 * FRAME + 2], true);
+        assert!(ramp[..2 * FRAME].windows(2).all(|pair| pair[0] <= pair[1]));
+        assert!(ramp[0] > 0. && ramp[2 * FRAME - 1] < 1. && ramp[2 * FRAME] == 1.);
+    }
+
+    #[test]
+    fn without_an_underrun_music_is_bit_identical_to_plain_decoding() {
+        // Two transmissions of music, each closed by its terminator, with a
+        // reordered pair, a packet recovered from FEC, one concealed and
+        // changing gains. Nothing runs dry, so nothing fades: steady-state
+        // output and concealment are unchanged (issue #206).
+        let packets = music(50);
+        let volume = |index: usize| [1., 0.5, 2., 0.75][index % 4];
+        let mut arrivals: Vec<Arrival> = packets
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| ![10, 20, 21].contains(index))
+            .map(|(index, opus)| {
+                let index = index as u64;
+                let (at, sequence) = match index {
+                    5 => (110, 10),
+                    6 => (105, 12),
+                    0..30 => (20 * index, 2 * index),
+                    // The next transmission restarts its sequence numbers.
+                    _ => (750 + 20 * (index - 30), 2 * (index - 30)),
+                };
+                Arrival {
+                    at,
+                    sequence,
+                    opus: opus.clone(),
+                    end: index == 29 || index == 49,
+                    volume: volume(index as usize),
+                }
+            })
+            .collect();
+        arrivals.sort_by_key(|arrival| arrival.at);
+        let output = clocked(&arrivals, 130);
+        let mut decoder = plain();
+        let (mut first, mut second, mut gain) = (Vec::new(), Vec::new(), 1.);
+        for (index, opus) in packets.iter().enumerate() {
+            let pcm = match index {
+                10 => recovered(&mut decoder, &packets[11]),
+                // Nothing after it has arrived yet: concealment, then FEC.
+                20 => decoded(&mut decoder, &[], 2 * FRAME),
+                21 => recovered(&mut decoder, &packets[22]),
+                _ => {
+                    gain = volume(index);
+                    decoded(&mut decoder, opus, MAX_PACKET_SAMPLES)
+                }
+            };
+            let transmission = if index < 30 { &mut first } else { &mut second };
+            transmission.extend(gained(&pcm, gain));
+            if index == 29 {
+                decoder.reset_state().unwrap();
+            }
+        }
+        let end = find(&output, 0, &first);
+        let end = find(&output, end, &second);
+        assert!(output[end..].iter().all(|frame| *frame == [0.; 2]));
+    }
+
+    #[test]
+    fn a_terminator_after_an_underrun_is_dropped_and_the_next_stream_starts_clean() {
+        // The sender stalls after packet 14 and later sends only its
+        // terminator: that is the tail of audio which already faded out, so it
+        // stays silent. The decoder resets as for any terminator, and the next
+        // transmission plays bit-identically, without a fade.
+        let tone = tone(16, 0.5);
+        let music = music(10);
+        let mut arrivals: Vec<Arrival> = tone
+            .iter()
+            .enumerate()
+            .map(|(index, opus)| Arrival {
+                at: if index < 15 { 20 * index as u64 } else { 600 },
+                sequence: 2 * index as u64,
+                opus: opus.clone(),
+                end: index == 15,
+                volume: 1.,
+            })
+            .collect();
+        arrivals.extend(music.iter().enumerate().map(|(index, opus)| Arrival {
+            at: 800 + 20 * index as u64,
+            sequence: 2 * index as u64,
+            opus: opus.clone(),
+            end: index == 9,
+            volume: 1.,
+        }));
+        let output = clocked(&arrivals, 120);
+        assert!(output[40 * FRAME..80 * FRAME].iter().all(|v| *v == [0.; 2]));
+        let mut decoder = plain();
+        let expected: Vec<[f64; 2]> = music
+            .iter()
+            .flat_map(|opus| gained(&decoded(&mut decoder, opus, MAX_PACKET_SAMPLES), 1.))
+            .collect();
+        let end = find(&output, 40 * FRAME, &expected);
+        assert!(output[end..].iter().all(|frame| *frame == [0.; 2]));
     }
 
     #[test]
