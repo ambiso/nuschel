@@ -650,3 +650,6 @@ extension answer these endpoints with an error instead of being queried.
 `add` also accepts `kind: "similar"` with the song in `id`, and `kind: "path"` with
 the start in `id` and the target in `to`. The bot asks the library again when
 adding. A path skips its first song when that song is already playing in the queue.
+Adding similar songs leaves out the song itself and every match with a similarity
+of 100%, which are other copies of the same recording, so the same song is not
+queued again and again.

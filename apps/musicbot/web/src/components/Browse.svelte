@@ -153,8 +153,8 @@
         {/if}
         <p class="muted metadata"><span>{matchSongs.length} tracks</span><span>{formatDuration(totalDuration(matchSongs))}</span></p>
         <div class="detail-actions">
-          <button class="primary" disabled={!current || !store.player || !matches.length} onclick={() => store.add(store.selected, sonicItem)}><Icon name="add" /> Add all</button>
-          <button disabled={!current || !store.player || !matches.length} onclick={() => store.add(store.selected, sonicItem, 0)}><Icon name="next" /> Play all next</button>
+          <button class="primary" disabled={!current || !store.player || !matches.length} title={route.view === "similar" ? "Adds every song listed except exact copies of this one" : undefined} onclick={() => store.add(store.selected, sonicItem)}><Icon name="add" /> Add all</button>
+          <button disabled={!current || !store.player || !matches.length} title={route.view === "similar" ? "Plays every song listed next except exact copies of this one" : undefined} onclick={() => store.add(store.selected, sonicItem, 0)}><Icon name="next" /> Play all next</button>
         </div>
       </div>
       <SongList songs={matchSongs} {namespace} covers similarities={matches.map((match) => match.similarity)} />
