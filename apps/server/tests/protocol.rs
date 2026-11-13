@@ -1354,13 +1354,12 @@ async fn hostile_frames_leave_the_server_running() {
     fixture.running.shutdown().await;
 }
 
-fn fixture_text(name: &str) -> String {
-    std::fs::read_to_string(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../tests/fixtures")
-            .join(name),
-    )
-    .unwrap()
+fn fixture_text() -> String {
+    let file = option_env!("NUSCHL_TEST_MURMUR_FIXTURE").unwrap_or(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tests/fixtures/murmur-1.5.json"
+    ));
+    std::fs::read_to_string(file).unwrap()
 }
 
 fn plain_settings(directory: &std::path::Path, extra: &str) -> nuschld::config::Settings {
@@ -1415,8 +1414,7 @@ async fn import_murmur(
 #[tokio::test]
 async fn a_murmur_database_imports_with_its_passwords_and_acls() {
     let carol = identity();
-    let mut dump =
-        nuschl_ipc::murmur::MurmurDump::from_json(&fixture_text("murmur-1.5.json")).unwrap();
+    let mut dump = nuschl_ipc::murmur::MurmurDump::from_json(&fixture_text()).unwrap();
     for user in &mut dump.users {
         if user.name == "carol" {
             // Murmur's hashes are lowercase; an uppercase one is normalised.
@@ -2083,8 +2081,7 @@ async fn statistics_count_connections_messages_and_voice() {
 /// fails before anything is replaced.
 #[tokio::test]
 async fn murmur_16_details_and_failures_before_any_change() {
-    let mut dump =
-        nuschl_ipc::murmur::MurmurDump::from_json(&fixture_text("murmur-1.5.json")).unwrap();
+    let mut dump = nuschl_ipc::murmur::MurmurDump::from_json(&fixture_text()).unwrap();
     dump.header.layout = "1.6".into();
     dump.channels[0].parent = Some(0);
     dump.acls.push(nuschl_ipc::murmur::MurmurAcl {
