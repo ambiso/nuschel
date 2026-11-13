@@ -77,13 +77,13 @@ Status: plan, 2026-11-13, against main 8781be09. It folds in the frozen #139 sig
 - **The passive-holder claim holds only under these conditions:** a party with S and every recording still cannot decrypt, because every sk_v is fresh and random and every K_epoch is independent random (never derived from S or from an earlier K). If any of those were derived from S, the claim would not hold.
 
 **Sizes and authentication profile (to be frozen with S0a's exact numbers):**
-- **Default profile:** an Ed25519 leaf binding (about 334 B) plus pk_v (1,216 B) fits a 4 KiB key message.
-- **Hybrid profile:** a hybrid identity binding (about 3,373 B) plus pk_v (1,216 B) or enc (1,120 B) exceeds 4 KiB before any envelope. Either send the binding as a separate message bound to the transcript hash (each under 4 KiB), or use bounded multipart (at most 3 parts, an 8 KiB total, a reassembly deadline and a per-viewer budget), or define an explicitly larger profile.
+- **Key-message cap: 8 KiB** (owner, 2026-11-13: "raise the limit then"). It is a Nuschl-chosen bound on the SFU WebSocket, not an external constraint. The exact value is to be confirmed from S0a's measured sizes.
+- **Both profiles fit in one message.** The default profile is an Ed25519 leaf binding (about 334 B) plus pk_v (1,216 B). The hybrid profile is a hybrid identity binding (about 3,373 B) plus pk_v (1,216 B) or enc (1,120 B), about 4.7 KB with its fields. No multipart is needed.
 - **No silent downgrade:** a policy that requires the hybrid binding never falls back to classical; it refuses.
 - Configuration: the same suite as `crates/identity/src/hpke.rs:35-43` (X-Wing / HKDF-SHA256 / ChaCha20-Poly1305).
 
 **Fan-out and rekeying:**
-- The key exchange travels over the SFU WebSocket as opaque blobs of at most 4 KiB. Plugin data is a poor fit: pk_v is 1,216 B and the ciphertext 1,120 B, which is 2–3 chunks each under Murmur's 4 messages/s budget.
+- The key exchange travels over the SFU WebSocket as opaque blobs of at most 8 KiB. Plugin data is a poor fit: pk_v is 1,216 B and the ciphertext 1,120 B, which is 2–3 chunks each under Murmur's 4 messages/s budget.
 - **Join, rekey first.** A newcomer never receives an epoch that carried media before they joined, because otherwise recorded pre-join media would decrypt. On a join the sharer creates K_{e+1}, sends it to the existing viewers over their channels, then grants K_{e+1} to the newcomer, then forces a keyframe under K_{e+1}. Batching joins (at most 2 s) delays the newcomer; it never hands out the old epoch.
 - **Leave exposure is bounded separately.** On a leave or kick the sharer rekeys, batched within 2 s. A departed viewer can decrypt at most until that rekey takes effect plus the previous-epoch grace (about 2 s). Every 15 minutes there is a rekey regardless.
 - Receivers keep the previous epoch for about 2 s.
@@ -213,11 +213,11 @@ Phase 1 order: S0 → K1 → K2 → W1 → B1 → T1, with E1 (the long pole) in
 - **Relay-only** uses the owner's existing definition (`docs/extension.md` `privacy/1`; `crates/core/src/network.rs` `PeerPolicy`), neither strengthened nor weakened:
   - **What it allows and forbids:** configured servers and relays may be contacted. Peer discovery, local-interface/STUN candidate gathering and direct peer connections are not allowed, and peer-supplied endpoints cannot override this. The configured server necessarily sees the source IP.
   - **Native:** with `relay_only`, the SDK driver gathers no host or srflx candidates and connects only to the configured SFU (or TURN).
-  - **Browser:** strict `iceTransportPolicy: 'relay'` *does* require TURN. A per-leg connection only to the SFU, where the page signals no local candidates and the SFU never forwards anyone's address, may satisfy the same privacy contract without TURN. That is a decision for the owner/coordinator to record explicitly, not a silent substitute.
+  - **Browser (owner, 2026-11-13: "A makes sense for relay-only people"):** with relay-only on, the page uses `iceTransportPolicy: 'relay'` through turn.nuschl.eu, so local addresses are never gathered and a VPN user's non-VPN interface is never tried. Without relay-only, the browser connects straight to the SFU. The page signals no local candidates, and the SFU never forwards anyone's address. Sharers and viewers never connect to each other in either case.
   - **No fallback:** if the permitted path fails, the call ends.
 - **Bounds:**
   - Video: at most 1920×1080 and 15 fps by default (30 opt-in), 2.5 Mbit/s, frames ≤256 KiB (a large keyframe may need an intra-bitrate cap or 512 KiB; to verify), ≤2 queued frames.
-  - Key messages ≤4 KiB, ≤32 pending key requests, at least 1 s between epochs, bounded replay windows.
+  - Key messages ≤8 KiB, ≤32 pending key requests, at least 1 s between epochs, bounded replay windows.
   - Viewer and SFU caps as in §5.
   - Decoder pixel, memory and CPU caps.
 
