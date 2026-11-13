@@ -266,6 +266,9 @@ message ChatAck {
   bytes conversation = 2;
   uint64 seq = 3;
   int64 server_ms = 4;
+  // The committed edit count, when supplied. Absence is unknown, not zero;
+  // timestamps alone cannot order edits committed in the same millisecond.
+  optional uint32 edits = 5;
 }
 
 // 0x4E03, live, to connections that may read the conversation now.
