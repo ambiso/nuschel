@@ -113,7 +113,7 @@ function libraryIndex(text) {
  * Parses a location hash into a route object:
  * `{ view: "queue" | "channels" | "history" }`, `{ view: "albums", library, list }`,
  * `{ view: "artists" | "playlists", library }`,
- * `{ view: "album" | "artist" | "playlist" | "similar", library, id, namespace? }`,
+ * `{ view: "album" | "artist" | "playlist" | "song" | "similar", library, id, namespace? }`,
  * `{ view: "path", library, from, to, namespace? }`, `{ view: "search", q }`.
  * A shared link (`library_name=`, see shareRoute) adds `sharedLibrary: name` to
  * library routes instead of a namespace; adoptSharedRoute resolves it.
@@ -150,6 +150,7 @@ export function parseRoute(hash) {
     case "album":
     case "artist":
     case "playlist":
+    case "song":
     case "similar":
       if (decoded === undefined || parts.length !== 3) return { view: "queue" };
       return { view, library: libraryIndex(library), id: decoded, ...namespace };
@@ -178,6 +179,7 @@ export function buildRoute(route) {
     case "album":
     case "artist":
     case "playlist":
+    case "song":
     case "similar":
       return `#/${route.view}/${route.library ?? 0}/${encodeURIComponent(route.id)}${namespaceQuery(route)}`;
     case "path":
@@ -205,6 +207,7 @@ export function routeForLibrary(route, library) {
     case "playlist":
       return { view: "playlists", library };
     case "album":
+    case "song":
       return { view: "albums", library, list: "newest" };
     case "similar":
     case "path":
@@ -222,7 +225,7 @@ export function libraryForNamespace(previous, current, index) {
   return next >= 0 && next === current.lastIndexOf(name) ? next : 0;
 }
 
-const DETAIL_VIEWS = new Set(["album", "artist", "playlist", "similar", "path"]);
+const DETAIL_VIEWS = new Set(["album", "artist", "playlist", "song", "similar", "path"]);
 
 /** Detail IDs in an unproved or expired namespace must return to their safe list. */
 export function routeForNamespace(route, library, namespace) {

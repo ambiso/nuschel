@@ -105,7 +105,7 @@ test("stepTarget stops at the ends", () => {
 
 test("routes round trip, including awkward ids", () => {
   const ids = ["plain", "a/b", "what?", "#hash", "with space", "50% & more", "ü/€?#=&+"];
-  for (const view of ["album", "artist", "playlist"]) {
+  for (const view of ["album", "artist", "playlist", "song"]) {
     for (const id of ids) {
       const route = { view, library: 2, id };
       const hash = buildRoute(route);
@@ -151,6 +151,8 @@ test("parseRoute falls back on bad input", () => {
   assert.deepEqual(parseRoute("#/artists?library=x"), { view: "artists", library: 0 });
   assert.deepEqual(parseRoute("#/album/zz/x"), { view: "album", library: 0, id: "x" });
   assert.deepEqual(parseRoute("#/similar/0"), { view: "queue" });
+  assert.deepEqual(parseRoute("#/song/0"), { view: "queue" });
+  assert.deepEqual(parseRoute("#/song/0/a/b"), { view: "queue" });
   assert.deepEqual(parseRoute("#/similar/0/a/b"), { view: "queue" });
   assert.deepEqual(parseRoute("#/path/0/a"), { view: "queue" });
   assert.deepEqual(parseRoute("#/path/0/a/b/c"), { view: "queue" });
@@ -161,6 +163,7 @@ test("parseRoute falls back on bad input", () => {
 test("routeForLibrary goes to the matching list view", () => {
   assert.deepEqual(routeForLibrary({ view: "albums", library: 0, list: "random" }, 1), { view: "albums", library: 1, list: "random" });
   assert.deepEqual(routeForLibrary({ view: "album", library: 0, id: "x" }, 1), { view: "albums", library: 1, list: "newest" });
+  assert.deepEqual(routeForLibrary({ view: "song", library: 0, id: "x", namespace: "n" }, 1), { view: "albums", library: 1, list: "newest" });
   assert.deepEqual(routeForLibrary({ view: "artist", library: 0, id: "x" }, 1), { view: "artists", library: 1 });
   assert.deepEqual(routeForLibrary({ view: "playlist", library: 0, id: "x" }, 2), { view: "playlists", library: 2 });
   assert.deepEqual(routeForLibrary({ view: "queue" }, 1), { view: "queue" });
@@ -169,11 +172,11 @@ test("routeForLibrary goes to the matching list view", () => {
 });
 
 test("detail routes never carry old IDs into a restarted or remapped namespace", () => {
-  for (const [view, safeView] of [["album", "albums"], ["artist", "artists"], ["playlist", "playlists"]]) {
+  for (const [view, safeView] of [["album", "albums"], ["artist", "artists"], ["playlist", "playlists"], ["song", "albums"]]) {
     const original = { view, library: 1, id: "old/id?", namespace: "page-a:0" };
     const route = parseRoute(buildRoute(original));
     assert.deepEqual(routeForNamespace(route, 1, "page-a:0"), original);
-    const safe = { view: safeView, library: 1, ...(view === "album" ? { list: "newest" } : {}) };
+    const safe = { view: safeView, library: 1, ...(safeView === "albums" ? { list: "newest" } : {}) };
     assert.deepEqual(routeForNamespace(route, 1, null), safe);
     assert.deepEqual(routeForNamespace(route, 1, "page-a:1"), safe);
     assert.deepEqual(routeForNamespace(route, 1, "page-b:0"), safe);
@@ -336,7 +339,7 @@ test("having the oldest retained play does not hide a refresh gap", () => {
 
 const TOKEN = "3f2b8c1e-9d4a-4e6f-8b7a-0c1d2e3f4a5b";
 const SHARE_IDS = ["plain", "a/b", "what?", "#hash", "with space", "50% & more", "ü/€?#=&+"];
-const LIBRARY_VIEWS = new Set(["albums", "artists", "playlists", "album", "artist", "playlist", "similar", "path"]);
+const LIBRARY_VIEWS = new Set(["albums", "artists", "playlists", "album", "artist", "playlist", "song", "similar", "path"]);
 
 function everyRoute(library, namespace) {
   const routes = [
@@ -345,7 +348,7 @@ function everyRoute(library, namespace) {
     { view: "albums", library, list: "starred" }, { view: "artists", library }, { view: "playlists", library },
   ];
   for (const id of SHARE_IDS) {
-    for (const view of ["album", "artist", "playlist", "similar"]) routes.push({ view, library, id, namespace });
+    for (const view of ["album", "artist", "playlist", "song", "similar"]) routes.push({ view, library, id, namespace });
     routes.push({ view: "path", library, from: id, to: SHARE_IDS[1], namespace });
   }
   return routes;
@@ -422,4 +425,26 @@ test("shared, reloaded and back/forward hashes are adopted by library name", () 
   assert.deepEqual(adoptSharedRoute(parseRoute("#/albums?library=0&list=starred&library_name=Jazz"), receiver, "r:1"), { view: "albums", library: 2, list: "starred" });
   // Internal routes without a library name keep the stale-namespace protection.
   assert.deepEqual(routeForNamespace(parseRoute("#/album/1/x?namespace=old"), 1, "r:1"), { view: "albums", library: 1, list: "newest" });
+});
+
+test("song routes keep the namespace in memory and the library name in the address bar", () => {
+  const sender = ["Main", "Jazz"];
+  const receiver = ["Jazz", "Main"];
+  const song = { view: "song", library: 1, id: "s/1?", namespace: "sender:3" };
+  assert.equal(buildRoute(song), "#/song/1/s%2F1%3F?namespace=sender%3A3");
+  assert.deepEqual(parseRoute(buildRoute(song)), song);
+  const shared = shareRoute(song, sender);
+  assert.equal(shared, "#/song/1/s%2F1%3F?library_name=Jazz");
+  assert.equal(addressRoute(song, sender), shared);
+  assert.ok(!shareUrl("https://bot.example/", song, sender).includes("namespace"));
+  const parsed = parseRoute(shared);
+  assert.deepEqual(parsed, { view: "song", library: 1, id: "s/1?", sharedLibrary: "Jazz" });
+  const adopted = adoptSharedRoute(parsed, receiver, "receiver:0");
+  assert.deepEqual(adopted, { view: "song", library: 0, id: "s/1?", namespace: "receiver:0" });
+  assert.deepEqual(routeForNamespace(adopted, 0, "receiver:0"), adopted);
+  assert.equal(addressRoute(adopted, receiver), "#/song/0/s%2F1%3F?library_name=Jazz");
+  // A missing library falls back to the album list; a stale namespace never opens the old song ID.
+  assert.deepEqual(adoptSharedRoute(parsed, ["Main"], "receiver:0"), { view: "albums", library: 0, list: "newest" });
+  assert.deepEqual(routeForNamespace(adopted, 0, "receiver:1"), { view: "albums", library: 0, list: "newest" });
+  assert.deepEqual(routeForNamespace(parseRoute("#/song/0/s1"), 0, "receiver:0"), { view: "albums", library: 0, list: "newest" });
 });

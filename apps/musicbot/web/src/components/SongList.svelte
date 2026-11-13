@@ -20,7 +20,7 @@
       <span class="number">{song.track ?? i + 1}</span>
       {#if covers}<Cover library={song.library} art={song.cover_art} size={96} px={42} />{/if}
       <div class="description">
-        <div class="title" title={song.title}>{song.title}</div>
+        <div class="title" title={song.title}><a href={buildRoute({ view: "song", library: song.library, id: song.id, namespace })} draggable="false">{song.title}</a></div>
         <div class="secondary muted">
           {#if song.artist_id}<a href={buildRoute({ view: "artist", library: song.library, id: song.artist_id, namespace })}>{song.artist || "Unknown artist"}</a>
           {:else if song.artist}<span>{song.artist}</span>{/if}
