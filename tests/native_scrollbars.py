@@ -12,7 +12,7 @@ import subprocess
 import time
 
 import acl_editor as fixture
-from accessibility import items
+from accessibility import items, snapshot
 from admin_bootstrap import encode
 from hash_document_wire import fields
 from layout_regression import inside
@@ -226,7 +226,10 @@ def actions(args, root, shell, application, bot, _murmur):
     focus(opener)
     opener.press()
     fonts = wait("Installed fonts")
-    focus(fonts)
+    choices = [node for _, node, role, _ in snapshot(fonts) if role == "radio button"]
+    assert len(choices) > 1, "private fixture needs an overflowing font list"
+    focus(choices[-1], dialog)
+    eventually(lambda: inside(fonts.extents(), dialog.extents()), "nested font viewport not revealed")
     records.append({"settings_fonts": bar(fonts, 100, "fonts"), "settings": bar(dialog, 100, "settings")})
     wait("Done", "push button").press()
     (args.output / "native-scrollbars.json").write_text(json.dumps(records, indent=2) + "\n")
