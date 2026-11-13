@@ -77,13 +77,13 @@ Status: plan, 2026-11-13, against main 8781be09. It folds in the frozen #139 sig
 - **The passive-holder claim holds only under these conditions:** a party with S and every recording still cannot decrypt, because every sk_v is fresh and random and every K_epoch is independent random (never derived from S or from an earlier K). If any of those were derived from S, the claim would not hold.
 
 **Sizes and authentication profile (to be frozen with S0a's exact numbers):**
-- **Key-message cap: 8 KiB** (owner, 2026-11-13: "raise the limit then"). It is a Nuschl-chosen bound on the SFU WebSocket, not an external constraint. The exact value is to be confirmed from S0a's measured sizes.
-- **Both profiles fit in one message.** The default profile is an Ed25519 leaf binding (about 334 B) plus pk_v (1,216 B). The hybrid profile is a hybrid identity binding (about 3,373 B) plus pk_v (1,216 B) or enc (1,120 B), about 4.7 KB with its fields. No multipart is needed.
+- **Key-message cap: 16 KiB.** The owner first raised it to 8 KiB, then (2026-11-13: "larger limit then") further, so the hybrid signing certificate travels inline as well. It is a Nuschl-chosen bound on the SFU WebSocket, not an external constraint. S0a measured, in one binary frame: binding plus hybrid certificate 8,908 B, KeyRequest with it about 10.3 KB; without the certificate the worst case is 5,124 B.
+- **Both profiles fit in one message, certificate included.** The default profile is an Ed25519 leaf binding (about 334 B) plus pk_v (1,216 B). The hybrid profile is a hybrid binding (3,471 B) plus its signing certificate plus pk_v (1,216 B) or enc (1,120 B). No multipart is needed, and no separate certificate fetch.
 - **No silent downgrade:** a policy that requires the hybrid binding never falls back to classical; it refuses.
 - Configuration: the same suite as `crates/identity/src/hpke.rs:35-43` (X-Wing / HKDF-SHA256 / ChaCha20-Poly1305).
 
 **Fan-out and rekeying:**
-- The key exchange travels over the SFU WebSocket as opaque blobs of at most 8 KiB. Plugin data is a poor fit: pk_v is 1,216 B and the ciphertext 1,120 B, which is 2–3 chunks each under Murmur's 4 messages/s budget.
+- The key exchange travels over the SFU WebSocket as opaque blobs of at most 16 KiB. Plugin data is a poor fit: pk_v is 1,216 B and the ciphertext 1,120 B, which is 2–3 chunks each under Murmur's 4 messages/s budget.
 - **Join, rekey first.** A newcomer never receives an epoch that carried media before they joined, because otherwise recorded pre-join media would decrypt. On a join the sharer creates K_{e+1}, sends it to the existing viewers over their channels, then grants K_{e+1} to the newcomer, then forces a keyframe under K_{e+1}. Batching joins (at most 2 s) delays the newcomer; it never hands out the old epoch.
 - **Leave exposure is bounded separately.** On a leave or kick the sharer rekeys, batched within 2 s. A departed viewer can decrypt at most until that rekey takes effect plus the previous-epoch grace (about 2 s). Every 15 minutes there is a rekey regardless.
 - Receivers keep the previous epoch for about 2 s.
@@ -217,7 +217,7 @@ Phase 1 order: S0 → K1 → K2 → W1 → B1 → T1, with E1 (the long pole) in
   - **No fallback:** if the permitted path fails, the call ends.
 - **Bounds:**
   - Video: at most 1920×1080 and 15 fps by default (30 opt-in), 2.5 Mbit/s, frames ≤256 KiB (a large keyframe may need an intra-bitrate cap or 512 KiB; to verify), ≤2 queued frames.
-  - Key messages ≤8 KiB, ≤32 pending key requests, at least 1 s between epochs, bounded replay windows.
+  - Key messages ≤16 KiB, ≤32 pending key requests, at least 1 s between epochs, bounded replay windows.
   - Viewer and SFU caps as in §5.
   - Decoder pixel, memory and CPU caps.
 
