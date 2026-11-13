@@ -1519,7 +1519,7 @@ impl Profile {
     /// voice-quality.json as it is on disk; reading changes nothing.
     fn read_voice_quality(&self) -> io::Result<Option<u32>> {
         let path = self.config_dir.join(VOICE_QUALITY_FILE);
-        let saved = match read_bounded(&path, MAX_VOICE_QUALITY_FILE) {
+        match read_bounded(&path, MAX_VOICE_QUALITY_FILE) {
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
             bytes => bytes.and_then(|bytes| {
                 let file: VoiceQualityFile = serde_json::from_slice(&bytes)?;
@@ -1532,8 +1532,7 @@ impl Profile {
                     )))
                 }
             }),
-        };
-        saved
+        }
     }
 
     /// With other settings: write voice-quality.json only when the bitrate

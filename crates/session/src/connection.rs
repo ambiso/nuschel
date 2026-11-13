@@ -359,7 +359,7 @@ impl VoiceRoute {
     pub fn suspend(&self) -> u64 {
         let previous = self
             .0
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |state| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |state| {
                 (state & !31).checked_add(32).map(|revision| revision | 31)
             })
             .expect("voice intent revisions exhausted");
@@ -381,7 +381,7 @@ impl VoiceRoute {
     fn suspend_revision(&self, revision: u64) {
         let _ = self
             .0
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |state| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |state| {
                 (state >> 5 == revision).then_some((revision << 5) | 31)
             });
     }
@@ -1850,22 +1850,21 @@ impl State {
                 }
             }
         };
-        if let Command::Scoped { authority, .. } = &command {
-            if authority
+        if let Command::Scoped { authority, .. } = &command
+            && authority
                 .users
                 .len()
                 .saturating_add(authority.channels.len())
                 .saturating_add(authority.conversations.len())
                 .saturating_add(authority.accounts.len())
                 > MAX_ACTION_TARGETS
-            {
-                return refuse_admin(
-                    ticket,
-                    "The ACL action authority exceeds its bounded target limit.",
-                    events,
-                )
-                .await;
-            }
+        {
+            return refuse_admin(
+                ticket,
+                "The ACL action authority exceeds its bounded target limit.",
+                events,
+            )
+            .await;
         }
         self.admin_pending
             .push_back(PendingAdmin { command, bytes });
@@ -2491,22 +2490,21 @@ impl State {
         {
             return None;
         }
-        if let Command::SelectVoiceTargetAt { id, .. } = &command {
-            if *id != 0
-                && self.voice_authorities.get(id).is_none_or(|installed| {
-                    installed.own != authority.own
-                        || !installed
-                            .users
-                            .iter()
-                            .all(|target| authority.users.contains(target))
-                        || !installed
-                            .channels
-                            .iter()
-                            .all(|target| authority.channels.contains(target))
-                })
-            {
-                return None;
-            }
+        if let Command::SelectVoiceTargetAt { id, .. } = &command
+            && *id != 0
+            && self.voice_authorities.get(id).is_none_or(|installed| {
+                installed.own != authority.own
+                    || !installed
+                        .users
+                        .iter()
+                        .all(|target| authority.users.contains(target))
+                    || !installed
+                        .channels
+                        .iter()
+                        .all(|target| authority.channels.contains(target))
+            })
+        {
+            return None;
         }
         if let Command::SetVoiceTarget { id, .. } | Command::Whisper { id, .. } = &command {
             if !(1..=30).contains(id) {
