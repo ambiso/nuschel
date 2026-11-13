@@ -704,6 +704,9 @@
           # Scoped unit-test leaves over the cached per-crate graph (no Cargo target).
           desktop-unit = crates.project.workspaceMembers."nuschl".build.override { runTests = true; };
           core-unit = crates.project.workspaceMembers."nuschl-core".build.override { runTests = true; };
+          protocol-unit = crates.project.workspaceMembers."nuschl-protocol".build.override {
+            runTests = true;
+          };
           client-unit = crates.project.workspaceMembers."nuschl-client".build.override {
             runTests = true;
           };
