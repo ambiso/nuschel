@@ -842,6 +842,11 @@
                 "1.3" = "${nixpkgs-mumble13.legacyPackages.${system}.murmur}/bin/murmurd";
               };
             };
+            vm-link-previews = import ./tests/link_previews_vm.nix {
+              inherit pkgs;
+              nuschl = package;
+              sourceIdentity = self.rev or self.outPath;
+            };
           }
         );
         devShells.default = craneLib.devShell {

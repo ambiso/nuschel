@@ -1,7 +1,7 @@
 {
   pkgs,
   nuschl,
-  sourceRevision,
+  sourceIdentity,
   fixtureTests ? ./.,
 }:
 let
@@ -112,7 +112,7 @@ pkgs.testers.runNixOSTest {
                 "--gnome-shell", "${pkgs.gnome-shell}/bin/gnome-shell",
                 "--pulse-bin", "${pkgs.pulseaudio}/bin",
                 "--output", output, "--server", server,
-                "--source-revision", "${sourceRevision}",
+                "--source-identity", "${sourceIdentity}",
             ]
             command = "runuser -u tester -- env -i " + shlex.join([
                 "HOME=/home/tester", "USER=tester", "LOGNAME=tester",

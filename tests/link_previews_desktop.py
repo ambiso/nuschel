@@ -125,7 +125,6 @@ def desktop(args):
     cases = []
     extra_children = []
     scene_start = len(control("snapshot")["events"])
-    assert re.fullmatch(r"[0-9a-f]{40}", args.source_revision)
     def digest(path):
         value = hashlib.sha256()
         with path.open("rb") as stream:
@@ -146,8 +145,8 @@ def desktop(args):
         "link_previews_desktop.py", "link_preview_fetch.py", "welcome_html.py", "gnome_session.py",
         "accessibility.py", "local_murmur.py", "local_nuschld.py", "mumble_client.py")}
     (args.output / "identity.json").write_text(json.dumps(dict(
-        source_revision=args.source_revision, programs=programs, fixtures=fixture_hashes,
-        scope="Source revision supplied by trusted Nix invocation; file hashes independently measured in guest."), indent=2) + "\n")
+        source_identity=args.source_identity, programs=programs, fixtures=fixture_hashes,
+        scope="Commit or store source path supplied by trusted Nix invocation; file hashes independently measured in guest."), indent=2) + "\n")
 
     def mark(name, **details):
         cases.append(dict(case=name, **details))
@@ -442,7 +441,7 @@ def main():
     for name in ("binaries", "murmur", "at-spi", "gnome-shell", "pulse-bin", "output"):
         gui.add_argument("--" + name, type=Path, required=True)
     gui.add_argument("--server", choices=("stock", "nuschld"), required=True)
-    gui.add_argument("--source-revision", required=True)
+    gui.add_argument("--source-identity", required=True)
     args = parser.parse_args()
     (peers if args.command == "peers" else desktop)(args)
 
