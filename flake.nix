@@ -727,6 +727,7 @@
             runTests = true;
             testInputs = [ pkgs.python3 ];
           };
+          server-unit = crates.project.workspaceMembers."nuschld".build.override { runTests = true; };
           media-unit = crates.project.workspaceMembers."nuschl-media-worker".build.override {
             runTests = true;
           };

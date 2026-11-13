@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: EUPL-1.2
+# Exactly what the "ci" check runs, on this checkout's tracked files. Arguments go
+# to nix build, e.g. scripts/pre-pr --cores 2 --max-jobs 2.
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+exec nix --extra-experimental-features 'nix-command flakes' build -f ci.nix --no-link --keep-going -L "$@"
