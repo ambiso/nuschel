@@ -7,6 +7,8 @@ use std::cell::OnceCell;
 use base64::Engine as _;
 #[cfg(feature = "images")]
 use image::{DynamicImage, ExtendedColorType, ImageEncoder as _, ImageFormat, ImageReader, Limits};
+#[cfg(feature = "images")]
+use nuschl_core::preview::{ImageMime, img_element};
 use nuschl_core::{CodeRun, ContentBlock, MAX_CONTENT_BYTES, MessageDocument};
 use syntect::{
     easy::HighlightLines,
@@ -189,12 +191,12 @@ pub fn encode_image_message(bytes: &[u8], limit: usize) -> Result<(String, Conte
         let mut smallest = png.len();
         for quality in [85, 70, 55] {
             let jpeg = encode_jpeg(&opaque, quality)?;
-            let (kind, bytes) = if png.len() <= jpeg.len() {
-                ("png", &png)
+            let (mime, bytes) = if png.len() <= jpeg.len() {
+                (ImageMime::Png, &png)
             } else {
-                ("jpeg", &jpeg)
+                (ImageMime::Jpeg, &jpeg)
             };
-            let element = img_element(kind, bytes);
+            let element = img_element(mime, bytes);
             if element.len() <= limit {
                 return Ok((element, thumbnail));
             }
@@ -257,32 +259,6 @@ fn flatten(image: &DynamicImage) -> image::RgbImage {
         target.0 = [blend(red), blend(green), blend(blue)];
     }
     rgb
-}
-
-/// `<img src="data:image/<kind>;base64,…" />` as stock Mumble writes it: the
-/// base64 text in lines of 72 characters, each percent-encoded.
-#[cfg(feature = "images")]
-fn img_element(kind: &str, bytes: &[u8]) -> String {
-    let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
-    let mut element = String::with_capacity(encoded.len() * 9 / 8 + 48);
-    element.push_str("<img src=\"data:image/");
-    element.push_str(kind);
-    element.push_str(";base64,");
-    for (index, line) in encoded.as_bytes().chunks(72).enumerate() {
-        if index > 0 {
-            element.push('\n');
-        }
-        for &byte in line {
-            match byte {
-                b'+' => element.push_str("%2B"),
-                b'/' => element.push_str("%2F"),
-                b'=' => element.push_str("%3D"),
-                other => element.push(char::from(other)),
-            }
-        }
-    }
-    element.push_str("\" />");
-    element
 }
 
 /// Decode an inline `data:` image for the viewer, up to `VIEW_WIDTH` × `VIEW_HEIGHT`.
@@ -763,34 +739,6 @@ mod tests {
         assert!(element.len() <= 20_000);
         let (width, _) = received(&element);
         assert!(width < 1600, "{width}");
-    }
-
-    #[test]
-    #[cfg(feature = "images")]
-    fn the_shared_writer_matches_this_one_byte_for_byte() {
-        use nuschl_core::preview::{ImageMime, img_element as shared};
-        let noisy = image::load_from_memory(&picture(640, 400, true)).unwrap();
-        let png = encode_png(&noisy).unwrap();
-        let jpeg = encode_jpeg(&flatten(&noisy), 85).unwrap();
-        let mut percent = [0; 3];
-        for (kind, mime, bytes) in [
-            ("png", ImageMime::Png, &png),
-            ("jpeg", ImageMime::Jpeg, &jpeg),
-        ] {
-            // The prefix length at which the element outgrows the paste limit.
-            let lengths: Vec<usize> = (0..=bytes.len()).collect();
-            let fits =
-                lengths.partition_point(|&n| img_element(kind, &bytes[..n]).len() <= 131_072);
-            assert!(fits < bytes.len(), "{kind} {}", bytes.len());
-            for n in (0..=110).chain([fits - 1, fits, fits + 1, bytes.len()]) {
-                let old = img_element(kind, &bytes[..n]);
-                assert_eq!(old, shared(mime, &bytes[..n]), "{kind} {n}");
-                for (count, code) in percent.iter_mut().zip(["%2B", "%2F", "%3D"]) {
-                    *count += old.matches(code).count();
-                }
-            }
-        }
-        assert!(percent.iter().all(|&count| count > 0), "{percent:?}");
     }
 
     #[test]
