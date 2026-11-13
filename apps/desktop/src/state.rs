@@ -220,6 +220,8 @@ pub struct Desktop {
     /// Actual logical body bounds, excluding the window chrome and update bar.
     pub body_size: std::rc::Rc<std::cell::Cell<Size<Pixels>>>,
     pub composer_rows: usize,
+    /// Observed additional control-row height; wrapping cannot spend timeline space.
+    pub composer_wrap: std::rc::Rc<std::cell::Cell<Pixels>>,
     pub channels_open: bool,
     pub scroll: ScrollHandle,
     pub channel_scroll: ScrollHandle,
@@ -527,6 +529,7 @@ impl Desktop {
             composer,
             body_size: Default::default(),
             composer_rows: 1,
+            composer_wrap: Default::default(),
             channels_open: false,
             scroll: ScrollHandle::new(),
             channel_scroll: ScrollHandle::new(),

@@ -24,6 +24,7 @@ use std::{collections::HashMap, rc::Rc};
 const RAIL_WIDTH: f32 = 72. + layout::SCROLLBAR_GUTTER;
 const SPLITTER_WIDTH: f32 = 5.;
 const CONTROL_HEIGHT: f32 = 32.;
+const CHANNELS_DIALOG: u8 = 1 << 6;
 
 #[derive(Clone, Copy)]
 struct PaneLayout {
@@ -35,15 +36,16 @@ struct PaneLayout {
 }
 
 impl PaneLayout {
-    fn new(size: Size<Pixels>, preferred: f32, line: Pixels) -> Self {
+    fn new(size: Size<Pixels>, preferred: f32, line: Pixels, wrap: Pixels) -> Self {
         let height = f32::from(size.height).max(0.);
         let line = f32::from(line).max(1.);
+        let wrap = f32::from(wrap).max(0.);
         let minimum = *nuschl_session::config::SIDEBAR_WIDTH.start();
         let available = f32::from(size.width) - RAIL_WIDTH - SPLITTER_WIDTH - minimum;
         // At short heights one shared context region scrolls header, notices,
         // preview and hints. The editor and at least one timeline line stay out.
         let (input, bottom, gap) = Self::padding(false);
-        let content = CONTROL_HEIGHT.max(line + 8.); // editor's py_1, or an icon
+        let content = CONTROL_HEIGHT.max(line + 8.) + wrap; // editor's py_1, or an icon
         let dense = height < 52. + CONTROL_HEIGHT + content + input * 2. + 2. + bottom + gap + line;
         let chrome = if dense { 0. } else { height / 4. };
         let (input, bottom, gap) = Self::padding(dense);
@@ -51,7 +53,7 @@ impl PaneLayout {
         let auxiliary = (height / 3.)
             .max(CONTROL_HEIGHT)
             .min((height - chrome - editor - bottom - gap - line).max(0.));
-        let padding = input * 2. + 8. + 2. + bottom + gap;
+        let padding = input * 2. + 8. + 2. + bottom + gap + wrap;
         let rows = ((height - chrome - auxiliary - line - padding) / line)
             .floor()
             .clamp(1., 10.) as usize;
@@ -93,13 +95,18 @@ impl Render for Desktop {
             .read(cx)
             .line_height()
             .unwrap_or(window.line_height());
-        let pane = PaneLayout::new(self.body_size.get(), self.sidebar_width(), line);
+        let pane = PaneLayout::new(
+            self.body_size.get(),
+            self.sidebar_width(),
+            line,
+            self.composer_wrap.get(),
+        );
         if pane.rows != self.composer_rows {
             self.composer_rows = pane.rows;
             self.composer
                 .update(cx, |input, cx| input.set_auto_grow(1, pane.rows, cx));
         }
-        if pane.sidebar.is_some() || self.open_dialogs() & 0b0011_1111 != 0 {
+        if pane.sidebar.is_some() || self.open_dialogs() & !CHANNELS_DIALOG != 0 {
             self.channels_open = false;
         }
         self.keep_dialog_focus(window, cx);
@@ -1682,7 +1689,11 @@ impl Desktop {
             | u8::from(self.prompt.is_some()) << 3
             | u8::from(self.finder.is_open()) << 4
             | u8::from(self.second_server.is_some()) << 5
-            | u8::from(self.channels_open) << 6
+            | if self.channels_open {
+                CHANNELS_DIALOG
+            } else {
+                0
+            }
     }
 
     pub fn dialog_open(&self) -> bool {
@@ -3364,6 +3375,9 @@ fn composer(
     let channel = context.channel;
     let pane = context.pane;
     let (input_padding, bottom, gap) = PaneLayout::padding(pane.dense);
+    let text_height = Rc::new(std::cell::Cell::new(px(0.)));
+    let observed_text = text_height.clone();
+    let wrap = this.composer_wrap.clone();
     let channel_name = channel.name.clone();
     // The link the keyboard is on in the timeline (where it really leads),
     // or who is typing here, takes the place of the composer's target: the
@@ -3584,6 +3598,7 @@ fn composer(
         )
         .child(
             div()
+                .relative()
                 .pl_1()
                 .pr_2()
                 .py(px(input_padding))
@@ -3608,8 +3623,12 @@ fn composer(
                     div()
                         .flex_1()
                         .min_w(px(CONTROL_HEIGHT))
-                        .flex_basis(px(CONTROL_HEIGHT * 2.))
                         .py_1()
+                        .on_children_prepainted(move |bounds, _, _| {
+                            if let Some(text) = bounds.first() {
+                                observed_text.set(text.size.height + px(8.));
+                            }
+                        })
                         .child(Textarea::new(&this.composer)),
                 )
                 .child(icon_button(
@@ -3620,7 +3639,26 @@ fn composer(
                     None,
                     |this, window, cx| this.send_message(window, cx),
                     cx,
-                )),
+                ))
+                .child(
+                    canvas(
+                        move |bounds, window, _| {
+                            // Measure the actual row, including any wrapped controls,
+                            // against the laid-out editor. Conservatively keep any
+                            // border rounding in the reservation as well.
+                            let extra = (bounds.size.height
+                                - px(input_padding * 2.)
+                                - text_height.get().max(px(CONTROL_HEIGHT)))
+                            .max(px(0.));
+                            if wrap.replace(extra) != extra {
+                                window.on_next_frame(|window, _| window.refresh());
+                            }
+                        },
+                        |_, _, _, _| {},
+                    )
+                    .absolute()
+                    .inset_0(),
+                ),
         )
         .into_any_element()
 }
@@ -4106,7 +4144,7 @@ mod viewport_tests {
         // window, with small/default/large actual font line heights.
         for (width, height) in [(286., 125.), (450., 354.), (1280., 754.)] {
             for line in [18., 24., 36.] {
-                let pane = PaneLayout::new(size(px(width), px(height)), 560., px(line));
+                let pane = PaneLayout::new(size(px(width), px(height)), 560., px(line), px(0.));
                 let (input, bottom, gap) = PaneLayout::padding(pane.dense);
                 let editor = CONTROL_HEIGHT.max(pane.rows as f32 * line + 8.) + input * 2. + 2.;
                 let occupied = f32::from(pane.chrome + pane.auxiliary) + editor + bottom + gap;
@@ -4119,18 +4157,33 @@ mod viewport_tests {
                     && sidebar + RAIL_WIDTH + SPLITTER_WIDTH + 200. <= width));
             }
         }
-        let compact = PaneLayout::new(size(px(450.), px(354.)), 560., px(24.));
+        let compact = PaneLayout::new(size(px(450.), px(354.)), 560., px(24.), px(0.));
         assert!(compact.sidebar.is_none());
         assert!(!compact.dense);
         // Full 54px image + card padding/border at the original 200% scene.
         assert!(compact.auxiliary >= px(72.));
         assert_eq!(
-            PaneLayout::new(size(px(1000.), px(754.)), 560., px(24.)).sidebar,
+            PaneLayout::new(size(px(1000.), px(754.)), 560., px(24.), px(0.)).sidebar,
             Some(560.)
         );
         assert_eq!(
-            PaneLayout::new(size(px(600.), px(754.)), 560., px(24.)).sidebar,
+            PaneLayout::new(size(px(600.), px(754.)), 560., px(24.), px(0.)).sidebar,
             Some(311.)
         );
+    }
+
+    #[test]
+    fn measured_wrap_reserves_height_in_the_minimum_inline_chat_pane() {
+        let viewport = size(px(600.), px(354.));
+        let wrapped = PaneLayout::new(viewport, 560., px(24.), px(40.));
+        assert_eq!(wrapped.sidebar, Some(311.)); // exactly 200px remains for chat
+        let remaining = |pane: PaneLayout| {
+            let (input, bottom, gap) = PaneLayout::padding(pane.dense);
+            let editor = (pane.rows as f32 * 24. + 8.).max(CONTROL_HEIGHT) + input * 2. + 2. + 40.;
+            354. - f32::from(pane.chrome + pane.auxiliary) - editor - bottom - gap
+        };
+        assert!(remaining(wrapped) >= 24.);
+        // Omitting the measured second row loses the timeline with long text.
+        assert!(remaining(PaneLayout::new(viewport, 560., px(24.), px(0.))) < 24.);
     }
 }
