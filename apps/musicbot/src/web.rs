@@ -2028,15 +2028,23 @@ mod tests {
             "channel": [],
         }))
         .unwrap();
+        let identities: Vec<_> = config
+            .libraries
+            .iter()
+            .map(crate::subsonic::LibraryIdentity::new)
+            .collect();
+        let keys = crate::library_keys::load(directory.path(), &identities).unwrap();
         let libraries = config
             .libraries
             .iter()
+            .zip(keys)
             .enumerate()
-            .map(|(index, library)| {
+            .map(|(index, (library, key))| {
                 Library::new(
                     index,
                     library,
                     crate::config::Credentials::ApiKey("private-key".into()),
+                    key,
                 )
             })
             .collect();

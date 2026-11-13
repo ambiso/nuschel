@@ -231,20 +231,25 @@ pub struct Library {
     stream_agent: ureq::Agent,
     /// OpenSubsonic extensions, asked once the server answers.
     extensions: OnceLock<HashSet<String>>,
-    /// Names this library in caches and shared links; changes when the
-    /// library's name or URL does.
+    /// Names this library in caches and shared links; a random value from
+    /// the state directory that changes when the library's name or URL does.
     key: String,
 }
 
 impl Library {
-    pub fn new(index: usize, config: &config::Library, credentials: Credentials) -> Self {
+    pub fn new(
+        index: usize,
+        config: &config::Library,
+        credentials: Credentials,
+        key: String,
+    ) -> Self {
         let api_agent = transport_agent(Some(API_TIMEOUT), STREAM_READ_TIMEOUT);
         let stream_agent = transport_agent(None, STREAM_READ_TIMEOUT);
         let base = config.url.trim_end_matches('/').to_owned();
         Self {
             index,
             name: config.name.clone(),
-            key: hex(&Md5::digest(format!("{}\0{base}", config.name))[..8]),
+            key,
             base,
             credentials,
             transcode: config.transcode.clone(),
@@ -255,7 +260,7 @@ impl Library {
         }
     }
 
-    /// A short hash of the name and URL, stable across restarts.
+    /// The library's key from `library_keys.json`, stable across restarts.
     pub fn key(&self) -> &str {
         &self.key
     }
@@ -1256,7 +1261,12 @@ pub(crate) mod tests {
             "name": "Test library", "url": server.url,
         }))
         .unwrap();
-        Library::new(0, &config, Credentials::ApiKey("private-key".into()))
+        Library::new(
+            0,
+            &config,
+            Credentials::ApiKey("private-key".into()),
+            "key".into(),
+        )
     }
 
     fn track() -> Track {
@@ -1648,7 +1658,12 @@ pub(crate) mod tests {
             "name": "Sonic", "url": server.url,
         }))
         .unwrap();
-        let library = Library::new(3, &config, Credentials::ApiKey("private-key".into()));
+        let library = Library::new(
+            3,
+            &config,
+            Credentials::ApiKey("private-key".into()),
+            "key".into(),
+        );
         assert!(!library.supports_sonic_similarity_cached());
 
         let similar = library.sonic_similar("seed").unwrap();

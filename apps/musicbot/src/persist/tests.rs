@@ -45,7 +45,14 @@ username = "DJ2"
             .libraries
             .iter()
             .enumerate()
-            .map(|(index, config)| Library::new(index, config, Credentials::ApiKey("test".into())))
+            .map(|(index, config)| {
+                Library::new(
+                    index,
+                    config,
+                    Credentials::ApiKey("test".into()),
+                    format!("key {index}"),
+                )
+            })
             .collect(),
     );
     let players = config

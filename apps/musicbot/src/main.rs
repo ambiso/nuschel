@@ -4,6 +4,7 @@
 mod config;
 mod covers;
 mod decode;
+mod library_keys;
 mod mumble;
 mod persist;
 mod player;
@@ -122,11 +123,21 @@ async fn run(arguments: Arguments) -> Result<(), String> {
         .ok_or("cannot locate the music codec worker")?;
     prepare_state_directory(&state_directory)
         .map_err(|error| format!("{}: {error}", state_directory.display()))?;
+    let identities: Vec<_> = config
+        .libraries
+        .iter()
+        .map(subsonic::LibraryIdentity::new)
+        .collect();
+    let keys = library_keys::load(&state_directory, &identities)
+        .map_err(|error| format!("library_keys.json: {error}"))?;
     let libraries = config
         .libraries
         .iter()
+        .zip(keys)
         .enumerate()
-        .map(|(index, library)| Ok(Library::new(index, library, library.credentials()?)))
+        .map(|(index, (library, key))| {
+            Ok(Library::new(index, library, library.credentials()?, key))
+        })
         .collect::<Result<Vec<_>, String>>()?;
     let tokens = Tokens::load(state_directory.join("tokens.json"))
         .map_err(|error| format!("tokens.json: {error}"))?;

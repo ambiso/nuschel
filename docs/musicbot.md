@@ -123,11 +123,13 @@ same server is a different origin. Requests with the link in the path
 (`/u/<token>/…`, for scripts) do not use the cookie and are not checked this way.
 
 The address bar can be copied and pasted anywhere: it contains only the public
-address and the open view, such as `https://music.example.org/#/album/0/a1?library_key=480bdd6b67409016`.
+address and the open view, such as `https://music.example.org/#/album/0/a1?library_key=0b6f3c1e9d2a4f5b8c7e6d5a4b3c2d1e`.
 **Copy link** on library pages copies the same URL. Somebody who has opened their
 own link in that browser sees the view as themselves. `library_key` is the
-library's key from the state, a hash of its configured name and URL, so the view
-finds the same library even when the configuration lists it at another position.
+library's key from the state: a random value the bot keeps for each library in
+`library_keys.json` in its state directory and replaces when the library's name
+or URL changes. So the view finds the same library even when the configuration
+lists it at another position.
 Without a remembered link the page explains how to get one. A replaced or
 revoked link is forgotten the next time the page loads.
 
@@ -177,7 +179,8 @@ services.nuschl-musicbot = {
 `credentials` are passed with systemd's `LoadCredential`; a relative `*_file` in the
 settings names one of them. The service runs as a dynamic user with its state in
 `/var/lib/nuschl-musicbot` (certificates in `identities/<channel>/`, links in
-`tokens.json`, playback state in `queues.json`, decoded covers in `covers/`). The package includes the Svelte
+`tokens.json`, playback state in `queues.json`, library keys in `library_keys.json`,
+decoded covers in `covers/`). The package includes the Svelte
 frontend. nginx keeps no access log for the page, since the links are secrets.
 
 The NixOS module validates the generated TOML during the build with the selected
@@ -644,8 +647,8 @@ read. A damaged file is deleted and fetched anew, and only well-formed pixels ar
 served. A restart keeps the files and drops expired, unfinished or excess ones. If
 the folder cannot be used the bot logs a warning and runs without the cache. A
 cached cover needs no library call and no worker job. State/SSE includes
-`library_keys`, one short key per
-library derived from its name and URL. With `v` set to that key the answer is
+`library_keys`, the random key of each
+library (see Links). With `v` set to that key the answer is
 `private, max-age=86400`, so the browser keeps it for a day. Without `v` it stays
 `private, no-store`. A `v` for another library (the configuration changed) gets
 404, so a browser never keeps one server's cover under another's URL.
