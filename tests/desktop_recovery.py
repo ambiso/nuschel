@@ -20,6 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from desktop_mumble import DesktopTest, eventually, terminate  # noqa: E402
 from local_murmur import Murmur, free_port  # noqa: E402
 from mumble_client import Client, certificate_pin  # noqa: E402
+import quarantine  # noqa: E402
 
 
 def worker_pids(app, binary):
@@ -99,12 +100,13 @@ class RecoveryTest(DesktopTest):
             self.capture("reconnecting")
             murmur.start()
             self.peer = Client(self.args.binaries, "127.0.0.1", port, pin, "RecoveryPeer", self.root / "peer")
-            back = self.peer.wait(lambda e: e["kind"] == "user" and e["user"]["name"] == "RecoveryDesktop"
-                                  and e["user"]["channel"] == 1, timeout=60)["user"]
-            assert back["self_muted"], "reconnect lost the mute state"
-            self.wait_for("list item", "Disconnected from", partial=True)
-            self.capture("reconnected")
-            print("Server restart: reconnected, rejoined Lobby muted and marked the history gap.", flush=True)
+            with quarantine.step("vm-smoke/desktop-recovery-reconnect"):
+                back = self.peer.wait(lambda e: e["kind"] == "user" and e["user"]["name"] == "RecoveryDesktop"
+                                      and e["user"]["channel"] == 1, timeout=60)["user"]
+                assert back["self_muted"], "reconnect lost the mute state"
+                self.wait_for("list item", "Disconnected from", partial=True)
+                self.capture("reconnected")
+                print("Server restart: reconnected, rejoined Lobby muted and marked the history gap.", flush=True)
 
             # Starting Nuschl again (no link) connects and rejoins the channel it was last in.
             terminate(self.app)
