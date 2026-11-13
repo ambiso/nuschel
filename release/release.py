@@ -236,7 +236,16 @@ def verify_stage(stage, signer):
     backend.verify_signature(stage, signer)
     require((stage / 'dist/SHA256SUMS').read_text() == backend.checksum_text(stage / 'dist'),
             'Signed release checksums changed.')
+    backend.check_notes(stage, ledger)  # Frozen at prepare; publication reuses, never regenerates.
     return ledger
+
+
+def notes_summary(stage):
+    record = backend.load(stage / 'notes/record.json')
+    since = record['previous_tag'] or 'first release (full history)'
+    return ['Release notes (frozen at prepare): ' + str(stage / 'notes/RELEASE-NOTES.md'),
+            'Notes range: ' + since + ' .. ' + record['commit'] + ' (' + str(record['commit_count']) +
+            ' commits), ' + record['generator'] + ', cliff.toml sha256 ' + record['config_sha256']]
 
 
 def execute(publish=False, *, confirm=None):
@@ -270,6 +279,7 @@ def execute(publish=False, *, confirm=None):
                 require(all(ledger[k] == selection[k] for k in ('repository', 'tag', 'commit')),
                         'Remembered release belongs to another source/tag.')
                 details = summary(selection, stage, 'PUBLISH these already-signed bytes; no rebuild or signing.')
+                details.extend(notes_summary(stage))
                 details.append('Push only this exact tag to origin without force, then publish; existing identical tags stay unchanged.')
                 require(confirm(details), 'Cancelled; signed artifacts kept and nothing published.')
                 require(infer(ROOT, publish=True) == selection, 'Source or origin changed during confirmation.')
@@ -308,6 +318,7 @@ def execute(publish=False, *, confirm=None):
         remember(root, record)
         print('Signed artifacts for testing:', stage / 'dist')
         print('Installed Windows/Mac trees:', stage / 'install')
+        print('Release notes to review:', stage / 'notes/RELEASE-NOTES.md')
         print('When ready: just release --publish')
         return stage
 

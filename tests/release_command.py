@@ -72,7 +72,7 @@ class ReleaseCommand(unittest.TestCase):
                                self.product if name == 'update-signer' else self.fixture.products[name]))
         self.builds = []
         self.patch(patch.object(self.local, 'guarded_build', side_effect=self.fake_build))
-        self.remote_calls, self.created = [], False
+        self.remote_calls, self.created, self.notes = [], False, None
         real = self.local.run
 
         def command(args, **kwargs):
@@ -95,9 +95,10 @@ class ReleaseCommand(unittest.TestCase):
                     assets = [{'name': p.name, 'size': p.stat().st_size,
                                'digest': 'sha256:' + self.local.sha(p), 'state': 'uploaded'}
                               for p in (stage / 'dist').iterdir()]
-                    return json.dumps({'id': 42, 'draft': True, 'assets': assets})
+                    return json.dumps({'id': 42, 'draft': True, 'assets': assets, 'body': self.notes})
             if args[1:3] == ['release', 'create']:
                 self.created = True
+                self.notes = Path(args[args.index('--notes-file') + 1]).read_text()
             return ''
         self.patch(patch.object(self.local, 'run', side_effect=command))
 

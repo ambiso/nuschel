@@ -275,11 +275,11 @@ class LocalRelease(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'links'):
             local.tree(root)
 
-    def publish(self, bad_remote=False):
-        calls, real, created = [], local.run, False
+    def publish(self, bad_remote=False, body=None):
+        calls, real, created, notes = [], local.run, False, None
         ledger = local.load(self.stage / 'ledger.json')
         def command(args, **kwargs):
-            nonlocal created
+            nonlocal created, notes
             if str(args[0]) != 'fixture-gh':
                 return real(args, **kwargs)
             args = list(map(str, args)); calls.append(args)
@@ -292,9 +292,11 @@ class LocalRelease(unittest.TestCase):
                 if endpoint.endswith('/releases/42'):
                     assets = [{'name': p.name, 'size': p.stat().st_size, 'digest': 'sha256:' + local.sha(p), 'state': 'uploaded'}
                               for p in (self.stage / 'dist').iterdir()]
-                    return json.dumps({'id': 42, 'draft': True, 'assets': assets[:-1] if bad_remote else assets})
+                    return json.dumps({'id': 42, 'draft': True, 'assets': assets[:-1] if bad_remote else assets,
+                                       'body': notes if body is None else body})
             if args[1:3] == ['release', 'create']:
-                created = True
+                created = True  # GitHub stores the uploaded notes file as the release body.
+                notes = Path(args[args.index('--notes-file') + 1]).read_text()
             return ''
         with patch.object(local, 'run', side_effect=command):
             try:
