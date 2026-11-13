@@ -15,7 +15,7 @@
 let
   inherit (pkgs) lib;
   probe = pkgs.writeShellScriptBin "turn-probe" ''
-    exec ${pkgs.python3}/bin/python3 ${./turn-stream-probe.py} "$@"
+    exec ${pkgs.python3}/bin/python3 ${../tests/turn_stream_probe.py} "$@"
   '';
   site = pkgs.runCommand "nuschl-stream-test-site" { } ''
     mkdir -p "$out"
