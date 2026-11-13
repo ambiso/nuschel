@@ -47,6 +47,7 @@ pkgs.testers.runNixOSTest {
       pkgs.gnome-shell
       pkgs.at-spi2-core
       pkgs.dbus
+      pkgs.glib
       pkgs.bash
       pkgs.pulseaudio
       pkgs.murmur
