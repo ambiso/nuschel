@@ -90,11 +90,22 @@ address and instructions for requesting a personal link. The public comment
 contains no authenticated URL and is republished after reconnecting.
 
 Write `!web` to the bot, in its channel or privately. It answers privately with a
-link like `https://music.example.org/u/5f0c…/`. The link is the only key to the page,
-so do not share it. A person with a Mumble certificate keeps the same link; `!web new`
-replaces it, and the old one stops working. Without a certificate anybody could use
-the same name later, so every `!web` gives a new link. Links are kept in
-`tokens.json` in the state directory.
+link like `https://music.example.org/u/5f0c…/`. That link is your key, so keep it to
+yourself. Opening it stores the key in an HttpOnly cookie (90 days, `SameSite=Lax`,
+`Secure` for an https public address, scoped to the public address's path) and
+moves the browser to the public address, so the key never stays in the address
+bar. A person with a Mumble certificate keeps the same link; `!web new` replaces
+it, and the old one stops working. Without a certificate anybody could use the
+same name later, so every `!web` gives a new link. Links are kept in `tokens.json`
+in the state directory.
+
+The address bar can be copied and pasted anywhere: it contains only the public
+address and the open view, such as `https://music.example.org/#/album/0/a1?library_name=Jazz`.
+**Copy link** on library pages copies the same URL. Somebody who has opened their
+own link in that browser sees the view as themselves; libraries are matched by
+name, so different configurations still find the right one. Without a remembered
+link the page explains how to get one. A replaced or revoked link is forgotten the
+next time the page loads.
 
 A link grants everything the page does: controlling every queue, reading playback
 history, and streaming any queue's audio in a browser (only the server-wide cap of
@@ -174,9 +185,10 @@ prefix/bin/nuschl-musicbot \
 `apps/musicbot/nuschl-musicbot.example.toml` explains every setting. Relative secret
 file names resolve beside the configuration, or in systemd's credentials directory.
 The page speaks HTTP; put a TLS proxy in front of it. Assets and API URLs are
-relative to the authenticated link, including when a proxy serves it under a path.
+relative to the public address, including when a proxy serves it under a path.
 For frontend development, run `npm run dev` in `apps/musicbot/web` through direnv,
-and open its `/u/<token>/` path. Vite proxies API and art requests to a bot on :8474.
+and open its `/u/<token>/` path once. Vite proxies that path and the API, art and
+licence requests to a bot on :8474, so the bot's cookie works for the dev page.
 
 Servers with a self-signed certificate need `certificate_sha256`, the SHA-256 of
 the server certificate. `channel` is the path from the root channel, so a
@@ -518,7 +530,11 @@ long track, seeking can take time; the player shows buffering while preparing it
 
 ## Web API
 
-The Svelte app uses endpoints below `/u/<token>/api/`. `GET state` returns a
+The page uses the endpoints below `api/` next to the public address and
+authenticates with the remembered link's cookie. Scripts can use the same
+endpoints below `/u/<token>/api/` instead; a token in the path never falls back to
+the cookie. POST bodies must be JSON, which cross-site forms cannot send, and the
+`SameSite=Lax` cookie is not sent on cross-site requests. `GET state` returns a
 snapshot; `GET events` sends `event: state` SSE frames immediately, after changes,
 and roughly every two seconds for progress correction. Slow viewers receive the
 latest state when they can read again. Revoked links lose access to the stream.
@@ -542,7 +558,7 @@ open. The stream remains open while the queue waits; disconnecting releases its
 subscription. Revoked links are
 checked during playback and at least once per second while idle or backpressured.
 
-The authenticated `GET /u/<token>/licenses` route serves the installed, bounded
+The authenticated `GET licenses` route serves the installed, bounded
 licence text. Nix packages are gated by the scoped Rust/npm notice inventory;
 the frontend retains actual emitted-owner licence files and its source lock.
 The musicbot scope is separate from the main web client's WASM build.
