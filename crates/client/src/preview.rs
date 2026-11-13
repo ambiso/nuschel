@@ -71,6 +71,9 @@ pub struct PreviewSend {
     pub target: crate::model::TextTarget,
     pub html: String,
     pub expected_peer: Option<u64>,
+    /// The same limits used when projecting this exact HTML. The actor may
+    /// refuse changed rich-text limits without parsing HTML in the session.
+    pub limits: nuschl_core::model::ServerLimits,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -410,7 +413,10 @@ impl Client {
         }
     }
 
-    pub(crate) fn link_preview_wire(&self, body: &str) -> Option<(Context, u64, String)> {
+    pub(crate) fn link_preview_wire(
+        &self,
+        body: &str,
+    ) -> Option<(Context, u64, String, nuschl_core::model::ServerLimits)> {
         let source = self.previews.current.as_ref()?;
         let (context, connection, carry) = self.preview_destination()?;
         if context != source.context
@@ -427,7 +433,7 @@ impl Client {
         let (server, _) = self.selected_indices()?;
         let limits = self.servers[server].limits.clone().unwrap_or_default();
         match projection::project(body, card, &limits) {
-            Projection::Card { html, .. } => Some((context, connection, html)),
+            Projection::Card { html, .. } => Some((context, connection, html, limits)),
             Projection::TextOnly(_) => None,
         }
     }
