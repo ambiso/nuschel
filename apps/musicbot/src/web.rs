@@ -16,7 +16,7 @@ use axum::{
     Json, Router,
     body::{Body, Bytes},
     extract::{Path, Query, State},
-    http::{HeaderName, HeaderValue, StatusCode, header},
+    http::{HeaderMap, HeaderName, HeaderValue, StatusCode, header},
     response::{
         Html, IntoResponse, Redirect, Response,
         sse::{Event, KeepAlive, Sse},
@@ -63,12 +63,15 @@ const PAGE_SIZE: u32 = 48;
 const COALESCE: Duration = Duration::from_millis(50);
 const INVALID_LINK: &str =
     "This link is not valid (any more). Send !web to the music bot in Mumble for a new one.";
+/// Remembers the browser's own link, so token-free shared URLs can open it.
+const LINK_COOKIE: &str = "musicbot_link";
+const LINK_COOKIE_MAX_AGE: u64 = 90 * 24 * 60 * 60;
 
 pub fn router(bot: Arc<Bot>) -> Router {
-    Router::new()
-        .route("/", get(index))
+    let links = Router::new()
+        .route("/", get(root))
         .route("/u/{token}", get(slash))
-        .route("/u/{token}/", get(app))
+        .route("/u/{token}/", get(remember))
         .route("/u/{token}/assets/{file}", get(asset))
         .route("/u/{token}/licenses", get(licenses))
         .route("/u/{token}/art/{library}/{id}", get(art))
@@ -88,7 +91,38 @@ pub fn router(bot: Arc<Bot>) -> Router {
         .route("/u/{token}/api/similar", get(similar))
         .route("/u/{token}/api/path", get(sonic_path))
         .layer(axum::middleware::map_response(headers))
-        .with_state(bot)
+        .with_state(bot);
+    // The outer router's layer runs before the inner routing, so the page's
+    // token-free requests can reach the per-link handlers.
+    Router::new()
+        .fallback_service(links)
+        .layer(axum::middleware::map_request(page_request))
+}
+
+/// The page runs at the token-free root and authenticates with the browser's
+/// remembered link; the address bar never shows the key. Its relative requests
+/// become the per-link routes. Without a usable cookie they name no link and
+/// fail like an unknown one. Explicit `/u/<token>/` paths never use the cookie.
+async fn page_request(mut request: axum::extract::Request) -> axum::extract::Request {
+    let path = request.uri().path();
+    let page_path = ["/api/", "/art/", "/assets/"]
+        .iter()
+        .any(|prefix| path.starts_with(prefix))
+        || path == "/licenses";
+    if !page_path {
+        return request;
+    }
+    let token = remembered_link(request.headers())
+        .flatten()
+        .unwrap_or(Uuid::nil());
+    let rewritten = match request.uri().query() {
+        Some(query) => format!("/u/{token}{path}?{query}"),
+        None => format!("/u/{token}{path}"),
+    };
+    if let Ok(uri) = rewritten.parse() {
+        *request.uri_mut() = uri;
+    }
+    request
 }
 
 /// The link is a secret: no referrer, nothing from elsewhere, and nothing
@@ -189,11 +223,69 @@ async fn ask<T: Send + 'static>(
     .await
 }
 
-async fn index() -> Html<&'static str> {
-    Html(
-        "<!DOCTYPE html><meta charset=\"utf-8\"><title>Music</title>\
-         <p>Send <code>!web</code> to the music bot in Mumble to get your link to this page.",
-    )
+/// The bot's public address: the page for a browser that opened its own link,
+/// otherwise how to get one. Shared views keep their URL fragment.
+async fn root(State(bot): State<Arc<Bot>>, headers: HeaderMap) -> Response {
+    match remembered_link(&headers) {
+        Some(Some(token)) if bot.tokens.is_valid(&token) => app_page(&bot).await,
+        remembered => {
+            let mut response = Html(
+                "<!DOCTYPE html><meta charset=\"utf-8\"><title>Music</title>\
+                 <p>Send <code>!web</code> to the music bot in Mumble to get your link to this page.\
+                 <p>Open it once in this browser; afterwards shared links work here as well.",
+            )
+            .into_response();
+            if remembered.is_some() {
+                response
+                    .headers_mut()
+                    .insert(header::SET_COOKIE, link_cookie(&bot, None));
+            }
+            response
+        }
+    }
+}
+
+/// `None` without the cookie, `Some(None)` for a malformed value.
+fn remembered_link(headers: &HeaderMap) -> Option<Option<Uuid>> {
+    headers
+        .get_all(header::COOKIE)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(';'))
+        .find_map(|pair| {
+            let (name, value) = pair.trim().split_once('=')?;
+            (name == LINK_COOKIE).then(|| Uuid::parse_str(value).ok())
+        })
+}
+
+/// Remembers `token` (or forgets the link) below the configured public path.
+fn link_cookie(bot: &Bot, token: Option<&Uuid>) -> HeaderValue {
+    let public = &bot.config.web.public_url;
+    let path = public
+        .parse::<axum::http::Uri>()
+        .ok()
+        .map(|uri| uri.path().trim_end_matches('/').to_owned() + "/")
+        .filter(|path| {
+            path.bytes()
+                .all(|byte| byte.is_ascii_graphic() && !matches!(byte, b';' | b','))
+        })
+        .unwrap_or_else(|| "/".to_owned());
+    let secure = if public
+        .get(..8)
+        .is_some_and(|scheme| scheme.eq_ignore_ascii_case("https://"))
+    {
+        "; Secure"
+    } else {
+        ""
+    };
+    let (value, max_age) = match token {
+        Some(token) => (token.to_string(), LINK_COOKIE_MAX_AGE),
+        None => (String::new(), 0),
+    };
+    HeaderValue::from_str(&format!(
+        "{LINK_COOKIE}={value}; Path={path}; Max-Age={max_age}; HttpOnly; SameSite=Lax{secure}"
+    ))
+    .expect("cookie built from a UUID and a checked path")
 }
 
 async fn slash(Path(token): Path<String>) -> Result<Redirect, ApiError> {
@@ -214,14 +306,28 @@ fn assets(bot: &Bot) -> Result<&PathBuf, ApiError> {
     })
 }
 
-async fn app(State(bot): State<Arc<Bot>>, Path(token): Path<String>) -> Response {
-    if owner(&bot, &token).is_err() {
+/// The link from `!web`: remember it in this browser, then show the page at the
+/// token-free root so the address bar can be copied safely.
+async fn remember(State(bot): State<Arc<Bot>>, Path(token): Path<String>) -> Response {
+    let Ok(token) = Uuid::parse_str(&token)
+        .map_err(drop)
+        .and_then(|token| bot.tokens.is_valid(&token).then_some(token).ok_or(()))
+    else {
         let page = format!(
             "<!DOCTYPE html><meta charset=\"utf-8\"><title>Unknown link</title><p>{INVALID_LINK}"
         );
         return (StatusCode::NOT_FOUND, Html(page)).into_response();
-    }
-    let directory = match assets(&bot) {
+    };
+    // Relative, like `slash`: the bot may be mounted below a proxy prefix.
+    let mut response = Redirect::to("../../").into_response();
+    response
+        .headers_mut()
+        .insert(header::SET_COOKIE, link_cookie(&bot, Some(&token)));
+    response
+}
+
+async fn app_page(bot: &Bot) -> Response {
+    let directory = match assets(bot) {
         Ok(directory) => directory,
         Err(error) => return error.into_response(),
     };
@@ -1376,6 +1482,167 @@ mod tests {
             response.headers()[header::LOCATION],
             "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/"
         );
+    }
+
+    #[tokio::test]
+    async fn the_page_runs_at_the_root_with_a_remembered_link_never_in_the_address() {
+        let (directory, mut bot, token) = test_bot("http://unused.invalid", 0);
+        std::fs::write(directory.path().join("index.html"), "<!DOCTYPE html><p>app").unwrap();
+        Arc::get_mut(&mut bot).unwrap().web_assets = Some(directory.path().to_owned());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let app = router(bot.clone());
+        let serving = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        // (status, Location, Set-Cookie, body) without following redirects.
+        async fn get(
+            url: String,
+            cookie: Option<String>,
+            body: Option<&'static str>,
+        ) -> (u16, Option<String>, Option<String>, String) {
+            tokio::task::spawn_blocking(move || {
+                let agent: ureq::Agent = ureq::Agent::config_builder()
+                    .http_status_as_error(false)
+                    .max_redirects(0)
+                    .timeout_global(Some(Duration::from_secs(2)))
+                    .build()
+                    .into();
+                let mut response = match body {
+                    Some(body) => {
+                        let mut request =
+                            agent.post(&url).header("Content-Type", "application/json");
+                        if let Some(cookie) = &cookie {
+                            request = request.header("Cookie", cookie);
+                        }
+                        request.send(body).unwrap()
+                    }
+                    None => {
+                        let mut request = agent.get(&url);
+                        if let Some(cookie) = &cookie {
+                            request = request.header("Cookie", cookie);
+                        }
+                        request.call().unwrap()
+                    }
+                };
+                let header = |name: &str| {
+                    response
+                        .headers()
+                        .get(name)
+                        .map(|value| value.to_str().unwrap().to_owned())
+                };
+                let (location, set_cookie) = (header("location"), header("set-cookie"));
+                let status = response.status().as_u16();
+                let body = response.body_mut().read_to_string().unwrap();
+                (status, location, set_cookie, body)
+            })
+            .await
+            .unwrap()
+        }
+        let cookie = format!("other=1; {LINK_COOKIE}={token}; more=2");
+
+        // The `!web` link only remembers itself and leaves for the root.
+        let (status, location, set_cookie, _) = get(format!("{base}/u/{token}/"), None, None).await;
+        assert_eq!((status, location.as_deref()), (303, Some("../../")));
+        let set_cookie = set_cookie.unwrap();
+        assert!(
+            set_cookie.starts_with(&format!("{LINK_COOKIE}={token}; Path=/; ")),
+            "{set_cookie}"
+        );
+        for attribute in ["HttpOnly", "SameSite=Lax", "Max-Age=7776000"] {
+            assert!(set_cookie.contains(attribute), "{set_cookie}");
+        }
+        assert!(!set_cookie.contains("Secure"), "plain HTTP public URL");
+
+        // The root shows the page only to the remembering browser.
+        let (status, _, _, page) = get(format!("{base}/"), Some(cookie.clone()), None).await;
+        assert_eq!((status, page.as_str()), (200, "<!DOCTYPE html><p>app"));
+        let (status, _, set_cookie, page) = get(format!("{base}/"), None, None).await;
+        assert!(status == 200 && page.contains("!web") && set_cookie.is_none());
+
+        // Token-free page requests use the cookie; without it they are unknown.
+        let (status, _, _, state) =
+            get(format!("{base}/api/state"), Some(cookie.clone()), None).await;
+        assert_eq!(status, 200);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&state).unwrap()["you"],
+            "Listener"
+        );
+        for missing in [None, Some(format!("{LINK_COOKIE}=not-a-uuid"))] {
+            let (status, _, _, body) = get(format!("{base}/api/state"), missing, None).await;
+            assert!(
+                status == 404 && body.contains(INVALID_LINK),
+                "{status} {body}"
+            );
+        }
+        // Commands reach the handler (no queues here) only with the cookie.
+        let command = r#"{"command":"pause","player":0}"#;
+        assert_eq!(
+            get(
+                format!("{base}/api/command"),
+                Some(cookie.clone()),
+                Some(command)
+            )
+            .await
+            .0,
+            400
+        );
+        assert_eq!(
+            get(format!("{base}/api/command"), None, Some(command))
+                .await
+                .0,
+            404
+        );
+        // An explicit link in the path never falls back to the cookie.
+        let nil = Uuid::nil();
+        assert_eq!(
+            get(
+                format!("{base}/u/{nil}/api/state"),
+                Some(cookie.clone()),
+                None
+            )
+            .await
+            .0,
+            404
+        );
+
+        // Renewal revokes the remembered link: the root forgets it.
+        let viewer = owner(&bot, &token).ok().unwrap();
+        bot.tokens.issue(viewer, true).unwrap();
+        let (status, _, set_cookie, page) =
+            get(format!("{base}/"), Some(cookie.clone()), None).await;
+        assert!(status == 200 && page.contains("!web"));
+        let set_cookie = set_cookie.unwrap();
+        assert!(
+            set_cookie.starts_with(&format!("{LINK_COOKIE}=; Path=/; Max-Age=0")),
+            "{set_cookie}"
+        );
+        assert_eq!(
+            get(format!("{base}/api/state"), Some(cookie), None).await.0,
+            404
+        );
+        let (status, _, set_cookie, _) = get(format!("{base}/u/{token}/"), None, None).await;
+        assert!(status == 404 && set_cookie.is_none());
+        serving.abort();
+        let _ = serving.await;
+    }
+
+    #[test]
+    fn the_remembered_link_stays_below_the_public_path() {
+        let (_directory, mut bot, _) = test_bot("http://unused.invalid", 0);
+        let token = Uuid::from_u128(7);
+        for (public, path, secure) in [
+            ("https://music.example.org/bot", "/bot/", true),
+            ("HTTPS://music.example.org/bot/", "/bot/", true),
+            ("http://music.example.org", "/", false),
+            ("https://music.example.org/a;b", "/", true),
+        ] {
+            Arc::get_mut(&mut bot).unwrap().config.web.public_url = public.into();
+            let cookie = link_cookie(&bot, Some(&token)).to_str().unwrap().to_owned();
+            assert!(
+                cookie.contains(&format!("; Path={path}; ")),
+                "{public}: {cookie}"
+            );
+            assert_eq!(cookie.ends_with("; Secure"), secure, "{public}: {cookie}");
+        }
     }
     use subsonic::tests::Server;
 

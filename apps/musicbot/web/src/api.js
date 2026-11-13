@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: EUPL-1.2
-// HTTP helpers. Every URL is relative to the page (`/u/<token>/`), so the app
-// also works when the bot sits behind a proxy under a path.
+// HTTP helpers. Every URL is relative to the token-free page root, which the
+// bot authenticates with its cookie, so the app also works when the bot sits
+// behind a proxy under a path.
 
 export class HttpError extends Error {
   constructor(status, message) {
