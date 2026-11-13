@@ -257,6 +257,28 @@ pub struct Media {
     task: tokio::task::JoinHandle<()>,
 }
 impl Media {
+    /// A worker reached in memory, a test double for the supervisor: the
+    /// requests it is sent, and where its events go. Nothing is started.
+    #[doc(hidden)]
+    pub fn in_memory() -> (
+        Self,
+        mpsc::Receiver<LiveMediaRequest>,
+        mpsc::Sender<LiveMediaEvent>,
+    ) {
+        let (commands, requests) = mpsc::channel(256);
+        let (replies, events) = mpsc::channel(32);
+        let task = tokio::spawn(async {});
+        (
+            Self {
+                commands,
+                events,
+                task,
+            },
+            requests,
+            replies,
+        )
+    }
+
     pub fn start() -> Result<Self, Error> {
         let executable = sibling("nuschl-media-worker")?;
         let mut command = nuschl_ipc::host::media_sandbox_command(&executable)

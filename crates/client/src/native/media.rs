@@ -810,61 +810,95 @@ mod tests {
         let _ = task.await;
     }
 
-    /// #199: a microphone that stopped by itself (its worker or device
-    /// failed) stays closed. The connections it went to are held and asked to
-    /// mute, the next worker starts with it closed, and their mute ends the
-    /// hold, so the next opening is an explicit Unmute.
+    /// #199: a worker that fails while the microphone is open (it reports
+    /// its device lost) is replaced by one with the microphone closed, and
+    /// the connection is asked to mute. Its mute ends the hold; the Unmute
+    /// after it opens the microphone again.
     #[tokio::test]
     async fn a_failed_microphone_stays_closed_until_an_explicit_unmute() {
-        let (events, mut reports) = mpsc::channel(8);
-        let (voice, _voice) = mpsc::channel(1);
-        let talking = link(false, false, 40_000, 3);
-        let stream = |generation, link| Stream {
-            generation,
-            number: 1,
-            link,
-            voice: voice.clone(),
-            held: false,
-        };
-        let mut streams = BTreeMap::from([
-            ("talk".to_string(), stream(7, talking)),
-            (
-                "listen".to_string(),
-                stream(9, link(true, false, 40_000, 3)),
-            ),
-        ]);
-        let mut planned = plan(streams.values().map(|stream| &stream.link));
-        hold_microphone(&mut streams, &events, &mut planned).await;
-        assert!(planned.listen && !planned.capture);
-        match reports.try_recv() {
-            Ok(Event::MicrophoneStopped { server, generation }) => {
-                assert_eq!((server.as_str(), generation), ("talk", 7));
+        type Worker = (
+            mpsc::Receiver<LiveMediaRequest>,
+            mpsc::Sender<LiveMediaEvent>,
+        );
+        let (control, input) = mpsc::unbounded_channel();
+        let (_playback, playback) = mpsc::channel(4);
+        let (events, mut reports) = mpsc::channel(64);
+        let (_settings, settings) = watch::channel(ClientSettings::default());
+        let (_keys, keys) = watch::channel(VoiceKeys::default());
+        let (started, mut workers) = mpsc::unbounded_channel::<Worker>();
+        let task = tokio::spawn(run_with_start(
+            (input, playback),
+            events,
+            (settings, keys),
+            move || {
+                let (media, requests, replies) = Media::in_memory();
+                let _ = started.send((requests, replies));
+                Ok(media)
+            },
+        ));
+        let wait = std::time::Duration::from_secs(2);
+        // The next worker, and whether it starts with the microphone closed.
+        let mut next = async || {
+            let (mut requests, replies) = tokio::time::timeout(wait, workers.recv())
+                .await
+                .unwrap()
+                .unwrap();
+            loop {
+                let request = tokio::time::timeout(wait, requests.recv()).await.unwrap();
+                if let Some(LiveMediaRequest::SetState { muted, .. }) = request {
+                    return ((requests, replies), muted);
+                }
             }
-            _ => panic!("expected MicrophoneStopped for the talk server"),
-        }
-        assert!(reports.try_recv().is_err(), "only the talk server is asked");
-        let talk = streams.get_mut("talk").unwrap();
+        };
+        let update = |revision, muted| Control::Update {
+            server: "one".into(),
+            generation: 1,
+            link: Link {
+                revision,
+                ..link(muted, false, 40_000, 1)
+            },
+            cue: None,
+        };
+        let (voice, _voice) = mpsc::channel(4);
+        control
+            .send(Control::Attach {
+                server: "one".into(),
+                generation: 1,
+                link: link(false, false, 40_000, 1),
+                voice,
+            })
+            .unwrap();
+        let (first, muted) = next().await;
+        assert!(!muted);
+        let lost = LiveMediaEvent::Status {
+            ready: false,
+            message: "Microphone unplugged".into(),
+        };
+        first.1.send(lost).await.unwrap();
+        let stopped = tokio::time::timeout(wait, async {
+            loop {
+                if let Some(Event::MicrophoneStopped { server, generation }) = reports.recv().await
+                {
+                    return (server, generation);
+                }
+            }
+        })
+        .await
+        .expect("the connection is asked to mute");
+        assert_eq!(stopped, ("one".to_string(), 1));
+        let (_second, muted) = next().await;
+        assert!(muted, "the replacement opened the microphone");
         // A new routing revision of the still unmuted connection keeps it closed.
-        let unmuted = Link {
-            revision: 1,
-            ..talking
-        };
-        assert!(!capture_route_changed(&talk.link, &talk.served(&unmuted)));
-        talk.update(&unmuted);
-        assert!(!speaking_to(&talk.link));
-        // Its mute ends the hold; the Unmute after it opens the microphone.
-        talk.update(&Link {
-            revision: 2,
-            muted: true,
-            ..talking
-        });
-        let reopened = Link {
-            revision: 3,
-            ..talking
-        };
-        assert!(capture_route_changed(&talk.link, &talk.served(&reopened)));
-        talk.update(&reopened);
-        assert!(speaking_to(&talk.link));
+        control.send(update(1, false)).unwrap();
+        let (reply, inspected) = tokio::sync::oneshot::channel();
+        control.send(Control::Inspect(reply)).unwrap();
+        assert!(!inspected.await.unwrap().1, "an update reopened it");
+        control.send(update(2, true)).unwrap();
+        control.send(update(3, false)).unwrap();
+        let (_third, muted) = next().await;
+        assert!(!muted);
+        task.abort();
+        let _ = task.await;
     }
 
     #[test]
