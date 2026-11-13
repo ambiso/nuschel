@@ -2249,7 +2249,8 @@ mod tests {
         encrypted
     }
     fn deliver_incoming(client: &mut Session, encrypted: &[u8], pattern: &[usize]) {
-        let mut at = 0;
+        assert!(!pattern.is_empty());
+        let mut at = 0_usize;
         for size in pattern.iter().cycle() {
             assert!((1..=tunnel::MAX_STREAM).contains(size));
             let end = at.saturating_add(*size).min(encrypted.len());
