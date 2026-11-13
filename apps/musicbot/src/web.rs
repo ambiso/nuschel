@@ -8,7 +8,8 @@ use crate::{
     Bot,
     player::{BrowserSubscription, Ducking, MAX_DUCK_HOLD},
     subsonic::{
-        self, Album, AlbumList, Artist, Library, LibraryIdentity, Playlist, SonicMatch, Track,
+        self, Album, AlbumList, Artist, Library, LibraryIdentity, Playlist, SongDetails,
+        SonicMatch, Track,
     },
     tokens::Owner,
 };
@@ -88,6 +89,7 @@ pub fn router(bot: Arc<Bot>) -> Router {
         .route("/u/{token}/api/playlists", get(playlists))
         .route("/u/{token}/api/playlist", get(playlist))
         .route("/u/{token}/api/search", get(search))
+        .route("/u/{token}/api/song", get(song))
         .route("/u/{token}/api/similar", get(similar))
         .route("/u/{token}/api/path", get(sonic_path))
         .layer(axum::middleware::map_response(headers))
@@ -1331,6 +1333,39 @@ async fn playlist(
     })
     .await?;
     Ok(Json(PlaylistView { playlist, songs }))
+}
+
+#[derive(Serialize)]
+struct SongView {
+    song: Track,
+    details: SongDetails,
+    appearances: Vec<Track>,
+    /// The song still shows when searching for its albums fails.
+    appearances_error: Option<String>,
+}
+
+/// A song's page: its details and the albums it is on.
+async fn song(
+    State(bot): State<Arc<Bot>>,
+    Path(token): Path<String>,
+    Query(query): Query<ItemQuery>,
+) -> Result<Json<SongView>, ApiError> {
+    owner(&bot, &token)?;
+    let view = ask(&bot, query.library, move |library| {
+        let (song, details) = library.song_details(&query.id)?;
+        let (appearances, appearances_error) = match library.appearances(&song) {
+            Ok(appearances) => (appearances, None),
+            Err(error) => (Vec::new(), Some(error.public_message())),
+        };
+        Ok(SongView {
+            song,
+            details,
+            appearances,
+            appearances_error,
+        })
+    })
+    .await?;
+    Ok(Json(view))
 }
 
 #[derive(Serialize)]
@@ -2619,6 +2654,75 @@ mod tests {
         // Library 0 would answer the same, but nobody has asked it yet.
         assert_eq!(snapshot(&bot, &you).sonic, [false, true]);
         assert_eq!(server.requests().len(), asked);
+    }
+
+    #[tokio::test]
+    async fn a_song_page_lists_the_albums_with_the_same_song() {
+        let _exclusive = API_TESTS.lock().await;
+        for search_fails in [false, true] {
+            let server = Server::new(move |request, socket| {
+                use std::io::Write;
+                let body = if request.starts_with("GET /rest/getSong") {
+                    r#"{"subsonic-response":{"status":"ok","song":{"id":"s1","title":"Tide","artist":"Waves","album":"Sea","albumId":"a1","year":2021,"genre":"Ambient","bitRate":320,"discNumber":2,"playCount":7}}}"#
+                } else if search_fails {
+                    r#"{"subsonic-response":{"status":"failed","error":{"code":0,"message":"http://dj:secret@private.example/rest/search3"}}}"#
+                } else {
+                    // Same song on two other albums (one twice), a cover by
+                    // someone else, a near title and a song without album.
+                    r#"{"subsonic-response":{"status":"ok","searchResult3":{"song":[
+                        {"id":"s1","title":"Tide","artist":"Waves","albumId":"a1"},
+                        {"id":"s2","title":" tide ","artist":"WAVES","album":"Best of","albumId":"a2"},
+                        {"id":"s3","title":"Tide","artist":"Waves","album":"Best of","albumId":"a2"},
+                        {"id":"s4","title":"Tide","artist":"Someone","albumId":"a3"},
+                        {"id":"s5","title":"Tide (Live)","artist":"Waves","albumId":"a4"},
+                        {"id":"s6","title":"Tide","artist":"Waves"},
+                        {"id":"s7","title":"Tide","artist":"Waves","album":"Live","albumId":"a5"}]}}}"#
+                };
+                write!(socket, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).unwrap();
+                socket.write_all(body.as_bytes()).unwrap();
+            });
+            let (_directory, bot, token) = test_bot(&server.url, 1);
+            let view = song(
+                State(bot),
+                Path(token),
+                Query(ItemQuery {
+                    library: 0,
+                    id: "s1".into(),
+                }),
+            )
+            .await
+            .ok()
+            .unwrap()
+            .0;
+            assert_eq!(view.song.title, "Tide");
+            assert_eq!(
+                view.details,
+                SongDetails {
+                    year: Some(2021),
+                    genre: Some("Ambient".into()),
+                    bit_rate: Some(320),
+                    disc_number: Some(2),
+                    play_count: Some(7),
+                }
+            );
+            let albums: Vec<_> = view
+                .appearances
+                .iter()
+                .map(|track| track.album_id.as_deref().unwrap())
+                .collect();
+            if search_fails {
+                assert!(albums.is_empty());
+                let error = view.appearances_error.unwrap();
+                assert!(!error.contains("secret"), "{error}");
+            } else {
+                assert_eq!(albums, ["a1", "a2", "a5"]);
+                assert_eq!(
+                    view.appearances[0].id, "s1",
+                    "the song's own album comes first"
+                );
+                assert!(view.appearances_error.is_none());
+            }
+        }
     }
 
     #[tokio::test]
