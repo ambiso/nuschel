@@ -1,0 +1,3 @@
+// Icon group 1: Explorer shows an executable's first icon group, and GPUI
+// loads group 1 for the window class (title bar, taskbar, Alt+Tab).
+1 ICON "nuschl.ico"
