@@ -119,6 +119,15 @@ and one in plain lines: certificate on first use, joining through Ctrl+K, sendin
 receiving, and on nuschld registering, typing, editing, deleting, search, a direct
 conversation and unread counts.
 
+The web client on touch: `web_touch.py --site <web-site>/app --relay <nuschl-web-relay>
+--murmur <mumble-server> --chromium <chromium> --playwright <playwright-core>/index.mjs
+--font-dir <fonts> --output DIR` runs the packaged client against a loopback Murmur in
+confined headless Chromium at a 390×844 touch viewport, with and without reduced motion:
+the voice toggles' states, the drawer's slide, swipes that open and close it (but not
+from code, the composer or a vertical scroll), no history swipe while the drawer is
+closed and a working back swipe while it is open. Touch is DevTools emulation; Firefox,
+phones and OS edge gestures are not covered.
+
 Deterministic voice reordering, not yet in the VM run: `with_local_murmur.py
 <mumble-server> udp_reorder.py <binaries> --port PORT --opus-library LIB` (or
 `with_local_nuschld.py <binaries> udp_reorder.py ...`). Each session CLI reaches the
