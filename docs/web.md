@@ -184,13 +184,13 @@ rather than mistaking an unreachable server for a refusal.
 
 Verified source: `fa281ca3` (explicit-deny correction) and `3b7236c4` (stronger
 fixture). All seven relay integration tests and nine units pass; both real VM
-cases pass in 39 seconds. The exact driver is
-`/nix/store/xr61xwgnkgm9xvyxxvj9sfg5j5lf5ipk-nixos-test-driver-nuschl-web-dns`.
-Source hashes, commands and retained failures are recorded in
-`~/.cache/nuschl-dns-review/handoff.json`; final actual runtime evidence is
-`run-3/dns-proof.json`, with btrfs state-path proof in
-`run-3/scratch-proof.json`. The earlier absent custom resolver-file trial and the
-actual pre-fix explicit-deny failure remain intact. IPv6 policy/custom-address
+cases pass in 39 seconds with the driver built by the `tests/web_dns_vm.nix`
+command above and run as described there (`tests/web_dns_vm.py` is its test
+script). That script writes `dns-proof.json`, and the shared pre-boot guard
+(`tests/vm_driver_scratch.py`) writes `scratch-proof.json`, into
+`$NUSCHL_VM_SCRATCH_ROOT`. Two earlier runs are kept as failures and not
+counted as passes: a trial in which the custom resolver file was absent, and
+the actual explicit-deny failure before the correction. IPv6 policy/custom-address
 evaluation is covered, but these runtime DNS cases use IPv4; no public deployment
 or unsupported-kernel eBPF guarantee is claimed.
 

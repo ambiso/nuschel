@@ -184,14 +184,15 @@ subsequent formula. It checks original source, CSP/canaries and all ordinary App
 geometry/reflow cases too. No microphone call or host clipboard access occurs.
 
 Source checkpoints are `87fae40c` (private scheduler/content extraction) and
-`585bb33f` (math owner/UI). The exact assembled App is
-`/nix/store/rjaarc0s8srprv7a7vq7zsxmf3z6ln9f-nuschl-web-app-with-notices`.
-Source-bound commands, hashes, screenshots and limitations are in
-`~/.cache/nuschl-math-retirement/handoff.json`; actual proofs are
-`browser/proof.json`, `content-browser/proof.json` and
-`app-cold-final/proof.json` there. The three earlier stricter App failures remain
-in `app-final`, `app-retry-debug` and `app-tags-debug`: the fixture counted a
-button by accessible role while its native details disclosure was closed, so no
-retry click happened. Tag/page diagnostics established that distinction; the
+`585bb33f` (math owner/UI); the App under test was the `nix build .#web-client`
+output of those sources. The results above come from
+`tests/web_math_retirement.browser.mjs` with
+`node --test web/app/src/math-render-lifecycle.test.js` (formula scheduling and
+retirement), `tests/web_content_retirement.browser.mjs` (content rerun after the
+extraction) and `NUSCHL_MATH_RETIREMENT_PROOF=1 tests/web_math.py` (cold App
+lifecycle); each writes its JSON proof and screenshots to its output directory.
+Three earlier, stricter App runs failed because the fixture counted a button by
+accessible role while its native details disclosure was closed, so no retry
+click happened. Tag/page diagnostics established that distinction; the
 final fixture opens Source first and asserts the real worker post. No production
 change was made to satisfy those failed fixture preconditions.
