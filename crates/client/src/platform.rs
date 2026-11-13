@@ -177,6 +177,12 @@ pub trait Platform {
         cache: Option<CacheKey>,
         page: Page,
     ) -> Result<(), String>;
+    /// Retire earlier history pages for this server. This does not cancel
+    /// sends, edits, deletions or cryptographic state. Adapters without a
+    /// native page registry rely on the ticket checked by the client.
+    fn cancel_history(&self, server: &str, epoch: u64) {
+        let _ = (server, epoch);
+    }
     fn change_message(&self, change: ChangeRequest) -> Result<(), String>;
     /// Render untrusted Mumble HTML in the content worker.
     fn render_html(&self, server: String, generation: u64, key: RenderKey, source: String);

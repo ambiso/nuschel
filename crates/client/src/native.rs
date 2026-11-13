@@ -13,7 +13,7 @@ use crate::{
     input::{Input, ServerEvent},
     platform::{CacheKey, ChangeRequest, Platform, RenderKey, Request, request_id},
     server::{AudioHealth, direct_conversation_key},
-    timeline::{Deletion, IncomingMessage, Page},
+    timeline::{Change, Deletion, IncomingMessage, Page},
 };
 use nuschl_core::audio::{
     AudioDevice, DEFAULT_SERVER_BANDWIDTH, DEFAULT_VOICE_BITRATE, EchoSource, Sound, TransmitMode,
@@ -48,6 +48,7 @@ mod media;
 #[derive(Default)]
 struct PendingReplies {
     pages: BTreeMap<u64, PagePending>,
+    page_epochs: BTreeMap<String, (u64, u64)>,
     changes: BTreeMap<u64, ChangePending>,
 }
 type Pending = std::sync::Arc<std::sync::Mutex<PendingReplies>>;
@@ -145,9 +146,20 @@ impl ChangePending {
 }
 
 impl PendingReplies {
-    fn insert(&mut self, request_id: u64, tracked: Tracked) {
+    fn insert(&mut self, request_id: u64, tracked: Tracked) -> bool {
         match tracked {
             Tracked::Page(page) => {
+                let epoch = page.ticket.owner.as_ref().map_or(0, |owner| owner.epoch);
+                let current = self
+                    .page_epochs
+                    .entry(page.server.clone())
+                    .or_insert((page.generation, epoch));
+                if page.generation > current.0 {
+                    *current = (page.generation, epoch);
+                }
+                if *current != (page.generation, epoch) {
+                    return false;
+                }
                 while self.pages.len() >= MAX_PENDING {
                     self.pages.pop_first();
                 }
@@ -160,6 +172,26 @@ impl PendingReplies {
                 self.changes.insert(request_id, change);
             }
         }
+        true
+    }
+
+    fn page_current(&self, server: &str, generation: u64, epoch: u64) -> bool {
+        self.page_epochs.get(server) == Some(&(generation, epoch))
+    }
+
+    fn cancel_pages(&mut self, owner: Owner<'_>, epoch: u64) {
+        let current = self
+            .page_epochs
+            .entry(owner.server.to_owned())
+            .or_insert((owner.generation, epoch));
+        if owner.generation < current.0 || (owner.generation == current.0 && epoch < current.1) {
+            return;
+        }
+        *current = (owner.generation, epoch);
+        self.pages.retain(|_, page| {
+            !page.sent_by(owner)
+                || page.ticket.owner.as_ref().map_or(0, |owner| owner.epoch) == epoch
+        });
     }
 
     /// The request never left (it could not be queued): forget it, if it
@@ -189,6 +221,16 @@ impl PendingReplies {
         };
         if !entry.get().sent_by(from) {
             return PageRoute::Foreign;
+        }
+        let epoch = entry
+            .get()
+            .ticket
+            .owner
+            .as_ref()
+            .map_or(0, |owner| owner.epoch);
+        if self.page_epochs.get(from.server) != Some(&(from.generation, epoch)) {
+            entry.remove();
+            return PageRoute::Missing;
         }
         if page.conversation.as_slice() != entry.get().conversation.as_slice() {
             return PageRoute::Mismatch(entry.remove());
@@ -228,6 +270,19 @@ impl PendingReplies {
             return ErrorRoute::Change(entry.remove());
         }
         ErrorRoute::Missing
+    }
+}
+
+#[derive(Clone)]
+struct PageAdmission {
+    pending: Pending,
+    server: String,
+    generation: u64,
+    epoch: u64,
+}
+impl PageAdmission {
+    fn current(&self) -> bool {
+        pending_replies(&self.pending).page_current(&self.server, self.generation, self.epoch)
     }
 }
 
@@ -767,7 +822,9 @@ fn enqueue_tracked(
         server,
         generation: connection.generation,
     };
-    pending_replies(pending).insert(request_id, record(owner.generation));
+    if !pending_replies(pending).insert(request_id, record(owner.generation)) {
+        return Err("The history request belongs to an ended connection attempt.".into());
+    }
     connection.commands.try_send(command).map_err(|_| {
         pending_replies(pending).forget(request_id, owner);
         "Connection is busy or has ended; reconnect to try again.".to_owned()
@@ -821,6 +878,11 @@ struct ChangeJob {
     cache: Option<CacheKey>,
     change: ChangeKind,
 }
+struct RenderedChange {
+    seq: u64,
+    cache: Option<CacheKey>,
+    change: CacheChange,
+}
 enum ChangeKind {
     Edit { content: String, edited_ms: i64 },
     Delete(Deletion),
@@ -835,6 +897,11 @@ enum StorageCommand {
     /// replaced where already kept.
     StoreServer {
         records: Vec<nuschl_core::ServerRecord>,
+        admission: PageAdmission,
+    },
+    PageChanges {
+        changes: Vec<RenderedChange>,
+        admission: PageAdmission,
     },
     /// Our message (by its key) was stored by the server as `seq`.
     Acked { key: [u8; 16], seq: u64 },
@@ -861,6 +928,7 @@ enum StorageCommand {
         after: Option<nuschl_core::SearchCursor>,
     },
 }
+#[derive(Clone)]
 enum CacheChange {
     Edit {
         source: String,
@@ -982,6 +1050,20 @@ impl Driver {
     }
     /// A page of a Nuschl server's history: before a seq (or the latest),
     /// after one, or around one (a search result); ids are seqs.
+    pub fn cancel_history(&self, server: &str, epoch: u64) {
+        // Keep the established connections -> pending lock order. No send,
+        // edit/deletion or crypto state is cleared by page cancellation.
+        if let Some(connection) = self.connections().get(server) {
+            pending_replies(&self.pending).cancel_pages(
+                Owner {
+                    server,
+                    generation: connection.generation,
+                },
+                epoch,
+            );
+        }
+    }
+
     pub fn server_history(
         &self,
         server: String,
@@ -2130,13 +2212,101 @@ async fn reply_page(
                 .await;
         }
         PageRoute::Render(asked) => {
+            if asked.ticket.catchup && !valid_catchup_page(&page, asked.page) {
+                let _ = events
+                    .send(Event::HistoryFailed {
+                        server: asked.server,
+                        ticket: asked.ticket,
+                        reason: "History recovery returned an invalid or non-advancing page."
+                            .into(),
+                    })
+                    .await;
+                return;
+            }
+            let admission = PageAdmission {
+                pending: pending.clone(),
+                server: asked.server.clone(),
+                generation: asked.generation,
+                epoch: asked.ticket.owner.as_ref().map_or(0, |owner| owner.epoch),
+            };
             let (events, storage) = (events.clone(), storage.clone());
             tokio::spawn(async move {
+                if !admission.current() {
+                    return;
+                }
+                let head = i64::try_from(page.head).unwrap_or(i64::MAX);
+                let scanned_through = page
+                    .messages
+                    .last()
+                    .and_then(|message| i64::try_from(message.seq).ok())
+                    .unwrap_or_else(|| match asked.page {
+                        Page::After(after) => after,
+                        _ => 0,
+                    });
+                let changes = if asked.ticket.catchup {
+                    render_page_changes(&page, &asked, &unauthenticated).await
+                } else {
+                    Vec::new()
+                };
                 let (messages, (next_before, next_after), records) =
                     render_server_page(page, asked.cache.as_ref(), &unauthenticated).await;
-                // Kept for offline reading and search.
+                if !admission.current() {
+                    return;
+                }
+                if asked.ticket.catchup {
+                    let projected = changes
+                        .iter()
+                        .map(|change| {
+                            let value = match &change.change {
+                                CacheChange::Edit {
+                                    source,
+                                    document,
+                                    edited_ms,
+                                } => Change::Edited {
+                                    source: source.clone(),
+                                    document: document.clone(),
+                                    edited_ms: *edited_ms,
+                                },
+                                CacheChange::Delete(deletion) => Change::Deleted(*deletion),
+                            };
+                            (change.seq, value)
+                        })
+                        .collect();
+                    if !changes.is_empty() {
+                        let _ = storage
+                            .send(StorageCommand::PageChanges {
+                                changes,
+                                admission: admission.clone(),
+                            })
+                            .await;
+                    }
+                    if !admission.current() {
+                        return;
+                    }
+                    // On this sender the changes precede the page; the page
+                    // may start the next ticket only after they are applied.
+                    let _ = events
+                        .send(Event::Input(Input::HistoryChanges {
+                            server: asked.server.clone(),
+                            ticket: asked.ticket.clone(),
+                            scanned_through,
+                            head,
+                            changes: projected,
+                        }))
+                        .await;
+                }
+                // Cancellation cannot undo a storage operation already
+                // admitted, but a queued retired page must not begin one.
                 if !records.is_empty() {
-                    let _ = storage.send(StorageCommand::StoreServer { records }).await;
+                    let _ = storage
+                        .send(StorageCommand::StoreServer {
+                            records,
+                            admission: admission.clone(),
+                        })
+                        .await;
+                }
+                if !admission.current() {
+                    return;
                 }
                 let (server, ticket) = (asked.server, asked.ticket);
                 let event = match asked.page {
@@ -2160,6 +2330,107 @@ async fn reply_page(
             });
         }
     }
+}
+
+fn valid_catchup_page(page: &v1::HistoryPage, requested: Page) -> bool {
+    let Page::After(after) = requested else {
+        return false;
+    };
+    page.messages.len() <= 50
+        && i64::try_from(page.head).is_ok_and(|head| head >= after)
+        && page
+            .messages
+            .last()
+            .is_none_or(|message| message.seq <= page.head)
+        && page
+            .messages
+            .iter()
+            .try_fold(0usize, |bytes, message| {
+                let author = message.author.as_ref().map_or(0, |author| {
+                    author.name.len().saturating_add(author.account.len())
+                });
+                bytes
+                    .checked_add(message.content.len())?
+                    .checked_add(message.mls.len())?
+                    .checked_add(message.archive.len())?
+                    .checked_add(author)
+            })
+            .is_some_and(|bytes| bytes <= nuschl_protocol::nuschl::MAX_PAGE_BYTES)
+        && page
+            .messages
+            .iter()
+            .all(|message| i64::try_from(message.seq).is_ok_and(|seq| seq > after))
+        && page
+            .messages
+            .windows(2)
+            .all(|pair| pair[0].seq < pair[1].seq)
+        && (!page.more_after || !page.messages.is_empty())
+}
+
+/// Project the mutation rows of one bounded page using the same ChangeJob
+/// and inert preparation as live changes. Their event seq moves the raw
+/// page cursor; their target seq names the message being changed.
+async fn render_page_changes(
+    page: &v1::HistoryPage,
+    asked: &PagePending,
+    unauthenticated: &[u64],
+) -> Vec<RenderedChange> {
+    let jobs: Vec<_> = page
+        .messages
+        .iter()
+        .filter_map(|message| {
+            if unauthenticated.contains(&message.seq) {
+                return None;
+            }
+            let change = if message.kind == v1::message::Kind::Edit as i32 {
+                Some(ChangeKind::Edit {
+                    content: message.content.clone(),
+                    edited_ms: message.edited_ms,
+                })
+            } else if message.kind == v1::message::Kind::Delete as i32 {
+                Some(ChangeKind::Delete(Deletion {
+                    at_ms: message.deleted_ms,
+                    moderator: message.delete_reason == 1,
+                }))
+            } else {
+                None
+            }?;
+            Some(ChangeJob {
+                server: asked.server.clone(),
+                conversation: asked.conversation,
+                seq: message.target,
+                cache: asked.cache.clone(),
+                change,
+            })
+        })
+        .collect();
+    let texts = jobs
+        .iter()
+        .filter_map(|job| match &job.change {
+            ChangeKind::Edit { content, .. } => Some((content.clone(), false)),
+            ChangeKind::Delete(_) => None,
+        })
+        .collect();
+    let mut prepared = prepare_many(texts).await.into_iter();
+    jobs.into_iter()
+        .map(|job| RenderedChange {
+            seq: job.seq,
+            cache: job.cache,
+            change: match job.change {
+                ChangeKind::Edit { content, edited_ms } => {
+                    let (source, document) = prepared
+                        .next()
+                        .unwrap_or_else(|| (content.clone(), plain(&content)));
+                    CacheChange::Edit {
+                        source,
+                        document,
+                        edited_ms,
+                    }
+                }
+                ChangeKind::Delete(deletion) => CacheChange::Delete(deletion),
+            },
+        })
+        .collect()
 }
 
 /// An acknowledgement arrived on connection `from`: our edit or deletion,
@@ -2449,6 +2720,45 @@ impl RecentChanges {
         }
     }
 }
+async fn keep_change(
+    storage: &mut Option<Storage>,
+    recent: &mut RecentChanges,
+    cache: Option<CacheKey>,
+    seq: u64,
+    change: &CacheChange,
+) {
+    if let Some(cache) = cache {
+        // Remembered for a page already on its way with the
+        // older text, which is kept after this.
+        recent.note(&cache, seq as i64, change);
+        if let Some(worker) = storage {
+            let result = match change {
+                CacheChange::Edit {
+                    source, edited_ms, ..
+                } => {
+                    worker
+                        .edit(
+                            cache.identity,
+                            cache.channel,
+                            seq as i64,
+                            source.clone(),
+                            *edited_ms,
+                        )
+                        .await
+                }
+                CacheChange::Delete(deletion) => {
+                    worker
+                        .delete(cache.identity, cache.channel, seq as i64, deletion.at_ms)
+                        .await
+                }
+            };
+            if result.is_err() {
+                storage.take();
+            }
+        }
+    }
+}
+
 async fn storage_loop(
     directory: PathBuf,
     mut jobs: mpsc::Receiver<StorageCommand>,
@@ -2465,6 +2775,10 @@ async fn storage_loop(
     let (pages, rendering) = mpsc::channel(16);
     tokio::spawn(history_loop(rendering, events.clone()));
     while let Some(job) = jobs.recv().await {
+        if matches!(&job, StorageCommand::StoreServer { admission, .. } | StorageCommand::PageChanges { admission, .. } if !admission.current())
+        {
+            continue;
+        }
         if storage.is_none() {
             match Storage::start(&directory) {
                 Ok(worker) => storage = Some(worker),
@@ -2601,7 +2915,13 @@ async fn storage_loop(
                     })
                     .await;
             }
-            StorageCommand::StoreServer { mut records } => {
+            StorageCommand::StoreServer {
+                mut records,
+                admission,
+            } => {
+                if !admission.current() {
+                    continue;
+                }
                 recent.patch(&mut records);
                 let result = match &mut storage {
                     Some(worker) => worker.store_server(records).await.map(|_| ()),
@@ -2610,6 +2930,21 @@ async fn storage_loop(
                 if let Err(error) = result {
                     storage.take();
                     let _ = events.send(Event::HistoryError(error.to_string())).await;
+                }
+            }
+            StorageCommand::PageChanges { changes, admission } => {
+                for change in changes {
+                    if !admission.current() {
+                        break;
+                    }
+                    keep_change(
+                        &mut storage,
+                        &mut recent,
+                        change.cache,
+                        change.seq,
+                        &change.change,
+                    )
+                    .await;
                 }
             }
             StorageCommand::Acked { key, seq } => match unacked_rows.remove(&key) {
@@ -2635,41 +2970,7 @@ async fn storage_loop(
                 cache,
                 change,
             } => {
-                if let Some(cache) = cache {
-                    // Remembered for a page already on its way with the
-                    // older text, which is kept after this.
-                    recent.note(&cache, seq as i64, &change);
-                    if let Some(worker) = &mut storage {
-                        let result = match &change {
-                            CacheChange::Edit {
-                                source, edited_ms, ..
-                            } => {
-                                worker
-                                    .edit(
-                                        cache.identity,
-                                        cache.channel,
-                                        seq as i64,
-                                        source.clone(),
-                                        *edited_ms,
-                                    )
-                                    .await
-                            }
-                            CacheChange::Delete(deletion) => {
-                                worker
-                                    .delete(
-                                        cache.identity,
-                                        cache.channel,
-                                        seq as i64,
-                                        deletion.at_ms,
-                                    )
-                                    .await
-                            }
-                        };
-                        if result.is_err() {
-                            storage.take();
-                        }
-                    }
-                }
+                keep_change(&mut storage, &mut recent, cache, seq, &change).await;
                 let event = match change {
                     CacheChange::Edit {
                         source,
@@ -2922,6 +3223,10 @@ impl Platform for Driver {
     ) -> Result<(), String> {
         Driver::server_history(self, server, conversation, (ticket, cache), page)
     }
+    fn cancel_history(&self, server: &str, epoch: u64) {
+        Driver::cancel_history(self, server, epoch);
+    }
+
     fn change_message(&self, change: ChangeRequest) -> Result<(), String> {
         Driver::change_message(self, change)
     }
@@ -4278,5 +4583,96 @@ mod reply_owner_tests {
             .page(&two, from("a", 7), page(22, &ASKED), false)
             .await;
         assert!(matches!(sinks_two.event().await, Event::History { .. }));
+    }
+    #[test]
+    fn page_epoch_revokes_decryption_and_already_removed_render_admissions_only() {
+        let pending: Pending = Default::default();
+        let owner = Owner {
+            server: "a",
+            generation: 7,
+        };
+        {
+            let mut replies = pending_replies(&pending);
+            assert!(replies.insert(1, page_asked("a", 7)));
+            assert!(replies.insert(2, page_asked("a", 7)));
+            assert!(replies.insert(3, change_asked("a", 7, Some("unchanged edit"))));
+            assert!(replies.insert(4, page_asked("b", 7)));
+            assert!(matches!(
+                replies.page(owner, &page(1, &ASKED), true),
+                PageRoute::Decrypt
+            ));
+            assert!(matches!(
+                replies.page(owner, &page(2, &ASKED), false),
+                PageRoute::Render(_)
+            ));
+        }
+        let admission = PageAdmission {
+            pending: pending.clone(),
+            server: "a".into(),
+            generation: 7,
+            epoch: 0,
+        };
+        assert!(
+            admission.current(),
+            "a rendering no longer has a map record"
+        );
+        pending_replies(&pending).cancel_pages(owner, 1);
+        assert!(
+            !admission.current(),
+            "its later cache/event admission is revoked too"
+        );
+        let mut replies = pending_replies(&pending);
+        assert!(matches!(
+            replies.page(owner, &page(1, &ASKED), false),
+            PageRoute::Missing
+        ));
+        assert!(replies.changes.contains_key(&3));
+        assert!(
+            replies.pages.contains_key(&4),
+            "another server is untouched"
+        );
+        assert!(
+            !replies.insert(5, page_asked("a", 7)),
+            "an old-epoch page cannot be re-enqueued"
+        );
+    }
+
+    #[test]
+    fn recovery_raw_cursor_validation_includes_voids_and_rejects_bad_heads_and_loops() {
+        let mut raw = page(1, &ASKED);
+        raw.head = 5;
+        raw.messages = vec![
+            v1::Message {
+                seq: 4,
+                kind: v1::message::Kind::Void as i32,
+                ..Default::default()
+            },
+            v1::Message {
+                seq: 5,
+                kind: v1::message::Kind::Delete as i32,
+                target: 1,
+                ..Default::default()
+            },
+        ];
+        assert!(valid_catchup_page(&raw, Page::After(3)));
+        raw.head = 4;
+        assert!(!valid_catchup_page(&raw, Page::After(3)));
+        raw.head = 5;
+        raw.messages.swap(0, 1);
+        assert!(!valid_catchup_page(&raw, Page::After(3)));
+        raw.messages.clear();
+        raw.more_after = true;
+        assert!(!valid_catchup_page(&raw, Page::After(3)));
+        raw.more_after = false;
+        assert!(
+            valid_catchup_page(&raw, Page::After(3)),
+            "client distinguishes empty-at-head from unavailable-before-head"
+        );
+        raw.messages = vec![v1::Message {
+            seq: 4,
+            content: "x".repeat(nuschl_protocol::nuschl::MAX_PAGE_BYTES + 1),
+            ..Default::default()
+        }];
+        assert!(!valid_catchup_page(&raw, Page::After(3)));
     }
 }

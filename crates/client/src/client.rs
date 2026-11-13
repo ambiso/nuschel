@@ -13,8 +13,9 @@ use crate::{
     input::{Input, ServerEvent},
     model::{Presence, RejectKind, TextTarget, User},
     names::{self, Preferences},
+    navigation::PageOwner,
     platform::{CacheKey, ChangeRequest, Platform, RenderKey, Request, request_id},
-    server::{CertificatePrompt, ServerState, Status},
+    server::{CertificatePrompt, HistoryProgress, ServerState, Status},
     timeline::{Change, MAX_TIMELINE, Page},
     voice::{self, Seat, Unmute, Voice},
 };
@@ -438,6 +439,62 @@ impl Client {
                 expired_any = true;
             }
         }
+        for server in &mut self.servers {
+            let expired = server.history_progress.values().any(|progress| {
+                progress.request.is_some()
+                    && progress
+                        .started_ms
+                        .is_some_and(|started| now_ms.saturating_sub(started) >= 30_000)
+            });
+            if expired {
+                server.page_epoch = server.page_epoch.wrapping_add(1);
+                self.platform.cancel_history(&server.id, server.page_epoch);
+                let mut stalled = false;
+                for progress in server.history_progress.values_mut() {
+                    if progress.ready_epoch.is_some() {
+                        progress.ready_epoch = Some(server.page_epoch);
+                    }
+                    if progress.request.take().is_some() {
+                        progress.response_end = None;
+                        if progress.through > progress.batch_start {
+                            progress.resume_at_ms = Some(now_ms.saturating_add(250));
+                        } else {
+                            progress.paused = true;
+                            stalled = true;
+                        }
+                    }
+                }
+                for channel in &mut server.channels {
+                    channel.timeline.loading = false;
+                }
+                if stalled {
+                    self.updates.push(Update::HistoryFailed("History recovery timed out without progress; reopen the conversation to retry.".into()));
+                }
+                expired_any = true;
+            }
+        }
+        if let Some((index, position)) = self.selected_indices() {
+            let server = &mut self.servers[index];
+            let channel = server.channels[position].id;
+            let due = server
+                .history_progress
+                .get(&channel)
+                .is_some_and(|progress| progress.resume_at_ms.is_some_and(|at| now_ms >= at));
+            if due {
+                let progress = server
+                    .history_progress
+                    .get_mut(&channel)
+                    .expect("checked above");
+                progress.resume_at_ms = None;
+                progress.pages = 0;
+                progress.started_ms = None;
+                progress.batch_start = progress.through;
+                if let Err(error) = self.resume_history(index, position, false) {
+                    self.updates.push(Update::HistoryFailed(error));
+                }
+                expired_any = true;
+            }
+        }
         expired_any
     }
 
@@ -578,6 +635,7 @@ impl Client {
     /// identity. Forget the view, never the persisted history in its old scope.
     fn forget_server_history(&mut self, index: usize) {
         let server = &mut self.servers[index];
+        server.history_progress.clear();
         for channel in &mut server.channels {
             channel.timeline = Default::default();
             channel.activity.clear();
@@ -828,16 +886,26 @@ impl Client {
             server: server.id.clone(),
             channel,
         };
+        self.pause_history();
         self.navigation
             .browse(conversation, HistorySource::LocalObserved);
         self.focus.following = true;
-        let entry = self.servers[index]
+        let position = self.servers[index]
             .channels
-            .iter_mut()
-            .find(|entry| entry.id == channel)
+            .iter()
+            .position(|entry| entry.id == channel)
             .expect("checked above");
         let mut result = Ok(true);
-        if entry.timeline.loaded {
+        if self.servers[index]
+            .history_progress
+            .get(&channel)
+            .is_some_and(|progress| progress.needed)
+        {
+            if let Err(error) = self.resume_history(index, position, true) {
+                result = Err(error);
+            }
+        } else if self.servers[index].channels[position].timeline.loaded {
+            let entry = &mut self.servers[index].channels[position];
             entry.timeline.trim_oldest(MAX_TIMELINE);
             entry.new_messages = 0;
         } else if let Err(error) = self.load_history(None) {
@@ -1057,6 +1125,28 @@ impl Client {
     /// Load `page` of conversation `position` of server `index`; answers
     /// for an earlier request of it are dropped.
     pub fn load_page(&mut self, index: usize, position: usize, page: Page) -> Result<(), String> {
+        let channel = self.servers[index].channels[position].id;
+        if page == Page::Before(None)
+            && self.servers[index]
+                .history_progress
+                .get(&channel)
+                .is_some_and(|progress| progress.needed)
+        {
+            return self.resume_history(index, position, true);
+        }
+        // Explicit navigation may interrupt catch-up; its durable cursor
+        // stays where the last accepted page left it.
+        self.pause_history();
+        self.request_page(index, position, page, false)
+    }
+
+    fn request_page(
+        &mut self,
+        index: usize,
+        position: usize,
+        page: Page,
+        catchup: bool,
+    ) -> Result<(), String> {
         let server = &mut self.servers[index];
         let Some(identity) = server.history_identity() else {
             return Ok(());
@@ -1069,13 +1159,24 @@ impl Client {
         if page == Page::Before(None) {
             channel.new_messages = 0;
         }
-        let ticket = self.navigation.browse(
+        let mut ticket = self.navigation.browse(
             Conversation {
                 server: server.id.clone(),
                 channel: channel.id,
             },
             source,
         );
+        ticket.catchup = catchup;
+        ticket.owner = Some(PageOwner {
+            generation: server.generation,
+            epoch: server.page_epoch,
+            archive: channel.conversation.filter(|_| archived),
+            identity: identity.clone(),
+        });
+        if catchup && let Some(progress) = server.history_progress.get_mut(&channel.id) {
+            progress.response_end = None;
+            progress.request = Some(ticket.clone());
+        }
         let requested = match channel.conversation.filter(|_| archived) {
             // A Nuschl server's history: everything this member may read.
             Some(conversation) => {
@@ -1110,8 +1211,112 @@ impl Client {
         };
         if requested.is_err() {
             channel.timeline.loading = false;
+            if catchup && let Some(progress) = server.history_progress.get_mut(&channel.id) {
+                progress.request = None;
+                progress.paused = true;
+            }
         }
         requested
+    }
+
+    fn pause_history(&mut self) {
+        let Some((index, position)) = self.selected_indices() else {
+            return;
+        };
+        let server = &mut self.servers[index];
+        let channel = &mut server.channels[position];
+        if let Some(progress) = server.history_progress.get_mut(&channel.id)
+            && progress.request.take().is_some()
+        {
+            channel.timeline.loading = false;
+        }
+    }
+
+    fn resume_history(
+        &mut self,
+        index: usize,
+        position: usize,
+        explicit: bool,
+    ) -> Result<(), String> {
+        const MAX_RECOVERY_PAGES: u8 = 16; // 800 raw rows, at most 4 MiB of page bodies.
+        const RECOVERY_MS: u64 = 30_000;
+        let server = &mut self.servers[index];
+        let channel = &mut server.channels[position];
+        if explicit {
+            // An explicit reopening chooses the newest stream, rather than
+            // continuing a detached search window. Its messages stay intact.
+            channel.timeline.next_after = None;
+            channel.timeline.missed_live = false;
+        }
+        let selected = self
+            .navigation
+            .selection()
+            .is_some_and(|selected| selected.server == server.id && selected.channel == channel.id);
+        let Some(progress) = server.history_progress.get_mut(&channel.id) else {
+            return Ok(());
+        };
+        if explicit {
+            progress.pages = 0;
+            progress.started_ms = None;
+            progress.batch_start = progress.through;
+            progress.resume_at_ms = None;
+            progress.paused = false;
+        }
+        if !selected
+            || !progress.needed
+            || progress.paused
+            || progress.request.is_some()
+            || progress.resume_at_ms.is_some()
+            || server.status != Status::Connected
+            || server.history_source != HistorySource::ServerArchive
+            || channel.conversation != Some(progress.conversation)
+            || progress.ready_epoch != Some(server.page_epoch)
+            || channel.timeline.next_after.is_some()
+        {
+            return Ok(());
+        }
+        let started = *progress.started_ms.get_or_insert(self.now_ms);
+        if progress.pages >= MAX_RECOVERY_PAGES
+            || self.now_ms.saturating_sub(started) >= RECOVERY_MS
+        {
+            progress.resume_at_ms = Some(self.now_ms.saturating_add(250));
+            return Ok(());
+        }
+        progress.pages += 1;
+        let after = progress.through;
+        self.request_page(index, position, Page::After(after), true)
+    }
+
+    fn remember_latest(
+        &mut self,
+        index: usize,
+        position: usize,
+        ticket: &crate::HistoryTicket,
+        messages: &[crate::timeline::IncomingMessage],
+    ) {
+        let Some(conversation) = ticket.owner.as_ref().and_then(|owner| owner.archive) else {
+            return;
+        };
+        // A completed latest snapshot is contiguous up to this conservative
+        // visible endpoint. Live rows and ACKs must never move the scan cursor.
+        // Trailing mutation/void rows may be replayed next time, safely.
+        let through = messages
+            .iter()
+            .filter_map(|message| message.seq)
+            .filter_map(|seq| i64::try_from(seq).ok())
+            .max()
+            .unwrap_or(0);
+        let server = &mut self.servers[index];
+        // Removed/recreated views cannot accumulate old recovery records.
+        server.history_progress.retain(|id, progress| {
+            server.channels.iter().any(|channel| {
+                channel.id == *id && channel.conversation == Some(progress.conversation)
+            })
+        });
+        server.history_progress.insert(
+            server.channels[position].id,
+            HistoryProgress::new(conversation, through, server.page_epoch),
+        );
     }
 
     /// Whether our previous message is still on its way.
@@ -1265,6 +1470,13 @@ impl Client {
         let archive = self.servers[server].history_source == HistorySource::ServerArchive;
         let server = &mut self.servers[server];
         let channel = &mut server.channels[channel];
+        if server
+            .history_progress
+            .get(&channel.id)
+            .is_some_and(|progress| progress.needed)
+        {
+            return;
+        }
         channel.unread = 0;
         channel.unread_mention = false;
         let newest = channel
@@ -1443,6 +1655,98 @@ impl Client {
         }
     }
 
+    fn catchup_page(
+        &mut self,
+        index: usize,
+        position: usize,
+        ticket: crate::HistoryTicket,
+        page: Page,
+        messages: Vec<crate::timeline::IncomingMessage>,
+        next_after: Option<i64>,
+    ) {
+        let server = &mut self.servers[index];
+        let channel = &mut server.channels[position];
+        let Some(progress) = server.history_progress.get_mut(&channel.id) else {
+            return;
+        };
+        if progress.request.as_ref() != Some(&ticket) || page != Page::After(progress.through) {
+            return;
+        }
+        progress.request = None;
+        channel.timeline.loading = false;
+        let Some(end) = progress.response_end.take() else {
+            progress.paused = true;
+            self.updates.push(Update::HistoryFailed(
+                "History recovery omitted its scan cursor.".into(),
+            ));
+            return;
+        };
+        let Some(target) = progress.target_head else {
+            progress.paused = true;
+            return;
+        };
+        if end < progress.through
+            || next_after.is_some_and(|next| next != end || next <= progress.through)
+            || (end < target && end == progress.through)
+            || messages.len() > 50
+            || messages.iter().any(|message| {
+                message
+                    .seq
+                    .is_none_or(|seq| seq <= progress.through as u64 || seq > end as u64)
+            })
+        {
+            progress.paused = true;
+            self.updates.push(Update::HistoryFailed(
+                "History recovery returned a non-advancing page.".into(),
+            ));
+            return;
+        }
+        channel.timeline.merge_catchup(messages);
+        progress.through = end;
+        progress.needed = end < target;
+        self.updates.push(Update::PageShown { page, used: true });
+        if progress.needed
+            && let Err(error) = self.resume_history(index, position, false)
+        {
+            self.updates.push(Update::HistoryFailed(error));
+        }
+    }
+
+    /// A page is valid through its last asynchronous stage, including a
+    /// worker rendering that had already left the native reply registry.
+    fn history_target(
+        &self,
+        server: &str,
+        ticket: &crate::HistoryTicket,
+    ) -> Option<(usize, usize)> {
+        if server != ticket.conversation.server || !self.navigation.accepts(ticket) {
+            return None;
+        }
+        if ticket.source == HistorySource::ServerArchive && ticket.owner.is_none() {
+            return None;
+        }
+        let index = self.server_index(server)?;
+        let state = &self.servers[index];
+        let position = state
+            .channels
+            .iter()
+            .position(|channel| channel.id == ticket.conversation.channel)?;
+        if let Some(owner) = &ticket.owner {
+            if owner.generation != state.generation
+                || owner.epoch != state.page_epoch
+                || state.history_identity().as_ref() != Some(&owner.identity)
+                || owner.archive.is_some_and(|id| {
+                    ticket.source != HistorySource::ServerArchive
+                        || state.history_source != HistorySource::ServerArchive
+                        || state.channels[position].conversation != Some(id)
+                })
+            {
+                return None;
+            }
+        }
+        Some((index, position))
+    }
+
     // What the platform reports.
 
     /// Apply what the platform reported; call [`Client::settle`] after a batch.
@@ -1495,22 +1799,14 @@ impl Client {
                 next_before,
                 next_after,
             } => {
-                if !self.navigation.accepts(&ticket) {
-                    return;
-                }
-                let Some(channel) = self
-                    .servers
-                    .iter_mut()
-                    .find(|entry| entry.id == server)
-                    .and_then(|server| {
-                        server
-                            .channels
-                            .iter_mut()
-                            .find(|entry| entry.id == ticket.conversation.channel)
-                    })
-                else {
+                let Some((index, position)) = self.history_target(&server, &ticket) else {
                     return;
                 };
+                if ticket.catchup {
+                    self.catchup_page(index, position, ticket, page, messages, next_after);
+                    return;
+                }
+                let channel = &mut self.servers[index].channels[position];
                 channel.timeline.loading = false;
                 let used = channel
                     .timeline
@@ -1520,6 +1816,46 @@ impl Client {
                     self.focus.following = false;
                 }
                 self.updates.push(Update::PageShown { page, used });
+            }
+            Input::HistoryChanges {
+                server,
+                ticket,
+                scanned_through,
+                head,
+                changes,
+            } => {
+                let Some((index, _)) = self.history_target(&server, &ticket) else {
+                    return;
+                };
+                let Some(conversation) = ticket.owner.as_ref().and_then(|owner| owner.archive)
+                else {
+                    return;
+                };
+                if !ticket.catchup
+                    || changes.len() > 50
+                    || self.servers[index]
+                        .history_progress
+                        .get(&ticket.conversation.channel)
+                        .is_none_or(|progress| progress.request.as_ref() != Some(&ticket))
+                {
+                    return;
+                }
+                let progress = self.servers[index]
+                    .history_progress
+                    .get_mut(&ticket.conversation.channel)
+                    .expect("checked above");
+                if scanned_through < progress.through
+                    || head < scanned_through
+                    || head < progress.through
+                    || progress.target_head.is_some_and(|target| head < target)
+                {
+                    return;
+                }
+                progress.target_head.get_or_insert(head);
+                progress.response_end = Some(scanned_through);
+                for (seq, change) in changes {
+                    self.apply_change(&server, conversation, seq, change);
+                }
             }
             Input::HistoryRecovered => self.updates.push(Update::HistoryRecovered),
             Input::Edited {
@@ -1562,13 +1898,17 @@ impl Client {
                 ticket,
                 reason,
             } => {
-                if let Some(server) = self.servers.iter_mut().find(|entry| entry.id == server)
-                    && let Some(channel) = server
-                        .channels
-                        .iter_mut()
-                        .find(|entry| entry.id == ticket.conversation.channel)
+                let Some((index, position)) = self.history_target(&server, &ticket) else {
+                    return;
+                };
+                self.servers[index].channels[position].timeline.loading = false;
+                if ticket.catchup
+                    && let Some(progress) = self.servers[index]
+                        .history_progress
+                        .get_mut(&ticket.conversation.channel)
                 {
-                    channel.timeline.loading = false;
+                    progress.request = None;
+                    progress.paused = true;
                 }
                 self.updates
                     .push(Update::HistoryFailed(format!("Server history: {reason}")));
@@ -1599,15 +1939,11 @@ impl Client {
                 messages,
                 next_before,
             } => {
-                if !self.navigation.accepts(&ticket) {
-                    return;
-                }
-                if let Some(server) = self.servers.iter_mut().find(|entry| entry.id == server)
-                    && let Some(channel) = server
-                        .channels
-                        .iter_mut()
-                        .find(|entry| entry.id == ticket.conversation.channel)
-                {
+                if let Some((index, position)) = self.history_target(&server, &ticket) {
+                    if before.is_none() {
+                        self.remember_latest(index, position, &ticket, &messages);
+                    }
+                    let channel = &mut self.servers[index].channels[position];
                     channel.timeline.loading = false;
                     channel.timeline.take_page(before, messages, next_before);
                     if before.is_none() {
@@ -1686,6 +2022,14 @@ impl Client {
                     let server = &mut self.servers[index];
                     if server.status == Status::Connected && !server.deafened {
                         self.platform.chime(Sound::Disconnected);
+                    }
+                    server.page_epoch = server.page_epoch.wrapping_add(1);
+                    self.platform.cancel_history(&server.id, server.page_epoch);
+                    for channel in &mut server.channels {
+                        channel.timeline.loading = false;
+                    }
+                    for progress in server.history_progress.values_mut() {
+                        progress.disconnected();
                     }
                     server.clear_acl_cache();
                     server.limits = None;
@@ -2116,6 +2460,19 @@ impl Client {
             &event,
             ServerEvent::Connected { .. } | ServerEvent::Channel(_)
         );
+        let refresh_history = matches!(
+            &event,
+            ServerEvent::Connected { .. }
+                | ServerEvent::ChannelInfo { .. }
+                | ServerEvent::DirectList(_)
+        );
+        let fresh_directs: Vec<_> = match &event {
+            ServerEvent::DirectList(directs) => directs
+                .iter()
+                .filter_map(|direct| nuschl::id(&direct.conversation))
+                .collect(),
+            _ => Vec::new(),
+        };
         let refresh_comment = matches!(&event, ServerEvent::User(_) | ServerEvent::UserRemoved(_));
         let render_comment = match &event {
             ServerEvent::User(user)
@@ -2205,6 +2562,13 @@ impl Client {
                     );
                 }
                 let encryption = conversation.and_then(|id| server.encryption.get(&id).cloned());
+                if let Some(progress) = server.history_progress.get_mut(&channel) {
+                    if conversation == Some(progress.conversation) {
+                        progress.ready_epoch = Some(server.page_epoch);
+                    } else {
+                        server.history_progress.remove(&channel);
+                    }
+                }
                 if let Some(view) = server.channel_view(channel) {
                     view.conversation = conversation;
                     view.encryption = encryption;
@@ -2663,6 +3027,20 @@ impl Client {
             ServerEvent::Transport(stats) => server.transport = Some(stats),
             // Handled above.
             ServerEvent::PluginData(_) | ServerEvent::PluginDataAdmission { .. } => {}
+        }
+        if refresh_history {
+            let server = &mut self.servers[index];
+            for progress in server.history_progress.values_mut() {
+                if fresh_directs.contains(&progress.conversation) {
+                    progress.ready_epoch = Some(server.page_epoch);
+                }
+            }
+            if let Some((selected, position)) = self.selected_indices()
+                && selected == index
+                && let Err(error) = self.resume_history(index, position, false)
+            {
+                self.updates.push(Update::HistoryFailed(error));
+            }
         }
         if fetch_description {
             self.request_selected_description(index);
@@ -4751,5 +5129,410 @@ mod tests {
             }),
         ));
         assert_eq!(blob_requests(&recorder).len(), 1);
+    }
+    fn recovery_row(seq: u64) -> IncomingMessage {
+        let Input::Message { mut message, .. } =
+            message("fixture", 2, &format!("row {seq}"), seq as i64)
+        else {
+            unreachable!()
+        };
+        message.seq = Some(seq);
+        message
+    }
+
+    fn recovery_client() -> (Client, Arc<Recorder>, String) {
+        let (mut client, recorder, id) = connected();
+        client.handle(Input::Server {
+            server: id.clone(),
+            generation: 1,
+            event: ServerEvent::Negotiated {
+                capabilities: vec!["history/1".into()],
+                policy: None,
+            },
+        });
+        client.handle(Input::Server {
+            server: id.clone(),
+            generation: 1,
+            event: ServerEvent::ChannelInfo {
+                channel: 2,
+                conversation: Some([2; 16]),
+            },
+        });
+        client.open(0, 2).unwrap();
+        let ticket = recorder.pages.lock().unwrap().last().unwrap().1.clone();
+        client.handle(Input::History {
+            server: id.clone(),
+            ticket,
+            before: None,
+            messages: (1..=3).map(recovery_row).collect(),
+            next_before: None,
+        });
+        (client, recorder, id)
+    }
+
+    fn recovery_reconnect(client: &mut Client, id: &str, connected_first: bool) {
+        client.handle(Input::Reconnecting {
+            server: id.into(),
+            generation: 1,
+            attempt: 1,
+            delay_secs: 1,
+            reason: "synthetic transport loss".into(),
+        });
+        let connected = || Input::Server {
+            server: id.into(),
+            generation: 1,
+            event: ServerEvent::Connected { session: 1 },
+        };
+        let named = || Input::Server {
+            server: id.into(),
+            generation: 1,
+            event: ServerEvent::ChannelInfo {
+                channel: 2,
+                conversation: Some([2; 16]),
+            },
+        };
+        if connected_first {
+            client.handle(connected());
+            client.handle(named());
+        } else {
+            client.handle(named());
+            client.handle(connected());
+        }
+    }
+
+    fn recovery_answer(
+        client: &mut Client,
+        recorder: &Recorder,
+        end: i64,
+        head: i64,
+        rows: Vec<IncomingMessage>,
+        next: Option<i64>,
+        changes: Vec<(u64, Change)>,
+    ) {
+        let (server, ticket, page) = recorder.pages.lock().unwrap().last().unwrap().clone();
+        assert!(ticket.catchup);
+        client.handle(Input::HistoryChanges {
+            server: server.clone(),
+            ticket: ticket.clone(),
+            scanned_through: end,
+            head,
+            changes,
+        });
+        client.handle(Input::HistoryWindow {
+            server,
+            ticket,
+            page,
+            messages: rows,
+            next_before: None,
+            next_after: next,
+        });
+    }
+
+    #[test]
+    fn reconnect_pages_fill_multiple_windows_without_using_live_or_ack_maxima() {
+        for connected_first in [false, true] {
+            let (mut client, recorder, id) = recovery_client();
+            recovery_reconnect(&mut client, &id, connected_first);
+            assert_eq!(
+                recorder.pages.lock().unwrap().last().unwrap().2,
+                Page::After(3)
+            );
+            // A later live row is real, but it is no proof that 4..120 were scanned.
+            let (_, position) = client.selected_indices().unwrap();
+            client.servers[0].channels[position]
+                .timeline
+                .merge(recovery_row(121));
+            recovery_answer(
+                &mut client,
+                &recorder,
+                53,
+                120,
+                (4..=53).map(recovery_row).collect(),
+                Some(53),
+                vec![],
+            );
+            assert_eq!(
+                recorder.pages.lock().unwrap().last().unwrap().2,
+                Page::After(53)
+            );
+            recovery_answer(
+                &mut client,
+                &recorder,
+                103,
+                121,
+                (54..=103).map(recovery_row).collect(),
+                Some(103),
+                vec![],
+            );
+            recovery_answer(
+                &mut client,
+                &recorder,
+                121,
+                200,
+                (104..=121).map(recovery_row).collect(),
+                Some(121),
+                vec![],
+            );
+            let progress = &client.servers[0].history_progress[&2];
+            assert_eq!(
+                progress.target_head,
+                Some(120),
+                "later heads cannot extend this recovery"
+            );
+            assert_eq!(progress.through, 121);
+            assert!(!progress.needed);
+            let shown = &client.servers[0].channels[position].timeline.messages;
+            assert_eq!(shown.len(), 121);
+            assert_eq!(shown.iter().filter(|row| row.seq == Some(121)).count(), 1);
+        }
+    }
+
+    #[test]
+    fn recovery_quota_yields_and_automatically_resumes_to_its_finite_head() {
+        let (mut client, recorder, id) = recovery_client();
+        recovery_reconnect(&mut client, &id, false);
+        for batch in 0..16 {
+            let start = 4 + batch * 50;
+            let end = start + 49;
+            recovery_answer(
+                &mut client,
+                &recorder,
+                end as i64,
+                1003,
+                (start..=end).map(recovery_row).collect(),
+                Some(end as i64),
+                vec![],
+            );
+        }
+        let before = recorder.pages.lock().unwrap().len();
+        let progress = &client.servers[0].history_progress[&2];
+        assert!(progress.needed && !progress.paused && progress.request.is_none());
+        assert_eq!((progress.through, progress.resume_at_ms), (803, Some(250)));
+        client.set_time(249);
+        assert_eq!(recorder.pages.lock().unwrap().len(), before);
+        client.set_time(250);
+        assert_eq!(recorder.pages.lock().unwrap().len(), before + 1);
+        assert_eq!(
+            recorder.pages.lock().unwrap().last().unwrap().2,
+            Page::After(803)
+        );
+        for start in [804, 854, 904, 954] {
+            let end = start + 49;
+            recovery_answer(
+                &mut client,
+                &recorder,
+                end as i64,
+                5000,
+                (start..=end).map(recovery_row).collect(),
+                Some(end as i64),
+                vec![],
+            );
+        }
+        assert!(!client.servers[0].history_progress[&2].needed);
+        assert_eq!(
+            client.servers[0].history_progress[&2].target_head,
+            Some(1003)
+        );
+        let (_, position) = client.selected_indices().unwrap();
+        assert_eq!(
+            client.servers[0].channels[position].timeline.messages.len(),
+            MAX_TIMELINE
+        );
+    }
+
+    #[test]
+    fn recovery_void_progress_and_outage_mutations_preserve_pending_keys_and_encryption() {
+        let (mut client, recorder, id) = recovery_client();
+        let (_, position) = client.selected_indices().unwrap();
+        let encryption = crate::conversation::EncryptionState {
+            security: SessionSecurity::MlsEstablished,
+            description: "established elsewhere".into(),
+            blocked: None,
+            epoch: 9,
+        };
+        client.servers[0]
+            .encryption
+            .insert([2; 16], encryption.clone());
+        let mut pending = recovery_row(4);
+        pending.id = None;
+        pending.seq = None;
+        pending.pending = Some([9; 16]);
+        pending.outgoing = true;
+        client.servers[0].channels[position].timeline.merge(pending);
+        client.servers[0].acked.insert([8; 16], Some(90));
+        recovery_reconnect(&mut client, &id, false);
+        recovery_answer(
+            &mut client,
+            &recorder,
+            53,
+            54,
+            vec![],
+            Some(53),
+            vec![
+                (
+                    1,
+                    Change::Deleted(crate::timeline::Deletion {
+                        at_ms: 20,
+                        moderator: true,
+                    }),
+                ),
+                (
+                    2,
+                    Change::Edited {
+                        source: "edited during loss".into(),
+                        document: MessageDocument { blocks: vec![] },
+                        edited_ms: 21,
+                    },
+                ),
+            ],
+        );
+        assert_eq!(
+            recorder.pages.lock().unwrap().last().unwrap().2,
+            Page::After(53),
+            "void rows advance the raw cursor"
+        );
+        recovery_answer(
+            &mut client,
+            &recorder,
+            54,
+            54,
+            vec![recovery_row(54)],
+            None,
+            vec![],
+        );
+        let server = &client.servers[0];
+        let timeline = &server.channels[position].timeline;
+        assert!(
+            timeline
+                .messages
+                .iter()
+                .any(|row| row.seq == Some(1) && row.deleted.is_some())
+        );
+        assert!(
+            timeline
+                .messages
+                .iter()
+                .any(|row| row.seq == Some(2) && row.source == "edited during loss")
+        );
+        assert!(
+            timeline
+                .messages
+                .iter()
+                .any(|row| row.pending == Some([9; 16]))
+        );
+        assert_eq!(server.acked.get(&[8; 16]), Some(&Some(90)));
+        assert_eq!(server.encryption.get(&[2; 16]), Some(&encryption));
+        assert!(!server.history_progress[&2].needed);
+    }
+
+    #[test]
+    fn old_attempt_pages_changes_and_failures_cannot_mutate_the_reconnected_view() {
+        let (mut client, recorder, id) = recovery_client();
+        recovery_reconnect(&mut client, &id, false);
+        let old = recorder.pages.lock().unwrap().last().unwrap().clone();
+        recovery_reconnect(&mut client, &id, false);
+        let current = recorder.pages.lock().unwrap().last().unwrap().1.clone();
+        assert_ne!(
+            old.1.owner.as_ref().unwrap().epoch,
+            current.owner.as_ref().unwrap().epoch
+        );
+        client.handle(Input::HistoryChanges {
+            server: id.clone(),
+            ticket: old.1.clone(),
+            scanned_through: 999,
+            head: 999,
+            changes: vec![(
+                1,
+                Change::Deleted(crate::timeline::Deletion {
+                    at_ms: 99,
+                    moderator: false,
+                }),
+            )],
+        });
+        client.handle(Input::HistoryWindow {
+            server: id.clone(),
+            ticket: old.1.clone(),
+            page: old.2,
+            messages: vec![recovery_row(999)],
+            next_before: None,
+            next_after: None,
+        });
+        client.handle(Input::HistoryFailed {
+            server: id.clone(),
+            ticket: old.1,
+            reason: "obsolete failure".into(),
+        });
+        let (_, position) = client.selected_indices().unwrap();
+        let timeline = &client.servers[0].channels[position].timeline;
+        assert_eq!(timeline.messages.len(), 3);
+        assert!(timeline.loading && timeline.messages.iter().all(|row| row.deleted.is_none()));
+        assert_eq!(
+            client.servers[0].history_progress[&2].request.as_ref(),
+            Some(&current)
+        );
+    }
+
+    #[test]
+    fn recovery_timeout_without_progress_is_visible_and_keeps_a_retryable_gap() {
+        let (mut client, recorder, id) = recovery_client();
+        recovery_reconnect(&mut client, &id, false);
+        client.set_time(30_000);
+        let progress = &client.servers[0].history_progress[&2];
+        assert!(progress.needed && progress.paused && progress.request.is_none());
+        assert_eq!(progress.through, 3);
+        assert!(client.take_updates().iter().any(|update| matches!(update, Update::HistoryFailed(reason) if reason.contains("without progress"))));
+        let before = recorder.pages.lock().unwrap().len();
+        client.set_time(60_000);
+        assert_eq!(recorder.pages.lock().unwrap().len(), before);
+        client.open(0, 2).unwrap();
+        assert_eq!(recorder.pages.lock().unwrap().len(), before + 1);
+        assert_eq!(
+            recorder.pages.lock().unwrap().last().unwrap().2,
+            Page::After(3)
+        );
+    }
+
+    #[test]
+    fn recovery_batch_deadline_with_progress_yields_then_resumes_the_same_cursor() {
+        let (mut client, recorder, id) = recovery_client();
+        recovery_reconnect(&mut client, &id, false);
+        recovery_answer(
+            &mut client,
+            &recorder,
+            53,
+            100,
+            (4..=53).map(recovery_row).collect(),
+            Some(53),
+            vec![],
+        );
+        let old = recorder.pages.lock().unwrap().last().unwrap().1.clone();
+        client.set_time(30_000);
+        assert_eq!(
+            client.servers[0].history_progress[&2].resume_at_ms,
+            Some(30_250)
+        );
+        assert!(!client.servers[0].history_progress[&2].paused);
+        client.set_time(30_250);
+        let current = recorder.pages.lock().unwrap().last().unwrap().clone();
+        assert_eq!(current.2, Page::After(53));
+        assert_ne!(current.1.owner, old.owner);
+    }
+
+    #[test]
+    fn empty_or_inconsistent_recovery_before_the_target_does_not_claim_completion() {
+        for head in [100, 2] {
+            let (mut client, recorder, id) = recovery_client();
+            recovery_reconnect(&mut client, &id, false);
+            recovery_answer(&mut client, &recorder, 3, head, vec![], None, vec![]);
+            let progress = &client.servers[0].history_progress[&2];
+            assert!(progress.needed && progress.paused);
+            assert_eq!(progress.through, 3);
+            assert!(
+                client
+                    .take_updates()
+                    .iter()
+                    .any(|update| matches!(update, Update::HistoryFailed(_)))
+            );
+        }
     }
 }

@@ -10,7 +10,7 @@ use crate::{
     },
     platform::RenderKey,
     server::AudioHealth,
-    timeline::{Deletion, IncomingMessage, Page},
+    timeline::{Change, Deletion, IncomingMessage, Page},
 };
 use nuschl_core::{
     MessageDocument, SearchPage,
@@ -107,6 +107,15 @@ pub enum Input {
         messages: Vec<IncomingMessage>,
         next_before: Option<i64>,
         next_after: Option<i64>,
+    },
+    /// Changes scanned by a catch-up page, bound to that page through the
+    /// final application. Live edits and deletions retain their own path.
+    HistoryChanges {
+        server: String,
+        ticket: HistoryTicket,
+        scanned_through: i64,
+        head: i64,
+        changes: Vec<(u64, Change)>,
     },
     /// A server history page could not be loaded.
     HistoryFailed {

@@ -97,6 +97,54 @@ impl AudioHealth {
     }
 }
 
+/// The last durably scoped history scan, distinct from live message maxima
+/// and from the timeline's detached-search cursor.
+#[derive(Clone, Debug)]
+pub(crate) struct HistoryProgress {
+    pub conversation: [u8; 16],
+    pub through: i64,
+    pub needed: bool,
+    pub ready_epoch: Option<u64>,
+    pub request: Option<crate::HistoryTicket>,
+    pub response_end: Option<i64>,
+    pub target_head: Option<i64>,
+    pub batch_start: i64,
+    pub resume_at_ms: Option<u64>,
+    pub pages: u8,
+    pub started_ms: Option<u64>,
+    pub paused: bool,
+}
+impl HistoryProgress {
+    pub fn new(conversation: [u8; 16], through: i64, epoch: u64) -> Self {
+        Self {
+            conversation,
+            through,
+            needed: false,
+            ready_epoch: Some(epoch),
+            request: None,
+            response_end: None,
+            target_head: None,
+            batch_start: through,
+            resume_at_ms: None,
+            pages: 0,
+            started_ms: None,
+            paused: false,
+        }
+    }
+    pub fn disconnected(&mut self) {
+        self.needed = true;
+        self.ready_epoch = None;
+        self.request = None;
+        self.response_end = None;
+        self.target_head = None;
+        self.batch_start = self.through;
+        self.resume_at_ms = None;
+        self.pages = 0;
+        self.started_ms = None;
+        self.paused = false;
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct ServerState {
     pub id: String,
@@ -114,6 +162,9 @@ pub struct ServerState {
     pub status: Status,
     /// The connection attempt events belong to; older ones' are dropped.
     pub generation: u64,
+    /// History requests of a retired transport cannot update its successor.
+    pub(crate) page_epoch: u64,
+    pub(crate) history_progress: BTreeMap<u32, HistoryProgress>,
     pub peer_sha256: Option<String>,
     pub own_session: Option<u32>,
     pub users: BTreeMap<u32, User>,
@@ -228,6 +279,8 @@ impl ServerState {
             channels,
             status: Status::Disconnected,
             generation: 0,
+            page_epoch: 0,
+            history_progress: BTreeMap::new(),
             peer_sha256: None,
             own_session: None,
             users: BTreeMap::new(),
