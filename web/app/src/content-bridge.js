@@ -58,7 +58,7 @@ export class DocumentCache {
 const cache = new DocumentCache();
 export function contentDocument(token) { return cache.get(token); }
 export function contentFailed(token) { return Boolean(cache.entries.get(token)?.failed || active?.denied.has(token)); }
-export function contentUnavailable() { return !active || active.service.retired === true; }
+export function contentUnavailable(token) { return !active || active.service.retired === true || active.denied.get(token) === true; }
 export function retryContent(token) { active?.retry(token); }
 export function retainDocument(token,failed=false) {
   if(typeof token!=="string")return()=>{};
@@ -74,25 +74,25 @@ export class ContentBridge {
   constructor(command,{service=new ContentService()}={}) {
     if(consumed)throw new Error("The content bridge already consumed its page-lifetime owner. Reload to reconnect.");
     consumed=true;
-    this.command=command;this.service=service;this.pending=new Map();this.missing=new Set();this.denied=new Set();this.welcomes=new Map();this.disposed=false;this.reportedRetirement=false;active=this;
+    this.command=command;this.service=service;this.pending=new Map();this.missing=new Set();this.denied=new Map();this.welcomes=new Map();this.disposed=false;this.reportedRetirement=false;active=this;
   }
   rehydrate(token) {
     if(this.disposed||this.service.retired||this.denied.has(token)||this.missing.has(token))return;
     if(this.missing.size>=128){this.deny(token);return;}
     this.missing.add(token);
-    this.command("content_request",token).catch(()=>{});
+    this.command("content_request",token).then(queued=>{if(queued!==true)this.deny(token);}).catch(()=>this.deny(token,true));
   }
-  deny(token) {
-    if(this.denied.size>=512)this.denied.delete(this.denied.values().next().value);
-    this.denied.add(token);this.notify(token);
+  deny(token,terminal=false) {
+    if(this.denied.size>=512)this.denied.delete(this.denied.keys().next().value);
+    this.denied.set(token,terminal||this.denied.get(token)===true);this.notify(token);
   }
   notify(token) {
     changed(token);
     if(this.service.retired&&!this.reportedRetirement){this.reportedRetirement=true;changed();}
   }
   retry(token) {
-    if(this.disposed||this.service.retired)return;
-    this.command("content_request",token).catch(()=>this.deny(token));
+    if(this.disposed||this.service.retired||this.denied.get(token)===true)return;
+    this.command("content_request",token).then(queued=>{if(queued!==true)this.deny(token);}).catch(()=>this.deny(token,true));
   }
   handle(data) {
     if(data?.kind!=="content_work")return false;

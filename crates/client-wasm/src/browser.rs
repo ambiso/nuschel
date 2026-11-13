@@ -8,7 +8,7 @@
 use crate::{
     actions::{Catalog, ServerRef},
     content_broker::{ImageAdmission, ImageAdmissionState, ImageBegin, ImageSend, SourceMode},
-    content_jobs::{Jobs, Origin},
+    content_jobs::{Jobs, Origin, RequestError},
     image::{Destination, Images},
     session::{Event, Login, Session},
     snapshot,
@@ -177,29 +177,25 @@ impl Shared {
                         .view(&server, generation, Some(&source), true)
                         .map(|view| view.token.clone());
                     if let Some(revision) = revision {
-                        let refused = self
-                            .jobs
-                            .borrow_mut()
-                            .request(
-                                Origin::Welcome {
-                                    server: server.clone(),
-                                    generation,
-                                    revision: revision.clone(),
-                                },
-                                &source,
-                                SourceMode::Legacy,
-                                now_ms(),
-                            )
-                            .is_err();
-                        if refused {
+                        let refused = self.jobs.borrow_mut().request(
+                            Origin::Welcome {
+                                server: server.clone(),
+                                generation,
+                                revision: revision.clone(),
+                            },
+                            &source,
+                            SourceMode::Legacy,
+                            now_ms(),
+                        );
+                        if let Err(error) = refused {
                             self.welcomes
                                 .borrow_mut()
                                 .fail(&server, generation, &revision, &source);
-                            document = MessageDocument {
+                            document = error.terminal().unwrap_or_else(|| MessageDocument {
                                 blocks: vec![ContentBlock::text(
-                                    "[Server welcome could not be prepared. Reconnect to retry.]",
+                                    "[Server welcome processing is busy. Reconnect to retry.]",
                                 )],
-                            };
+                            });
                         }
                     }
                     Input::Server {
@@ -1044,11 +1040,11 @@ impl WebClient {
         for failure in batch.failures {
             self.clear_evicted(&failure.evicted);
             if let Some(message) = content_message_mut(&mut self.client, &failure.origin) {
-                message.document = MessageDocument {
+                message.document = failure.terminal.and_then(RequestError::terminal).unwrap_or_else(|| MessageDocument {
                     blocks: vec![ContentBlock::text(
                         "[Content processing exceeded its deadline. Retry this message preview or reload.]",
                     )],
-                };
+                });
             }
             if let Origin::Welcome {
                 server,
@@ -1163,7 +1159,7 @@ impl WebClient {
         serde_json::to_string(&serde_json::json!({"token":token,"charge":completed.rendered.retained_bytes,"document":completed.rendered.document,"failed":completed.failed})).map_err(|_| "Content result could not be serialized.".into())
     }
 
-    pub fn content_request(&mut self, token: String) -> Result<(), String> {
+    pub fn content_request(&mut self, token: String) -> Result<bool, String> {
         let (origin, mode, digest) = self
             .shared
             .jobs
@@ -1176,11 +1172,19 @@ impl WebClient {
         if <[u8; 32]>::from(sha2::Sha256::digest(source.as_bytes())) != digest {
             return Err("This content source changed.".into());
         }
-        self.shared
+        let result = self
+            .shared
             .jobs
             .borrow_mut()
-            .request(origin, &source, mode, now_ms())
-            .map_err(str::to_owned)
+            .request(origin.clone(), &source, mode, now_ms());
+        match result {
+            Ok(()) => Ok(true),
+            Err(RequestError::Overloaded) => Ok(false),
+            Err(error) => {
+                self.source_refused(&origin, error);
+                Err(error.message().into())
+            }
+        }
     }
 
     pub fn timeline(&self) -> String {
@@ -1216,6 +1220,12 @@ impl WebClient {
                     let jobs = self.shared.jobs.borrow();
                     message.content_token = jobs.token(&origin).map(str::to_owned);
                     message.content_failed = jobs.is_failed(&origin);
+                    if message.content_failed
+                        && crate::content_jobs::is_terminal_document(&message.document)
+                    {
+                        message.content_token = None;
+                        message.content_failed = false;
+                    }
                 }
             }
         }
@@ -1486,14 +1496,15 @@ impl WebClient {
                 self.recovery.pop_front();
                 continue;
             };
-            if self
-                .shared
-                .jobs
-                .borrow_mut()
-                .request(origin, &source, mode, now_ms())
-                .is_err()
-            {
-                break;
+            let result =
+                self.shared
+                    .jobs
+                    .borrow_mut()
+                    .request(origin.clone(), &source, mode, now_ms());
+            match result {
+                Ok(()) => {}
+                Err(RequestError::Overloaded) => break,
+                Err(error) => self.source_refused(&origin, error),
             }
             self.recovery.pop_front();
         }
@@ -1517,38 +1528,56 @@ impl WebClient {
         let mode = *message.source_format.get_or_insert(mode);
         let selected = self.recovery_selection.as_ref().is_some_and(|(server, generation, channel, instance)| matches!(&origin, Origin::Message { server: id, generation: epoch, channel: target, instance: lifetime, .. } if id == server && epoch == generation && target == channel && lifetime == instance))
             && self.recovery_selection == selected_lifetime(&self.client);
+        if self
+            .shared
+            .jobs
+            .borrow()
+            .pending_source(&origin, source, mode)
+        {
+            return;
+        }
         let deferred = selected && !self.shared.jobs.borrow().recovery_credit();
-        if deferred
-            || self
-                .shared
+        let permanent = self.shared.jobs.borrow().permanent_refusal(source);
+        let result = if let Some(error) = permanent {
+            Err(error)
+        } else if deferred {
+            Err(RequestError::Overloaded)
+        } else {
+            self.shared
                 .jobs
                 .borrow_mut()
                 .request(origin.clone(), source, mode, now_ms())
-                .is_err()
-        {
-            // Queue pressure is not a parser failure. Preserve any readable
-            // derivative and never consume failure-handle/derivative capacity.
-            if !self.shared.jobs.borrow().successful_row(&origin) {
-                if let Some(message) = content_message_mut(&mut self.client, &origin) {
-                    message.document = MessageDocument {
-                        blocks: vec![ContentBlock::text(
-                            "[Content processing is busy; reopen this conversation to prepare it again.]",
-                        )],
-                    };
+        };
+        if let Err(error) = result {
+            self.source_refused(&origin, error);
+            if error == RequestError::Overloaded
+                && selected
+                && self.recovery.len() < nuschl_client::timeline::MAX_TIMELINE
+                && !self
+                    .recovery
+                    .iter()
+                    .any(|(candidate, _)| candidate == &origin)
+                && !self.shared.jobs.borrow().successful_row(&origin)
+            {
+                if self.recovery.is_empty() {
+                    self.recovery_until = now_ms().saturating_add(120_000);
                 }
-                if selected
-                    && self.recovery.len() < nuschl_client::timeline::MAX_TIMELINE
-                    && !self
-                        .recovery
-                        .iter()
-                        .any(|(candidate, _)| candidate == &origin)
-                {
-                    if self.recovery.is_empty() {
-                        self.recovery_until = now_ms().saturating_add(120_000);
-                    }
-                    self.recovery.push_back((origin, mode));
-                }
+                self.recovery.push_back((origin, mode));
             }
+        }
+    }
+
+    fn source_refused(&mut self, origin: &Origin, error: RequestError) {
+        // A rehydration failure cannot destroy a valid charged derivative.
+        if self.shared.jobs.borrow().successful_row(origin) {
+            return;
+        }
+        if let Some(message) = content_message_mut(&mut self.client, origin) {
+            message.document = error.terminal().unwrap_or_else(|| MessageDocument {
+                blocks: vec![ContentBlock::text(
+                    "[Content processing is busy; reopen this conversation to prepare it again.]",
+                )],
+            });
         }
     }
 

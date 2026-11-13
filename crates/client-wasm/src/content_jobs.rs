@@ -17,6 +17,35 @@ const MAX_FAILED_HANDLES: usize = 128;
 const DEADLINE_MS: u64 = QUEUE_DEADLINE_MS;
 const MAX_HANDLES: usize = 4096;
 const MAX_PLAIN_BYTES: usize = 16 * 1024 * 1024;
+const TOO_LARGE: &str =
+    "[This content exceeds the local 256 KiB preview limit. It cannot be previewed here.]";
+const EXHAUSTED: &str =
+    "[Preview tickets are exhausted. Reload this page to prepare new previews.]";
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RequestError {
+    Overloaded,
+    TooLarge,
+    Exhausted,
+}
+impl RequestError {
+    pub fn message(self) -> &'static str {
+        match self {
+            Self::Overloaded => "Content processing is busy. Retry when pending work finishes.",
+            Self::TooLarge => TOO_LARGE,
+            Self::Exhausted => EXHAUSTED,
+        }
+    }
+    pub fn terminal(self) -> Option<nuschl_core::MessageDocument> {
+        (self != Self::Overloaded).then(|| nuschl_core::MessageDocument {
+            blocks: vec![nuschl_core::ContentBlock::text(self.message())],
+        })
+    }
+}
+/// This controls presentation recovery only: it never supplies a source, mode,
+/// authority, origin or ticket. The original SDK row remains authoritative.
+pub fn is_terminal_document(document: &nuschl_core::MessageDocument) -> bool {
+    matches!(document.blocks.as_slice(), [nuschl_core::ContentBlock::Text { text, spans, role: nuschl_core::TextRole::Paragraph }] if spans.is_empty() && (text == TOO_LARGE || text == EXHAUSTED))
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Origin {
@@ -117,6 +146,7 @@ struct Handle {
 }
 
 pub struct Failure {
+    pub terminal: Option<RequestError>,
     pub origin: Origin,
     pub evicted: Vec<Origin>,
 }
@@ -151,27 +181,23 @@ impl Jobs {
         source: &str,
         mode: SourceMode,
         now: u64,
-    ) -> Result<(), &'static str> {
+    ) -> Result<(), RequestError> {
         if source.len() > nuschl_core::MAX_CONTENT_BYTES {
-            return Err("Content source exceeds the display limit.");
+            return Err(RequestError::TooLarge);
         }
-        if self.pending.values().any(|job| {
-            !job.cancelled && job.origin == origin && job.source == source && job.mode == mode
-        }) {
+        if self.pending_source(&origin, source, mode) {
             return Ok(());
         }
+        let next = self.next.checked_add(1).ok_or(RequestError::Exhausted)?;
         // Account for the retained SDK source AND its outstanding transport copy.
         // Metadata is bounded independently, including very short/empty sources.
         let charge = source.len().saturating_mul(2).saturating_add(4096);
         if self.pending.len() >= MAX_PENDING_JOBS
             || self.pending_bytes.saturating_add(charge) > MAX_PENDING_BYTES
         {
-            return Err("Content processing is busy. Retry when pending work finishes.");
+            return Err(RequestError::Overloaded);
         }
-        self.next = self
-            .next
-            .checked_add(1)
-            .ok_or("Content ticket counter exhausted.")?;
+        self.next = next;
         self.pending.insert(
             self.next,
             Job {
@@ -205,10 +231,11 @@ impl Jobs {
             if !job.cancelled {
                 if !current(&job.origin, &job.source) {
                     job.cancelled = true;
-                    expired.push((job.origin.clone(), job.mode, None));
+                    expired.push((*request, job.origin.clone(), job.mode, None));
                 } else if now >= job.deadline {
                     job.cancelled = true;
                     expired.push((
+                        *request,
                         job.origin.clone(),
                         job.mode,
                         Some(<[u8; 32]>::from(Sha256::digest(job.source.as_bytes()))),
@@ -230,27 +257,26 @@ impl Jobs {
             true
         });
         let mut failures = Vec::new();
-        for (origin, mode, digest) in expired {
+        for (request, origin, mode, digest) in expired {
             if self.successful_row(&origin) {
                 continue;
             }
             if let Some(digest) = digest {
-                if let Some(next) = self.next.checked_add(1) {
-                    self.next = next;
-                    let evicted = self.install_digest(
-                        origin.clone(),
-                        digest,
-                        mode,
-                        next.to_string(),
-                        0,
-                        true,
-                    );
-                    failures.push(Failure { origin, evicted });
-                }
+                // This identity was already issued for the original request.
+                // Reusing it as failure metadata cannot mint new worker work,
+                // including when the checked counter has reached its maximum.
+                let evicted =
+                    self.install_digest(origin.clone(), digest, mode, request.to_string(), 0, true);
+                failures.push(Failure {
+                    terminal: (self.next == u64::MAX).then_some(RequestError::Exhausted),
+                    origin,
+                    evicted,
+                });
             } else {
                 // The source lease is gone; only retire the still-resident
                 // placeholder. This grants no authority to the new lifetime.
                 failures.push(Failure {
+                    terminal: None,
                     evicted: vec![origin.clone()],
                     origin,
                 });
@@ -312,13 +338,16 @@ impl Jobs {
         if failed && self.successful_row(&job.origin) {
             return Ok(None);
         }
+        let fallback = if self.next == u64::MAX {
+            EXHAUSTED
+        } else {
+            "[Message could not be prepared. Retry or reload to try again.]"
+        };
         let rendered = result.ok().flatten().unwrap_or_else(|| ValidatedRender {
             document: nuschl_core::MessageDocument {
-                blocks: vec![nuschl_core::ContentBlock::text(
-                    "[Message could not be prepared. Retry or reload to try again.]",
-                )],
+                blocks: vec![nuschl_core::ContentBlock::text(fallback)],
             },
-            plain_text: "[Message could not be prepared. Retry or reload to try again.]".into(),
+            plain_text: fallback.into(),
             retained_bytes: 1024,
         });
         let token = request.to_owned();
@@ -496,6 +525,21 @@ impl Jobs {
             .any(|(stored, handle)| !handle.failed && stored.same_row(origin))
     }
 
+    pub fn permanent_refusal(&self, source: &str) -> Option<RequestError> {
+        if source.len() > nuschl_core::MAX_CONTENT_BYTES {
+            Some(RequestError::TooLarge)
+        } else if self.next == u64::MAX {
+            Some(RequestError::Exhausted)
+        } else {
+            None
+        }
+    }
+    pub fn pending_source(&self, origin: &Origin, source: &str, mode: SourceMode) -> bool {
+        self.pending.values().any(|job| {
+            !job.cancelled && &job.origin == origin && job.source == source && job.mode == mode
+        })
+    }
+
     pub fn pending(&self, origin: &Origin) -> bool {
         self.pending
             .values()
@@ -535,6 +579,9 @@ impl Jobs {
             .rev()
             .take(nuschl_client::timeline::MAX_TIMELINE)
             .filter_map(|message| {
+                if is_terminal_document(&message.document) {
+                    return None;
+                }
                 Some((
                     Origin::Message {
                         server: server.into(),
@@ -1116,5 +1163,157 @@ mod tests {
         let used: Vec<_> = servers[0].channels[0].timeline.messages.iter().map(|message| jobs.handles.iter().find(|(origin, _)| matches!(origin, Origin::Message { serial, .. } if *serial == message.serial)).unwrap().1.used).collect();
         assert!(used.windows(2).all(|pair| pair[0] < pair[1]));
         assert_eq!(jobs.plain_bytes, resident_plain_bytes(&servers));
+    }
+    #[test]
+    fn oversized_legacy_source_is_terminal_without_tickets_or_navigation_spin() {
+        let mut servers = resident_model(1, 1);
+        let mut jobs = Jobs::default();
+        let source = format!("<p>{}</p>", "x".repeat(nuschl_core::MAX_CONTENT_BYTES));
+        let origin = model_origin(&servers[0], 0, 0);
+        let message = model_message_mut(&mut servers, &origin);
+        message.source = source.clone();
+        assert_eq!(
+            jobs.request(origin.clone(), &source, SourceMode::Legacy, 0),
+            Err(RequestError::TooLarge)
+        );
+        message.document = RequestError::TooLarge.terminal().unwrap();
+        for _ in 0..100 {
+            assert!(
+                jobs.recover_rows("owned", 1, &servers[0].channels[0])
+                    .is_empty()
+            );
+            assert!(jobs.take(0, |_, _| true).is_empty());
+        }
+        assert_eq!(jobs.next, 0);
+        assert_eq!(jobs.pending_bytes, 0);
+        assert!(jobs.handles.is_empty());
+        assert_eq!(
+            model_message_mut(&mut servers, &origin).source,
+            source,
+            "raw source/representation is never guessed or silently replaced"
+        );
+        assert_eq!(
+            jobs.request(
+                origin,
+                "🙂".repeat(nuschl_core::MAX_CONTENT_BYTES / 4 + 1).as_str(),
+                SourceMode::Plain,
+                0
+            ),
+            Err(RequestError::TooLarge)
+        );
+    }
+
+    #[test]
+    fn counter_exhaustion_keeps_exact_issued_failure_identity_for_queued_and_posted_jobs() {
+        for posted in [false, true] {
+            let mut jobs = Jobs {
+                next: u64::MAX - 1,
+                ..Jobs::default()
+            };
+            jobs.request(origin(1), "source", SourceMode::Plain, 0)
+                .unwrap();
+            let token = u64::MAX.to_string();
+            if posted {
+                assert_eq!(jobs.take(0, |_, _| true).len(), 1);
+            }
+            let held = jobs.pending_bytes;
+            assert_eq!(
+                jobs.request(origin(2), "new", SourceMode::Plain, 1),
+                Err(RequestError::Exhausted)
+            );
+            let expired = jobs.take_with_failures(QUEUE_DEADLINE_MS, |_, _| true);
+            assert_eq!(expired.failures.len(), 1);
+            assert_eq!(expired.failures[0].terminal, Some(RequestError::Exhausted));
+            assert_eq!(jobs.token(&origin(1)), Some(token.as_str()));
+            assert!(jobs.is_failed(&origin(1)));
+            assert_eq!(jobs.next, u64::MAX);
+            assert_eq!(jobs.pending_bytes, if posted { held } else { 0 });
+            assert!(
+                jobs.complete(&token, Some(REPLY), QUEUE_DEADLINE_MS + 1, |_, _| true)
+                    .unwrap()
+                    .is_none()
+            );
+            assert_eq!(jobs.pending_bytes, 0);
+            assert_eq!(jobs.token(&origin(1)), Some(token.as_str()));
+            assert!(jobs.is_failed(&origin(1)));
+            assert_eq!(
+                jobs.request(origin(2), "new", SourceMode::Plain, QUEUE_DEADLINE_MS + 2),
+                Err(RequestError::Exhausted)
+            );
+        }
+    }
+
+    #[test]
+    fn canceled_late_ack_cannot_overwrite_retry_same_source_revision_or_new_revision() {
+        for revision in [0, 1] {
+            let mut jobs = Jobs::default();
+            let old = origin(1);
+            let mut fresh = old.clone();
+            if let Origin::Message {
+                revision: value, ..
+            } = &mut fresh
+            {
+                *value = revision;
+            }
+            jobs.request(old.clone(), "same source", SourceMode::Plain, 0)
+                .unwrap();
+            jobs.take(0, |_, _| true);
+            let expired = jobs.take_with_failures(EXECUTION_DEADLINE_MS, |_, _| true);
+            assert_eq!(expired.failures.len(), 1);
+            assert_eq!(jobs.token(&old), Some("1"));
+            jobs.request(
+                fresh.clone(),
+                "same source",
+                SourceMode::Plain,
+                EXECUTION_DEADLINE_MS + 1,
+            )
+            .unwrap();
+            let work = jobs.take(EXECUTION_DEADLINE_MS + 1, |_, _| true);
+            assert!(work.iter().any(
+                |operation| matches!(operation,Operation::Render{request,..} if request=="2")
+            ));
+            let done = jobs
+                .complete(
+                    "2",
+                    Some(REPLY),
+                    EXECUTION_DEADLINE_MS + 2,
+                    |origin, source| origin == &fresh && source == "same source",
+                )
+                .unwrap()
+                .unwrap();
+            assert!(!done.failed);
+            assert_eq!(jobs.token(&fresh), Some("2"));
+            let held = jobs.pending_bytes;
+            assert!(held > 0);
+            assert!(
+                jobs.complete("1", Some(REPLY), EXECUTION_DEADLINE_MS + 3, |_, _| true)
+                    .unwrap()
+                    .is_none()
+            );
+            assert_eq!(jobs.pending_bytes, 0);
+            assert_eq!(jobs.token(&fresh), Some("2"));
+            assert!(!jobs.is_failed(&fresh));
+        }
+    }
+
+    #[test]
+    fn overloaded_is_temporary_and_duplicate_posted_request_does_not_need_a_new_counter() {
+        let mut jobs = Jobs::default();
+        for serial in 0..MAX_PENDING_JOBS {
+            jobs.request(origin(serial as u64), "", SourceMode::Plain, 0)
+                .unwrap();
+        }
+        assert_eq!(
+            jobs.request(origin(999), "", SourceMode::Plain, 0),
+            Err(RequestError::Overloaded)
+        );
+        assert!(RequestError::Overloaded.terminal().is_none());
+        jobs.take(0, |_, _| true);
+        jobs.next = u64::MAX;
+        assert!(
+            jobs.request(origin(0), "", SourceMode::Plain, 1).is_ok(),
+            "duplicate existing work creates no new ticket"
+        );
+        assert_eq!(jobs.pending.len(), MAX_PENDING_JOBS);
     }
 }

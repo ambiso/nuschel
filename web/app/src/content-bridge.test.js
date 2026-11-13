@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: EUPL-1.2
 import test from "node:test";
 import assert from "node:assert/strict";
-import {DocumentCache,ContentBridge,contentDocument,retainDocument,observeDocument} from "./content-bridge.js";
+import {DocumentCache,ContentBridge,contentDocument,retainDocument,observeDocument,contentFailed,contentUnavailable} from "./content-bridge.js";
 const document={blocks:[{kind:"text",text:"safe",spans:[]}]};
 
 test("global derivative credit follows pinned documents until actual release",()=>{
@@ -30,9 +30,10 @@ test("untrusted charge, image source and derivative counts cannot bypass global 
 });
 
 test("only the SDK accepted reply becomes visible, with no credential metadata in codec jobs",async()=>{
-  const calls=[];let finish;
+  const calls=[],requests=[];let finish,admission=true;
   const service={render(packet){calls.push(packet);return new Promise(resolve=>finish=resolve);},dispose(){}};
   const bridge=new ContentBridge(async(method,id,raw)=>{
+    if(method==="content_request"){requests.push(id);if(admission instanceof Error)throw admission;return admission;}
     assert.equal(method,"content_complete");assert.equal(id,"7");
     assert.equal(JSON.parse(raw).plain_text,"safe");
     return JSON.stringify({token:"7",charge:1000,document,failed:false});
@@ -50,6 +51,14 @@ test("only the SDK accepted reply becomes visible, with no credential metadata i
     stopOwn();stopOwn();stopOther();
     bridge.deny("7");assert.equal(own,2,"unmounted observer is released");assert.equal(other,1);
     const release=retainDocument("7");release();
+    admission=false;bridge.retry("7");await new Promise(resolve=>setImmediate(resolve));
+    assert.equal(contentFailed("7"),true);assert.equal(contentUnavailable("7"),false,"overload keeps explicit retry available");
+    admission=new Error("Preview ticket owner exhausted");bridge.retry("7");await new Promise(resolve=>setImmediate(resolve));
+    assert.equal(contentUnavailable("7"),true);assert.equal(contentUnavailable(),false,"other valid cached previews retain their owner");
+    const count=requests.length;bridge.retry("7");await new Promise(resolve=>setImmediate(resolve));assert.equal(requests.length,count,"terminal refusal never retries or spins");
+    assert.deepEqual(contentDocument("7"),document,"terminal rehydration never destroys a valid charged derivative");
+    for(let index=100;index<800;index++)bridge.deny(String(index),index%2===0);
+    assert.equal(bridge.denied.size,512,"terminal flags share the existing bounded negative table");
   } finally {bridge.dispose();}
   assert.deepEqual(contentDocument("7"),document);
   assert.throws(()=>new ContentBridge(()=>{}, {service}),/page-lifetime/);

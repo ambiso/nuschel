@@ -13,7 +13,7 @@
   $effect(() => {
     const current=token;
     const stop=observeDocument(current,()=>{
-      prepared=contentDocument(current);cacheFailed=contentFailed(current);unavailable=contentUnavailable();
+      prepared=contentDocument(current);cacheFailed=contentFailed(current);unavailable=contentUnavailable(current);
     });
     const release=retainDocument(current,serverFailed);
     return()=>{stop();release();};
