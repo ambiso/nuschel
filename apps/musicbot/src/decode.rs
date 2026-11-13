@@ -60,7 +60,7 @@ impl Decoding {
 
     /// Poll without waiting on OS teardown. Terminal errors follow buffered PCM;
     /// a provisional Done cannot become success before the final network result.
-    pub async fn poll_outcome(&mut self) -> Option<Result<(), String>> {
+    pub async fn poll_outcome(&mut self, held_frame: bool) -> Option<Result<(), String>> {
         if self.terminal.is_none() {
             match self.terminal_receiver.try_recv() {
                 Ok(result) => self.terminal = Some(result),
@@ -82,7 +82,7 @@ impl Decoding {
                 }
             }
         }
-        if self.reported || !self.frames.is_empty() {
+        if self.reported || held_frame || !self.frames.is_empty() {
             return None;
         }
         let outcome = self.final_result.clone().or_else(|| {
@@ -234,26 +234,26 @@ pub(crate) mod tests {
             sender.try_send(Ok(vec![index as f32])).unwrap();
         }
         terminal.send(Err("decoder timed out".into())).unwrap();
-        assert_eq!(decoding.poll_outcome().await, None);
+        assert_eq!(decoding.poll_outcome(false).await, None);
         assert_eq!(decoding.terminal, Some(Err("decoder timed out".into())));
         assert!(!decoding.retired());
         for index in 0..AHEAD {
             assert_eq!(decoding.frames.try_recv().unwrap().unwrap(), [index as f32]);
         }
         assert_eq!(
-            decoding.poll_outcome().await,
+            decoding.poll_outcome(false).await,
             Some(Err("decoder timed out".into()))
         );
         decoding.request_cancel();
         for _ in 0..20 {
-            assert_eq!(decoding.poll_outcome().await, None);
+            assert_eq!(decoding.poll_outcome(false).await, None);
             assert!(decoding.retiring() && !decoding.retired());
             assert_eq!((decoding.entry, decoding.generation), (7, 3));
         }
         finish.send(Ok(())).unwrap();
         tokio::time::timeout(std::time::Duration::from_secs(1), async {
             while !decoding.retired() {
-                assert_eq!(decoding.poll_outcome().await, None);
+                assert_eq!(decoding.poll_outcome(false).await, None);
                 tokio::task::yield_now().await;
             }
         })
@@ -270,14 +270,14 @@ pub(crate) mod tests {
             finish,
         } = controlled();
         terminal.send(Ok(())).unwrap();
-        assert_eq!(decoding.poll_outcome().await, None);
+        assert_eq!(decoding.poll_outcome(false).await, None);
         assert!(!decoding.retired());
         finish
             .send(Err("network read failed after decoder Done".into()))
             .unwrap();
         let result = tokio::time::timeout(std::time::Duration::from_secs(1), async {
             loop {
-                if let Some(result) = decoding.poll_outcome().await {
+                if let Some(result) = decoding.poll_outcome(false).await {
                     break result;
                 }
                 tokio::task::yield_now().await;
@@ -303,10 +303,10 @@ pub(crate) mod tests {
         while !decoding.worker.is_finished() {
             tokio::task::yield_now().await;
         }
-        assert!(decoding.poll_outcome().await.unwrap().is_err());
+        assert!(decoding.poll_outcome(false).await.unwrap().is_err());
         decoding.request_cancel();
         assert!(!decoding.retired());
         assert!(decoding.supervisor_failed);
-        assert_eq!(decoding.poll_outcome().await, None);
+        assert_eq!(decoding.poll_outcome(false).await, None);
     }
 }

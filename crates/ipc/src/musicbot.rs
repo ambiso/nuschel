@@ -1112,11 +1112,14 @@ mod tests {
         let (mut client, gate, pid) = held_client(Role::Encode);
         // The fixture's libtest stdout is an invalid framed reply, driving the
         // real request -> end -> bounded close path.
-        let failure = tokio::time::timeout(Duration::from_secs(3), client.request(Request::Clear))
-            .await
-            .unwrap()
-            .unwrap_err();
-        assert!(matches!(failure, Failure::Retained(_)));
+        let error = tokio::time::timeout(
+            Duration::from_secs(3),
+            client.encode(vec![0.; FRAME * CHANNELS], 96_000),
+        )
+        .await
+        .unwrap()
+        .unwrap_err();
+        assert!(error.contains("retirement"));
         assert!(client.retirement_pending());
         assert_eq!(client.process.as_ref().unwrap().child.id(), Some(pid));
         assert!(
@@ -1141,6 +1144,7 @@ mod tests {
                 .is_err()
         );
         assert!(client.retirement_pending());
+        client.close_grace = Duration::from_secs(1);
         gate.notify_one();
         client.close().await.unwrap();
         assert!(!client.started() && !client.retirement_pending());
@@ -1161,6 +1165,12 @@ mod tests {
             quarantined: vec![4],
             failures: 1,
         };
+        assert!(
+            ducker
+                .hear(9, &nuschl_core::audio::SILENT_OPUS, 0.6)
+                .await
+                .is_err()
+        );
         assert!(ducker.disable().await.is_err());
         assert!(ducker.new_session().await.is_err());
         assert_eq!(ducker.quarantined, [4]);
@@ -1169,6 +1179,7 @@ mod tests {
             ducker.client.process.as_ref().unwrap().child.id(),
             Some(pid)
         );
+        ducker.client.close_grace = Duration::from_secs(1);
         gate.notify_one();
         ducker.new_session().await.unwrap();
         assert!(!ducker.running() && ducker.quarantined.is_empty());

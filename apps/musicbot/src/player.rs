@@ -602,7 +602,11 @@ impl Player {
         let mut gain = 0.0f32;
         let mut was_ducked = false;
         loop {
-            if self.poll_decoder(&mut decoding).await {
+            if self.poll_decoder(&mut decoding, held.is_some()).await {
+                if talking {
+                    self.end(&mut encoder, last_bitrate).await;
+                    talking = false;
+                }
                 continue;
             }
             if encoder.retirement_pending() {
@@ -789,9 +793,9 @@ impl Player {
     }
 
     /// Returns true while the original decoder still owns this player's slot.
-    async fn poll_decoder(&self, decoding: &mut Option<Decoding>) -> bool {
+    async fn poll_decoder(&self, decoding: &mut Option<Decoding>, held_frame: bool) -> bool {
         if let Some(running) = decoding.as_mut()
-            && let Some(outcome) = running.poll_outcome().await
+            && let Some(outcome) = running.poll_outcome(held_frame).await
         {
             self.decode_outcome(running.entry, running.generation, outcome);
             running.request_cancel();
@@ -935,7 +939,7 @@ mod tests {
         decoding.generation = generation;
         let mut slot = Some(decoding);
         terminal.send(Err("decoder stopped".into())).unwrap();
-        assert!(player.poll_decoder(&mut slot).await);
+        assert!(player.poll_decoder(&mut slot, false).await);
         assert_eq!(queued(&player), ["next"]);
         assert_eq!(player.state().history[0].outcome, HistoryOutcome::Failed);
         player.set_paused(true);
@@ -943,13 +947,13 @@ mod tests {
         player.enqueue(vec![track("later")], "ada", None);
         assert_eq!(player.state().volume, 17);
         for _ in 0..3 {
-            assert!(player.poll_decoder(&mut slot).await);
+            assert!(player.poll_decoder(&mut slot, false).await);
             assert_eq!(slot.as_ref().unwrap().entry, entry);
             assert_eq!(queued(&player), ["next", "later"]);
         }
         finish.send(Ok(())).unwrap();
         tokio::time::timeout(Duration::from_secs(1), async {
-            while player.poll_decoder(&mut slot).await {
+            while player.poll_decoder(&mut slot, false).await {
                 tokio::task::yield_now().await;
             }
         })
