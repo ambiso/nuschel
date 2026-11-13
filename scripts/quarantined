@@ -2,11 +2,20 @@
 # SPDX-License-Identifier: EUPL-1.2
 # Print the quarantined steps' results (tests/quarantine.txt) from the build
 # logs of this checkout's ci.nix checks, as the "quarantined" CI job does.
+# Each failure is also a GitHub warning annotation.
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 nix=(nix --extra-experimental-features 'nix-command flakes')
-drvs=$("${nix[@]}" eval --impure --raw --expr \
-  'builtins.concatStringsSep " " (map (check: check.drvPath) (builtins.attrValues (import ./ci.nix)))')
-for drv in $drvs; do
-  { "${nix[@]}" log "$drv" 2>/dev/null || true; } | sed 's/\x1b\[[0-9;]*m//g' | grep -o 'QUARANTINED [A-Z]* (#[0-9]*): .*' || true
+# shellcheck disable=SC2016 # ${name} is Nix interpolation
+checks=$("${nix[@]}" eval --impure --raw --expr \
+  'builtins.concatStringsSep " " (map (name: name + "=" + (import ./ci.nix).${name}.drvPath) (builtins.attrNames (import ./ci.nix)))')
+for check in $checks; do
+  if ! log=$("${nix[@]}" log "${check#*=}" 2>/dev/null); then
+    echo "no build log for ${check%%=*}"
+    continue
+  fi
+  printf '%s\n' "$log" | sed 's/\x1b\[[0-9;]*m//g' | grep -o 'QUARANTINED [A-Z]* (#[0-9]*): .*' | while read -r line; do
+    echo "$line"
+    if [[ $line == "QUARANTINED FAIL"* ]]; then echo "::warning title=Quarantined step failed::$line"; fi
+  done || true
 done
