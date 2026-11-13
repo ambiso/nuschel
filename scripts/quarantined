@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: EUPL-1.2
+# Print the quarantined steps' results (tests/quarantine.txt) from the build
+# logs of this checkout's ci.nix checks, as the "quarantined" CI job does.
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+nix=(nix --extra-experimental-features 'nix-command flakes')
+drvs=$("${nix[@]}" eval --impure --raw --expr \
+  'builtins.concatStringsSep " " (map (check: check.drvPath) (builtins.attrValues (import ./ci.nix)))')
+for drv in $drvs; do
+  { "${nix[@]}" log "$drv" 2>/dev/null || true; } | sed 's/\x1b\[[0-9;]*m//g' | grep -o 'QUARANTINED [A-Z]* (#[0-9]*): .*' || true
+done
