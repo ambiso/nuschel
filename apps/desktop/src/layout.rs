@@ -20,13 +20,16 @@ struct FocusState {
     _focus: Subscription,
 }
 
+/// What assistive technology's click runs, given the control's focus handle.
+type AccessibleClick = Rc<dyn Fn(&FocusHandle, &mut Window, &mut App)>;
+
 #[derive(IntoElement)]
 struct Focusable {
     id: ElementId,
     child: Stateful<Div>,
     outset: Pixels,
     handle: Option<FocusHandle>,
-    click: Option<Rc<dyn Fn(&FocusHandle, &mut Window, &mut App)>>,
+    click: Option<AccessibleClick>,
 }
 
 impl RenderOnce for Focusable {
