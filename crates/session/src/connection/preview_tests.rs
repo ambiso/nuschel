@@ -383,6 +383,9 @@ async fn expired_preview_is_refused_even_when_the_rate_bucket_still_has_no_capac
     enqueue(&mut state, send, &tx).await;
     assert_eq!(state.outbox.waiting.len(), 1);
     assert!(receipts(&drain(&mut rx)).is_empty());
+    let expiry = state.outbox.waiting[0].preview.as_ref().unwrap().expires;
+    assert!(state.outbox.slot_due() > expiry);
+    assert_eq!(state.outbox.due(), Some(expiry));
     tokio::time::advance(Duration::from_secs(30)).await;
     assert!(!state.outbox.ready(Instant::now()));
     state.flush_outbox(&tx).await.unwrap();
