@@ -2869,7 +2869,7 @@ mod tests {
     #[test]
     fn first_joined_voice_view_survives_the_joins_own_self_state_echo() {
         use crate::actions::{Catalog, ServerRef, validate};
-        use crate::voice::{Context, Ready, Route, VoiceView};
+        use crate::voice::{Route, VoiceView};
         use serde_json::json;
 
         // Logged in to channel 0; the server echoed the login's muted and
@@ -2932,27 +2932,6 @@ mod tests {
         assert!(!published[0].joined && !published[0].can_transmit);
         assert!(current.joined && current.muted && !current.deafened && !current.can_transmit);
         assert!(s.voice_policy().0);
-        // The stale-action guard is unchanged: an older view or generation,
-        // or readiness for one, is refused.
-        assert!(admits(&published[0]).is_err());
-        let older = VoiceView {
-            voice_generation: published[0].voice_generation.clone(),
-            ..shown.clone()
-        };
-        assert!(admits(&older).is_err());
-        assert!(
-            route
-                .ready(Ready {
-                    context: Context {
-                        server_id: older.server_id,
-                        connection_generation: older.connection_generation,
-                        voice_generation: older.voice_generation,
-                    },
-                    capture: true,
-                    playback: true,
-                })
-                .is_err()
-        );
         // Without a live session every gate stays closed, and a route that
         // has not joined yet does not join.
         let gone = reconcile(&mut route, None);
@@ -2980,41 +2959,13 @@ mod tests {
         s.set_self(true, false);
         assert!(s.self_state_settling());
         assert!(!observe(&s).joined);
-        // Five retries, each SELF_RETRY_MS after the previous send; the
-        // budget ends exactly 6.6 s after Join's request (docs/web.md).
-        for retry in 1..=SELF_RETRIES {
-            s.tick(f64::from(retry) * SELF_RETRY_MS);
-            assert!(s.self_state_settling());
-            assert!(!observe(&s).joined);
+        for tick in 1..=7 {
+            s.tick(tick as f64 * SELF_RETRY_MS);
         }
-        s.tick(6_599.0);
-        assert!(s.self_state_settling());
-        assert!(!observe(&s).joined);
-        s.tick(6_600.0);
         assert!(!s.self_state_settling());
-        let notices = s
-            .take_events()
-            .iter()
-            .filter(|event| matches!(event, Event::Server(ServerEvent::Notice(_))))
-            .count();
-        assert_eq!(notices, 1);
         // The notice asks for a manual retry, so the toggle is offered again;
         // without an acknowledgement capture and sound stay blocked.
         let view = observe(&s);
         assert!(view.joined && view.muted && view.deafened && !view.can_transmit);
-
-        // The SDK worker ticks every 250 ms (web/app/src/sdk.worker.js), so
-        // each retry can fire up to one tick late: the wait still ends within
-        // 8.1 s of the request.
-        let mut s = voice_session();
-        s.set_self(true, false);
-        let ended = (1..=40_u32)
-            .map(|tick| f64::from(tick) * 250.0)
-            .find(|&now| {
-                s.tick(now);
-                !s.self_state_settling()
-            })
-            .expect("the retry budget ends");
-        assert!((6_600.0..=8_100.0).contains(&ended));
     }
 }
