@@ -18,9 +18,12 @@ use std::{
 
 /// How long a cover is served before the library is asked again.
 pub const MAX_AGE: Duration = Duration::from_secs(24 * 60 * 60);
+/// At most this many covers, however small, so the index and its scans stay
+/// small too.
+pub const MAX_ENTRIES: usize = 4096;
 const TEMPORARY: &str = ".tmp-";
 
-/// The library's art key, the cover ID and the edge length.
+/// The library's key, the cover ID and the edge length.
 pub type CoverKey = (String, String, u32);
 
 pub struct CoverCache {
@@ -46,8 +49,8 @@ struct Entry {
 
 impl CoverCache {
     /// Indexes what an earlier run left, oldest first, and drops whatever is
-    /// expired, unfinished or beyond `budget` bytes. A zero budget turns the
-    /// cache off and empties it.
+    /// expired, unfinished or beyond `budget` bytes or [`MAX_ENTRIES`]. A zero
+    /// budget turns the cache off and empties it.
     pub fn open(directory: PathBuf, budget: u64) -> std::io::Result<Self> {
         let mut found = Vec::new();
         match std::fs::read_dir(&directory) {
@@ -83,50 +86,61 @@ impl CoverCache {
             budget,
             index: Mutex::new(Index::default()),
         };
-        for name in cache.make_room(&mut index, 0) {
+        for name in cache.make_room(&mut index, 0, 0) {
             remove(&cache.directory.join(name));
         }
-        *cache
-            .index
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = index;
+        *cache.lock() = index;
         Ok(cache)
+    }
+
+    /// A cache that keeps nothing and touches no files.
+    pub fn disabled() -> Self {
+        Self {
+            directory: PathBuf::new(),
+            budget: 0,
+            index: Mutex::new(Index::default()),
+        }
     }
 
     pub async fn get(&self, key: &CoverKey) -> Option<Bytes> {
         let name = file_name(key);
-        {
+        // The lock is never held across an await.
+        let size = {
             let mut index = self.lock();
             let entry = *index.entries.get(&name)?;
             if expired(entry.stored) {
                 index.bytes -= entry.size;
                 index.entries.remove(&name);
-                drop(index);
-                remove(&self.directory.join(&name));
-                return None;
+                None
+            } else {
+                index.tick += 1;
+                let tick = index.tick;
+                if let Some(entry) = index.entries.get_mut(&name) {
+                    entry.used = tick;
+                }
+                Some(entry.size)
             }
-            index.tick += 1;
-            let tick = index.tick;
-            if let Some(entry) = index.entries.get_mut(&name) {
-                entry.used = tick;
-            }
-        }
+        };
         let path = self.directory.join(&name);
-        match tokio::fs::read(&path)
+        let Some(size) = size else {
+            discard(&path).await;
+            return None;
+        };
+        match read_at_most(&path, size)
             .await
-            .ok()
             .and_then(|file| answer(key, file))
         {
             Some(Ok(body)) => Some(body),
             // Another key with the same file name: leave it alone.
             Some(Err(Collision)) => None,
             None => {
-                let mut index = self.lock();
-                if let Some(entry) = index.entries.remove(&name) {
-                    index.bytes -= entry.size;
+                {
+                    let mut index = self.lock();
+                    if let Some(entry) = index.entries.remove(&name) {
+                        index.bytes -= entry.size;
+                    }
                 }
-                drop(index);
-                remove(&path);
+                discard(&path).await;
                 None
             }
         }
@@ -151,7 +165,7 @@ impl CoverCache {
             .join(format!("{TEMPORARY}{}", uuid::Uuid::new_v4().simple()));
         if let Err(error) = write(&temporary, &self.directory.join(&name), &file).await {
             tracing::warn!("cover cache: {error}");
-            remove(&temporary);
+            discard(&temporary).await;
             return;
         }
         let evicted = {
@@ -159,7 +173,7 @@ impl CoverCache {
             if let Some(old) = index.entries.remove(&name) {
                 index.bytes -= old.size;
             }
-            let evicted = self.make_room(&mut index, size);
+            let evicted = self.make_room(&mut index, size, 1);
             index.tick += 1;
             index.bytes += size;
             let entry = Entry {
@@ -171,13 +185,14 @@ impl CoverCache {
             evicted
         };
         for name in evicted {
-            remove(&self.directory.join(name));
+            discard(&self.directory.join(name)).await;
         }
     }
 
     /// Takes expired and then least recently used entries out of the index
-    /// until `incoming` more bytes fit; returns their file names.
-    fn make_room(&self, index: &mut Index, incoming: u64) -> Vec<String> {
+    /// until `incoming` more bytes and `slots` more entries fit; returns their
+    /// file names.
+    fn make_room(&self, index: &mut Index, incoming: u64, slots: usize) -> Vec<String> {
         let mut evicted: Vec<String> = index
             .entries
             .iter()
@@ -189,7 +204,7 @@ impl CoverCache {
                 index.bytes -= entry.size;
             }
         }
-        while index.bytes + incoming > self.budget {
+        while index.bytes + incoming > self.budget || index.entries.len() + slots > MAX_ENTRIES {
             let Some(oldest) = index
                 .entries
                 .iter()
@@ -211,6 +226,16 @@ impl CoverCache {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
+}
+
+/// The whole file when it is exactly `size` bytes long; nothing is read past
+/// that, so a file that grew cannot make a request read more.
+async fn read_at_most(path: &Path, size: u64) -> Option<Vec<u8>> {
+    use tokio::io::AsyncReadExt;
+    let file = tokio::fs::File::open(path).await.ok()?;
+    let mut contents = Vec::with_capacity(usize::try_from(size).ok()?);
+    file.take(size + 1).read_to_end(&mut contents).await.ok()?;
+    (contents.len() as u64 == size).then_some(contents)
 }
 
 fn expired(stored: SystemTime) -> bool {
@@ -264,8 +289,17 @@ async fn write(temporary: &Path, path: &Path, contents: &[u8]) -> std::io::Resul
     tokio::fs::rename(temporary, path).await
 }
 
+/// For startup, before anything is served.
 fn remove(path: &Path) {
     match std::fs::remove_file(path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => tracing::warn!("cover cache: {}: {error}", path.display()),
+    }
+}
+
+async fn discard(path: &Path) {
+    match tokio::fs::remove_file(path).await {
         Ok(()) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => tracing::warn!("cover cache: {}: {error}", path.display()),
@@ -320,7 +354,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("covers");
         let cache = CoverCache::open(path.clone(), 1 << 20).unwrap();
-        for id in ["damaged", "old", "foreign"] {
+        for id in ["damaged", "grown", "old", "abc", "xyz"] {
             cache.insert(&key(id), BODY).await;
         }
         // More than an eighth of the budget is never stored.
@@ -336,6 +370,14 @@ mod tests {
         assert!(cache.get(&key("damaged")).await.is_none());
         assert!(!damaged.exists(), "damaged files are removed");
 
+        // A file longer than indexed is not read beyond that and not served.
+        let grown = path.join(file_name(&key("grown")));
+        let mut file = std::fs::read(&grown).unwrap();
+        file.extend_from_slice(b" ");
+        std::fs::write(&grown, file).unwrap();
+        assert!(cache.get(&key("grown")).await.is_none());
+        assert!(!grown.exists());
+
         // Pixels larger than the key's size are not served.
         let tiny: CoverKey = ("k".into(), "tiny".into(), 1);
         cache
@@ -345,10 +387,10 @@ mod tests {
         assert!(!path.join(file_name(&tiny)).exists());
 
         // A file whose stored key differs is someone else's, never served.
-        let foreign = path.join(file_name(&key("foreign")));
-        let other = std::fs::read(path.join(file_name(&key("old")))).unwrap();
+        let foreign = path.join(file_name(&key("abc")));
+        let other = std::fs::read(path.join(file_name(&key("xyz")))).unwrap();
         std::fs::write(&foreign, other).unwrap();
-        assert!(cache.get(&key("foreign")).await.is_none());
+        assert!(cache.get(&key("abc")).await.is_none());
         assert!(foreign.exists());
 
         // Expired and unfinished files are gone after a restart.
@@ -364,5 +406,25 @@ mod tests {
         assert!(reopened.get(&key("old")).await.is_none());
         assert!(!path.join(file_name(&key("old"))).exists());
         assert!(!path.join(format!("{TEMPORARY}leftover")).exists());
+    }
+
+    #[tokio::test]
+    async fn the_number_of_covers_is_capped_as_well() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("covers");
+        let cache = CoverCache::open(path.clone(), 1 << 30).unwrap();
+        for index in 0..=MAX_ENTRIES {
+            cache.insert(&key(&index.to_string()), BODY).await;
+        }
+        assert_eq!(cache.lock().entries.len(), MAX_ENTRIES);
+        assert!(cache.get(&key("0")).await.is_none(), "the oldest left");
+        assert_eq!(std::fs::read_dir(&path).unwrap().count(), MAX_ENTRIES);
+    }
+
+    #[tokio::test]
+    async fn a_disabled_cache_keeps_nothing() {
+        let cache = CoverCache::disabled();
+        cache.insert(&key("a"), BODY).await;
+        assert!(cache.get(&key("a")).await.is_none());
     }
 }
