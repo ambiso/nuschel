@@ -45,10 +45,10 @@ dialog{color:var(--text);background:var(--surface);border:1px solid var(--border
 @media(hover:hover){.voice-toggle[aria-pressed="true"]:hover:not(:disabled){color:var(--bad);background:color-mix(in srgb,var(--bad) 28%,transparent)}}
 .icon .strike{stroke-width:2.2;stroke-dasharray:1 2;stroke-dashoffset:1;visibility:hidden;transition:stroke-dashoffset var(--toggle-time) var(--toggle-ease),visibility var(--toggle-time)}.icon.struck .strike{stroke-dashoffset:0;visibility:visible}
 
-/* The mobile drawer: its backdrop fades with the slide (App.svelte drawerSlide),
-   and vertical panning stays with the browser while sideways drags are swipes. */
+/* The mobile drawer: its backdrop fades with the slide (App.svelte drawerSlide).
+   On phones a sideways drag on the chat is a drawer swipe, never the browser's
+   history swipe; once the drawer is open, a back swipe on it goes back as usual. */
 .navigation-drawer::backdrop{opacity:var(--drawer-shown,1)}
-@media(max-width:760px){.chat,.messages,.navigation-drawer,.navigation-drawer .server-scroll,.navigation-drawer .channel-tree{touch-action:pan-y pinch-zoom}html{overscroll-behavior-x:none}}
-/* Sideways drags past the end of code, a formula or (on phones) any field never
-   turn into the browser's history swipe, which would leave the client. */
-pre,.math-scroll{overscroll-behavior-x:contain}
+@media(max-width:760px){.chat,.messages{touch-action:pan-y pinch-zoom}.navigation-drawer,.navigation-drawer .server-scroll,.navigation-drawer .channel-tree{touch-action:pan-y pan-left pinch-zoom}html:not(:has(.navigation-drawer[open])){overscroll-behavior-x:none}}
+/* Sideways drags past the end of code never turn into the history swipe. */
+pre{overscroll-behavior-x:contain}
