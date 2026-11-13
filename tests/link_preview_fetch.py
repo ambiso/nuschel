@@ -280,6 +280,7 @@ def serve(args):
     assert os.stat("/proc/self/ns/net").st_ino != args.net_inode, "refusing host network namespace"
     assert os.readlink("/proc/self/ns/user") != args.user_namespace, "refusing host user namespace"
     assert os.getuid() != 0 and os.getgid() != 0, "fixture requires its mapped nonroot identity"
+    assert os.stat("/dev/tty").st_rdev == os.stat("/dev/null").st_rdev, "fixture tty must be inert null"
     # Fixed argv only, and only after namespace identity validation.
     def ip(*arguments):
         subprocess.run([str(args.ip), *arguments], check=True, stdin=subprocess.DEVNULL, timeout=2)
@@ -358,7 +359,9 @@ def run(args):
     command = [config["bwrap"], "--unshare-user", "--unshare-pid", "--unshare-net", "--unshare-ipc", "--unshare-uts", "--unshare-cgroup-try",
                "--die-with-parent", "--new-session", "--clearenv", "--cap-drop", "ALL", "--cap-add", "CAP_NET_ADMIN", "--cap-add", "CAP_NET_BIND_SERVICE",
                "--uid", str(uid), "--gid", str(gid), "--ro-bind", "/nix/store", "/nix/store", "--proc", "/proc", "--tmpfs", "/dev",
-               "--dev-bind", "/dev/null", "/dev/null", "--dev-bind", "/dev/urandom", "/dev/urandom", "--tmpfs", "/tmp", "--tmpfs", "/run",
+               "--dev-bind", "/dev/null", "/dev/null", "--dev-bind", "/dev/zero", "/dev/zero", "--dev-bind", "/dev/full", "/dev/full",
+               "--dev-bind", "/dev/random", "/dev/random", "--dev-bind", "/dev/urandom", "/dev/urandom", "--dev-bind", "/dev/null", "/dev/tty",
+               "--tmpfs", "/tmp", "--tmpfs", "/run",
                "--ro-bind", str(directory / "etc"), "/etc", "--bind", str(directory), "/fixture", "--ro-bind", str(script), "/fixture-script.py", "--chdir", "/fixture"]
     environment = {"PATH": ":".join(config["path"]), "HOME": "/fixture/home", "XDG_RUNTIME_DIR": "/fixture/runtime", "TMPDIR": "/tmp", "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8",
                    "PYTHONDONTWRITEBYTECODE": "1", "DBUS_SESSION_BUS_ADDRESS": "unix:path=/no-host-session-bus", "DBUS_SYSTEM_BUS_ADDRESS": "unix:path=/no-host-system-bus",
