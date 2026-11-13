@@ -80,6 +80,7 @@ pkgs.testers.runNixOSTest {
   };
   testScript = ''
     start_all()
+    # CI sample 2 for #10.
     server.wait_for_unit("murmur.service")
     server.wait_for_open_port(64738)
     server.succeed("systemctl stop murmur.service")
