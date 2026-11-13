@@ -80,13 +80,11 @@ or platform-wide confinement.
 ## Continuous integration
 
 Pull requests to `main` and pushes to `main` run one command on the self-hosted
-runner, the `ci` check: `nix build -f ci.nix`, every flake check except the NixOS
-VM fixtures and the release packaging proofs. Run the same command before pushing
-with `scripts/pre-pr`; Nix reads only tracked files, so commit new files first.
-jj runs no git hooks: push bookmarks with `scripts/pr-push --bookmark NAME`. With
-plain git, `git config core.hooksPath .githooks` runs it before each push. The
-VM smoke test, `nix build .#checks.x86_64-linux.vm-smoke` (`just vm`), runs after
-each push to `main`, nightly and on demand.
+runner, the `ci` check: `nix build -f ci.nix`, every flake check including the
+NixOS VM tests, except the release packaging proofs. Run the same command before
+pushing with `scripts/pre-pr`; Nix reads only tracked files, so commit new files
+first. jj runs no git hooks: push bookmarks with `scripts/pr-push --bookmark NAME`.
+With plain git, `git config core.hooksPath .githooks` runs it before each push.
 
 Changes reach `main` only through pull requests from this repository's branches
 whose required checks pass. Pull requests from forks never run on the

@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: EUPL-1.2
-# Builds ci.nix (Linux packages, Clippy, rustfmt, unit tests, policy checks) on
-# the self-hosted runner. Pull requests from forks never run there.
+# Builds ci.nix (Linux packages, Clippy, rustfmt, unit tests, policy checks and
+# the NixOS VM tests) on the self-hosted runner. Fork pull requests never run there.
 name: Check
 on:
   push:
