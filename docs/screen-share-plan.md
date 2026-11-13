@@ -5,7 +5,7 @@ Status: plan, 2026-11-13, against main 8781be09; revised the same day on main ae
 ## 0. Bottom line
 
 - **Nothing user-visible exists yet.** What exists is a str0m transport trial with synthetic frames, the #139 design, #93 plugin data (frozen, off main), and reusable post-quantum crypto (HPKE with X-Wing) in `nuschl-identity`. There is no capture, encoder, decoder, SFU, watch page or SFrame code.
-- **Topology:** for one sharer and many viewers, use a forward-only **companion SFU at stream.nuschl.eu**. I don't recommend mesh. TURN at turn.nuschl.eu is a reachability fallback, restricted so it can only relay to the SFU. It is not on the critical path.
+- **Topology:** a forward-only **companion SFU at stream.nuschl.eu** relays for every link viewer, every relay-only user, and whenever the sharer's upload is too small. Direct sharer→viewer connections come later, natively, only between verified Nuschl identities that both allow them, and only while the sharer's upload covers them (§4.6). Switching paths never changes encryption. TURN at turn.nuschl.eu is a reachability fallback, restricted so it can only relay to the SFU. It is not on the critical path.
 - **Quality (owner target, §4):** up to 4K60 where the sharer has a hardware AV1 encoder and the viewer can decode it; everyone else gets a lower tier automatically. Only resolution, frame rate and bitrate ever adapt.
 - **Fastest route to "working":**
   - **Phase 1:** browser-captured sharing launched from Nuschl. Nuschl opens `stream.nuschl.eu/share` in the system browser, and viewers use `stream.nuschl.eu/watch#…`. It works on stock Mumble and on compatible-mode Nuschl servers.
@@ -41,7 +41,7 @@ Status: plan, 2026-11-13, against main 8781be09; revised the same day on main ae
 - **Who shares:** a Nuschl desktop user clicks "Share screen" in a channel. Nuschl generates the link secret S and a separate publisher secret P, opens `https://stream.nuschl.eu/share#v=1&k=S&p=P` in the system browser, and posts the legacy line containing `https://stream.nuschl.eu/watch#v=1&k=S`. P is never posted.
 - **Capture:** the browser's own picker and recording indicator, via getDisplayMedia. Video only. **What Phase 1 can realistically reach:** up to 1080p30 with software AV1 (S0b got 1080p at about 15 fps in Chromium and 9 fps in Firefox, headless, at 2.5 Mbit/s). Higher tiers, up to 4K60, only where the browser uses a hardware AV1 encoder and `getStats` shows it keeping up (§4.3). That varies by OS, GPU and browser version and is unmeasured (S0b had no GPU). 4K60 is most achievable natively (Phase 2). **AV1 only** (owner, 2026-11-13): hardware encoding wherever the device has it, software AV1 as the fallback, no VP8 and no H.264 (§8.6). Screen-content tuning and an L1T3 scalability mode where the browser offers them. S0b found that only Chromium applies `scalabilityMode` and sends the Dependency Descriptor, and only when the mode is set before the offer. Firefox silently ignores the mode and never sends the descriptor. So a Firefox sharer is single-layer, and the SFU cannot drop layers for it.
 - **Viewers:** anyone with the link, in a browser. Nuschl users get the same link (no in-app player yet).
-- **Media path:** browser → companion SFU → browsers. SFrame with a random key per epoch, delivered per viewer by the X-Wing PSK exchange.
+- **Media path:** browser → companion SFU → browsers, always relayed in Phase 1 (§4.6). SFrame with a random key per epoch, delivered per viewer by the X-Wing PSK exchange.
 - **Servers:** stock Murmur 1.x and compatible-mode nuschld (both use the chat-link path). End-to-end-mode nuschld refuses with "not available yet" (fail closed; #139 §2).
 - **Viewer cap:** 1 publisher and 16 viewers on the project instance.
 
@@ -54,7 +54,7 @@ Status: plan, 2026-11-13, against main 8781be09; revised the same day on main ae
 
 **Later:** Windows/macOS capture, audio (#146/#144), scalable video (#140), nuschld's own SFU and `rtc/1` (#142/#141), long-call validation (#147).
 
-**Why an SFU:** a sharer acting as the hub uploads N copies, and a browser re-encodes once per peer connection. The browser viewers also need a rendezvous at nuschl.eu anyway. str0m's frame and RTP-mode forwarding is the shared core that #142 reuses later.
+**Why an SFU:** link viewers and relay-only users need it anyway, a browser sharer re-encodes once per peer connection, and a sharer's upload rarely covers many 4K streams (16 viewers at 25 Mbit/s is 400 Mbit/s). The browser viewers also need a rendezvous at nuschl.eu. Direct paths are an addition for small verified groups (§4.6), not a replacement. str0m's frame and RTP-mode forwarding is the shared core that #142 reuses later.
 
 ## 3. Stock-server key agreement (owner's PAKE request)
 
@@ -237,6 +237,28 @@ Each device's tier is measured when the share starts and re-checked during it:
 - **Hysteresis:** step down after 2 s below the floor. Step up only with ≥1.3× the next step's floor for 10 s (frame rate) or 30 s (resolution). A failed step-up doubles the wait, up to 2 min. S0c used 1.15× to stay and 1.3× to rise.
 - **Key-frame requests** stay coalesced and rate-limited (§4.2). They never change the tier by themselves.
 
+### 4.6 Direct or relayed
+
+- **Direct:** the sharer sends to each viewer over its own peer connection, so its upload carries every viewer's stream. A native sharer encodes once, encrypts each frame once and sends N copies, picking layers per viewer with the same code as the SFU. A browser sharer re-encodes for every peer connection, so direct paths are for native sharers.
+- **Relayed:** the sharer uploads one stream to the SFU, which fans it out. Mixing is fine: some viewers direct, the rest through one SFU leg.
+- **Who may go direct** (decision 12; recommended):
+  - only verified Nuschl identities (`CallBinding` checked) that both allow direct connections;
+  - never when either side uses relay-only. **Relay-only users are always relayed**, whatever the bandwidth: through the SFU, and through TURN in a browser (owner, 2026-11-13). `PeerPolicy` is checked before any candidate is gathered;
+  - never for link viewers on stock servers. Anyone with the link could otherwise learn the sharer's IP address, and the sharer theirs.
+- **Candidates go only to verified peers**, sealed under that viewer's HPKE channel key (not `signal_key`, which every link holder has), over the SFU WebSocket. The SFU never sees them.
+- **Choosing by upload:**
+  - **Before the share:** while the picker is open, the client probes its upload against the SFU (str0m padding probes up to 1.25× the expected direct demand, at most 2 s and a bounded number of bytes). Go direct if 80 % of the estimate covers the direct viewers, plus the SFU leg when some viewers are relayed anyway.
+  - **During:** every leg has its own TWCC estimate. If the direct legs back off together (a shared upload bottleneck), or demand stays above 85 % of the upload estimate for 5 s, viewers move to the relay, largest first, until it fits.
+  - **Back to direct** only when the upload covers it with 50 % to spare for 60 s, and at most once per 2 min per viewer.
+- **The client opts in** (owner: "the client opting into relay forwarding"). Setting: "When my upload is too slow: relay automatically (default) / lower the quality instead". Either way, the sharer and viewer cards show the path: "Direct", "Relayed: upload limit", "Relayed: privacy".
+- **Switching never touches encryption.** SFrame keys and epochs don't depend on the path; only the transport changes. The same encrypted frames flow either way, the key exchange stays on the SFU WebSocket, and nothing is rekeyed. Make before break:
+  1. the new path starts, at the base layer;
+  2. both paths run for at most 2 s, and the receiver drops duplicates through the SFrame replay window;
+  3. the old path closes.
+
+  Natively the decoder carries on without a key frame. A browser viewer's new peer connection needs one (rate-limited).
+- **Phase 1 stays relayed:** browser sharers and link viewers. Direct paths come with native, identity-bound viewing (slice X1).
+
 ## 5. Critical path
 
 Phase 1 order: S0 → K1 → K2 → W1 → B1 → T1, with E1 (the long pole) in parallel and D1 and I1 alongside. Rough estimate for Phase 1 with 5–6 lanes: about 2.5–3 weeks (uncertain).
@@ -311,6 +333,7 @@ Phase 1 order: S0 → K1 → K2 → W1 → B1 → T1, with E1 (the long pole) in
   - Stock and compatible servers: link-encrypted as in §3, honestly labelled.
   - End-to-end servers: MLS only, never links or plugin data.
   - No plaintext fallback: a browser without encoded transforms refuses to play or share.
+  - Quality and path changes never touch encryption: only resolution, frame rate, bitrate and transport change (§4).
 - **Authenticity:**
   - `CallBinding` signs the full transcript, including pk_v, enc and DTLS fingerprints (#139 §5.5).
   - Unknown identities are never pinned from a stock server.
@@ -323,7 +346,8 @@ Phase 1 order: S0 → K1 → K2 → W1 → B1 → T1, with E1 (the long pole) in
 - **Relay-only** uses the owner's existing definition (`docs/extension.md` `privacy/1`; `crates/core/src/network.rs` `PeerPolicy`), neither strengthened nor weakened:
   - **What it allows and forbids:** configured servers and relays may be contacted. Peer discovery, local-interface/STUN candidate gathering and direct peer connections are not allowed, and peer-supplied endpoints cannot override this. The configured server necessarily sees the source IP.
   - **Native:** with `relay_only`, the SDK driver gathers no host or srflx candidates and connects only to the configured SFU (or TURN).
-  - **Browser (owner, 2026-11-13: "A makes sense for relay-only people"):** with relay-only on, the page uses `iceTransportPolicy: 'relay'` through turn.nuschl.eu, so local addresses are never gathered and a VPN user's non-VPN interface is never tried. Without relay-only, the browser connects straight to the SFU. The page signals no local candidates, and the SFU never forwards anyone's address. Sharers and viewers never connect to each other in either case.
+  - **Browser (owner, 2026-11-13: "A makes sense for relay-only people"):** with relay-only on, the page uses `iceTransportPolicy: 'relay'` through turn.nuschl.eu, so local addresses are never gathered and a VPN user's non-VPN interface is never tried. Without relay-only, the browser connects straight to the SFU. The page signals no local candidates, and the SFU never forwards anyone's address. In Phase 1, sharers and viewers never connect to each other.
+  - **Direct paths (later, §4.6):** only between verified identities that both allow them, never for a relay-only user, whatever the bandwidth. Candidates go only to the verified peer, sealed under its channel key.
   - **No fallback:** if the permitted path fails, the call ends.
 - **Bounds:**
   - Video: tiers up to 3840×2160, 60 fps and 40 Mbit/s, each gated by measurement (§4.3). Key frames ≤1 MiB from 1440p up, ≤512 KiB below; deltas ≤ half that; oversized frames are dropped (§4.2). ≤2 queued frames at the encoder; SFU leg queues ≤2 MiB; RTX caches ≈1 s.
@@ -335,7 +359,7 @@ Phase 1 order: S0 → K1 → K2 → W1 → B1 → T1, with E1 (the long pole) in
 ## 8. Owner decisions, with recommended defaults
 
 1. **Phase 1 sharer:** browser capture launched from Nuschl, with native Linux in parallel. Approves #139 J. The alternative, native Linux first, adds about 1–2 weeks.
-2. **Topology:** companion SFU at stream.nuschl.eu, not mesh. **16 viewers** on the project instance; configurable when self-hosted.
+2. **Topology:** companion SFU at stream.nuschl.eu as the relay, plus direct paths as in decision 12. **16 viewers** on the project instance; configurable when self-hosted.
 3. **Key agreement:** option (b), HPKE PSK mode with X-Wing. The KEM backend is chosen by spike S0a.
 4. **Viewer policy and rekeying:** Link policy by default (Approve available); rekey on leave and join (batched within 2 s) and every 15 minutes.
 5. **Labels:** a new "Link-encrypted" state with the §3 wording, never green.
@@ -345,6 +369,13 @@ Phase 1 order: S0 → K1 → K2 → W1 → B1 → T1, with E1 (the long pole) in
 9. **End-to-end servers:** S delivered over an MLS `Signal` envelope (fast), with exporter keys (#135) later for voice.
 10. **cargo-deny:** add a str0m wrapper `nuschl-sfu`, and the KEM/HPKE wrapper rows for the stream exchange (Root reviews). AV1 only, so there is no vpx wrapper.
 11. **Compatible-mode nuschld in Phase 1:** use the interim link mode, until `rtc/1` (#141) brings a server-made line.
+12. **Direct paths and privacy (new; recommended):** a direct connection shows each side the other's IP address. So:
+    - relay through the SFU by default for link viewers, who on stock servers are anyone with the link;
+    - direct only between verified Nuschl identities that both allow it ("Allow direct connections with verified people", on by default), and only while the sharer's upload covers it;
+    - relay-only users are never direct (already decided);
+    - "When my upload is too slow" defaults to "relay automatically", with the path always shown.
+
+    Alternatives: the setting off by default (always relayed unless someone turns it on), or direct for anyone in the channel, which exposes addresses to strangers on stock servers.
 
 The coordinator should file new issues for K1, W1, B1, V1 and the infrastructure, with `source:user-request` quoting today's requests. #140–#147 are approved migrated scope.
 
