@@ -93,7 +93,7 @@ impl Desktop {
         let Some((bytes, extension)) = image
             .source
             .as_deref()
-            .and_then(crate::document::data_uri_file)
+            .and_then(nuschl_core::data_uri_image)
         else {
             self.error = Some("This image cannot be saved.".into());
             return;

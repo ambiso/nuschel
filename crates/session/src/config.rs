@@ -170,23 +170,8 @@ impl MumbleUrl {
 }
 
 fn percent_decode(text: &str) -> Result<String, String> {
-    let bytes = text.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut index = 0;
-    while index < bytes.len() {
-        if bytes[index] == b'%' {
-            let hex = bytes
-                .get(index + 1..index + 3)
-                .and_then(|pair| std::str::from_utf8(pair).ok())
-                .and_then(|pair| u8::from_str_radix(pair, 16).ok())
-                .ok_or("invalid percent-encoding in mumble:// URL")?;
-            out.push(hex);
-            index += 3;
-        } else {
-            out.push(bytes[index]);
-            index += 1;
-        }
-    }
+    let out = nuschl_core::percent::decode(text.as_bytes(), false)
+        .ok_or("invalid percent-encoding in mumble:// URL")?;
     let decoded = String::from_utf8(out).map_err(|_| "mumble:// URL is not valid UTF-8")?;
     if decoded.chars().any(char::is_control) {
         return Err("mumble:// URL contains control characters".into());

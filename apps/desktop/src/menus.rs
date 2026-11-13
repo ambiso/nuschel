@@ -1593,7 +1593,7 @@ impl Desktop {
                 .channels
                 .iter()
                 .find(|entry| entry.target == TextTarget::Channel(id))?;
-            path.push(percent_encode(&view.name));
+            path.push(nuschl_core::percent::encode(&view.name, ""));
             current = view.parent;
             if path.len() > 64 {
                 return None;
@@ -1865,18 +1865,6 @@ pub fn strip_tags(html: &str) -> String {
         .replace("&amp;", "&")
         .trim()
         .to_string()
-}
-
-fn percent_encode(segment: &str) -> String {
-    segment
-        .bytes()
-        .map(|byte| match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                (byte as char).to_string()
-            }
-            other => format!("%{other:02X}"),
-        })
-        .collect()
 }
 
 struct MenuSurfaceState {
@@ -2263,17 +2251,13 @@ pub fn prompt(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement> {
 #[cfg(test)]
 mod tests {
     // Not `super::*`: that glob includes GPUI's `test` macro, which shadows `#[test]`.
-    use super::{percent_encode, strip_tags};
+    use super::strip_tags;
     #[test]
     fn strips_mumble_html_for_editing() {
         assert_eq!(
             strip_tags("<p>Hi <b>there</b><br/>line&amp;more</p>"),
             "Hi there\nline&more"
         );
-    }
-    #[test]
-    fn encodes_url_path_segments() {
-        assert_eq!(percent_encode("Dev Talk/ü"), "Dev%20Talk%2F%C3%BC");
     }
 }
 

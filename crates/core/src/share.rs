@@ -18,6 +18,8 @@
 //!
 //! The landing page (web/site/join.js) reads the same format.
 
+use crate::percent;
+
 /// The scheme the desktop registers next to `mumble://`.
 pub const SCHEME: &str = "nuschl";
 /// The default Mumble port, left out of links.
@@ -170,9 +172,13 @@ impl ShareLink {
         } else {
             format!("{host}:{}", self.port)
         };
-        let mut parts = vec![format!("s={}", encode(&server, ":[]"))];
+        let mut parts = vec![format!("s={}", percent::encode(&server, ":[]"))];
         if !self.channel.is_empty() {
-            let path: Vec<String> = self.channel.iter().map(|part| encode(part, "")).collect();
+            let path: Vec<String> = self
+                .channel
+                .iter()
+                .map(|part| percent::encode(part, ""))
+                .collect();
             parts.push(format!("c={}", path.join("/")));
         }
         if let Some(pin) = &self.certificate_sha256 {
@@ -182,7 +188,7 @@ impl ShareLink {
             parts.push("policy=nuschl".into());
         }
         if let Some(name) = &self.name {
-            parts.push(format!("n={}", encode(name, "")));
+            parts.push(format!("n={}", percent::encode(name, "")));
         }
         parts.join("&")
     }
@@ -284,46 +290,9 @@ fn split_server(text: &str) -> Option<(String, u16)> {
     valid.then(|| (host.to_ascii_lowercase(), port))
 }
 
-fn encode(text: &str, keep: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    for byte in text.bytes() {
-        if byte.is_ascii_alphanumeric()
-            || b"-._~".contains(&byte)
-            || keep.as_bytes().contains(&byte)
-        {
-            out.push(char::from(byte));
-        } else {
-            out.push_str(&format!("%{byte:02X}"));
-        }
-    }
-    out
-}
-
 fn decode(text: &str) -> Result<String, String> {
-    let bytes = text.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut index = 0;
-    while index < bytes.len() {
-        match bytes[index] {
-            b'%' => {
-                let hex = bytes
-                    .get(index + 1..index + 3)
-                    .and_then(|pair| std::str::from_utf8(pair).ok())
-                    .and_then(|pair| u8::from_str_radix(pair, 16).ok())
-                    .ok_or("invalid percent-encoding in the share link")?;
-                out.push(hex);
-                index += 3;
-            }
-            b'+' => {
-                out.push(b' ');
-                index += 1;
-            }
-            byte => {
-                out.push(byte);
-                index += 1;
-            }
-        }
-    }
+    let out = percent::decode(text.as_bytes(), true)
+        .ok_or("invalid percent-encoding in the share link")?;
     let decoded = String::from_utf8(out).map_err(|_| "the share link is not valid UTF-8")?;
     if decoded.chars().any(char::is_control) {
         return Err("the share link contains control characters".into());

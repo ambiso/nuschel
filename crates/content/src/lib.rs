@@ -293,43 +293,7 @@ pub fn decode_view(uri: &str) -> Option<ContentBlock> {
 /// Parse `data:image/<type>;base64,<payload>`; nothing else is accepted.
 #[cfg(feature = "images")]
 fn data_uri(uri: &str) -> Option<Vec<u8>> {
-    let rest = uri.trim().strip_prefix("data:image/")?;
-    let (kind, payload) = rest.split_once(";base64,")?;
-    if !matches!(
-        kind.to_ascii_lowercase().as_str(),
-        "png" | "jpeg" | "jpg" | "gif" | "webp"
-    ) {
-        return None;
-    }
-    let payload: String = payload.chars().filter(|c| !c.is_whitespace()).collect();
-    if payload.len() > MAX_CONTENT_BYTES {
-        return None;
-    }
-    // Stock Mumble percent-encodes the base64 text (`+` as %2B, `/` as %2F,
-    // `=` as %3D) and wraps it every 72 characters (Log::imageToImg).
-    base64::engine::general_purpose::STANDARD
-        .decode(percent_decode(&payload)?)
-        .ok()
-}
-
-/// `%XX` escapes to bytes; anything malformed rejects the payload.
-#[cfg(feature = "images")]
-fn percent_decode(text: &str) -> Option<Vec<u8>> {
-    let bytes = text.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut index = 0;
-    while index < bytes.len() {
-        if bytes[index] == b'%' {
-            let hex = bytes.get(index + 1..index + 3)?;
-            let value = u8::from_str_radix(std::str::from_utf8(hex).ok()?, 16).ok()?;
-            out.push(value);
-            index += 3;
-        } else {
-            out.push(bytes[index]);
-            index += 1;
-        }
-    }
-    Some(out)
+    Some(nuschl_core::data_uri_image(uri)?.0)
 }
 
 /// Loading syntect's syntaxes and theme costs most of a worker's start-up, so
