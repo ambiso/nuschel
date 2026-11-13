@@ -72,6 +72,21 @@ dependency policy, and a vulnerability check using a pinned advisory database.
 `cargo deny check` also checks the current advisory database and registry yanks
 outside the Nix sandbox.
 
+### Reusing Cargo build artifacts
+
+Prefer Crane's dependency-only artifacts when reusing a build. A full workspace
+check also contains first-party metadata. With Nix's fixed source timestamps,
+Cargo can incorrectly reuse that metadata after a source change, producing stale
+API errors or skipping the code that a check should exercise.
+
+If a coordinated check reuses full workspace artifacts, run
+`cargo clean --release --workspace --offline` inside that check's owned build
+directory before the release-profile check. Match the profile if checking another
+one. This removes workspace outputs while retaining third-party dependencies;
+do not clean another agent's build or the shared artifact source. Confirm from the
+build log that the intended workspace packages were checked or compiled. Record
+the source revision, seed artifact, command and result with the evidence.
+
 ## The icon
 
 The icon's source is `apps/desktop/assets/nuschl.svg`. The Linux package installs

@@ -106,6 +106,11 @@ Read [SECURITY.md](SECURITY.md), [architecture](docs/architecture.md) and
   do not hand-edit the generated graph or relax policy to avoid fixing a dependency.
 - Dry-run substantial builds. Avoid duplicate broad builds and giant cold Cargo
   targets; coordinate the build window and reuse validated dependency artifacts.
+- Prefer dependency-only Cargo artifacts. When reusing artifacts from a full
+  workspace check, clean the workspace packages inside the owned build before
+  checking again; fixed Nix source timestamps can leave stale first-party metadata.
+  Verify the intended packages were actually rechecked, not just reported fresh
+  ([development](docs/development.md#reusing-cargo-build-artifacts)).
 - Default to `--cores 2 --max-jobs 2` for Nix builds unless the coordinator adjusts it.
 - Put scratch, logs, VM state and runtime directories under an owned disk-backed cache.
   Verify actual driver/state paths; client `TMPDIR` does not move daemon build scratch.
