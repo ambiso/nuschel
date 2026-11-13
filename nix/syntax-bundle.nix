@@ -17,6 +17,9 @@ let
   # Reuse the locked graph's EXISTING generation-capable Syntect configuration.
   # This does not change the normal content dependency's enabled features.
   features = project.internal.crates.syntect.resolvedDefaultFeatures;
+  asset =
+    (builtins.fromJSON (builtins.readFile ../release/licenses/syntect-assets/ASSET-PROVENANCE.json))
+    .custom_bundle;
   syntect = project.internal.buildRustCrateWithFeatures {
     packageId = "syntect";
     inherit features;
@@ -53,6 +56,11 @@ let
         ];
       };
 in
+assert project.internal.crates.syntect.version == "5.3.0";
+assert
+  builtins.hashFile "sha256" ../release/licenses/syntect-assets/nix/Nix.sublime-syntax
+  == asset.raw_grammar_sha256;
+assert builtins.hashFile "sha256" ../tools/generate-syntaxes.rs == asset.generator_sha256;
 assert builtins.elem "yaml-load" features;
 assert !(builtins.elem "regex-onig" features);
 pkgs.runCommand "nuschl-content-syntax-bundle" { } ''

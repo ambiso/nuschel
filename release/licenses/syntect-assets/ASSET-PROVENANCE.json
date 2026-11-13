@@ -350,7 +350,7 @@
     "generator": "tools/generate-syntaxes.rs",
     "generator_sha256": "80fd85015986c76b78754be9ea2a886908a04ca899d7bbf9dc4c584610d6dd3b",
     "recipe": "nix/syntax-bundle.nix",
-    "recipe_sha256": "233ad46bf554d22cc742c81319bd308f6d18ae4c8ed8867888f8b152107f0178",
+    "recipe_sha256": "7807ac8992f1c32097c018653396395851854297293eac19d1079577c870e68b",
     "preserved_default_definitions": 75,
     "total_definitions": 76,
     "unresolved_contexts": 0
