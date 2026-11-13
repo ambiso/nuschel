@@ -602,6 +602,19 @@ impl Player {
         let mut gain = 0.0f32;
         let mut was_ducked = false;
         loop {
+            if self.poll_decoder(&mut decoding).await {
+                continue;
+            }
+            if encoder.retirement_pending() {
+                if let Some(running) = decoding.as_mut() {
+                    running.request_cancel();
+                }
+                if encoder.close().await.is_err() {
+                    self.wait_for_retirement().await;
+                    continue;
+                }
+                reset_encoder = false;
+            }
             if reset_encoder {
                 if let Err(error) = encoder.clear().await {
                     tracing::warn!("{}: encoder reset failed: {error}", self.name);
@@ -625,13 +638,18 @@ impl Player {
             };
             if replace {
                 held = None;
-                if let Some(previous) = decoding.take() {
+                if let Some(previous) = decoding.as_mut() {
                     let finished = previous.frames.is_closed() && previous.frames.is_empty();
+                    previous.request_cancel();
                     if talking && !finished {
                         self.end(&mut encoder, last_bitrate).await;
                         talking = false;
                     }
-                    previous.cancel().await;
+                    if !previous.retired() {
+                        self.wait_for_retirement().await;
+                        continue;
+                    }
+                    decoding = None;
                 }
                 // A seek or skip may have arrived while the old read was stopping.
                 let request = {
@@ -763,19 +781,54 @@ impl Player {
                         self.changes.notify();
                     }
                 }
-                Err(TryRecvError::Disconnected) => {
-                    let mut state = self.state();
-                    if state.finish(
-                        running.entry,
-                        running.generation,
-                        HistoryOutcome::Completed,
-                        None,
-                        wall_clock_ms,
-                    ) {
-                        self.changes.notify();
-                    }
-                }
+                // A closed PCM pipe is not final success: the supervisor's
+                // network result and actual retirement are checked above.
+                Err(TryRecvError::Disconnected) => {}
             }
+        }
+    }
+
+    /// Returns true while the original decoder still owns this player's slot.
+    async fn poll_decoder(&self, decoding: &mut Option<Decoding>) -> bool {
+        if let Some(running) = decoding.as_mut()
+            && let Some(outcome) = running.poll_outcome().await
+        {
+            self.decode_outcome(running.entry, running.generation, outcome);
+            running.request_cancel();
+        }
+        if decoding.as_ref().is_some_and(Decoding::retiring) {
+            if !decoding.as_ref().is_some_and(Decoding::retired) {
+                self.wait_for_retirement().await;
+                return true;
+            }
+            *decoding = None;
+        }
+        false
+    }
+
+    fn decode_outcome(&self, entry: u64, generation: u64, outcome: Result<(), String>) {
+        let mut state = self.state();
+        let changed = match outcome {
+            Ok(()) => state.finish(
+                entry,
+                generation,
+                HistoryOutcome::Completed,
+                None,
+                wall_clock_ms,
+            ),
+            Err(error) => state.fail(entry, generation, error, wall_clock_ms),
+        };
+        if changed {
+            self.changes.notify();
+        }
+    }
+
+    async fn wait_for_retirement(&self) {
+        // The existing owner remains in its single slot. Control callbacks can
+        // still update state, but no queued song/download/codec is started here.
+        tokio::select! {
+            _ = self.wake.notified() => {}
+            _ = sleep(Duration::from_millis(50)) => {}
         }
     }
 
@@ -865,6 +918,65 @@ mod tests {
         assert!(state.start_next(|_| None));
         let playing = state.current.as_ref().unwrap();
         (playing.entry.id, playing.generation)
+    }
+
+    #[tokio::test]
+    async fn retiring_decoder_keeps_its_slot_while_controls_remain_responsive() {
+        let player = player();
+        player.enqueue(vec![track("first"), track("next")], "ada", None);
+        let (entry, generation) = start_next(&player);
+        let decode::tests::Controlled {
+            mut decoding,
+            sender: _sender,
+            terminal,
+            finish,
+        } = decode::tests::controlled();
+        decoding.entry = entry;
+        decoding.generation = generation;
+        let mut slot = Some(decoding);
+        terminal.send(Err("decoder stopped".into())).unwrap();
+        assert!(player.poll_decoder(&mut slot).await);
+        assert_eq!(queued(&player), ["next"]);
+        assert_eq!(player.state().history[0].outcome, HistoryOutcome::Failed);
+        player.set_paused(true);
+        player.set_volume(17);
+        player.enqueue(vec![track("later")], "ada", None);
+        assert_eq!(player.state().volume, 17);
+        for _ in 0..3 {
+            assert!(player.poll_decoder(&mut slot).await);
+            assert_eq!(slot.as_ref().unwrap().entry, entry);
+            assert_eq!(queued(&player), ["next", "later"]);
+        }
+        finish.send(Ok(())).unwrap();
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while player.poll_decoder(&mut slot).await {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(slot.is_none());
+        player.set_paused(false);
+        assert!(player.state().start_next(|_| None));
+        assert_eq!(
+            player.state().current.as_ref().unwrap().entry.track.id,
+            "next"
+        );
+    }
+
+    #[test]
+    fn decode_outcome_cannot_finish_or_fail_a_replacement_generation() {
+        let player = player();
+        player.enqueue(vec![track("a")], "ada", None);
+        let (entry, generation) = start_next(&player);
+        player.seek(Duration::from_secs(2));
+        player.decode_outcome(entry, generation, Ok(()));
+        player.decode_outcome(entry, generation, Err("old failure".into()));
+        assert!(player.state().current.is_some());
+        assert!(player.state().history.is_empty());
+        assert!(player.state().error.is_none());
+        player.decode_outcome(entry, generation + 1, Err("late network failure".into()));
+        assert_eq!(player.state().history[0].outcome, HistoryOutcome::Failed);
     }
 
     fn audio(player: &Player, entry: u64, generation: u64, now: impl FnOnce() -> i64) -> bool {

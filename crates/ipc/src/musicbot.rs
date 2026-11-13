@@ -29,7 +29,7 @@ use std::{
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     process::{Child, ChildStdin, ChildStdout},
-    sync::{Notify, mpsc},
+    sync::{Notify, mpsc, oneshot},
     time::Instant,
 };
 
@@ -325,6 +325,9 @@ pub fn worker_path(bot: &Path) -> Option<PathBuf> {
 }
 
 pub const RESPONSE_TIMEOUT: Duration = Duration::from_secs(2);
+/// A caller stops waiting for retirement independently of the OS operation.
+/// Expiry retains the original child and containment; it never frees a slot.
+const RETIREMENT_GRACE: Duration = Duration::from_secs(2);
 
 /// The credential-bearing parent's end of one confined codec child: only
 /// bounded IPC and opaque transport.
@@ -333,12 +336,18 @@ pub struct Process {
     pub input: Option<ChildStdin>,
     pub output: Option<ChildStdout>,
     _containment: crate::host::Containment,
+    #[cfg(test)]
+    retirement_gate: Option<Arc<Notify>>,
 }
 
 impl Process {
     /// A kill request is not a released slot: callers retain this object until
     /// the OS has confirmed exit. Errors leave ownership with the caller.
     pub async fn retire(&mut self) -> Result<(), String> {
+        #[cfg(test)]
+        if let Some(gate) = &self.retirement_gate {
+            gate.notified().await;
+        }
         if self
             .child
             .try_wait()
@@ -396,6 +405,8 @@ pub async fn spawn(executable: &Path, role: Role) -> Result<Process, String> {
         input,
         output,
         _containment: containment,
+        #[cfg(test)]
+        retirement_gate: None,
     };
     if process.input.is_none() || process.output.is_none() {
         process.retire().await?;
@@ -469,14 +480,16 @@ impl std::fmt::Display for Failure {
 /// One unique mutable owner per encoder/connection; no request queue or spawned
 /// per-request tasks. A cancelled future leaves `busy` set and must retire the
 /// old process before another request. Failure to reap never creates a new one.
-/// The request deadline bounds only the exchange; reaping a failed child is
-/// awaited separately and completely.
+/// The exchange and the subsequent retirement attempt have separate deadlines.
+/// Expired retirement leaves the original child owned, without a replacement.
 pub struct Client {
     role: Role,
     executable: PathBuf,
     process: Option<Process>,
     next: u64,
     busy: bool,
+    #[cfg(test)]
+    close_grace: Duration,
 }
 
 impl Client {
@@ -487,11 +500,31 @@ impl Client {
             process: None,
             next: 1,
             busy: false,
+            #[cfg(test)]
+            close_grace: RETIREMENT_GRACE,
         }
     }
     pub async fn close(&mut self) -> Result<(), String> {
+        let grace = {
+            #[cfg(test)]
+            {
+                self.close_grace
+            }
+            #[cfg(not(test))]
+            {
+                RETIREMENT_GRACE
+            }
+        };
+        self.close_until(Instant::now() + grace).await
+    }
+
+    async fn close_until(&mut self, deadline: Instant) -> Result<(), String> {
+        // Cancellation of this borrowed future must leave the child unusable.
+        self.busy = true;
         if let Some(process) = self.process.as_mut() {
-            process.retire().await?;
+            tokio::time::timeout_at(deadline, process.retire())
+                .await
+                .map_err(|_| "codec worker retirement is still pending".to_owned())??;
             self.process = None;
         }
         self.busy = false;
@@ -499,6 +532,12 @@ impl Client {
     }
     pub fn started(&self) -> bool {
         self.process.is_some()
+    }
+
+    /// The previous operation cannot be reused, even though its error has
+    /// already been delivered. Keep this owner until close confirms reaping.
+    pub fn retirement_pending(&self) -> bool {
+        self.busy && self.process.is_some()
     }
 
     /// Ends the current child after `error`: recovered only once its exit is
@@ -751,6 +790,72 @@ pub async fn decode(
     wake: Arc<Notify>,
     limits: &DecodeLimits,
 ) -> Result<(), String> {
+    decode_inner(
+        executable,
+        media,
+        skip_frames,
+        sender,
+        cancelled,
+        wake,
+        &mut DecodeCompletion {
+            limits: *limits,
+            terminal: None,
+        },
+    )
+    .await
+}
+
+/// Deliver the logical terminal result independently of retirement. Returning
+/// from this future still requires actual child exit and completion of the
+/// outstanding media read; that final result includes any late download error.
+pub struct DecodeCompletion {
+    pub limits: DecodeLimits,
+    pub terminal: Option<oneshot::Sender<Result<(), String>>>,
+}
+
+pub async fn decode_notifying(
+    executable: &Path,
+    media: Media<impl Read + Send + 'static>,
+    skip_frames: u64,
+    sender: &mpsc::Sender<Frame>,
+    cancelled: Arc<AtomicBool>,
+    wake: Arc<Notify>,
+    mut completion: DecodeCompletion,
+) -> Result<(), String> {
+    let result = decode_inner(
+        executable,
+        media,
+        skip_frames,
+        sender,
+        cancelled,
+        wake,
+        &mut completion,
+    )
+    .await;
+    // Validation and launch failures occur before the exchange's notification.
+    notify_terminal(&mut completion.terminal, &result);
+    result
+}
+
+fn notify_terminal(
+    terminal: &mut Option<oneshot::Sender<Result<(), String>>>,
+    result: &Result<(), String>,
+) {
+    if let Some(terminal) = terminal.take() {
+        let _ = terminal.send(result.clone());
+    }
+}
+
+async fn decode_inner(
+    executable: &Path,
+    media: Media<impl Read + Send + 'static>,
+    skip_frames: u64,
+    sender: &mpsc::Sender<Frame>,
+    cancelled: Arc<AtomicBool>,
+    wake: Arc<Notify>,
+    completion: &mut DecodeCompletion,
+) -> Result<(), String> {
+    let limits = &completion.limits;
     if skip_frames > limits.seek_frames {
         return Err(format!(
             "playback cannot start more than {} minutes into a song",
@@ -885,6 +990,10 @@ pub async fn decode(
             _ => break Err("music decoder returned an invalid response".into()),
         }
     };
+    // No frame-channel capacity or OS exit is required to settle the operation.
+    // Success here is provisional: the owner's final result still includes the
+    // network read, and must be checked before recording successful history.
+    notify_terminal(&mut completion.terminal, &result);
     // Closing the bounded chunk receiver releases a blocked producer; a read
     // already submitted to the library must still finish before this slot is reusable.
     if !written {
@@ -893,6 +1002,25 @@ pub async fn decode(
     }
     reading.abort();
     let _ = (&mut reading).await;
+    finish_decode(
+        process,
+        pumping,
+        cancelled,
+        result,
+        &mut completion.terminal,
+    )
+    .await
+}
+
+/// The supervisor retains both resources after settling the logical operation.
+async fn finish_decode(
+    mut process: Process,
+    pumping: tokio::task::JoinHandle<Result<(), String>>,
+    cancelled: Arc<AtomicBool>,
+    result: Result<(), String>,
+    terminal: &mut Option<oneshot::Sender<Result<(), String>>>,
+) -> Result<(), String> {
+    notify_terminal(terminal, &result);
     loop {
         match process.retire().await {
             Ok(()) => break,
@@ -938,6 +1066,158 @@ fn pump(
 mod tests {
     use super::*;
     use std::io::Cursor;
+
+    // The gate withholds retirement acknowledgement deterministically; this is
+    // not a claim to reproduce an unkillable kernel task. The owned child and
+    // the eventual kill/reap are real. No test mode is included in release bins.
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "owned subprocess fixture"]
+    fn retirement_child() {
+        if std::env::var_os("NUSCHL_RETIREMENT_CHILD").is_some() {
+            std::thread::sleep(Duration::from_secs(60));
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn held_client(role: Role) -> (Client, Arc<Notify>, u32) {
+        let mut child = tokio::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "musicbot::tests::retirement_child", "--ignored"])
+            .env("NUSCHL_RETIREMENT_CHILD", "1")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let pid = child.id().unwrap();
+        let containment = crate::host::contain(&child).unwrap();
+        let gate = Arc::new(Notify::new());
+        let process = Process {
+            input: child.stdin.take(),
+            output: child.stdout.take(),
+            child,
+            _containment: containment,
+            retirement_gate: Some(gate.clone()),
+        };
+        let mut client = Client::new(role, PathBuf::from("/nonexistent/no-replacement"));
+        client.process = Some(process);
+        client.close_grace = Duration::from_millis(20);
+        (client, gate, pid)
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn failed_exchange_and_cancelled_close_retain_the_same_child() {
+        let (mut client, gate, pid) = held_client(Role::Encode);
+        // The fixture's libtest stdout is an invalid framed reply, driving the
+        // real request -> end -> bounded close path.
+        let failure = tokio::time::timeout(Duration::from_secs(3), client.request(Request::Clear))
+            .await
+            .unwrap()
+            .unwrap_err();
+        assert!(matches!(failure, Failure::Retained(_)));
+        assert!(client.retirement_pending());
+        assert_eq!(client.process.as_ref().unwrap().child.id(), Some(pid));
+        assert!(
+            client
+                .process
+                .as_mut()
+                .unwrap()
+                .child
+                .try_wait()
+                .unwrap()
+                .is_none()
+        );
+        // Busy preflight cannot start another executable or reuse the pipes.
+        assert!(matches!(
+            client.request(Request::Clear).await,
+            Err(Failure::Retained(_))
+        ));
+        assert_eq!(client.process.as_ref().unwrap().child.id(), Some(pid));
+        assert!(
+            tokio::time::timeout(Duration::from_millis(1), client.close())
+                .await
+                .is_err()
+        );
+        assert!(client.retirement_pending());
+        gate.notify_one();
+        client.close().await.unwrap();
+        assert!(!client.started() && !client.retirement_pending());
+        assert!(!Path::new(&format!("/proc/{pid}")).exists());
+        // Only now can a fresh launch be attempted (and fail discovery).
+        assert!(matches!(
+            client.request(Request::Clear).await,
+            Err(Failure::Recovered(_))
+        ));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn duck_disable_and_new_session_keep_unconfirmed_credit() {
+        let (client, gate, pid) = held_client(Role::Duck);
+        let mut ducker = Ducker {
+            client,
+            quarantined: vec![4],
+            failures: 1,
+        };
+        assert!(ducker.disable().await.is_err());
+        assert!(ducker.new_session().await.is_err());
+        assert_eq!(ducker.quarantined, [4]);
+        assert_eq!(ducker.failures, 1);
+        assert_eq!(
+            ducker.client.process.as_ref().unwrap().child.id(),
+            Some(pid)
+        );
+        gate.notify_one();
+        ducker.new_session().await.unwrap();
+        assert!(!ducker.running() && ducker.quarantined.is_empty());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn decode_terminal_precedes_reaping_and_a_controlled_blocking_read() {
+        let (mut client, gate, pid) = held_client(Role::Decode);
+        let process = client.process.take().unwrap();
+        let (entered, started) = oneshot::channel();
+        let (release, read_release) = std::sync::mpsc::channel();
+        let pumping = tokio::task::spawn_blocking(move || {
+            entered.send(()).unwrap();
+            read_release.recv().unwrap();
+            Err("late network failure".to_owned())
+        });
+        started.await.unwrap();
+        let (terminal, ready) = oneshot::channel();
+        let mut owner = tokio::spawn(async move {
+            finish_decode(
+                process,
+                pumping,
+                Arc::new(AtomicBool::new(false)),
+                Ok(()),
+                &mut Some(terminal),
+            )
+            .await
+        });
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(1), ready)
+                .await
+                .unwrap()
+                .unwrap(),
+            Ok(())
+        );
+        assert!(!owner.is_finished());
+        assert!(Path::new(&format!("/proc/{pid}")).exists());
+        gate.notify_one();
+        assert!(
+            tokio::time::timeout(Duration::from_millis(30), &mut owner)
+                .await
+                .is_err()
+        );
+        // The read is independently still owned even after real process exit.
+        assert!(!Path::new(&format!("/proc/{pid}")).exists());
+        release.send(()).unwrap();
+        assert_eq!(owner.await.unwrap(), Err("late network failure".into()));
+    }
 
     #[test]
     fn sensitivity_lowers_the_threshold() {

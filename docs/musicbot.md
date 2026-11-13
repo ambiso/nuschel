@@ -202,7 +202,10 @@ sets only the fixed public `PWD=/tmp` for Rust codec children. No credential or
 parent environment value is admitted by the service inspection fixture.
 
 IPC frames are capped at 64 KiB before allocation. Encoder/duck exchanges have a
-2-second deadline; a decode operation must produce its next reply within 35 seconds
+2-second exchange deadline and a separate two-second retirement grace; an error
+returns when that grace expires, while the original child and containment remain
+owned. A canceled-request preflight has the same retirement bound and cannot
+reuse old pipes or start a replacement. A decode operation must produce its next reply within 35 seconds
 (excluding consumer backpressure). Network reads have the existing 30-second bound.
 Before its first PCM, a decode child reports work that yields no audio in exact
 steps: each MiB of an MP4 file it reads whole, and each 250 frames (5 seconds) it
@@ -216,8 +219,13 @@ limit fails the song with an explicit message, never a truncated decode, and pro
 after the first PCM is a protocol violation. The skip happens after resampling, so a
 seek plays exactly the frames an unskipped decode would play from that position.
 Cancellation closes the consumer promptly but replacement awaits actual child exit
-and the outstanding network read. Kill/reap failure retains the old process slot;
-no replacement is created. A song has no artificial total-duration limit: retained
+and the outstanding network read. Decoder terminal notification is separate from
+cleanup and does not need space in the PCM queue. Errors follow already-buffered
+PCM; a provisional decoder Done is not recorded as successful history until the
+final network result and reaping are confirmed. Kill/reap failure retains the old
+process slot; no replacement is created. A retiring encoder or decoder suspends
+new playback jobs while pause/seek/queue controls remain responsive. A panicked
+decoder supervisor does not confirm reaping and permanently retains that slot. A song has no artificial total-duration limit: retained
 queues and each operation are bounded. An HTTP sender can stream indefinitely only
 while bounded decoding continues and the configured queue retains that track.
 
