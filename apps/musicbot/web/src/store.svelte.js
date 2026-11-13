@@ -2,7 +2,7 @@
 // Live state from the bot, the commands that change it, and the client-side
 // guesses (optimistic values) shown until the server confirms them.
 import { getJSON, postJSON, HttpError } from "./api.js";
-import { applyMove, browseItemIsCurrent, buildRoute, clamp, debounce, libraryForNamespace, parseRoute, queueStorageKey, routeForLibrary, routeForNamespace, seekSettled, selectedQueue } from "./logic.js";
+import { addressRoute, adoptSharedRoute, applyMove, browseItemIsCurrent, clamp, debounce, libraryForNamespace, parseRoute, queueStorageKey, routeForLibrary, routeForNamespace, seekSettled, selectedQueue } from "./logic.js";
 
 const storageKey = queueStorageKey(location.pathname);
 
@@ -91,22 +91,40 @@ class Store {
 
   #routeChanged() {
     let route = parseRoute(location.hash);
+    if (route.sharedLibrary != null) {
+      // A shared link names its library; it waits (loading nothing) until a state gives the namespace.
+      if (this.browseKey === null) {
+        this.route = route;
+        return;
+      }
+      route = adoptSharedRoute(route, this.#libraryNames, this.browseKey);
+    }
+    this.#applyRoute(route, false);
+  }
+
+  navigate(route) {
+    this.#applyRoute(route, true);
+  }
+
+  /** Shows `route` under the namespace rules; `push` adds a history entry instead of replacing it. */
+  #applyRoute(route, push) {
     let library = typeof route.library === "number" ? route.library : this.library;
     if (this.browseKey !== null && library >= this.#libraryNames.length) library = 0;
     route = routeForNamespace(route, library, this.browseKey);
     if (typeof route.library === "number") this.library = route.library;
-    this.#replaceRoute(route);
+    this.#replaceRoute(route, push);
   }
 
-  navigate(route) {
-    const library = typeof route.library === "number" ? route.library : this.library;
-    location.hash = buildRoute(routeForNamespace(route, library, this.browseKey));
-  }
-
-  #replaceRoute(route) {
+  /**
+   * Sets the in-memory route (with library index and namespace) and writes
+   * its share-format hash to the address bar, so the URL is always safe to copy.
+   */
+  #replaceRoute(route, push = false) {
     this.route = route;
-    const hash = buildRoute(route);
-    if (location.hash !== hash) history.replaceState(history.state, "", hash);
+    const hash = addressRoute(route, this.#libraryNames);
+    if (location.hash === hash) return;
+    if (push) history.pushState(history.state, "", hash);
+    else history.replaceState(history.state, "", hash);
   }
 
   #invalidateBrowse() {
@@ -122,7 +140,7 @@ class Store {
       delete overrides[key];
     }
     if (overrides) this.overrides = overrides;
-    this.#replaceRoute(routeForLibrary(this.route, this.library));
+    if (this.route.sharedLibrary == null) this.#replaceRoute(routeForLibrary(this.route, this.library));
   }
 
   #disconnected() {
@@ -194,13 +212,14 @@ class Store {
   #receive(state) {
     const libraryKey = JSON.stringify(state.libraries);
     const newNamespace = this.browseKey === null || libraryKey !== this.#libraryKey;
+    const shared = newNamespace && this.route.sharedLibrary != null;
     if (newNamespace) {
       const library = libraryForNamespace(this.#libraryNames, state.libraries, this.library);
       if (this.browseKey !== null) this.#invalidateBrowse();
       this.#libraryNames = state.libraries;
       this.#libraryKey = libraryKey;
       this.library = library;
-      this.#replaceRoute(routeForLibrary(this.route, library));
+      if (!shared) this.#replaceRoute(routeForLibrary(this.route, library));
     }
     this.#states++;
     this.snapshot = state;
@@ -210,6 +229,11 @@ class Store {
       this.#browseController = new AbortController();
       this.browseSignal = this.#browseController.signal;
       this.browseKey = `${this.#browseSession}:${this.browseEpoch}`;
+      if (shared) {
+        const route = adoptSharedRoute(this.route, this.#libraryNames, this.browseKey);
+        if (typeof route.library === "number") this.library = route.library;
+        this.#replaceRoute(route);
+      }
     }
     let overrides = null;
     for (const [key, override] of Object.entries(this.overrides)) {

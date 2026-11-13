@@ -3,7 +3,7 @@
   import { store } from "../store.svelte.js";
   import { resource } from "../resource.svelte.js";
   import { query } from "../api.js";
-  import { ALBUM_LISTS, buildRoute, formatDuration, totalDuration } from "../logic.js";
+  import { ALBUM_LISTS, buildRoute, formatDuration, shareRoute, shareUrl, totalDuration } from "../logic.js";
   import { startItemDrag } from "../dnd.js";
   import Cover from "./Cover.svelte";
   import MediaCard from "./MediaCard.svelte";
@@ -36,6 +36,32 @@
     ?? (route.view === "similar" ? (data?.song ? `Similar to ${data.song.title}` : "Similar songs")
       : route.view === "path" ? (matches.length ? `Sonic path: ${matches[0].track.title} → ${matches.at(-1).track.title}` : "Sonic path")
       : detail?.name ?? "Loading…"));
+  const libraries = $derived(store.snapshot?.libraries ?? []);
+  const libraryRoute = $derived(typeof route.library === "number");
+  const shareProblem = $derived(route.sharedLibrary != null || (libraryRoute && (!current || libraries[route.library] === undefined))
+    ? "Sharing is available once the library is loaded."
+    : shareRoute(route, libraries) === null ? "Another library has the same name, so a shared link could not find this one." : null);
+  const link = $derived(shareProblem === null ? shareUrl(location.href, route, libraries) : null);
+  let manualLink = $state(null);
+
+  async function copyLink() {
+    const text = link;
+    if (text === null) return;
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error("The clipboard is unavailable.");
+      await navigator.clipboard.writeText(text);
+      manualLink = null;
+      store.toast("Link copied — it works for people who have their own link to this bot.");
+    } catch {
+      // Plain HTTP pages and denied permissions have no clipboard: let the user copy it by hand.
+      manualLink = text;
+    }
+  }
+
+  function selectAll(node) {
+    node.focus();
+    node.select();
+  }
 
   function changePage(next) {
     if (!current) return;
@@ -47,14 +73,23 @@
 <section class="browse" aria-labelledby="browse-title" aria-busy={result.loading}>
   <div class="section-heading">
     <h1 id="browse-title">{heading}</h1>
-    {#if route.view === "albums"}
-      <label class="sort"><span class="visually-hidden">Sort albums</span>
-        <select value={route.list} disabled={!current} onchange={(event) => { if (current) store.navigate({ ...route, list: event.currentTarget.value }); }}>
-          {#each ALBUM_LISTS as [value, label]}<option {value}>{label}</option>{/each}
-        </select>
-      </label>
-    {/if}
+    <div class="heading-actions">
+      {#if route.view === "albums"}
+        <label class="sort"><span class="visually-hidden">Sort albums</span>
+          <select value={route.list} disabled={!current} onchange={(event) => { if (current) store.navigate({ ...route, list: event.currentTarget.value }); }}>
+            {#each ALBUM_LISTS as [value, label]}<option {value}>{label}</option>{/each}
+          </select>
+        </label>
+      {/if}
+      <button class="share" disabled={link === null} aria-label="Copy link to this page" title={shareProblem ?? (link === null ? "This page cannot be shared." : "Copy a link for people who have their own link to this bot")} onclick={copyLink}><Icon name="link" size={18} /> Copy link</button>
+    </div>
   </div>
+  {#if manualLink !== null}
+    <div class="manual-link">
+      <label class="muted small" for="share-link">Copy this link. It works for people who have their own link to this bot.</label>
+      <input id="share-link" type="text" readonly value={manualLink} use:selectAll onfocus={(event) => event.currentTarget.select()} />
+    </div>
+  {/if}
   {#if route.view === "albums"}
     <div class="pagination">
       <button disabled={!current || page === 0 || result.loading} onclick={() => changePage(page - 1)}>Previous</button>
@@ -156,7 +191,11 @@
 </section>
 
 <style>
-  .section-heading { display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; margin-bottom: 1rem; }
+  .section-heading { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem 1rem; flex-wrap: wrap; margin-bottom: 1rem; }
+  .heading-actions { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+  .share { display: inline-flex; align-items: center; gap: 0.35rem; white-space: nowrap; }
+  .manual-link { display: grid; gap: 0.35rem; margin: -0.25rem 0 1rem; }
+  .manual-link input { width: 100%; min-width: 0; }
   h1 { margin: 0; overflow-wrap: anywhere; }
   .sort select { max-width: 100%; }
   .pagination { display: flex; align-items: center; justify-content: center; gap: 1rem; margin: 0 0 1.25rem; }
