@@ -149,7 +149,13 @@ impl PendingReplies {
     fn insert(&mut self, request_id: u64, tracked: Tracked) -> bool {
         match tracked {
             Tracked::Page(page) => {
-                let epoch = page.ticket.owner.as_ref().map_or(0, |owner| owner.epoch);
+                let Some(owner) = page.ticket.owner.as_ref() else {
+                    return false;
+                };
+                if owner.generation != page.generation || owner.archive != Some(page.conversation) {
+                    return false;
+                }
+                let epoch = owner.epoch;
                 let current = self
                     .page_epochs
                     .entry(page.server.clone())
@@ -190,8 +196,23 @@ impl PendingReplies {
         *current = (owner.generation, epoch);
         self.pages.retain(|_, page| {
             !page.sent_by(owner)
-                || page.ticket.owner.as_ref().map_or(0, |owner| owner.epoch) == epoch
+                || page
+                    .ticket
+                    .owner
+                    .as_ref()
+                    .is_some_and(|owner| owner.epoch == epoch)
         });
+    }
+
+    fn forget_pages(&mut self, owner: Owner<'_>) {
+        self.pages.retain(|_, page| !page.sent_by(owner));
+        if self
+            .page_epochs
+            .get(owner.server)
+            .is_some_and(|(generation, _)| *generation == owner.generation)
+        {
+            self.page_epochs.remove(owner.server);
+        }
     }
 
     /// The request never left (it could not be queued): forget it, if it
@@ -222,12 +243,10 @@ impl PendingReplies {
         if !entry.get().sent_by(from) {
             return PageRoute::Foreign;
         }
-        let epoch = entry
-            .get()
-            .ticket
-            .owner
-            .as_ref()
-            .map_or(0, |owner| owner.epoch);
+        let Some(epoch) = entry.get().ticket.owner.as_ref().map(|owner| owner.epoch) else {
+            entry.remove();
+            return PageRoute::Missing;
+        };
         if self.page_epochs.get(from.server) != Some(&(from.generation, epoch)) {
             entry.remove();
             return PageRoute::Missing;
@@ -1003,6 +1022,10 @@ impl Driver {
             return Err("Disconnect a server before opening another connection (limit: 8).".into());
         }
         if let Some(old) = connections.remove(&server.id) {
+            pending_replies(&self.pending).forget_pages(Owner {
+                server: &server.id,
+                generation: old.generation,
+            });
             old.task.abort();
             self.media.send(media::Control::Detach {
                 server: server.id.clone(),
@@ -1343,6 +1366,10 @@ impl Driver {
     }
     pub fn disconnect(&self, server: &str) {
         if let Some(connection) = self.connections().remove(server) {
+            pending_replies(&self.pending).forget_pages(Owner {
+                server,
+                generation: connection.generation,
+            });
             connection.task.abort();
             // Before a chime for it, so the worker knows whether it still runs.
             self.media.send(media::Control::Detach {
@@ -2227,7 +2254,13 @@ async fn reply_page(
                 pending: pending.clone(),
                 server: asked.server.clone(),
                 generation: asked.generation,
-                epoch: asked.ticket.owner.as_ref().map_or(0, |owner| owner.epoch),
+                // A PagePending without this owner cannot enter the registry.
+                epoch: asked
+                    .ticket
+                    .owner
+                    .as_ref()
+                    .expect("page owner checked on insertion")
+                    .epoch,
             };
             let (events, storage) = (events.clone(), storage.clone());
             tokio::spawn(async move {
@@ -4147,11 +4180,18 @@ mod reply_owner_tests {
         )
     }
     fn page_asked(server: &str, generation: u64) -> Tracked {
+        let mut ticket = ticket();
+        ticket.owner = Some(crate::navigation::PageOwner {
+            generation,
+            epoch: 0,
+            archive: Some(ASKED),
+            identity: "fixture".into(),
+        });
         Tracked::Page(PagePending {
             server: server.into(),
             generation,
             conversation: ASKED,
-            ticket: ticket(),
+            ticket,
             page: Page::Before(None),
             cache: None,
         })
@@ -4674,5 +4714,48 @@ mod reply_owner_tests {
             ..Default::default()
         }];
         assert!(!valid_catchup_page(&raw, Page::After(3)));
+    }
+    #[test]
+    fn retiring_page_owners_bounds_registry_and_readd_never_revives_old_admissions() {
+        let pending: Pending = Default::default();
+        for generation in 1..=128 {
+            let server = format!("temporary-{generation}");
+            let mut replies = pending_replies(&pending);
+            assert!(replies.insert(generation, page_asked(&server, generation)));
+            assert!(replies.insert(1000 + generation, change_asked(&server, generation, None)));
+            assert_eq!(replies.page_epochs.len(), 1);
+            replies.forget_pages(Owner {
+                server: &server,
+                generation,
+            });
+            assert!(replies.page_epochs.is_empty() && replies.pages.is_empty());
+            assert!(
+                replies.changes.contains_key(&(1000 + generation)),
+                "page retirement never removes changes"
+            );
+        }
+        pending_replies(&pending).insert(500, page_asked("same", 200));
+        let old = PageAdmission {
+            pending: pending.clone(),
+            server: "same".into(),
+            generation: 200,
+            epoch: 0,
+        };
+        assert!(old.current());
+        pending_replies(&pending).forget_pages(Owner {
+            server: "same",
+            generation: 200,
+        });
+        assert!(!old.current(), "missing means revoked");
+        pending_replies(&pending).insert(501, page_asked("same", 201));
+        assert!(
+            !old.current(),
+            "a new generation cannot revive the old render"
+        );
+        let mut unowned = page_asked("same", 201);
+        if let Tracked::Page(page) = &mut unowned {
+            page.ticket.owner = None;
+        }
+        assert!(!pending_replies(&pending).insert(502, unowned));
     }
 }
