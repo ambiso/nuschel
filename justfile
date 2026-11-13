@@ -7,6 +7,12 @@ default:
 release *args:
     python3 release/release.py "$@"
 
+# Open issues in AGENTS.md queue order (read-only GraphQL through `gh`); also
+# `why N`, `blocked-urgent` and local claims (`acquire-next --agent NAME`).
+[positional-arguments]
+next *args:
+    python3 -I tools/next-issues.py "$@"
+
 check:
     cargo fmt --all -- --check
     cargo clippy --workspace --all-targets -- -D warnings
