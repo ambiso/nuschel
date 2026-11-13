@@ -15,7 +15,7 @@
 //! route then fails, so nothing is fetched): no reading ever yields Direct
 //! unless the file says Direct. `managed-link-previews.json` (same format) can
 //! only narrow the user's choice; see [`cap`]. The caller does the file I/O.
-use crate::policy::{DnsSettings, Error as PolicyError, Mode, Settings};
+use crate::policy::{DnsSettings, Error as PolicyError, Mode, ProxiedDns, Proxy, Settings};
 use serde::{Deserialize, Serialize};
 
 pub const FILE_NAME: &str = "link-previews.json";
@@ -185,8 +185,13 @@ pub fn serialize(settings: &Settings) -> Result<Vec<u8>, SaveError> {
 }
 
 /// The policy in force from the user's sidecar and the managed one. A
-/// managed file that is unreadable, malformed or of an unknown version means
-/// Off; a usable one narrows the user's settings with [`cap`].
+/// managed file that is unreadable, malformed, of an unknown version, or
+/// names a proxy or resolver that is not valid means Off with its
+/// [`Problem`]: a broken administrator configuration never falls back to the
+/// user's choice. A usable one narrows the user's settings with [`cap`]; when
+/// the result is ProxyRequired without a complete configuration, nothing is
+/// fetched and the problem says why. The caller passes only the managed file
+/// from the administrator's locations (like `managed.json`).
 pub fn effective(user: &Loaded, managed: &Loaded) -> Loaded {
     if !managed.present {
         return user.clone();
@@ -196,6 +201,9 @@ pub fn effective(user: &Loaded, managed: &Loaded) -> Loaded {
         Some(Problem::Unreadable | Problem::TooLarge | Problem::Malformed | Problem::Version(_))
     ) {
         return managed.clone();
+    }
+    if let Some(error) = invalid_services(&managed.settings) {
+        return Loaded::off(true, Some(Problem::Incomplete(error)));
     }
     let settings = cap(&user.settings, &managed.settings);
     let problem = match &user.problem {
@@ -208,6 +216,18 @@ pub fn effective(user: &Loaded, managed: &Loaded) -> Loaded {
         present: true,
         problem,
     }
+}
+
+/// A proxy or resolver a file names must be valid even where its mode does
+/// not use it.
+fn invalid_services(settings: &Settings) -> Option<PolicyError> {
+    if let Some(Err(error)) = settings.proxy.as_deref().map(Proxy::parse) {
+        return Some(error);
+    }
+    if let Some(Err(error)) = settings.dns.as_ref().map(ProxiedDns::parse) {
+        return Some(error);
+    }
+    None
 }
 
 /// The managed cap, kept apart so its semantics are easy to change: the
@@ -405,6 +425,17 @@ mod tests {
         let supplied = effective(&user_direct, &managed_with_proxy);
         assert_eq!(supplied.settings, proxy_settings());
         assert_eq!(supplied.problem, None);
+        // The managed proxy replaces the user's own.
+        let managed_other_proxy = read(
+            r#"{"version":1,"mode":"proxy_required","proxy":"socks5://10.0.0.2:1080","dns":{"url":"https://resolver.example/dns-query","bootstrap":["10.0.0.53"]}}"#,
+        );
+        let replaced = effective(&user_proxy, &managed_other_proxy);
+        let Ok(Route::Proxy { proxy, dns }) = replaced.settings.route() else {
+            panic!("{replaced:?}");
+        };
+        assert_eq!(proxy.address(), "10.0.0.2:1080".parse().unwrap());
+        assert_eq!(dns.url().as_str(), "https://resolver.example/dns-query");
+        assert_eq!(replaced.problem, None);
         // A managed file that cannot be used is Off, never the user's Direct.
         for broken in [
             parse(Source::Unreadable),
@@ -414,6 +445,20 @@ mod tests {
             let effective = effective(&user_direct, &broken);
             assert_eq!(effective.settings.mode, Mode::Off);
             assert!(effective.problem.is_some());
+        }
+        // A managed file naming an invalid proxy or resolver is Off, even
+        // where its mode does not use them.
+        for broken in [
+            r#"{"version":1,"mode":"direct","proxy":"socks5h://127.0.0.1:9050"}"#,
+            r#"{"version":1,"mode":"proxy_required","proxy":"socks5://127.0.0.1:9050","dns":{"url":"http://dns.example/","bootstrap":["192.0.2.53"]}}"#,
+            r#"{"version":1,"mode":"proxy_required","proxy":"socks5://proxy.example:1080"}"#,
+        ] {
+            let effective = effective(&user_proxy, &read(broken));
+            assert_eq!(effective.settings, Settings::default(), "{broken}");
+            assert!(
+                matches!(effective.problem, Some(Problem::Incomplete(_))),
+                "{broken}"
+            );
         }
         // A user file that was not understood stays Off and keeps its notice.
         let user_broken = read("{");
