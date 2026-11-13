@@ -1287,8 +1287,10 @@ impl Client {
         // existing whole-frame maximum before asking, so actual canonical
         // page bodies cannot exceed 4 MiB in one batch, including metadata.
         if progress.pages >= MAX_RECOVERY_PAGES
-            || progress.batch_bytes
-                > MAX_RECOVERY_BYTES - nuschl::server_limit(nuschl::kind::HISTORY_PAGE)
+            || progress
+                .batch_bytes
+                .checked_add(nuschl::server_limit(nuschl::kind::HISTORY_PAGE))
+                .is_none_or(|bytes| bytes > MAX_RECOVERY_BYTES)
             || self.now_ms.saturating_sub(started) >= RECOVERY_MS
         {
             progress.resume_at_ms = Some(self.now_ms.saturating_add(250));
