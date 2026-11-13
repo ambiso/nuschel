@@ -2,9 +2,11 @@
 # SPDX-License-Identifier: EUPL-1.2
 """Build the emoji assets the desktop and web clients compile in or serve.
 
-    python3 -I nix/emoji.py --twemoji <jdecked/twemoji> --emojibase <emojibase-data> --output <dir>
+    python3 -I nix/emoji.py --twemoji <jdecked/twemoji> --emojibase <emojibase-data> \
+        --cldr-license <CLDR LICENSE> --version <twemoji> --revision <commit> \
+        --emojibase-version <version> --cldr-version <version> --output <dir>
 
-Both inputs are pinned flake inputs (see nix/emoji.nix); this only reads them.
+All three sources are pinned together in nix/emoji.nix; this only reads them.
 
 Output:
   emoji.txt   The picker's table: `@Group` lines, then one emoji per line as
@@ -22,9 +24,11 @@ Output:
               Every Twemoji image, named by its key: the code points in
               lower-case hex without leading zeros, joined by "-", without
               U+FE0F. Clients compute the same key for text they render.
-  LICENSE-GRAPHICS, LICENSE-emojibase, ATTRIBUTION.txt
-              Twemoji's CC-BY 4.0 grant, emojibase-data's MIT licence and the
-              attribution the graphics licence requires.
+  LICENSE-GRAPHICS, LICENSE-emojibase, LICENSE-unicode-cldr, ATTRIBUTION.txt
+              Twemoji's CC-BY 4.0 grant, emojibase-data's MIT licence, the
+              Unicode License v3 of the CLDR release emojibase-data's names
+              and keywords derive from, and the attribution the graphics
+              licence requires.
 
 The SVGs are checked to be small, static drawings: no scripts, embedded or
 linked resources, or styles, so neither client ever fetches or runs anything
@@ -69,6 +73,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--twemoji", required=True, type=Path)
     parser.add_argument("--emojibase", required=True, type=Path)
+    parser.add_argument("--cldr-license", required=True, type=Path)
+    parser.add_argument("--emojibase-version", required=True)
+    parser.add_argument("--cldr-version", required=True)
     parser.add_argument("--version", required=True)
     parser.add_argument("--revision", required=True)
     parser.add_argument("--output", required=True, type=Path)
@@ -162,13 +169,19 @@ def main():
 
     shutil.copyfile(args.twemoji / "LICENSE-GRAPHICS", args.output / "LICENSE-GRAPHICS")
     shutil.copyfile(args.emojibase / "LICENSE", args.output / "LICENSE-emojibase")
+    cldr_license = args.cldr_license.read_text(encoding="utf-8")
+    if not cldr_license.startswith("UNICODE LICENSE V3") or "Unicode-3.0" not in cldr_license:
+        raise SystemExit("the CLDR licence is not the Unicode License v3")
+    (args.output / "LICENSE-unicode-cldr").write_text(cldr_license, encoding="utf-8")
     (args.output / "ATTRIBUTION.txt").write_text(
         "Emoji graphics: Twemoji, Copyright 2019 Twitter, Inc and other contributors,\n"
         "and the jdecked/twemoji maintainers; licensed under CC-BY 4.0 (LICENSE-GRAPHICS),\n"
         f"https://github.com/jdecked/twemoji/tree/{args.revision} (version {args.version}).\n"
         "The images are renamed by code point; their drawings are unchanged.\n\n"
-        "Emoji names, groups and keywords: emojibase-data 17.0.0 (MIT, LICENSE-emojibase),\n"
-        "https://www.npmjs.com/package/emojibase-data.\n"
+        f"Emoji names, groups and keywords: emojibase-data {args.emojibase_version} (MIT, LICENSE-emojibase),\n"
+        "https://www.npmjs.com/package/emojibase-data. Its English names and keywords\n"
+        f"derive from Unicode CLDR {args.cldr_version}'s annotations, Copyright Unicode, Inc.,\n"
+        "under the Unicode License v3 (LICENSE-unicode-cldr), https://cldr.unicode.org.\n"
     )
     count = sum(len(rows) for rows in table.values())
     print(f"{count} emoji in {len(table)} groups, {len(images)} images; without an image: {' '.join(skipped) or 'none'}")

@@ -233,6 +233,7 @@ Nuschl is licensed under the [EUPL-1.2](LICENSE). Vendored Mumble schemas keep t
 [Twemoji](https://github.com/jdecked/twemoji) by Twitter, Inc and other contributors,
 licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/); emoji names
 and keywords are from [emojibase-data](https://www.npmjs.com/package/emojibase-data)
-(MIT) ([docs/emoji.md](docs/emoji.md)). Dependency licences are
-reviewed in `deny.toml`; that allowlist does not replace attribution or a
-licence-compliance review for releases.
+(MIT), derived from [Unicode CLDR](https://cldr.unicode.org) data under the
+[Unicode License v3](https://www.unicode.org/license.txt) ([docs/emoji.md](docs/emoji.md)).
+Dependency licences are reviewed in `deny.toml`; that allowlist does not replace
+attribution or a licence-compliance review for releases.

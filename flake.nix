@@ -13,16 +13,6 @@
       url = "github:rustsec/advisory-db";
       flake = false;
     };
-    # Emoji images (CC-BY 4.0) and their names, groups and keywords (MIT).
-    # nix/emoji.nix also reads these pins from flake.lock for non-flake callers.
-    twemoji = {
-      url = "github:jdecked/twemoji/v17.0.3";
-      flake = false;
-    };
-    emojibase-data = {
-      url = "https://registry.npmjs.org/emojibase-data/-/emojibase-data-17.0.0.tgz";
-      flake = false;
-    };
     # Only for checking the Home Manager module; it does not use this input,
     # so consumers bring their own Home Manager.
     home-manager = {
@@ -42,8 +32,6 @@
       flake-utils,
       rust-overlay,
       advisory-db,
-      twemoji,
-      emojibase-data,
       home-manager,
       nixpkgs-mumble14,
       nixpkgs-mumble13,
@@ -149,11 +137,9 @@
           pkgs.libxrandr
           pkgs.libxcb
         ];
-        # Twemoji images and emojibase names for both clients (nix/emoji.nix).
-        emojiAssets = import ./nix/emoji.nix {
-          inherit pkgs;
-          sources = { inherit twemoji emojibase-data; };
-        };
+        # Twemoji images and emojibase names for both clients; the sources
+        # are pinned together in nix/emoji.nix.
+        emojiAssets = import ./nix/emoji.nix { inherit pkgs; };
         common = {
           pname = "nuschl";
           version = "0.1.0";

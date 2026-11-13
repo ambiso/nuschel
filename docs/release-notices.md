@@ -24,7 +24,8 @@ for an existing flake export, with no new ARM runtime or CI proof.
 | `all` | Complete target union | Complete inspectable source audit, retained with CI diagnostic artifacts |
 
 The emoji assets are Twemoji's graphics (CC-BY 4.0, with the attribution it asks
-for) and emojibase-data (MIT), from the pinned flake inputs ([emoji.md](emoji.md)).
+for), emojibase-data (MIT) and the Unicode License v3 of the CLDR release its names
+and keywords derive from, all pinned in `nix/emoji.nix` ([emoji.md](emoji.md)).
 The license check requires them wherever the desktop (`nuschl`) or the web client
 (`nuschl-client-wasm`) is a root. The pickers also credit Twemoji.
 

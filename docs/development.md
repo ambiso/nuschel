@@ -112,7 +112,7 @@ the source revision, seed artifact, command and result with the evidence.
 ## Emoji assets
 
 The desktop compiles in, and the web client serves, Twemoji images and the picker's
-data built from two pinned flake inputs (`nix build .#emojiAssets`,
+data built from sources pinned together in `nix/emoji.nix` (`nix build .#emojiAssets`,
 [emoji.md](emoji.md)). Nix builds and the development shell set
 `NUSCHL_EMOJI_ASSETS`; without it, the desktop's build script reads `emoji-assets/`,
 which `just emoji-assets` links (with `web/app/public/emoji` for `npm run dev` and

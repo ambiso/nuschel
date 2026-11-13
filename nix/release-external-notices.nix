@@ -39,10 +39,11 @@ let
       path = "${native.${name}}/${name}/${file}";
     }) files;
   };
-  # Twemoji graphics (CC-BY 4.0) and emojibase-data (MIT), compiled into the
-  # desktop and served by the web client (nix/emoji.nix).
+  # Twemoji graphics (CC-BY 4.0), emojibase-data (MIT) and the Unicode
+  # License v3 of the CLDR data it derives from, compiled into the desktop
+  # and served by the web client; pinned together in nix/emoji.nix.
   emojiAssets = import ./emoji.nix { inherit pkgs; };
-  emojiLock = (builtins.fromJSON (builtins.readFile ../flake.lock)).nodes;
+  emojiPins = emojiAssets.passthru.pins;
   newcm = projectRoot + "/release/licenses/newcm";
   syntect = projectRoot + "/release/licenses/syntect-assets";
   syntax =
@@ -117,8 +118,8 @@ in
     ++ [
       {
         name = "emoji-assets";
-        version = "twemoji-${emojiLock.twemoji.original.ref}+emojibase-data-17.0.0";
-        source = "https://github.com/jdecked/twemoji/tree/${emojiLock.twemoji.locked.rev} (${emojiLock.twemoji.locked.narHash}); ${emojiLock.emojibase-data.locked.url} (${emojiLock.emojibase-data.locked.narHash})";
+        version = "twemoji-v${emojiPins.twemoji.version}+emojibase-data-${emojiPins.emojibase.version}+cldr-${emojiPins.cldr.version}";
+        source = with emojiAssets.passthru.sources; "${twemoji}; ${emojibase}; ${cldr}";
         files =
           map
             (file: {
@@ -129,6 +130,7 @@ in
               "ATTRIBUTION.txt"
               "LICENSE-GRAPHICS"
               "LICENSE-emojibase"
+              "LICENSE-unicode-cldr"
             ];
       }
     ]

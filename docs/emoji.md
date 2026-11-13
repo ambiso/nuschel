@@ -10,16 +10,20 @@ classic smileys ([#7](https://github.com/ambiso/nuschl/issues/7)).
 
 ## The data
 
-Both sources are flake inputs with `flake = false`, pinned in `flake.lock`:
+The three sources are pinned together, by hash, in `nix/emoji.nix`. They belong
+together: Twemoji draws the emoji of one Unicode Emoji version, emojibase-data
+names and groups that version's emoji from one CLDR release, and that release's
+licence covers the names and keywords.
 
-| Input | Pinned | Licence | Used for |
+| Source | Pinned | Licence | Used for |
 | --- | --- | --- | --- |
-| `twemoji` | `github:jdecked/twemoji/v17.0.3` | graphics CC-BY 4.0 | the images (`assets/svg`) |
-| `emojibase-data` | `emojibase-data-17.0.0.tgz` from npm | MIT | groups, names, keywords, short codes, skin tones |
+| Twemoji | `jdecked/twemoji` v17.0.3 (commit `b6b55fef`) | graphics CC-BY 4.0 | the images (`assets/svg`) |
+| emojibase-data | `emojibase-data-17.0.0.tgz` from npm (Emoji 17, CLDR 48) | MIT | groups, names, keywords, short codes, skin tones |
+| CLDR licence | `LICENSE` of `unicode-org/cldr` release-48 (commit `acd6d88a`) | Unicode License v3 | the notice for the names and keywords |
 
-`nix/emoji.nix` runs `nix/emoji.py` over them (`nix build .#emojiAssets`). Callers
-outside the flake (`nix/crate2nix.nix`, the distro packaging) read the same pins
-from `flake.lock`, so every build path uses identical store paths. The output:
+`nix/emoji.nix` runs `nix/emoji.py` over them (`nix build .#emojiAssets`). Every
+caller (the flake, `nix/crate2nix.nix`, the distro packaging) imports that file,
+so every build path uses identical store paths. The output:
 
 - `emoji.txt`: the picker's table. One `@Group` line per group, then one emoji per
   line: the emoji, its name, its search words (name, keywords and emojibase short
@@ -34,14 +38,16 @@ from `flake.lock`, so every build path uses identical store paths. The output:
 - `svg/<key>.svg`: all 4009 Twemoji images, renamed by key; the drawings are
   unchanged. A key is the code points in lower-case hex without leading zeros,
   joined by `-`, without U+FE0F (`2122`, `1f44d-1f3fd`, `23-20e3`).
-- `LICENSE-GRAPHICS`, `LICENSE-emojibase` and `ATTRIBUTION.txt`, the notices. They
-  are the `emoji-assets` component of the release notices (docs/release-notices.md),
-  and both pickers credit Twemoji in their footer.
+- `LICENSE-GRAPHICS`, `LICENSE-emojibase`, `LICENSE-unicode-cldr` and
+  `ATTRIBUTION.txt`, the notices. They are the `emoji-assets` component of the
+  release notices (docs/release-notices.md), and both pickers credit Twemoji in
+  their footer.
 
 emojibase-data is published under MIT, but its English names and keywords derive
-from Unicode CLDR's annotations, which are under the Unicode License v3. The pinned
-package carries no Unicode notice, and the bundle does not add one: whether one is
-needed is an open question for the release licence review.
+from Unicode CLDR's annotations, which are under the Unicode License v3. The npm
+package carries no Unicode notice (nor does emojibase's repository), so the bundle
+takes the licence from the CLDR release emojibase-data was built from, and the
+attribution names it. The generator checks that it is the Unicode License v3.
 
 The generator refuses an image larger than 64 KiB or one that could run code or
 load anything: scripts, `<image>`, `<use>`, `<foreignObject>`, styles, links,
@@ -190,7 +196,9 @@ The web picker has no browser test; its logic is in `emoji.js`, which is tested.
 
 ## Updating
 
-Change the `twemoji` or `emojibase-data` URL in `flake.nix`, then run
-`nix flake lock` and `nix build .#emojiAssets`. Its output says how many emoji
-have no image, which should stay none. Then run both clients' tests; the
+Update the three pins in `nix/emoji.nix` together: a Twemoji release, the
+emojibase-data release for the same Emoji version, and the CLDR release that
+emojibase-data's changelog names (its `release-NN` tag). Set each `hash` to `""`,
+run `nix build .#emojiAssets`, and take the hash Nix reports, one at a time. Its
+output says how many emoji have no image, which should stay none. Then run both clients' tests; the
 `emoji-assets` notice picks up the new pins (docs/release-notices.md).
