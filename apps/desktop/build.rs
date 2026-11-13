@@ -85,7 +85,8 @@ fn emoji() -> Result<(), Box<dyn std::error::Error>> {
         if !valid {
             return Err(format!("unexpected image key {key:?}").into());
         }
-        let svg = root.join("svg").join(format!("{key}.svg"));
+        // Gzip-compressed (nix/emoji.nix); GPUI's SVG parser reads it as is.
+        let svg = root.join("svgz").join(format!("{key}.svgz"));
         if !svg.is_file() {
             return Err(format!("{} is missing", svg.display()).into());
         }
@@ -98,7 +99,8 @@ fn emoji() -> Result<(), Box<dyn std::error::Error>> {
          pub const TABLE: &str = include_str!(",
     );
     out += &format!("{:?});\n", table.display().to_string());
-    out += "/// Every Twemoji image by key, sorted: (key, shown as text by default, SVG).\n";
+    out += "/// Every Twemoji image by key, sorted: (key, shown as text by default,\n";
+    out += "/// gzip-compressed SVG).\n";
     out += "pub static IMAGES: &[(&str, bool, &[u8])] = &[\n";
     for (key, text, svg) in &entries {
         out += &format!(

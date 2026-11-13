@@ -7,6 +7,10 @@
 # (docs/emoji.md, "Updating"). Every caller (the flake, crate2nix.nix, the
 # distro packaging) imports this file, so all build paths use identical
 # store paths.
+#
+# The desktop embeds the images gzip-compressed (`svgz/`, by zopfli: about
+# 4.2 MB instead of 10 MB); GPUI's SVG parser (usvg) reads gzip as is. The
+# web client serves the plain `svg/`, which HTTP compression covers.
 { pkgs }:
 let
   pins = {
@@ -42,7 +46,10 @@ let
 in
 pkgs.runCommand "nuschl-emoji-assets"
   {
-    nativeBuildInputs = [ pkgs.python3 ];
+    nativeBuildInputs = [
+      pkgs.python3
+      pkgs.zopfli
+    ];
     # For the release notices (nix/release-external-notices.nix).
     passthru = {
       inherit pins;
@@ -59,4 +66,20 @@ pkgs.runCommand "nuschl-emoji-assets"
       --version ${pins.twemoji.version} --revision ${pins.twemoji.rev} \
       --emojibase-version ${pins.emojibase.version} --cldr-version ${pins.cldr.version} \
       --output "$out"
+
+    # zopfli's gzip has no file name and a zero time: reproducible. Each file
+    # must decompress to exactly the checked SVG.
+    mkdir "$out/svgz"
+    compress() {
+      zopfli -c "$1" > "$out/svgz/$(basename "$1" .svg).svgz"
+    }
+    export -f compress
+    export out
+    find "$out/svg" -name '*.svg' -print0 \
+      | xargs -0 -n 64 -P "''${NIX_BUILD_CORES:-1}" bash -c 'for f; do compress "$f"; done' _
+    for svg in "$out"/svg/*.svg; do
+      gzip -dc "$out/svgz/$(basename "$svg" .svg).svgz" | cmp -s - "$svg" \
+        || { echo "svgz of $svg does not match it" >&2; exit 1; }
+    done
+    test "$(ls "$out/svgz" | wc -l)" = "$(ls "$out/svg" | wc -l)"
   ''

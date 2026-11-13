@@ -37,7 +37,12 @@ so every build path uses identical store paths. The output:
 - `data.json`: the table and the keys for the web client.
 - `svg/<key>.svg`: all 4009 Twemoji images, renamed by key; the drawings are
   unchanged. A key is the code points in lower-case hex without leading zeros,
-  joined by `-`, without U+FE0F (`2122`, `1f44d-1f3fd`, `23-20e3`).
+  joined by `-`, without U+FE0F (`2122`, `1f44d-1f3fd`, `23-20e3`). The web
+  client serves these.
+- `svgz/<key>.svgz`: the same images gzip-compressed by zopfli, for the desktop:
+  4.2 MB instead of 10 MB. `nix/emoji.nix` makes them after the checks and fails
+  unless each decompresses to exactly its SVG; zopfli's output has no file name
+  and no time, so it is reproducible.
 - `LICENSE-GRAPHICS`, `LICENSE-emojibase`, `LICENSE-unicode-cldr` and
   `ATTRIBUTION.txt`, the notices. They are the `emoji-assets` component of the
   release notices (docs/release-notices.md), and both pickers credit Twemoji in
@@ -74,7 +79,10 @@ The picker inserts emojibase's emoji form, so a ™ from the picker is `™️`.
 
 ## Desktop
 
-`build.rs` embeds the table and the images (about 10 MB of SVG in the binary). It
+`build.rs` embeds the table and the compressed images (about 4.2 MB in the
+binary). GPUI's SVG parser (usvg) recognises gzip and decompresses an image when
+it is first drawn, with `flate2`, which the desktop already uses; nothing new
+is linked. It
 reads them from `NUSCHL_EMOJI_ASSETS`, which every Nix build sets, or else from
 `emoji-assets/` in the workspace root (`just emoji-assets`; the Debian source
 package ships it). It fails without them rather than build a desktop without emoji.

@@ -1269,11 +1269,18 @@ mod tests {
         assert!(images("Version 2024 # * → ✓ ü ß 中文").is_empty());
     }
 
+    /// The images are embedded gzip-compressed (nix/emoji.nix, which also
+    /// checks each decompresses to the SVG nix/emoji.py checked); GPUI's
+    /// SVG parser takes them as they are.
     #[test]
-    fn every_image_is_a_small_static_svg() {
+    fn every_image_is_a_small_compressed_svg_that_parses() {
+        let renderer = SvgRenderer::new(Arc::new(crate::assets::Assets));
         for (key, _, svg) in assets::IMAGES {
-            let text = std::str::from_utf8(svg).unwrap();
-            assert!(text.starts_with("<svg") && svg.len() <= 64 * 1024, "{key}");
+            assert!(
+                svg.starts_with(&[0x1f, 0x8b]) && svg.len() <= 64 * 1024,
+                "{key}"
+            );
+            assert!(renderer.parse_svg(svg).is_ok(), "{key}");
         }
         assert!(Twemoji.svg(assets::IMAGES.len() as u32).is_none());
     }
