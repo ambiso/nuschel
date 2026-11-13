@@ -1356,6 +1356,47 @@ async fn import_murmur(
     report
 }
 
+/// A PBKDF2 row without its salt column is imported without a password.
+#[tokio::test]
+async fn a_murmur_pbkdf2_password_without_a_salt_is_not_imported() {
+    use nuschl_ipc::murmur::{MurmurChannel, MurmurDump, MurmurUser};
+    let user = |id, name: &str, salt: Option<&str>| MurmurUser {
+        id,
+        name: name.into(),
+        password: Some("ab".repeat(48)),
+        salt: salt.map(Into::into),
+        kdf_iterations: Some(1000),
+        ..Default::default()
+    };
+    let dump = MurmurDump {
+        channels: vec![MurmurChannel {
+            id: 0,
+            name: "Root".into(),
+            ..Default::default()
+        }],
+        users: vec![
+            user(1, "alice", Some("0011223344556677")),
+            user(2, "bob", None),
+        ],
+        ..Default::default()
+    };
+    let directory = tempfile::tempdir().unwrap();
+    let store = MemoryStore::shared();
+    let report = import_murmur(directory.path(), &store, dump, false)
+        .await
+        .unwrap();
+    assert_eq!(report.imported.get("registered users"), Some(&2));
+    assert_eq!((report.pbkdf2_hashes, report.sha1_hashes), (1, 0));
+    assert!(
+        report
+            .skipped
+            .iter()
+            .any(|line| line.starts_with("user 2: malformed PBKDF2 password")),
+        "{:?}",
+        report.skipped
+    );
+}
+
 #[tokio::test]
 async fn a_murmur_database_imports_with_its_passwords_and_acls() {
     let carol = identity();
@@ -1402,7 +1443,7 @@ async fn a_murmur_database_imports_with_its_passwords_and_acls() {
             "{what}: {rendered}"
         );
     }
-    assert_eq!((report.pbkdf2_passwords, report.sha1_passwords), (3, 1));
+    assert_eq!((report.pbkdf2_hashes, report.sha1_hashes), (3, 1));
     for expected in [
         "user 4: the name does not match",
         "user 5: another account has the same name",
