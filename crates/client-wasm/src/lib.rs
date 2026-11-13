@@ -7,6 +7,10 @@
 //! [`session`] and [`snapshot`] are plain Rust and tested natively; the
 //! browser glue is only built for `wasm32-unknown-unknown`.
 
+pub mod actions;
+pub mod content_broker;
+pub mod content_jobs;
+pub mod image;
 pub mod session;
 pub mod snapshot;
 pub mod storage;

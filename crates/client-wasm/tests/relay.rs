@@ -23,6 +23,13 @@ async fn mumble_server() -> (u16, String) {
 }
 
 async fn mumble_server_with_budget(initial: Option<u32>, update: Option<u32>) -> (u16, String) {
+    mumble_server_with_limits(initial, update, None).await
+}
+async fn mumble_server_with_limits(
+    initial: Option<u32>,
+    update: Option<u32>,
+    content_limit: Option<u32>,
+) -> (u16, String) {
     let certified = rcgen::generate_simple_self_signed(vec!["localhost".into()]).expect("cert");
     let certificate = certified.cert.der().clone();
     let fingerprint = nuschl_client_wasm::session::hex(&sha2_digest(certificate.as_ref()));
@@ -55,6 +62,17 @@ async fn mumble_server_with_budget(initial: Option<u32>, update: Option<u32>) ->
                             break 'login;
                         }
                     }
+                }
+                if let Some(limit) = content_limit {
+                    let config = proto::ServerConfig {
+                        allow_html: Some(true),
+                        message_length: Some(0),
+                        image_message_length: Some(limit),
+                        ..Default::default()
+                    };
+                    tls.write_all(&encode_control(kind::SERVER_CONFIG, &config).unwrap())
+                        .await
+                        .unwrap();
                 }
                 let frames = [
                     encode_control(
@@ -316,6 +334,151 @@ async fn legacy_text_preserves_newlines_and_escapes_html_across_tls_relay() {
     }
 }
 
+// Valid public synthetic 1×1 PNG, with a large ancillary text chunk. This
+// exercises transport size without adding a codec to the session test graph.
+fn large_png_html() -> String {
+    fn chunk(png: &mut Vec<u8>, name: &[u8; 4], body: &[u8]) {
+        png.extend_from_slice(&(body.len() as u32).to_be_bytes());
+        png.extend_from_slice(name);
+        png.extend_from_slice(body);
+        let mut crc = u32::MAX;
+        for byte in name.iter().chain(body) {
+            crc ^= u32::from(*byte);
+            for _ in 0..8 {
+                crc = (crc >> 1) ^ if crc & 1 == 0 { 0 } else { 0xedb8_8320 };
+            }
+        }
+        png.extend_from_slice(&(!crc).to_be_bytes());
+    }
+    let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+    chunk(&mut png, b"IHDR", &[0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0, 0, 0]);
+    let mut padding = b"padding\0".to_vec();
+    padding.extend(std::iter::repeat_n(b'A', 150_000));
+    chunk(&mut png, b"tEXt", &padding);
+    chunk(
+        &mut png,
+        b"IDAT",
+        &[120, 156, 99, 208, 8, 168, 248, 15, 0, 3, 132, 1, 240],
+    );
+    chunk(&mut png, b"IEND", &[]);
+    let alphabet = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut encoded = String::new();
+    for bytes in png.chunks(3) {
+        let value = (u32::from(bytes[0]) << 16)
+            | (u32::from(*bytes.get(1).unwrap_or(&0)) << 8)
+            | u32::from(*bytes.get(2).unwrap_or(&0));
+        for (index, shift) in [18, 12, 6, 0].into_iter().enumerate() {
+            let byte = if index > bytes.len() {
+                b'='
+            } else {
+                alphabet[((value >> shift) & 63) as usize]
+            };
+            match byte {
+                b'+' => encoded.push_str("%2B"),
+                b'/' => encoded.push_str("%2F"),
+                b'=' => encoded.push_str("%3D"),
+                _ => encoded.push(char::from(byte)),
+            }
+        }
+    }
+    format!("<img src=\"data:image/png;base64,{encoded}\" />")
+}
+
+#[tokio::test]
+async fn large_text_and_image_cross_default_rustls_buffer_without_truncation_or_interleaving() {
+    let (port, fingerprint) = mumble_server_with_limits(None, None, Some(0)).await;
+    let relay = relay().await;
+    let mut request = relay.into_client_request().unwrap();
+    request.headers_mut().insert(
+        "Sec-WebSocket-Protocol",
+        HeaderValue::from_static(tunnel::SUBPROTOCOL),
+    );
+    let (mut ws, _) = tokio_tungstenite::connect_async(request).await.unwrap();
+    let mut session = Session::new(Login {
+        host: "127.0.0.1".into(),
+        port,
+        username: "web".into(),
+        password: None,
+        tokens: vec![],
+        pin: Some(fingerprint),
+    })
+    .unwrap();
+    let text = "x".repeat(200_000);
+    let image = large_png_html();
+    assert!(image.len() > 200_000 && image.len() < 256 * 1024);
+    let image_wire = format!("{image}<br/>one &amp; &lt;caption&gt;");
+    let expected = [
+        format!("fixture received: {text}"),
+        format!("fixture received: {image_wire}"),
+    ];
+    let mut channel_instance = None;
+    let mut own_instance = None;
+    let mut received = 0;
+    let mut sent_boundaries = Vec::new();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    loop {
+        for frame in session.take_outgoing() {
+            ws.send(Message::binary(frame)).await.unwrap();
+        }
+        for event in session.take_events() {
+            match event {
+                Event::Server(ServerEvent::Channel(channel)) if channel.id == 0 => {
+                    channel_instance = Some(channel.instance)
+                }
+                Event::Server(ServerEvent::User(user)) if user.session == 3 => {
+                    own_instance = Some(user.instance)
+                }
+                Event::Server(ServerEvent::Connected { .. }) => {
+                    session
+                        .send_text(
+                            nuschl_client::model::TextTarget::Channel(0),
+                            text.clone(),
+                            None,
+                        )
+                        .unwrap();
+                    // Queue both before the transport drains: the TLS records
+                    // must contain complete first/second application frames.
+                    session
+                        .send_inline_image(
+                            nuschl_client::model::TextTarget::Channel(0),
+                            &image,
+                            "one & <caption>",
+                            None,
+                            channel_instance,
+                            own_instance.unwrap(),
+                        )
+                        .unwrap();
+                    assert!(!session.is_closed());
+                }
+                Event::Sent { transport, .. } => sent_boundaries.push(transport),
+                Event::Text {
+                    outgoing: false,
+                    body,
+                    ..
+                } => {
+                    assert_eq!(body, expected[received]);
+                    received += 1;
+                    if received == 2 {
+                        assert_eq!(sent_boundaries.len(), 2);
+                        assert!(sent_boundaries[0] < sent_boundaries[1]);
+                        assert!(!session.is_closed());
+                        return;
+                    }
+                }
+                Event::Closed { reason } => panic!("large TLS send closed: {reason}"),
+                _ => {}
+            }
+        }
+        for frame in session.take_outgoing() {
+            ws.send(Message::binary(frame)).await.unwrap();
+        }
+        match tokio::time::timeout_at(deadline, ws.next()).await {
+            Ok(Some(Ok(Message::Binary(bytes)))) => session.receive(&bytes),
+            other => panic!("large TLS relay ended: {other:?}"),
+        }
+    }
+}
+
 #[tokio::test]
 async fn an_unknown_certificate_is_the_users_decision() {
     let (port, fingerprint) = mumble_server().await;
@@ -353,11 +516,10 @@ async fn an_unknown_certificate_is_the_users_decision() {
 }
 
 #[tokio::test]
+#[ignore = "requires an owned stock Murmur executable in NUSCHL_TEST_MURMUR"]
 async fn logs_in_to_murmur() {
-    let Some(binary) = std::env::var_os("NUSCHL_TEST_MURMUR") else {
-        eprintln!("NUSCHL_TEST_MURMUR is not set; skipping the Murmur run");
-        return;
-    };
+    let binary = std::env::var_os("NUSCHL_TEST_MURMUR")
+        .expect("Explicit stock-Murmur test requires NUSCHL_TEST_MURMUR pointing to the owned fixture executable");
     let root = tempfile::tempdir().expect("temporary directory");
     let port = std::net::TcpListener::bind("127.0.0.1:0")
         .expect("bind")

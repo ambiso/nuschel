@@ -2,14 +2,23 @@
 // An RPC timeout is not a worker acknowledgment. Retire the entire owned lane
 // before settling timed-out requests. A closed owner never posts new work
 // while the browser finishes its asynchronous native shutdown.
-export const SDK_RPC_LIMIT=128, SDK_RPC_TIMEOUT=15000, SDK_STARTUP_TIMEOUT=30000;
+// The SDK posts at most this many content jobs before their ACKs (Rust
+// MAX_POSTED_JOBS; tests/content_window.unit.mjs keeps the two equal).
+export const CONTENT_WINDOW=4;
+export const SDK_RPC_LIMIT=128, SDK_RPC_ACK_RESERVE=CONTENT_WINDOW, SDK_RPC_TIMEOUT=15000, SDK_STARTUP_TIMEOUT=30000;
+// A content completion ACK releases credit the SDK holds for one posted job.
+// Four of the 128 slots (one per posted job) are reserved for these ACKs, so
+// ordinary command pressure can never refuse one locally. The lane's single
+// best-effort retirement notice shares that reserve and is refused, not
+// queued, when all four are in flight.
+const ACK_METHODS=new Set(["content_complete","content_retire"]);
 export class SdkUnavailableError extends Error {
   constructor(message="The client is unavailable. Reload to reconnect.") {super(message);this.name="SdkUnavailableError";this.code="SDK_UNAVAILABLE";}
 }
 export class SdkRpc {
   constructor(worker,{onClose=()=>{},clock=globalThis}={}) {
     this.worker=worker;this.onClose=onClose;this.clock=clock;
-    this.pending=new Map();this.next=0;this.closed=false;this.phase="starting";this.initialized=false;
+    this.pending=new Map();this.acks=0;this.next=0;this.closed=false;this.phase="starting";this.initialized=false;this.lastState=0;this.statePending=null;
     this.startupTimer=this.clock.setTimeout(()=>this.close("The browser client did not finish starting. Reload to try again."),SDK_STARTUP_TIMEOUT);
   }
   get size(){return this.pending.size;}
@@ -24,10 +33,26 @@ export class SdkRpc {
     this.clock.clearTimeout(this.startupTimer);this.startupTimer=null;this.phase="ready";
     return true;
   }
-  request(method,args=[]) {
+  acceptState(id) {
+    if(this.closed||this.phase!=="ready")return false;
+    if(!Number.isSafeInteger(id)||id!==this.lastState+1||this.statePending!==null){this.close("The browser worker sent an invalid state sequence. Reload to reconnect.");return false;}
+    this.lastState=id;this.statePending=id;return true;
+  }
+  ackState(id) {
+    if(this.closed||this.statePending===null||!Number.isSafeInteger(id)||id!==this.statePending)return false;
+    try { this.worker.postMessage({method:"state_applied",args:[id]});this.statePending=null;return true; }
+    catch { this.close("The browser worker could not accept its state acknowledgment. Reload to reconnect.");return false; }
+  }
+  request(method,args=[],proof) {
     if(this.closed)return Promise.reject(new SdkUnavailableError());
     if(this.phase!=="ready")return Promise.reject(new Error("The client is still starting."));
-    if(this.pending.size>=SDK_RPC_LIMIT)return Promise.reject(new Error("The client is busy. Try again shortly."));
+    let context;
+    if(proof!==undefined){
+      try{context=JSON.stringify(proof);if(typeof context!=="string"||context.length>4096||new TextEncoder().encode(context).length>4096)throw new Error("Action context exceeds the browser limit.");}
+      catch(error){return Promise.reject(error);}
+    }
+    const ack=ACK_METHODS.has(method);
+    if(ack?this.acks>=SDK_RPC_ACK_RESERVE:this.pending.size-this.acks>=SDK_RPC_LIMIT-SDK_RPC_ACK_RESERVE)return Promise.reject(new Error("The client is busy. Try again shortly."));
     if(!Number.isSafeInteger(this.next+1)) {
       this.close("The client request counter is exhausted. Reload to reconnect.");
       return Promise.reject(new SdkUnavailableError());
@@ -35,15 +60,15 @@ export class SdkRpc {
     const id=++this.next;
     return new Promise((resolve,reject)=>{
       const timer=this.clock.setTimeout(()=>this.close("The browser worker did not respond. Reload to reconnect."),SDK_RPC_TIMEOUT);
-      this.pending.set(id,{resolve,reject,timer});
-      try {this.worker.postMessage({id,method,args});}
+      this.pending.set(id,{resolve,reject,timer,ack});if(ack)this.acks++;
+      try {this.worker.postMessage(context===undefined?{id,method,args}:{id,method,args,context});}
       catch {this.close("The browser worker could not accept a command. Reload to reconnect.");}
     });
   }
   accept(data) {
     if(this.closed||data?.kind!=="result"||!Number.isSafeInteger(data.id)||data.id<=0)return false;
     const entry=this.pending.get(data.id);if(!entry)return false;
-    this.pending.delete(data.id);this.clock.clearTimeout(entry.timer);
+    this.pending.delete(data.id);if(entry.ack)this.acks--;this.clock.clearTimeout(entry.timer);
     if(data.error!==undefined)entry.reject(new Error(String(data.error).slice(0,4096)));
     else entry.resolve(data.value);
     return true;
@@ -68,7 +93,7 @@ export class SdkRpc {
     finally {
       const error=new SdkUnavailableError(reason);
       for(const entry of this.pending.values())entry.reject(error);
-      this.pending.clear();
+      this.pending.clear();this.acks=0;
     }
   }
 }

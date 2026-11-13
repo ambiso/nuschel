@@ -7110,7 +7110,6 @@ dependencies = [
  "futures-util",
  "js-sys",
  "nuschl-client",
- "nuschl-content",
  "nuschl-core",
  "nuschl-legacy-html",
  "nuschl-protocol",
