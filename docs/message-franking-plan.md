@@ -35,7 +35,7 @@ a hub MAC over it with the accepted time [MIMI].
 | Party | Attempt | Defence |
 | --- | --- | --- |
 | Sender | unreportable content | receipt check (§4.3) |
-| Sender | other content for the moderator | `com`; files/1 `R`, sticker `c_i` |
+| Sender | other content for the moderator | `com`; files/1 `R` |
 | Sender | another member's name | MLS signature; `account` in `tag` |
 | Sender | edit or delete later | recipients keep openings (§6) |
 | Reporter | altered content | `com` |
@@ -86,8 +86,8 @@ tag   = HMAC-SHA256(K_s[key_id], "nuschl/frank-server/v1" ‖ u32 key_id
 
 - `env'` holds kind, device, counter, `prev`, `seen`, idempotency key,
   `sent_at`, `k_f` and the body: text, reply target, file references
-  (files/1 key, pieces root, length) and `StickerRef` (pack id, index,
-  `c_i`, pack key).
+  (files/1 key, pieces root, length), and for a sticker its `FileRef` and
+  `StickerInfo` (sticker plan §3.1).
 - `log_id` and `group_id` (conversation ‖ generation) bind the server and
   conversation; `credential` is the sender's 172-byte Nuschl device
   credential (identity fingerprint, device, leaf key).
@@ -105,14 +105,14 @@ tag   = HMAC-SHA256(K_s[key_id], "nuschl/frank-server/v1" ‖ u32 key_id
 | --- | --- | --- |
 | HMAC-SHA256 [GLR17] | key, message | `com` |
 | AES-GCM, ChaCha20-Poly1305 | nothing | salamanders [DGRW18], [LGR21] |
-| Key hash in the header [ADGKLS22] | key | files/1 `C`, sticker `c_i` |
+| Key hash in the header [ADGKLS22] | key | files/1 `C` |
 | UtC, HtE transforms [BH22] | key; HtE also context | later, for files/1 |
 | CTX [CR22] | key, nonce, AD | needs the AEAD's internal tag |
 
 The opening of a message is its plaintext and `k_f`, so MLS's AEAD
 (AES-128-GCM in suite 0x004F) needs no key commitment for franking. Openings
-that are keys (attachments, stickers) rely on the key commitments files/1
-and the sticker plan define. That covers the attachment attack [DGRW18]
+that are keys (attachments, stickers) rely on files/1's key commitment
+`C` inside the root `R`. That covers the attachment attack [DGRW18]
 found in Messenger. Terms follow draft-irtf-cfrg-aead-properties.
 
 ## 4. Where it lives
@@ -176,16 +176,14 @@ open reports per server (oldest dismissed reports dropped first).
 
 | Report about | Goes to | Because it holds |
 | --- | --- | --- |
-| E2EE message, Nuschl server | that server | `K_s`, the users, the tools |
-| Message, `history/1` server | that server | the plaintext row |
-| Sticker image | `stickers.nuschl.eu` | blobs, `c_i`, uploader, licence |
+| E2EE message or sticker | its Nuschl server | `K_s`, the users, the tools |
+| `history/1` message or sticker | its server | the plaintext row |
 | Feedback, crashes | `reports.nuschl.eu` | content-free reports (#205) |
 
-Message reports stay with the conversation's operator. reports.nuschl.eu
-holds no `K_s` of other operators, has no authority over their users, and
-#205 excludes message content. Sticker reports follow the sticker plan's
-D9. Servers run by the Nuschl project show their reports in
-triage.nuschl.eu (D12).
+Message and sticker reports stay with the conversation's operator.
+reports.nuschl.eu holds no `K_s` of other operators, has no authority over
+their users, and #205 excludes message content. Servers run by the Nuschl
+project show their reports in triage.nuschl.eu (D11).
 
 ## 6. Edits, deletions, attachments, stickers, history
 
@@ -200,13 +198,14 @@ triage.nuschl.eu (D12).
 - **Attachments:** `env'` carries the files/1 key and pieces root. The
   report reveals that one key; `R` binds key, length and ciphertext, so one
   object opens to one file.
-- **Stickers:** `StickerRef` carries `c_i`, so `com` binds the sender to
-  pack, index and image commitment. The client files two reports: the
-  message report (who sent it) to the conversation's server, and the
-  sticker report (`k_i`, `k_0`) to the sticker service (what it is, who
-  uploaded it). The message report reveals the pack key to that server's
-  moderators (D10). A pack reported from the picker goes to the sticker
-  service alone.
+- **Stickers:** a sent sticker is a files/1 object of the conversation
+  with a fresh key (sticker plan §3.1). A sticker report is an attachment
+  report: it reveals that object's key and the franked envelope, so the
+  moderator sees the image, `StickerInfo`, the sender and the time.
+  Moderator deletion releases the object. In E2EE conversations each copy
+  has its own key and object, and the server cannot link copies, so each
+  copy needs its own report. A pack shared in a conversation is a set of
+  objects there and is reported the same way.
 - **History:** archive pages carry `frank`; reports work for messages read
   from the archive. Messages from envelope version 1 carry no `k_f`; their
   reports name `seq` only and the server records them as unverified.
@@ -238,7 +237,7 @@ forwarded messages (Hecate [IAV22]) is out of scope.
 
 - **Stock Mumble:** the server receives every text message in plaintext and
   Mumble has no report message. Nuschl offers local ignore and hides
-  "Report" (D11). Plugin data (#93) is unauthenticated, so there is nothing
+  "Report" (D10). Plugin data (#93) is unauthenticated, so there is nothing
   to verify.
 - **`history/1` servers (compatible mode, no E2EE):** the server stores
   plaintext rows with `seq` and author. A plaintext `MessageReport` names
@@ -254,10 +253,10 @@ forwarded messages (Hecate [IAV22]) is out of scope.
    and pages; protocol fields in `crates/protocol`.
 4. `MessageReport`: server verification, bounds, reports table, moderator
    listing; desktop report dialog and moderator view.
-5. Attachments and stickers in reports; the sticker-service handoff.
+5. Attachments and stickers (files/1 objects) in reports.
 6. Edits and deletions, with the encrypted edit and delete envelopes.
 7. Plaintext reports on `history/1` servers; triage.nuschl.eu for
-   project-run servers (D12).
+   project-run servers (D11).
 
 ## 10. Tests
 
@@ -278,7 +277,7 @@ forwarded messages (Hecate [IAV22]) is out of scope.
   an archived message.
 - Attachments: the correct key verifies; a second key for an object built
   to open under two keys is refused.
-- Stickers: `c_i` mismatch refused at receipt; both report paths.
+- Stickers: a report verifies through `R`; deletion releases the object.
 - Privacy: the server's rows, logs and diagnostics for unreported messages
   contain ciphertext, `com` and metadata only.
 - Moderator client renders report bodies through the content worker.
@@ -286,8 +285,8 @@ forwarded messages (Hecate [IAV22]) is out of scope.
 
 ## 11. Decisions for the owner
 
-1. **Destination:** message reports to the conversation's server; stickers
-   to the sticker service; reports.nuschl.eu stays for #205 (recommended).
+1. **Destination:** message and sticker reports to the conversation's
+   server; reports.nuschl.eu stays for #205 (recommended).
 2. **Server binding:** HMAC-SHA256 with a server key (recommended; MIMI's
    `server_frank`) or a signature with the server's KT key, which anyone can
    verify and which makes server statements transferable.
@@ -306,14 +305,11 @@ forwarded messages (Hecate [IAV22]) is out of scope.
 8. **Moderators:** channel moderators for channels and administrators for
    direct conversations (recommended), or administrators alone.
 9. **Retention of reports** on servers: one year after closing, or longer.
-10. **Sticker in a message:** reveal the whole `StickerRef` with the pack
-    key to the conversation's moderators (recommended; simple), or commit to
-    the pack key separately and reveal `k_i` alone.
-11. **Stock Mumble:** hide "Report" (recommended) or offer an unverified
+10. **Stock Mumble:** hide "Report" (recommended) or offer an unverified
     local export.
-12. **Project-run servers:** their reports in triage.nuschl.eu
+11. **Project-run servers:** their reports in triage.nuschl.eu
     (recommended), or in the desktop moderator view alone.
-13. **`K_s` rotation:** yearly, old keys kept while tagged history exists.
+12. **`K_s` rotation:** yearly, old keys kept while tagged history exists.
 
 ## References
 
