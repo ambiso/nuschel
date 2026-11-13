@@ -10,7 +10,7 @@ with synthetic audio on a private PulseAudio daemon. It never opens the host mic
 Screenshots are copied into the test result.
 
 Steps listed in `quarantine.txt` are known to be flaky: they still run, and a
-failure is logged as `QUARANTINED FAIL` with its issue instead of failing the
+failure is logged as `QUARANTINED FAIL` with its issue and does not fail the
 check (`quarantine.py`). A feature that relies on a quarantined step needs its own proof.
 
 Flake checks run their VMs inside the Nix daemon. Built drivers run by hand go
