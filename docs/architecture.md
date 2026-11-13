@@ -16,6 +16,8 @@ platform decisions reversible without duplicating the session model.
 | `nuschl-session` | Native TLS/control sessions, identities, bookmarks and worker supervision | GPUI, SQLite implementation, content parser, codecs |
 | `nuschl-cli` | Diagnostic frontend using the real session implementation | GPUI, audio codecs |
 | `nuschl-ipc` | Versioned worker messages, framing, and native supervision | Content parser, SQLite, codecs |
+| `nuschl-sandbox` | Worker confinement for every role and platform: bwrap/prlimit, Seatbelt, AppContainer policies, job containment, spawning | Protocol messages, parsers, codecs, unsafe code |
+| `nuschl-sandbox-windows` | The workers' Windows launch stage (the one crate with unsafe Win32 calls) | Anything a worker does after it is confined |
 | `nuschl-content` | Message Markdown and formulas in one bounded parse (syntax hidden, lines kept), legacy HTML to inert text, syntax highlighting | Network access, database, native regex engines |
 | `nuschl-storage` | SQLx/Tokio history operations for SQLite and PostgreSQL | UI, session credentials, arbitrary SQL from IPC |
 | `nuschl` | GPUI desktop shell and native application supervision | Direct parser, database, or codec implementation |
