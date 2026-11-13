@@ -92,14 +92,14 @@ impl Facts {
             State::ServerMuted
         } else if self.suppressed {
             State::Suppressed
+        } else if !self.transmit_budget {
+            State::NoTransmitBudget
         } else if self.muted {
             if self.acknowledged {
                 State::Muted
             } else {
                 State::MutedPending
             }
-        } else if !self.transmit_budget {
-            State::NoTransmitBudget
         } else if !self.acknowledged {
             State::AwaitingAcknowledgement
         } else if self.push_muted {
@@ -399,6 +399,13 @@ mod tests {
                         ..held
                     },
                     State::ServerMuted,
+                ),
+                (
+                    Facts {
+                        transmit_budget: false,
+                        ..held
+                    },
+                    State::NoTransmitBudget,
                 ),
             ] {
                 assert_eq!(facts.state(), expected);
