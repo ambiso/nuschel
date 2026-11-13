@@ -1,9 +1,11 @@
+mod emoji_images;
 mod font_fallbacks;
 mod font_features;
 mod line;
 mod line_layout;
 mod line_wrapper;
 
+pub use emoji_images::{EmojiImages, set_emoji_images};
 pub use font_fallbacks::*;
 pub use font_features::*;
 pub use line::*;
@@ -862,6 +864,10 @@ impl WindowTextSystem {
                 }
                 run_start += run_len_within_line;
             }
+            // Nuschel patch: emoji shaped with the emoji font (emoji_images.rs).
+            emoji_images::use_emoji_font(&line_text, &mut font_runs, |family| {
+                self.resolve_font(&font(family))
+            });
 
             let layout = self.line_layout_cache.layout_wrapped_line(
                 &line_text,
@@ -970,6 +976,10 @@ impl WindowTextSystem {
             }
         }
 
+        // Nuschel patch: emoji shaped with the emoji font (emoji_images.rs).
+        emoji_images::use_emoji_font(text, &mut font_runs, |family| {
+            self.resolve_font(&font(family))
+        });
         let layout = self.line_layout_cache.layout_line(
             &SharedString::new(text),
             font_size,
