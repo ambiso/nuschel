@@ -4682,7 +4682,12 @@ mod reply_owner_tests {
             .build()
             .unwrap();
         let entered = runtime.enter();
-        let directory = std::env::temp_dir().join(format!("nuschl-arc-history-{}", request_id()));
+        let directory = std::env::temp_dir().join(format!(
+            "nuschl-arc-history-{}-{}",
+            std::process::id(),
+            request_id()
+        ));
+        std::fs::create_dir(&directory).unwrap();
         let profile = Profile::open(Some(directory.clone())).unwrap();
         let (driver, _events) = Driver::new(runtime.handle().clone(), profile, Default::default());
         let driver = std::sync::Arc::new(driver);
