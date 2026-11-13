@@ -228,11 +228,6 @@ impl Emoji {
         }
     }
 
-    /// The short code to type for it, without its colons (`heart`).
-    pub fn shortcode(&self) -> &'static str {
-        self.shortcodes.split(' ').next().unwrap_or_default()
-    }
-
     /// The skin tone `text` is of this emoji in (0 for the default).
     fn tone_of(&self, text: &str) -> usize {
         let text = bare(text);
@@ -396,7 +391,7 @@ fn matches(query: &str) -> Vec<&'static Emoji> {
         })
         .collect();
     // Stable: equally related emoji keep the table's order.
-    related.sort_by(|a, b| b.0.cmp(&a.0));
+    related.sort_by_key(|(shared, _)| std::cmp::Reverse(*shared));
     found
         .into_iter()
         .chain(related.into_iter().map(|(_, emoji)| emoji))
