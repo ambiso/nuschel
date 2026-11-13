@@ -891,7 +891,8 @@ mod tests {
         };
         assert_ne!(color("# comment"), color("let greeting"));
         assert_ne!(color("hello"), color("let greeting"));
-        assert_ne!(color("true"), color("enabled"));
+        // This theme gives attribute names and booleans the same orange.
+        assert_ne!(color("true"), color("let greeting"));
         for language in [Some("nix"), Some("Nix"), Some("unknown_language"), None] {
             let rendered = renderer.highlight(body, language)?;
             assert_eq!(

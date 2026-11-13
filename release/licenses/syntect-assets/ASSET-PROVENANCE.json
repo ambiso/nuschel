@@ -326,7 +326,7 @@
   "scope": "Default syntax/theme assets associated with the exact syntect package and its pinned Makefile/submodules. Actual custom permissive/individual terms retained; no generic MIT claim for all syntax data. Seven theme sources preserve their own embedded attribution. Build-only utilities, icons, samples and test input code are excluded. No claim of byte-for-byte dump regeneration.",
   "custom_bundle": {
     "path": "crates/content/assets/default-nix.packdump",
-    "sha256": "e9d5fe2710ee5c84bad43f21211afc6ad928c6f7ccf700157142c49329ac1ae9",
+    "sha256": "13db45c6f2bd8843fa8165984fab60fc258d12473de0aa8bdd0522523e93c197",
     "version": "syntect-5.3.0+nix-9032bd6",
     "default_input": "assets/default_newlines.packdump",
     "default_input_sha256": "d740b20c12e40b678b9f1012401e1969aaa5cd55f1ab329ffeb94d746b06a5c0",
