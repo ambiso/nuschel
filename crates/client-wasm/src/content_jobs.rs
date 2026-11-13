@@ -1110,6 +1110,30 @@ mod tests {
     }
 
     #[test]
+    fn serially_executed_posted_jobs_start_their_budget_at_the_head() {
+        let mut jobs = Jobs::default();
+        for serial in 0..MAX_POSTED_JOBS as u64 {
+            jobs.request(origin(serial), "source", SourceMode::Plain, 0)
+                .unwrap();
+        }
+        assert_eq!(jobs.take(0, |_, _| true).len(), MAX_POSTED_JOBS);
+        // The UI codec runs one job at a time; each finishes inside its own
+        // execution budget even though all were posted together.
+        for (index, request) in ["1", "2", "3", "4"].into_iter().enumerate() {
+            let now = (index as u64 + 1) * (EXECUTION_DEADLINE_MS - 1);
+            let batch = jobs.take_with_failures(now - 1, |_, _| true);
+            assert!(batch.failures.is_empty(), "queue time is not execution time");
+            let done = jobs
+                .complete(request, Some(REPLY), now, |_, _| true)
+                .unwrap()
+                .unwrap();
+            assert!(!done.failed);
+            assert!(jobs.take(now, |_, _| true).is_empty());
+        }
+        assert_eq!(jobs.pending_bytes, 0);
+    }
+
+    #[test]
     fn failed_metadata_never_evicts_successful_derivatives_or_replaces_valid_rerender() {
         let mut jobs = Jobs::default();
         jobs.request(origin(0), "source", SourceMode::Plain, 0)
@@ -1147,23 +1171,144 @@ mod tests {
     }
 
     #[test]
-    fn reconnect_recovery_preserves_readable_old_origin_and_lru_newest_priority() {
+    fn reconnect_rebinds_verified_rows_to_the_current_origin_with_lru_priority() {
         let mut servers = resident_model(1, 5);
         let mut jobs = Jobs::default();
         for row in 0..5 {
             let origin = model_origin(&servers[0], 0, row);
             render_model(&mut jobs, &mut servers, origin);
         }
+        let tokens: Vec<String> = (0..5)
+            .map(|row| {
+                jobs.token(&model_origin(&servers[0], 0, row))
+                    .unwrap()
+                    .to_owned()
+            })
+            .collect();
+        // An obsolete posted job from the old lifetime is still outstanding.
+        let old = model_origin(&servers[0], 0, 4);
+        let source = servers[0].channels[0].timeline.messages[4].source.clone();
+        jobs.request(old, &source, SourceMode::Legacy, 2).unwrap();
+        let work = jobs.take(2, |_, _| true);
+        let [Operation::Render {
+            request: obsolete, ..
+        }] = work.as_slice()
+        else {
+            panic!()
+        };
         servers[0].generation += 1;
         servers[0].channels[0].instance += 1;
         assert!(
             jobs.recover_rows("owned", servers[0].generation, &servers[0].channels[0])
-                .is_empty()
+                .is_empty(),
+            "digest-verified rows need no new codec work"
         );
+        for (row, token) in tokens.iter().enumerate() {
+            let fresh = model_origin(&servers[0], 0, row);
+            assert_eq!(
+                jobs.token(&fresh),
+                Some(token.as_str()),
+                "the snapshot's exact current origin finds the derivative"
+            );
+            assert_eq!(jobs.origin(token).unwrap().0, fresh);
+        }
         let used: Vec<_> = servers[0].channels[0].timeline.messages.iter().map(|message| jobs.handles.iter().find(|(origin, _)| matches!(origin, Origin::Message { serial, .. } if *serial == message.serial)).unwrap().1.used).collect();
         assert!(used.windows(2).all(|pair| pair[0] < pair[1]));
         assert_eq!(jobs.plain_bytes, resident_plain_bytes(&servers));
+        // The old lifetime's late result is not current and cannot replace it.
+        let fresh = model_origin(&servers[0], 0, 4);
+        assert!(
+            jobs.complete(obsolete, Some(REPLY), 3, |lease, _| lease == &fresh)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(jobs.token(&fresh), Some(tokens[4].as_str()));
+        assert_eq!(jobs.pending_bytes, 0);
     }
+
+    #[test]
+    fn reconnect_never_rebinds_a_changed_source_or_mode() {
+        let mut servers = resident_model(1, 2);
+        let mut jobs = Jobs::default();
+        for row in 0..2 {
+            let origin = model_origin(&servers[0], 0, row);
+            render_model(&mut jobs, &mut servers, origin);
+        }
+        let stale: Vec<String> = (0..2)
+            .map(|row| {
+                jobs.token(&model_origin(&servers[0], 0, row))
+                    .unwrap()
+                    .to_owned()
+            })
+            .collect();
+        servers[0].generation += 1;
+        servers[0].channels[0].instance += 1;
+        // Same serial and revision, but not the derivative's original input.
+        servers[0].channels[0].timeline.messages[0].source = "<b>replaced</b>".into();
+        servers[0].channels[0].timeline.messages[1].source_format = Some(SourceMode::Plain);
+        let recovery = jobs.recover_rows("owned", servers[0].generation, &servers[0].channels[0]);
+        assert_eq!(
+            recovery.len(),
+            2,
+            "unverified rows are requested again from their current source"
+        );
+        for (row, token) in stale.iter().enumerate() {
+            assert!(jobs.token(&model_origin(&servers[0], 0, row)).is_none());
+            assert!(jobs.origin(token).is_none(), "the stale handle is revoked");
+        }
+        assert_eq!(jobs.plain_bytes, 0);
+    }
+
+    #[test]
+    fn lost_cancel_ack_retires_the_lane_visibly_and_keeps_unacknowledged_credit() {
+        let mut jobs = Jobs::default();
+        for serial in 0..6 {
+            jobs.request(origin(serial), "source", SourceMode::Plain, 0)
+                .unwrap();
+        }
+        let posted = jobs.take(0, |_, _| true);
+        assert_eq!(posted.len(), MAX_POSTED_JOBS);
+        // Every posted job expires; its Cancel is sent but no ACK ever arrives.
+        let expired = jobs.take_with_failures(EXECUTION_DEADLINE_MS, |_, _| true);
+        assert_eq!(expired.operations.len(), MAX_POSTED_JOBS);
+        let held = jobs.pending_bytes;
+        // Later, but before the queued jobs' own deadline, lost ACKs become a
+        // visible terminal lane state rather than a permanently silent busy.
+        let now = EXECUTION_DEADLINE_MS + 30_000; // below QUEUE_DEADLINE_MS
+        let retired = jobs.take_with_failures(now, |_, _| true);
+        assert!(retired.operations.is_empty());
+        assert_eq!(
+            retired.failures.len(),
+            2,
+            "queued rows are told the lane stopped"
+        );
+        assert!(retired.failures.iter().all(|failure| failure
+            .terminal
+            .is_some_and(|error| error.terminal().is_some())));
+        assert!(
+            matches!(jobs.request(origin(9), "new", SourceMode::Plain, now), Err(error) if error.terminal().is_some())
+        );
+        assert!(jobs.permanent_refusal("new").is_some());
+        assert_eq!(
+            jobs.pending.len(),
+            MAX_POSTED_JOBS,
+            "unacknowledged credit is never released"
+        );
+        assert!(jobs.pending_bytes > 0 && jobs.pending_bytes < held);
+        // A late real ACK releases exactly its own credit; the lane stays terminal.
+        let Operation::Render { request, .. } = &posted[0] else {
+            panic!()
+        };
+        assert!(
+            jobs.complete(request, Some(REPLY), now + 1, |_, _| true)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(jobs.pending.len(), MAX_POSTED_JOBS - 1);
+        assert!(jobs.take(now + 2, |_, _| true).is_empty());
+        assert!(jobs.request(origin(10), "new", SourceMode::Plain, now + 2).is_err());
+    }
+
     #[test]
     fn oversized_legacy_source_is_terminal_without_tickets_or_navigation_spin() {
         let mut servers = resident_model(1, 1);

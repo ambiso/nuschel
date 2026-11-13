@@ -76,3 +76,17 @@ test("two SDK audio RPC credits survive20 epochs and250ms capture timeout until 
  clock.expire();assert.equal(worker.terminated,1);assert.equal(audio.voice,null);await turn();
  assert.equal(audio.txJobs.size,0);assert.equal(rpc.size,0);await audio.dispose();
 });
+test("content completion ACKs keep a small reserve so ordinary command pressure cannot refuse them",async()=>{
+ const {worker,clock,rpc}=fixture();const ordinary=[];
+ for(let index=0;index<SDK_RPC_LIMIT;index++)ordinary.push(rpc.request("content_request",[String(index+1)]).catch(error=>error));
+ await assert.rejects(rpc.request("browse_server",[0]),/busy/);
+ const acks=[];for(let index=0;index<4;index++)acks.push(rpc.request("content_complete",[String(index+1),""]).catch(error=>error));
+ assert.equal(worker.messages.filter(message=>message.method==="content_complete").length,4,"ACKs reach the SDK at the ordinary limit");
+ await assert.rejects(rpc.request("content_complete",["5",""]),/busy/,"the reserve itself is bounded");
+ await assert.rejects(rpc.request("browse_server",[0]),/busy/,"ordinary work cannot borrow ACK slots");
+ const ack=worker.messages.find(message=>message.method==="content_complete");
+ assert.equal(rpc.accept({kind:"result",id:ack.id,value:"null"}),true);assert.equal(await acks[0],"null");
+ acks.push(rpc.request("content_complete",["5",""]).catch(error=>error));
+ assert.equal(worker.messages.filter(message=>message.method==="content_complete").length,5);
+ clock.expire();assert.equal(rpc.size,0);await Promise.all(ordinary);await Promise.allSettled(acks);
+});

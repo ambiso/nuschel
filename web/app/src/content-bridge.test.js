@@ -63,3 +63,60 @@ test("only the SDK accepted reply becomes visible, with no credential metadata i
   assert.deepEqual(contentDocument("7"),document);
   assert.throws(()=>new ContentBridge(()=>{}, {service}),/page-lifetime/);
 });
+
+// Fresh module realm per case: the production bridge is one page-lifetime owner.
+let realm=0;
+const fresh=()=>import(`./content-bridge.js?credit-case=${++realm}`);
+const settle=()=>new Promise(resolve=>setImmediate(resolve));
+const render=(request,source="x")=>({kind:"content_work",operations:[{kind:"render",request,mode:"plain",source}]});
+
+test("an oversized codec reply is ACKed as a bounded failure, never forwarded",async()=>{
+  const {ContentBridge}=await fresh();const acks=[];
+  const service={render:async()=>({marked_text:"x".repeat(2*1024*1024+1),plain_text:"x",document}),dispose(){}};
+  const bridge=new ContentBridge(async(method,id,raw)=>{acks.push({method,id,raw});return "null";},{service});
+  bridge.handle(render("1"));await settle();
+  assert.deepEqual(acks.map(({method,id,raw})=>({method,id,bytes:raw.length})),[{method:"content_complete",id:"1",bytes:0}]);
+  assert.equal(bridge.pending.size,0);bridge.dispose();
+});
+
+test("an ACK that never reached the SDK keeps its credit and retires previews visibly",async()=>{
+  const m=await fresh();const calls=[];
+  const service={render:async packet=>{calls.push(packet.source);return {marked_text:"ok",plain_text:"ok",document};},dispose(){}};
+  const bridge=new m.ContentBridge(async method=>{if(method==="content_complete")throw new Error("The client is busy. Try again shortly.");return true;},{service});
+  bridge.handle(render("1","first"));await settle();
+  assert.equal(bridge.pending.has("1"),true,"credit stays charged without a real ACK");
+  assert.equal(m.contentUnavailable("9"),true,"terminal state is visible on every preview");
+  // SDK-admitted work stays charged and unacknowledged; the SDK's own ACK
+  // deadline then retires its lane with that credit still held.
+  assert.equal(bridge.handle(render("2","second")),true);await settle();
+  assert.equal(bridge.pending.has("2"),true);
+  assert.deepEqual(calls,["first"],"a retired lane starts no further codec work");
+  bridge.dispose();
+});
+
+test("rehydration keeps few SDK RPCs in flight and queued tokens are not denied",async()=>{
+  const m=await fresh();const requests=[];
+  const service={render:()=>new Promise(()=>{}),dispose(){}};
+  const bridge=new m.ContentBridge((method,token)=>new Promise(resolve=>requests.push({method,token,resolve})),{service});
+  const releases=[];for(let index=1;index<=100;index++)releases.push(m.retainDocument(String(index)));
+  assert.ok(requests.length<=8,`at most 8 rehydration RPCs in flight, saw ${requests.length}`);
+  assert.equal(m.contentFailed("100"),false,"a waiting row is not turned into a failure");
+  releases[99]();
+  for(let turn=0;turn<20&&requests.length<99;turn++){for(const request of requests.splice(0))request.resolve(true);await settle();}
+  bridge.dispose();
+});
+
+test("admitted renders reach the serial codec one at a time; a queued cancel ACKs at once",async()=>{
+  const m=await fresh();const started=[],finish=new Map(),acks=[];
+  const service={render:packet=>new Promise(resolve=>{started.push(packet.source);finish.set(packet.source,resolve);}),dispose(){}};
+  const bridge=new m.ContentBridge(async(method,id,raw)=>{acks.push([id,raw.length]);return "null";},{service});
+  bridge.handle({kind:"content_work",operations:["1","2","3","4"].map(request=>({kind:"render",request,mode:"plain",source:`s${request}`}))});
+  await settle();assert.deepEqual(started,["s1"],"one codec job at a time; later work waits in the bridge");
+  bridge.handle({kind:"content_work",operations:[{kind:"cancel",request:"4"}]});await settle();
+  assert.deepEqual(acks,[["4",0]],"queued cancellation is acknowledged without codec work");
+  finish.get("s1")({marked_text:"ok",plain_text:"ok",document});await settle();
+  assert.deepEqual(started,["s1","s2"]);assert.deepEqual(acks.map(([id])=>id),["4","1"]);
+  finish.get("s2")({marked_text:"ok",plain_text:"ok",document});await settle();
+  finish.get("s3")({marked_text:"ok",plain_text:"ok",document});await settle();
+  assert.deepEqual(started,["s1","s2","s3"]);assert.equal(bridge.pending.size,0);bridge.dispose();
+});
