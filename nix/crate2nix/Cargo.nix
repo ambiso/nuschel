@@ -23351,11 +23351,6 @@ rec {
             usesDefaultFeatures = false;
           }
           {
-            name = "nuschl-content";
-            packageId = "nuschl-content";
-            usesDefaultFeatures = false;
-          }
-          {
             name = "nuschl-core";
             packageId = "nuschl-core";
           }

@@ -1,22 +1,26 @@
 // SPDX-License-Identifier: EUPL-1.2
-// The only WASM/session/parser/storage owner. No DOM or HTML is used here.
+// The SDK/session/storage owner. Complex parsing stays in the content Worker.
 import init, { WebClient } from "./sdk/nuschl_client_wasm.js";
 import { openHistory } from "./history.js";
+import {UI_METHODS,projectedAction} from "./action-context.js";
+import { StatePublication, stateFrame } from "./state-publication.js";
+import { createContentPublication } from "./content-publication.js";
 import { restoreOrder } from "./server-order.js";
 let client;
 let history;
 let saved = null;
 let storageQueue = Promise.resolve();
-let queued = false;
 let started = false;
 let orderQueue = Promise.resolve();
 let orderCommitActive = false;
 function fail(reason) { postMessage({ kind: "error", message: String(reason?.message || reason) }); }
-function wake() {
-  if (queued) return;
-  queued = true;
-  queueMicrotask(() => { queued = false; refresh(); });
-}
+const states=new StatePublication({
+  collect:(id,updates)=>stateFrame(id,{servers:client.servers(),timeline:client.timeline(),voice:client.voice()},updates),
+  post:packet=>postMessage(packet),
+  fatal:message=>{try{postMessage({kind:"fatal",message:String(message).slice(0,4096)});}finally{close();}},
+});
+const publication=createContentPublication(refresh);
+const wake=publication.wake;
 let audioQueued = false;
 function wakeAudio() {
   if (audioQueued) return;
@@ -31,10 +35,18 @@ function drainVoice() {
     postMessage({kind:"voice_packet",packet},[packet.opus.buffer]);
   }
 }
+function drainContentWork() {
+  if(!client)return;
+  const operations=JSON.parse(client.content_requests());
+  if(operations.length)postMessage({kind:"content_work",operations});
+}
 function refresh() {
-  if (!client) return;
-  const updates = JSON.parse(client.poll());
-  postMessage({ kind: "state", servers: JSON.parse(client.servers()), timeline: JSON.parse(client.timeline()), voice: JSON.parse(client.voice()), updates });
+  if (!client || states.closed) return;
+  const updates = client.poll();
+  // Codec credit must not wait behind a large UI snapshot/layout task.
+  drainContentWork();
+  states.changed(updates);
+  if(states.closed)return;
   drainVoice();
   for (const operation of JSON.parse(client.storage_requests())) {
     // Pages cannot overtake preceding writes. Rust retains opaque navigation
@@ -82,10 +94,15 @@ async function persistServerOrder(ids) {
   orderQueue = action.catch(() => {});
   return action;
 }
-const methods = new Set(["add_server", "connect", "disconnect", "accept_certificate", "open", "browse_server", "open_direct", "send_text", "older", "join", "toggle_mute", "toggle_deaf", "audio_ready", "voice_packet", "remove_server", "dismiss_notice", "dismiss_welcome", "connect_with_password", "stop_audio", "edit_server", "set_server_order", "set_voice_bitrate"]);
+const methods = new Set(UI_METHODS);
 onmessage = async ({ data }) => {
   try {
+    if(states.closed)return;
     if (!data || typeof data !== "object") throw new Error("Invalid browser command.");
+    if(data.method === "state_applied") {
+      if(data.id!==undefined||!Array.isArray(data.args)||data.args.length!==1){states.fail("Invalid browser state acknowledgment.");return;}
+      states.ack(data.args[0]);return;
+    }
     if (data.method === "init") {
       if (started) throw new Error("The browser client is already initialized.");
       started = true;
@@ -99,8 +116,31 @@ onmessage = async ({ data }) => {
       postMessage({ kind: "ready", capabilities:["remove_server","dismiss_notice", "dismiss_welcome","connect_with_password","voice","stop_audio", "edit_server", "server_order"] });
     } else {
       if (!client || !methods.has(data.method) || !Array.isArray(data.args) || data.args.length > 6) throw new Error("Unsupported browser command.");
+      const call=projectedAction(data.method,data.args);
+      if(call){
+        const projection=JSON.stringify(call);
+        if(projection.length>512||new TextEncoder().encode(projection).length>512||typeof data.context!=="string"||data.context.length>4096||new TextEncoder().encode(data.context).length>4096)throw new Error("This view changed. Your draft was kept; use the updated view and try again.");
+        client.validate_action(projection,data.context);
+      }else if(data.context!==undefined)throw new Error("Unexpected browser action context.");
       let value;
-      if (data.method === "set_server_order") {
+      if (data.method === "content_complete") {
+        const [request,reply]=data.args;
+        if(typeof request!=="string"||!/^[1-9][0-9]{0,19}$/.test(request))throw new Error("Invalid content request.");
+        // An invalid codec reply is still this job's ACK: release its exact SDK
+        // credit as a terminal failure instead of leaving the lease outstanding.
+        const valid=typeof reply==="string"&&reply.length<=2*1024*1024&&new TextEncoder().encode(reply).length<=2*1024*1024;
+        value=client.content_complete(request,valid?reply:"");
+      } else if (data.method === "content_retire") {
+        if(!["undelivered","protocol"].includes(data.args[0]))throw new Error("Invalid content lane retirement.");
+        value=client.content_retire(data.args[0]);
+      } else if (data.method === "image_begin" || data.method === "image_send") {
+        const raw=JSON.stringify(data.args[0]);
+        if(raw.length>2*1024*1024)throw new Error("Invalid image command.");
+        value=JSON.parse(client[data.method](raw));
+      } else if(data.method === "add_server" || data.method === "edit_server") {
+        const index=client[data.method](...data.args);
+        value={index,reference:JSON.parse(client.server_reference(index))};
+      } else if (data.method === "set_server_order") {
         value = await persistServerOrder(data.args[0]);
       } else if (data.method === "audio_ready") {
         value = client.audio_ready(JSON.stringify(data.args[0]));
@@ -113,6 +153,11 @@ onmessage = async ({ data }) => {
       if (data.id !== undefined) postMessage({ kind: "result", id: data.id, value });
       // Encoding is frequent; its route has already been admitted in Rust.
       if (data.method === "voice_packet") return;
+      if(data.method === "content_complete" || data.method === "content_request") {
+        // The real ACK above releases its exact credit immediately. Refill the
+        // bounded codec lane before coalescing only the model publication.
+        drainContentWork();publication.content();return;
+      }
     }
     wake();
   } catch (reason) {
@@ -120,5 +165,6 @@ onmessage = async ({ data }) => {
     // revoked internal packets without turning them into user-facing toasts.
     if (data?.id === undefined && (data?.method === "voice_packet" || data?.method === "audio_ready")) return;
     postMessage({ kind: "result", id: data?.id, error: String(reason?.message || reason) });
+    wake(); // errors/navigation never wait behind derivative publication
   }
 };

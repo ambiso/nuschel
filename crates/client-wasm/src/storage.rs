@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! Bounded asynchronous browser storage bridge. JavaScript receives opaque
 //! tickets; navigation/certificate evidence and parsed documents stay in Rust.
+use crate::content_broker::SourceMode;
 use nuschl_client::{
     HistoryTicket,
     input::Input,
@@ -13,6 +14,18 @@ use std::collections::BTreeMap;
 
 pub const PAGE_SIZE: usize = 100;
 const MAX_PENDING: usize = 128;
+const MAX_PENDING_BYTES: usize = 8 * 1024 * 1024;
+
+fn marked_mode() -> SourceMode {
+    SourceMode::Marked
+}
+
+pub struct RawCompletion {
+    pub inputs: Vec<Input>,
+    pub live_mode: Option<SourceMode>,
+    pub channel_instance: Option<u64>,
+    pub stored_modes: BTreeMap<i64, SourceMode>,
+}
 
 #[derive(Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -21,6 +34,7 @@ pub enum Operation {
         ticket: String,
         message: ChatMessage,
         outgoing: bool,
+        mode: SourceMode,
     },
     Page {
         ticket: String,
@@ -36,12 +50,19 @@ struct Context {
     generation: u64,
     identity: String,
 }
+/// Source facts captured at admission, never selected by a storage reply.
+pub(crate) struct SourceProvenance {
+    pub(crate) mode: SourceMode,
+    pub(crate) channel_instance: Option<u64>,
+}
 enum Pending {
     Append {
         context: Context,
         target: TextTarget,
         peer: Option<User>,
         message: Box<IncomingMessage>,
+        mode: SourceMode,
+        channel_instance: Option<u64>,
     },
     Page {
         context: Context,
@@ -55,6 +76,7 @@ pub struct Storage {
     next: u64,
     pending: BTreeMap<String, Pending>,
     outgoing: Vec<Operation>,
+    bytes: usize,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -62,6 +84,8 @@ struct Stored {
     id: i64,
     message: ChatMessage,
     outgoing: bool,
+    #[serde(default = "marked_mode")]
+    mode: SourceMode,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -95,6 +119,42 @@ impl Storage {
         peer: Option<User>,
         message: IncomingMessage,
     ) -> Result<(), String> {
+        self.append_raw(
+            server,
+            generation,
+            target,
+            peer,
+            message,
+            SourceProvenance {
+                mode: SourceMode::Marked,
+                channel_instance: None,
+            },
+        )
+    }
+    pub(crate) fn append_raw(
+        &mut self,
+        server: String,
+        generation: u64,
+        target: TextTarget,
+        peer: Option<User>,
+        message: IncomingMessage,
+        provenance: SourceProvenance,
+    ) -> Result<(), String> {
+        let SourceProvenance {
+            mode,
+            channel_instance,
+        } = provenance;
+        let charge = message
+            .message
+            .body
+            .len()
+            .saturating_mul(2)
+            .saturating_add(4096);
+        if message.message.body.len() > MAX_CONTENT_BYTES
+            || self.bytes.saturating_add(charge) > MAX_PENDING_BYTES
+        {
+            return Err("Local history is busy; this message could not be saved.".into());
+        }
         let id = self.allocate()?;
         let context = Context {
             server,
@@ -105,6 +165,7 @@ impl Storage {
             ticket: id.clone(),
             message: message.message.clone(),
             outgoing: message.outgoing,
+            mode,
         });
         self.pending.insert(
             id,
@@ -113,8 +174,11 @@ impl Storage {
                 target,
                 peer,
                 message: Box::new(message),
+                mode,
+                channel_instance,
             },
         );
+        self.bytes += charge;
         Ok(())
     }
     pub fn page(
@@ -129,7 +193,11 @@ impl Storage {
         let Page::Before(before) = page else {
             return Err("History search windows are not available in the browser yet.".into());
         };
+        if self.bytes.saturating_add(4096) > MAX_PENDING_BYTES {
+            return Err("Local history is busy.".into());
+        }
         let id = self.allocate()?;
+        self.bytes += 4096;
         self.outgoing.push(Operation::Page {
             ticket: id.clone(),
             identity: identity.clone(),
@@ -165,8 +233,58 @@ impl Storage {
         current: impl Fn(&str, u64, &str) -> bool,
         render: impl Fn(&str) -> MessageDocument,
     ) -> Vec<Input> {
+        self.complete_impl(id, raw, current, |source, _, _| render(source))
+    }
+
+    /// New rows retain raw source/mode. Old rows are explicitly marked legacy
+    /// normalized representation; no history is discarded or reparsed here.
+    pub fn complete_raw(
+        &mut self,
+        id: &str,
+        raw: &str,
+        current: impl Fn(&str, u64, &str) -> bool,
+    ) -> RawCompletion {
+        let (live_mode, channel_instance) = match self.pending.get(id) {
+            Some(Pending::Append {
+                mode,
+                channel_instance,
+                ..
+            }) => (Some(*mode), *channel_instance),
+            _ => (None, None),
+        };
+        let mut stored_modes = BTreeMap::new();
+        let inputs = self.complete_impl(id, raw, current, |_, mode, id| {
+            if let Some(id) = id {
+                stored_modes.insert(id, mode);
+            }
+            pending_document()
+        });
+        RawCompletion {
+            inputs,
+            live_mode,
+            channel_instance,
+            stored_modes,
+        }
+    }
+
+    fn complete_impl(
+        &mut self,
+        id: &str,
+        raw: &str,
+        current: impl Fn(&str, u64, &str) -> bool,
+        mut render: impl FnMut(&str, SourceMode, Option<i64>) -> MessageDocument,
+    ) -> Vec<Input> {
         let Some(pending) = self.pending.remove(id) else {
             return Vec::new();
+        };
+        self.bytes -= match &pending {
+            Pending::Append { message, .. } => message
+                .message
+                .body
+                .len()
+                .saturating_mul(2)
+                .saturating_add(4096),
+            Pending::Page { .. } => 4096,
         };
         let context = match &pending {
             Pending::Append { context, .. } | Pending::Page { context, .. } => context,
@@ -184,6 +302,7 @@ impl Storage {
                 target,
                 peer,
                 mut message,
+                ..
             } => {
                 message.id = response
                     .filter(|_| !failure)
@@ -236,7 +355,7 @@ impl Storage {
                     .rows
                     .into_iter()
                     .map(|row| {
-                        let document = render(&row.message.body);
+                        let document = render(&row.message.body, row.mode, Some(row.id));
                         IncomingMessage::plain(Some(row.id), row.message, document, row.outgoing)
                     })
                     .collect();
@@ -249,6 +368,12 @@ impl Storage {
                 }]
             }
         }
+    }
+}
+
+pub fn pending_document() -> MessageDocument {
+    MessageDocument {
+        blocks: vec![nuschl_core::ContentBlock::text("[Preparing message…]")],
     }
 }
 

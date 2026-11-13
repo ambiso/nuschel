@@ -15,6 +15,10 @@ pub struct ServerView {
     /// Stable command index, independent of this snapshot's display position.
     pub runtime_index: usize,
     pub id: String,
+    pub generation: String,
+    /// Filled by the browser catalog owner; zero is never a valid entry lease.
+    pub catalog_instance: String,
+    pub own_instance: Option<String>,
     pub name: String,
     pub host: String,
     pub port: u16,
@@ -42,6 +46,8 @@ pub struct ServerView {
 #[derive(Serialize)]
 pub struct ChannelView {
     pub id: u32,
+    pub instance: String,
+    pub peer: Option<crate::actions::PeerRef>,
     pub parent: Option<u32>,
     pub direct: bool,
     pub name: String,
@@ -50,6 +56,7 @@ pub struct ChannelView {
 #[derive(Serialize)]
 pub struct UserView {
     pub session: u32,
+    pub instance: String,
     pub name: String,
     pub channel: u32,
     pub self_mute: bool,
@@ -83,6 +90,7 @@ pub enum UpdateView {
         server: String,
         token: String,
         document: nuschl_core::MessageDocument,
+        content_token: Option<String>,
     },
     Changed,
 }
@@ -100,6 +108,12 @@ fn server_views<'a>(servers: impl Iterator<Item = (usize, &'a ServerState)>) -> 
         .map(|(runtime_index, server)| ServerView {
             runtime_index,
             id: server.id.clone(),
+            generation: server.generation.to_string(),
+            catalog_instance: "0".into(),
+            own_instance: server
+                .own_session
+                .and_then(|id| server.users.get(&id))
+                .map(|user| user.instance.to_string()),
             name: server.name.clone(),
             host: server.bookmark.host.clone(),
             port: server.bookmark.port,
@@ -129,6 +143,14 @@ fn server_views<'a>(servers: impl Iterator<Item = (usize, &'a ServerState)>) -> 
                 .iter()
                 .map(|channel| ChannelView {
                     id: channel.id,
+                    instance: channel.instance.to_string(),
+                    peer: channel
+                        .direct_peer
+                        .as_ref()
+                        .map(|user| crate::actions::PeerRef {
+                            session: user.session,
+                            instance: user.instance.to_string(),
+                        }),
                     parent: channel.parent,
                     direct: !matches!(channel.target, TextTarget::Channel(_)),
                     name: channel.name.clone(),
@@ -139,6 +161,7 @@ fn server_views<'a>(servers: impl Iterator<Item = (usize, &'a ServerState)>) -> 
                 .values()
                 .map(|user| UserView {
                     session: user.session,
+                    instance: user.instance.to_string(),
                     name: user.name.clone(),
                     channel: user.channel,
                     self_mute: user.self_muted || user.muted || user.suppressed,
@@ -227,6 +250,33 @@ mod tests {
     use super::*;
 
     #[test]
+    fn lifetime_metadata_never_rounds_u64_through_javascript_numbers() {
+        let mut server =
+            ServerState::new(bookmark("owned", "127.0.0.1", 64738, "fixture", None).unwrap());
+        server.generation = u64::MAX - 1;
+        server.own_session = Some(7);
+        server.users.insert(
+            7,
+            nuschl_client::model::User {
+                session: 7,
+                instance: u64::MAX - 2,
+                ..Default::default()
+            },
+        );
+        server.channels[0].instance = u64::MAX - 3;
+        let views = servers(&[server]);
+        let view = &views[0];
+        assert_eq!(view.generation, (u64::MAX - 1).to_string());
+        assert_eq!(view.own_instance, Some((u64::MAX - 2).to_string()));
+        assert_eq!(view.users[0].instance, (u64::MAX - 2).to_string());
+        assert_eq!(view.channels[0].instance, (u64::MAX - 3).to_string());
+        assert_eq!(
+            view.catalog_instance, "0",
+            "only the browser catalog owner can fill a valid entry lifetime"
+        );
+    }
+
+    #[test]
     fn bookmarks_are_checked() {
         let saved = bookmark("", "Voice.Example.org", 64738, "ada", None).expect("valid");
         assert_eq!(saved.name, "voice.example.org");
@@ -241,6 +291,9 @@ mod tests {
 
 #[derive(Serialize)]
 pub struct TimelineView {
+    pub content_context: Option<String>,
+    pub instance: String,
+    pub peer: Option<crate::actions::PeerRef>,
     pub server: String,
     pub channel: u32,
     pub name: String,
@@ -252,6 +305,9 @@ pub struct TimelineView {
 #[derive(Serialize)]
 pub struct MessageView {
     pub serial: String,
+    pub revision: u32,
+    pub content_token: Option<String>,
+    pub content_failed: bool,
     pub author: String,
     pub at_ms: i64,
     pub outgoing: bool,
@@ -263,6 +319,15 @@ pub fn timeline(client: &nuschl_client::Client) -> Option<TimelineView> {
     let server = &client.servers[server];
     let channel = &server.channels[channel];
     Some(TimelineView {
+        content_context: None,
+        instance: channel.instance.to_string(),
+        peer: channel
+            .direct_peer
+            .as_ref()
+            .map(|user| crate::actions::PeerRef {
+                session: user.session,
+                instance: user.instance.to_string(),
+            }),
         server: server.id.clone(),
         channel: channel.id,
         name: channel.name.clone(),
@@ -275,6 +340,9 @@ pub fn timeline(client: &nuschl_client::Client) -> Option<TimelineView> {
             .iter()
             .map(|message| MessageView {
                 serial: message.serial.to_string(),
+                revision: message.revision,
+                content_token: None,
+                content_failed: false,
                 author: message.author.clone(),
                 at_ms: message.observed_at_ms,
                 outgoing: message.outgoing,

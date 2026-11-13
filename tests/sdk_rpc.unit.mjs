@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: EUPL-1.2
 import test from "node:test";
 import assert from "node:assert/strict";
-import {SdkRpc,SdkUnavailableError,SDK_RPC_LIMIT,SDK_RPC_TIMEOUT,SDK_STARTUP_TIMEOUT} from "../web/app/src/sdk-rpc.js";
+import {SdkRpc,SdkUnavailableError,SDK_RPC_LIMIT,SDK_RPC_ACK_RESERVE,SDK_RPC_TIMEOUT,SDK_STARTUP_TIMEOUT} from "../web/app/src/sdk-rpc.js";
+const ORDINARY=SDK_RPC_LIMIT-SDK_RPC_ACK_RESERVE;
 import {BrowserAudio} from "../web/app/src/audio.js";
 const turn=()=>new Promise(resolve=>setImmediate(resolve));
 class Clock {
@@ -21,17 +22,18 @@ function fixture(onClose=()=>{}) {
   rpc.initialize("ws://127.0.0.1/relay");assert.equal(rpc.acceptReady(),true);worker.messages.length=0;
   return {worker,clock,rpc};
 }
-test("128 unresolved commands remain globally bounded until real ACK or owned worker death",async()=>{
+test("124 unresolved ordinary commands remain globally bounded until real ACK or owned worker death",async()=>{
  const {worker,clock,rpc}=fixture();const promises=[];
- for(let index=0;index<SDK_RPC_LIMIT;index++)promises.push(rpc.request("voice_packet",[]).catch(error=>error));
- await assert.rejects(rpc.request("browse_server",[0]),/busy/);assert.equal(worker.messages.length,128);assert.equal(rpc.size,128);
+ assert.equal(ORDINARY,124);
+ for(let index=0;index<ORDINARY;index++)promises.push(rpc.request("voice_packet",[]).catch(error=>error));
+ await assert.rejects(rpc.request("browse_server",[0]),/busy/);assert.equal(worker.messages.length,ORDINARY);assert.equal(rpc.size,ORDINARY);
  const first=worker.messages[0];assert.equal(rpc.accept({kind:"result",id:first.id+1000,value:true}),false);
- assert.equal(rpc.size,128);assert.equal(rpc.accept({kind:"result",id:first.id,value:true}),true);
- promises.push(rpc.request("browse_server",[]).catch(error=>error));assert.equal(rpc.size,128);
- assert.equal(rpc.accept({kind:"result",id:first.id,value:true}),false);assert.equal(rpc.size,128);
+ assert.equal(rpc.size,ORDINARY);assert.equal(rpc.accept({kind:"result",id:first.id,value:true}),true);
+ promises.push(rpc.request("browse_server",[]).catch(error=>error));assert.equal(rpc.size,ORDINARY);
+ assert.equal(rpc.accept({kind:"result",id:first.id,value:true}),false);assert.equal(rpc.size,ORDINARY);
  clock.expire();assert.equal(worker.terminated,1);assert.equal(rpc.size,0);assert.equal(clock.jobs.size,0);
  const results=await Promise.all(promises);assert.equal(results[0],true);assert.ok(results.slice(1).every(error=>error instanceof SdkUnavailableError));
- await assert.rejects(rpc.request("join",[]),SdkUnavailableError);assert.equal(worker.messages.length,129);
+ await assert.rejects(rpc.request("join",[]),SdkUnavailableError);assert.equal(worker.messages.length,ORDINARY+1);
 });
 test("timeout closes the worker and revokes audio before any synthetic rejection grants credits",async()=>{
  const trace=[];const {worker,clock,rpc}=fixture(()=>trace.push("revoke"));
@@ -75,4 +77,41 @@ test("two SDK audio RPC credits survive20 epochs and250ms capture timeout until 
  audio.syncVoice(voice("50"));audio.sendPacket(0n,new Uint8Array([0xf8,0xff,0xfe]),false);assert.equal(worker.messages.length,3);
  clock.expire();assert.equal(worker.terminated,1);assert.equal(audio.voice,null);await turn();
  assert.equal(audio.txJobs.size,0);assert.equal(rpc.size,0);await audio.dispose();
+});
+test("content completion ACKs keep four of the 128 slots so ordinary command pressure cannot refuse them",async()=>{
+ const {worker,clock,rpc}=fixture();const ordinary=[];
+ for(let index=0;index<ORDINARY;index++)ordinary.push(rpc.request("content_request",[String(index+1)]).catch(error=>error));
+ await assert.rejects(rpc.request("browse_server",[0]),/busy/);
+ const acks=[];for(let index=0;index<4;index++)acks.push(rpc.request("content_complete",[String(index+1),""]).catch(error=>error));
+ assert.equal(worker.messages.filter(message=>message.method==="content_complete").length,4,"ACKs reach the SDK at the ordinary limit");
+ assert.equal(rpc.size,SDK_RPC_LIMIT,"the aggregate table is not raised");
+ await assert.rejects(rpc.request("content_complete",["5",""]),/busy/,"the reserve itself is bounded");
+ await assert.rejects(rpc.request("browse_server",[0]),/busy/,"ordinary work cannot borrow ACK slots");
+ const ack=worker.messages.find(message=>message.method==="content_complete");
+ assert.equal(rpc.accept({kind:"result",id:ack.id,value:"null"}),true);assert.equal(await acks[0],"null");
+ acks.push(rpc.request("content_complete",["5",""]).catch(error=>error));
+ assert.equal(worker.messages.filter(message=>message.method==="content_complete").length,5);
+ clock.expire();assert.equal(rpc.size,0);await Promise.all(ordinary);await Promise.allSettled(acks);
+});
+test("the lane retirement notice shares the four ACK slots and is refused, not queued, when they are full",async()=>{
+ const {worker,clock,rpc}=fixture();const ordinary=[];
+ for(let index=0;index<ORDINARY;index++)ordinary.push(rpc.request("content_request",[String(index+1)]).catch(error=>error));
+ const acks=[];for(let index=0;index<SDK_RPC_ACK_RESERVE;index++)acks.push(rpc.request("content_complete",[String(index+1),""]).catch(error=>error));
+ const posted=worker.messages.length;
+ await assert.rejects(rpc.request("content_retire",["undelivered"]),/busy/);
+ assert.equal(worker.messages.length,posted,"a refused notice posts nothing");assert.equal(rpc.size,SDK_RPC_LIMIT,"and takes no extra slot");
+ const ack=worker.messages.find(message=>message.method==="content_complete");rpc.accept({kind:"result",id:ack.id,value:"null"});
+ const retire=rpc.request("content_retire",["undelivered"]).catch(error=>error);
+ assert.equal(worker.messages.at(-1).method,"content_retire");assert.equal(rpc.size,SDK_RPC_LIMIT);
+ clock.expire();await Promise.all([...ordinary,...acks,retire]);
+});
+test("only this layer's capacity refusal is the typed local busy error",async()=>{
+ const {SdkBusyError}=await import("../web/app/src/sdk-rpc.js");
+ const {worker,clock,rpc}=fixture();const ordinary=[];
+ for(let index=0;index<ORDINARY;index++)ordinary.push(rpc.request("content_request",[String(index+1)]).catch(error=>error));
+ const refused=await rpc.request("content_request",["0"]).catch(error=>error);
+ assert.ok(refused instanceof SdkBusyError);assert.equal(refused.code,"SDK_BUSY");assert.equal(worker.messages.length,ORDINARY,"it never left this realm");
+ const first=worker.messages[0];rpc.accept({kind:"result",id:first.id,error:"The client is busy. Try again shortly."});
+ const remote=await ordinary[0];assert.equal(remote instanceof SdkBusyError,false,"an SDK reply with the same text is not local busy");
+ clock.expire();await Promise.all(ordinary);
 });

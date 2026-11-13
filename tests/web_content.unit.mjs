@@ -192,3 +192,35 @@ test("all breaks together ask for no more line breaks than a message holds",()=>
   validateDocument(spread(0));
   assert.throws(()=>validateDocument(spread(1)),/Invalid/);
 });
+test("serial queued renders get their retiring deadline at dispatch; queue wait is reject-only",async()=>{
+  const {service,workers,clock}=fixture();
+  // Four admitted jobs, each well inside its own 8s budget, on one serial worker.
+  const jobs=Array.from({length:4},(_,i)=>outcome(service.render({source:`queued ${i}`})));
+  workers[0].ready();
+  for(let i=0;i<4;i++){
+    assert.equal(workers[0].sent.length,i+1);assert.equal(service.active.deadline,clock.now+8000,"execution budget starts at dispatch");
+    clock.advance(2500);assert.equal(service.retired,false,"queue time never retires a healthy running job");
+    workers[0].finish(`reply ${i}`);assert.equal((await jobs[i]).value.plain_text,`reply ${i}`);
+  }
+  assert.equal(service.bytes,0);assert.equal(workers.length,1);assert.equal(workers[0].terminated,0);
+  // A job that waited past its separate queue deadline is rejected without
+  // retiring the healthy job that is running.
+  const first=outcome(service.render({source:"first"})),running=outcome(service.render({source:"running"})),waiting=outcome(service.render({source:"waiting"}));
+  clock.advance(7000);workers[0].finish("first done");assert.ok((await first).value);
+  clock.advance(1000);assert.match((await waiting).error.message,/deadline/);assert.equal(service.retired,false);
+  clock.advance(1000);workers[0].finish("running done");assert.equal((await running).value.plain_text,"running done");
+  assert.equal(service.bytes,0);assert.equal(workers.length,1);
+  service.dispose();
+});
+test("active cancellation reports the worker's actual release, never the early rejection",async()=>{
+  const {service,workers,clock}=fixture();const active=new AbortController(),queued=new AbortController();
+  const first=outcome(service.render({source:"active"},{signal:active.signal})),second=outcome(service.render({source:"queued"},{signal:queued.signal}));
+  workers[0].ready();queued.abort();const waiting=(await second).error;assert.equal(waiting.workerReleased,undefined,"a queued job held no worker");
+  active.abort();const cancelled=(await first).error;let released=false;cancelled.workerReleased.then(()=>{released=true;});
+  clock.advance(100);await Promise.resolve();assert.equal(released,false);assert.equal(service.bytes,6);
+  workers[0].finish("late real reply");await Promise.resolve();assert.equal(released,true);assert.equal(service.bytes,0);
+  // Retirement is also an actual release of a cancelled active job.
+  const stalled=new AbortController();const third=outcome(service.render({source:"stalled"},{signal:stalled.signal}));stalled.abort();
+  let retiredRelease=false;(await third).error.workerReleased.then(()=>{retiredRelease=true;});
+  clock.advance(8000);await Promise.resolve();assert.equal(service.retired,true);assert.equal(retiredRelease,true);
+});

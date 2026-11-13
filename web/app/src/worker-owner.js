@@ -25,7 +25,9 @@ export class WorkerOwner {
       return Promise.reject(this.error("Content processing is busy; retry this message."));
     if(!Number.isSafeInteger(this.next+1))return Promise.reject(this.error("Content job identifiers are exhausted."));
     return new Promise((resolve,reject)=>{
-      const job={id:++this.next,client,packet:{...packet},size,resolve,reject,signal,deadline:performance.now()+timeoutMs,settled:false,released:false};
+      // Until dispatch, `deadline` is a reject-only queue deadline. The worker
+      // execution deadline that can retire this owner starts at dispatch.
+      const job={id:++this.next,client,packet:{...packet},size,resolve,reject,signal,timeoutMs,deadline:performance.now()+timeoutMs,settled:false,released:false};
       if(packet.bytes)job.packet.bytes=packet.bytes.slice();
       job.abort=()=>this.cancel(job);
       job.timer=setTimeout(()=>this.expire(job),timeoutMs);
@@ -51,6 +53,8 @@ export class WorkerOwner {
     if(this.phase!=="ready")return;
     const job=this.queue.shift();
     if(performance.now()>=job.deadline){this.complete(job,this.error("Content processing exceeded its deadline."));this.release(job);this.dispatch();return;}
+    // Queue wait never consumes the execution budget of this serial worker.
+    clearTimeout(job.timer);job.deadline=performance.now()+job.timeoutMs;job.timer=setTimeout(()=>this.expire(job),job.timeoutMs);
     this.active=job;
     try{this.worker.postMessage({id:job.id,...job.packet},job.packet.bytes?[job.packet.bytes.buffer]:[]);}
     catch{this.retire("The content worker could not accept this job. Reload to try again.");}
@@ -92,17 +96,23 @@ export class WorkerOwner {
     if(this.active===job)this.active=null;
     const index=this.queue.indexOf(job);if(index>=0)this.queue.splice(index,1);
     job.client=null;job.packet=null;
+    job.onRelease?.();job.onRelease=null;
   }
   cancel(job) {
     if(job.released||job.settled)return;
-    this.complete(job,this.error("Content processing was cancelled."));
+    const error=this.error("Content processing was cancelled.");
     // Active cancellation is a tombstone, not a codec acknowledgment. Preserve
-    // its original absolute deadline and bytes/slot until real reply or retirement.
+    // its absolute execution deadline and bytes/slot until real reply or
+    // retirement. The rejection carries that actual release for serial callers.
+    if(this.active===job)error.workerReleased=new Promise(resolve=>{job.onRelease=resolve;});
+    this.complete(job,error);
     if(this.active!==job){this.release(job);this.dispatch();}
   }
   expire(job) {
     if(job.released)return;
-    if(this.active===job){this.retire("Content processing exceeded its deadline. Reload to try again.");return;}
+    // An overdue active job wins any timer race: its stalled worker retires
+    // the owner before a queued job's reject-only deadline is reported.
+    if(this.active===job||(this.active&&performance.now()>=this.active.deadline)){this.retire("Content processing exceeded its deadline. Reload to try again.");return;}
     this.complete(job,this.error("Content processing exceeded its deadline."));this.release(job);this.dispatch();
     // Loading without a consumer is still one owned loader, with the original
     // startup deadline. Routine navigation cannot cancel/recreate WASM realms.

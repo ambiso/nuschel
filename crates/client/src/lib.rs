@@ -23,7 +23,7 @@ pub mod sounds;
 pub mod timeline;
 pub mod tree;
 pub mod voice;
-pub use client::{Client, Focus, Notification, SecondServer, SendError, Update};
+pub use client::{Client, Focus, MessageReceipt, Notification, SecondServer, SendError, Update};
 pub use navigation::*;
 pub use nuschl_core::model;
 
