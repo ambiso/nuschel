@@ -42,17 +42,19 @@ carrier of structure on stock Mumble, and nothing parsed back out of display tex
   checked in the protocol layer and the SDK against fixed limits, then drawn with
   native widgets. Nothing is executed, fetched or parsed as markup. Only artwork
   would need the existing content worker, and artwork is not in v1.
-- **Authority on stock Mumble.** A client cannot see anyone else's permissions, so
-  the only permission it can piggy-back on is **Write on the root channel**. On
-  Murmur's defaults that means administrators. Admins can list integrations with a
-  strict, versioned marker in the root channel's description (§3.2). Everything else
-  needs each user's own consent. Section 3.1 states what a stock server cannot
-  guarantee. This is owner decision D1.
+- **Authority on stock Mumble: there is no permission to piggy-back on.** A client
+  learns only its own permissions, and a stock server relays plugin data without any
+  permission check. Nothing can stop a server, or any user, from claiming to be an
+  integration (§3.1). On stock servers an integration therefore appears only after
+  each user's own consent, at most one offer at a time, and is shown as
+  **unverified** (§3.2). Text markers, such as a line in the root channel's
+  description, and certificate hashes are rejected as sources of admin authority
+  (§3.3). Operators who want admins to decide run nuschld.
 - **Authority on Nuschl servers.** nuschld keeps an integration registry. Holders of
   Write on the root manage it, as an extension policy without a new ACL bit. Entries
   bind integrations to accounts, scope them to channels, and let the server decide
   who receives a surface and who may press its buttons. The server attests the entry
-  to clients and keeps an audit trail (§3.3).
+  to clients and keeps an audit trail (§3.5).
 
 ## 1. What exists today (at d82473e3)
 
@@ -85,7 +87,7 @@ ordinary messages.
 
 | Part | What it is | Lifetime |
 |---|---|---|
-| Principal | Nuschl: a registry entry (§3.3) with up to 8 registered accounts, one per connection (the music bot has one per channel). Later perhaps also an in-process nuschld service. Stock: one session's certificate hash | Nuschl: until an admin removes the entry; ids are never reused. Stock: while that certificate is used |
+| Principal | Nuschl: a registry entry (§3.5) with up to 8 registered accounts, one per connection (the music bot has one per channel). Later perhaps also an in-process nuschld service. Stock: one session, remembered for consent by the certificate hash the server reports for it | Nuschl: until an admin removes the entry; ids are never reused. Stock: while the server reports that certificate |
 | Surface | One template instance: `(principal, surface id)` with a monotonic `revision` and a `subject` (§5) | While the publishing connection or presence is online, or until removed. Never stored in history |
 | Catalog | Up to 16 command specs with a `revision` | While the publishing connection or presence is online |
 | Action / invocation | A request from one user to the principal, bound to a ticket (§5) | Until its result or a timeout (5 s for actions, 10 s for commands). Never retried automatically |
@@ -96,7 +98,7 @@ ordinary messages.
 | Path | Key the client stores | Display name | Not used |
 |---|---|---|---|
 | Nuschl server with `integrations/1` | `(server history identity, IntegrationId)`: 16 random bytes from nuschld | The registry's name, which an admin sets | The bot's nickname, session ids, registration numbers |
-| Stock Murmur, or a Nuschl server without `integrations/1` | `(server history identity, certificate SHA-1)` from `UserState.hash` | The sender's name in `UserState`, as for any user. A short id ("3f1c 9a…") appears in About | A name inside the payload. Sessions without a certificate are ignored |
+| Stock Murmur, or a Nuschl server without `integrations/1` | `(server history identity, certificate SHA-1)` from `UserState.hash`. The server asserts it, not the sender, so it is only as trustworthy as that server. It is the key for consent memory and grants nothing | The sender's name in `UserState`, as for any user, tagged "Unverified". A short id ("3f1c 9a…") appears in About | Any name or hash inside the payload. Sessions without a certificate are ignored |
 | E2EE (`e2ee/1`) | None in v1 (§8.3) | — | — |
 
 A new certificate is a new integration on stock servers, so consent is asked again.
@@ -105,111 +107,115 @@ A new certificate is a new integration on stock servers, so consent is asked aga
 
 | Level | When | Words in About |
 |---|---|---|
-| Added by admins | Nuschl registry entry | "Added by Alice · 3 Nov" |
-| Listed by this server | Stock: its certificate hash is in the root marker (§3.2) | "Listed by this server" |
-| You allowed this | Stock: local consent | "You allowed this" |
+| Added by admins | Nuschl registry entry, enforced and attested by the server | "Added by Alice · 3 Nov" |
+| Unverified, you allowed this | Stock: the user's own consent | Card tag "Unverified"; About: "Unverified. You allowed this." |
 
-No path shows a check mark or the word "verified". About always says "Sees who
+There is no check mark and no "verified" on any path. About always says "Sees who
 presses its buttons." On stock servers and in compatible mode it also says "Not end-to-end
 encrypted."
 
 ## 3. Authority: who may add and operate integrations
 
-### 3.1 Stock Mumble: what a client can observe
+### 3.1 What a stock Mumble client can and cannot learn
 
-A stock client can query **its own** permissions (`PermissionQuery`), not anyone
-else's. It sees ACLs and group membership only with Write on that channel. It sees
-every user's name, registration (`user_id`) and certificate hash. What could carry an
-administrator's say-so:
+- A client learns **only its own** permissions, per channel, through
+  `PermissionQuery`. It cannot ask what anyone else may do.
+- It sees ACLs and group membership only where it holds Write itself, so an ordinary
+  user never learns who the admins are.
+- It sees every user's name, registration (`user_id`) and certificate hash
+  (`UserState.hash`). All three are **asserted by the server**, not by the user they
+  describe. Registration is open to everyone by default (`all` holds Register self,
+  `state.rs:875`, as in Murmur).
+- Murmur forwards plugin data from any authenticated session to any listed session,
+  with no channel or permission check (`0e40c7ac`, `plugin.rs`). A data id is a name,
+  not evidence of who sent the data.
 
-| Signal | Who can produce it | Verdict |
+So on a stock server **nothing can prevent a claim of integration status**:
+
+- any user can run a client or bot that sends integration payloads;
+- a malicious stock server can invent sessions, names, certificate hashes and payloads,
+  and drop anything;
+- the integration learns who pressed a button only from the server's session report.
+
+No client design can change this without server support. The plan therefore claims
+no admin authority on stock servers, and the UI marks every stock integration as
+unverified.
+
+### 3.2 Stock policy: personal consent only
+
+The coordinator's policy requires this, and it is also the recommendation.
+
+- **Nothing shows by default.** A stock integration's cards and commands appear only
+  after **each user's own consent**, on that device.
+- **One offer at a time.** An integration that is neither allowed nor declined may
+  make one offer when all of these hold:
+  - the sender is registered and has a certificate. This only limits noise: it keeps
+    throwaway guest sessions from offering, and a registered name cannot be taken by
+    another session. It is **not** authority, because anyone can register by default;
+  - it is in, or listened to in, the user's current voice channel;
+  - no other offer is showing.
+
+  The offer is a dock row: "Show controls from Music? Unverified." with **Show** and
+  **No**. A declined integration never asks again until the user resets it in the
+  Integrations list.
+- **What identifies it.** Consent is remembered under `(server history identity,
+  certificate hash)`. The hash is the one the server reports in `UserState.hash`:
+  **server-asserted, not sender-claimed**, and only as trustworthy as that stock
+  server. On an honest server it means "the same key as when you allowed it"; a new
+  certificate asks again. It identifies an integration for consent memory and grants
+  nothing. A hash inside a payload is never read. About shows a short id ("ID 3f1c
+  9a…") only to tell two integrations apart.
+- **Unverified, explicitly.** Stock cards carry an "Unverified" tag in their frame.
+  About says "Unverified. You allowed this." No path on a stock server shows a check
+  mark or "verified".
+- **Placement is not authority.** A card docks only while its sender is, by the
+  server's report, in one of the user's voice places. Admins can use the existing
+  Enter and Speak ACLs to decide where bots may be. That limits placement only; it
+  does not stop anyone from claiming to be an integration.
+- **Admin control needs server support.** Operators who want admins to decide run
+  nuschld (§3.5).
+
+### 3.3 Considered and rejected
+
+| Candidate | Who can produce it | Why it is rejected |
 |---|---|---|
-| The integration is registered | Anyone, by default: `all` holds Register self (`state.rs:875`, as in Murmur) | Not authority. It only stops a second session using the same registered name. Required for offers, as cheap noise control |
-| Its certificate hash | The key holder; TLS proves possession on an honest server | Identity continuity, not approval |
-| Root channel description | Write on root, which is the `admin` group on defaults | **The only admin-only data every client can read.** Recommended carrier for a strict marker (§3.2, D1) |
-| Another channel's description | Write on that channel | Later, as per-channel scope. Not in v1 |
-| Welcome text | The operator's config file | Rejected: it needs a restart, is shown to everyone at every login and is not editable from a client |
-| Priority speaker, server mute | Mute/Deafen holders | Rejected: changes audio for everyone |
-| Presence in an Enter-restricted channel | ACL editors, or someone who moved it | Rejected: others cannot see the restriction, and Move overrides it |
-| Plugin data claiming approval | Anyone; Murmur checks no channel or permission | Never authority |
+| **A marker in the root channel's description** (an earlier draft: a `nuschl-integrations/1` token with an `allow` or `only` mode and certificate hashes, written by holders of Write on root) | Write on root, or a malicious server | It takes authority from text written for display, which breaks the structured-data rule ("legacy text is presentation only"). Clients cannot see who holds Write on root, a malicious server can show any description, and the stock editor gives no guarantee the token survives. Stock clients and servers cannot make it trustworthy |
+| A marker in another channel's description, or in the welcome text | Write on that channel; the operator's config | Same objections |
+| A certificate hash as approval, from a payload or from `UserState.hash` | The sender, or the server's report | Key continuity at best, never approval. Used only as the key of a user's own consent (§3.2) |
+| Registration (`user_id`) | Anyone, by default | Register self is open to all. Kept only as noise control for offers |
+| Plugin data claiming approval or a role | Anyone | The relay checks no permission |
+| An admin's Nuschl client vouching over plugin data | That client | Receivers cannot check that the sender holds any permission |
+| Presence in an Enter-restricted channel, priority speaker, server mute | ACL editors, Mute/Deafen holders | Others cannot see the restriction, Move overrides Enter, and the others change audio for everyone |
+| Signed payloads pinned at consent | The integration's own key | Would stop a malicious server forging a card from an integration you already allowed, but nothing else such a server can do. It would also add a signature dependency to the SDK, and users have no key to sign their presses. Not in v1 |
 
-**What a stock server cannot guarantee, even an honest one:** who pressed a button
-(only the server's session claim, which the integration checks itself); delivery;
-that no other user receives or sends `nuschl/` plugin data; an audit of who listed
-what; that the marker's writer is an "admin" rather than anyone granted Write on root.
-**A malicious stock server** can forge sessions, certificate hashes, descriptions and
-plugin data, and can drop anything. Nothing on the stock path claims more than "this
-server says so". The UI never uses the word "verified" here.
+### 3.4 Integration authentication is not the plugin-data transport
 
-### 3.2 Recommended stock policy: admin marker plus personal consent
+- **PD (#93) stays a generic, opaque carrier.** It handles bounded bytes, the receiver
+  list and pacing, and reports the sender as the session knew it on arrival. Its
+  sender fields "authorise nothing" (`client/plugin.rs`, frozen `0e40c7ac`), and this
+  plan keeps it that way. PD gains no integration semantics, consent state, registry
+  or filtering.
+- **The integrations layer decides who counts as an integration** and what may be
+  shown. That layer is `nuschl-core::integration` and
+  `crates/client/src/integrations.rs`. It uses the registry the Nuschl server enforces
+  (§3.5), or the user's own consent on stock servers (§3.2). It reaches PD only through
+  the reserved-id hook the PD lane provides, and treats every field PD reports as a
+  claim.
+- **nuschld's plugin-data relay stays generic.** It does not filter by integration
+  data ids. Clients that negotiated `integrations/1` with a server ignore the stock
+  carrier from it (sticky), so the registry is their only path.
+- **Nuschl servers authenticate integrations themselves.** The publishing connection
+  must log in with persistent credentials as an account in the registry entry. Clients
+  never authenticate an integration from a hash.
 
-**Marker.** It is one token in the **root channel's description**, written by someone
-with Write on root:
+### 3.5 Nuschl servers: a registry the server enforces
 
-```text
-marker = "nuschl-integrations/1:" mode ":" [ hash *15( "," hash ) ]
-mode   = "allow" / "only"
-hash   = 40( DIGIT / %x61-66 )   ; lower-case SHA-1 hex of the integration's certificate
-```
-
-Example line in the description: `Integrations: nuschl-integrations/1:allow:3f1c…e2`.
-
-- `allow`: listed integrations show without asking. Others may still offer themselves
-  for personal consent.
-- `only`: listed integrations show, and no others are offered.
-- **Extraction** is an exact byte match over the raw description string the session
-  already holds, at most 128 KiB, with no HTML parsing. The prefix must occur exactly
-  once. The byte before it must be the start of the description or a byte outside
-  `[A-Za-z0-9_/-]`. After the last hash or the second colon must come the end or a
-  byte outside `[0-9a-f,]`. The grammar uses only ASCII letters, digits, `/`, `:`
-  and `,`, which an HTML editor has no reason to escape. That stock Mumble's editor
-  keeps the token intact is still to be checked in the stock-server test (§12.3).
-- **Fail closed:** two prefixes, a bad mode, a short hash, more than 16 hashes or an
-  oversized description all count as `only` with an empty list. Nothing shows, and the
-  Integrations list says "This server's list can't be read." A missing marker
-  means "no admin list", and consent applies.
-- **The SDK asks for the root description body** (one `RequestBlobs` per advertised
-  hash) only while the stock path is active and some `nuschl/int/1` sender is present.
-  A description change re-evaluates the list. A removed hash withdraws that
-  integration's surfaces at once.
-- The marker is visible to stock users. That is deliberate: everyone can see what the
-  admins listed. The marker can also be hidden in an HTML comment, but whether stock
-  Mumble's description editor keeps comments when it saves is unverified. The visible
-  form is recommended.
-
-**Why this does not break the "never parse legacy text" rule.** That rule forbids
-recovering *message semantics* from text written for display. The marker is a
-declaration written deliberately as configuration. It is carried in the only
-admin-writable field a stock server offers, and is matched exactly, with no heuristics
-and no fallback. It never applies to chat messages, comments or other channels, and
-it only narrows what is shown. It cannot grant a permission, start an action or show
-anything a user has not been offered. If the owner prefers no exception at all, the
-alternative is consent only (D1).
-
-**Consent and offers.** An integration that is neither listed nor declined may make
-**one offer**, under all of these conditions:
-
-- its sender is registered and has a certificate;
-- the marker is absent or says `allow`;
-- the sender is in, or listened to in, the user's current voice channel;
-- no other offer is showing.
-
-The offer is a row in the dock: "Show controls from Music?" with **Show** and **No**.
-The decision is stored per server and certificate (§7). There is never more than one
-offer row, and a declined integration never asks again until the user resets it in
-the Integrations list.
-
-**Admins with Write on root** see a "Copy ID" item in About, so they can paste the
-hash into the marker. The music bot prints its hash at startup and on its web page
-(§11).
-
-### 3.3 Nuschl servers: a registry the server enforces
-
-**Capability** `integrations/1` (proposal), only in compatible mode (§8.3). It is
-sticky like every capability. Once negotiated, the client ignores `nuschl/int*`
-plugin data from that server. nuschld with `integrations/1` drops `nuschl/int`
-plugin data instead of forwarding it, so no user can get round the registry on the
-stock path.
+**Capability** `integrations/1` (a proposed name, not allocated), only in compatible
+mode (§8.3). It is sticky like every capability. Once negotiated, the client ignores
+the stock carrier (`nuschl/int*` plugin data) from that server, so for Nuschl clients
+the registry is the only path. nuschld's plugin-data relay stays generic (§3.4).
+A client that does not negotiate the extension sees the server as a stock server:
+consent only, unverified. Today's web client is one (§8.4).
 
 **Registry entry** (persistent; one storage migration, `00NN_integrations.sql`, number
 by Root):
@@ -268,15 +274,15 @@ requester over the authenticated extension channel. Clients show the registry na
 oldest dropped) that managers can read through the CLI. Logs never contain command
 arguments or result text.
 
-### 3.4 Side by side
+### 3.6 Side by side
 
 | Question | Stock Mumble | Nuschl server |
 |---|---|---|
-| Who adds an integration | Anyone can run a bot. Holders of Write on root can list or exclude integrations through the marker | Holders of Write on root, or the operator CLI, through the registry |
-| What stops unwanted surfaces | The client: `only` mode, consent, one offer at a time | The server: unregistered principals cannot publish at all |
-| Who receives surfaces | Whoever the integration lists; the client checks the sender's channel | The server's audience rule, re-evaluated on every change |
-| Who may press | The integration decides from the server's session claim | The server checks the audience and registration, then the integration decides |
-| Trust in the result | As much as the stock server, and no more | As much as the Nuschl server, with sticky negotiation and no downgrade |
+| Who adds an integration | Anyone can run one; no admin control is possible | Holders of Write on root, or the operator CLI, through the registry |
+| What stops unwanted surfaces | Only each user's consent, with one offer at a time | The server: principals outside the registry cannot publish at all |
+| Who receives surfaces | Whoever the integration lists; the client docks only senders in its voice places, by the server's report | The server's audience rule, re-evaluated on every change |
+| Who may press | The integration decides from the server's session report | The server checks the audience and registration, then the integration decides |
+| What the client shows | "Unverified", from a key the server asserts; the server can forge it | "Added by …", attested by the server, with sticky negotiation and no downgrade |
 | Audit | None | `integration_audit` |
 
 ## 4. The UI kit
@@ -429,6 +435,8 @@ channel list and the voice card (`view.rs:807-812`):
 - **What shows:** surfaces whose channel is a voice place of yours (in it, or
   listening) on a connected server, matching the voice card. Selecting a text channel
   changes nothing. Server-wide surfaces show while that server is a voice place.
+  On stock servers only allowed integrations show, and their frame carries a fixed
+  "Unverified" tag that the integration cannot remove or restyle.
 - **How many:** at most 3 cards. The rest are reachable from "2 more" and the
   Integrations list. The dock takes at most 30% of the sidebar height, with the shared
   `layout::scrollbar` and focus-reveal contracts (`docs/desktop-layout.md`). When the
@@ -469,9 +477,10 @@ validated view models only.
 Short and human, as the owner asks:
 
 - Card: "Music · Lounge", "Previous", "Play", "Pause", "Next", "Hide", "About".
-- Offer: "Show controls from Music?" with **Show** and **No**.
-- About: "Added by Alice · 3 Nov", "Listed by this server" or "You allowed this";
-  "Sees who presses its buttons."; "Not end-to-end encrypted."
+- Offer (stock): "Show controls from Music? Unverified." with **Show** and **No**.
+- Card tag (stock): "Unverified".
+- About: "Added by Alice · 3 Nov" (Nuschl) or "Unverified. You allowed this."
+  (stock); "Sees who presses its buttons."; "Not end-to-end encrypted."
 - Results: "Done.", "Not allowed.", "Out of date.", "Music didn't answer."
 - Integrations list: "Music · Hidden" with **Show**.
 - Composer: "/skip — Skip this song · Music"; "No command /skp" with
@@ -627,9 +636,10 @@ message itself.
 
 ### 8.1 Nuschl server, compatible mode (`integrations/1`)
 
-The plan needs **one block of 16 message types**. The next block after Root's freeze
-would be 0x4EC0–0x4ECF; this plan **does not claim it**. Offsets are written `INT+n`
-until Root allocates the block (D6).
+The plan needs **one block of 16 message types**. This is a proposal, not an
+allocation: the registry is frozen at polls 0x4E98–0x4E9F, RTC 0x4EA0–0x4EAF and
+interactions 0x4EB0–0x4EBF. Root may assign the next free block (0x4EC0–0x4ECF
+would be one) or another. Offsets are written `INT+n` until Root allocates (D6).
 
 | Type | Message | Direction | Permission |
 |---|---|---|---|
@@ -664,9 +674,10 @@ until Root allocates the block (D6).
 **Scope.** Stock Murmur, and Nuschl servers without `integrations/1`. Never on a
 server whose sticky record holds `integrations/1`, and never on `e2ee/1`. Session
 support for the reserved namespace (sending to exact receivers, pacing, delivery to
-the SDK with sender session, presence instance and certificate hash) belongs to the
-PD lane, equivalently in `nuschl-session` and `crates/client-wasm`. It is not on main
-yet (`0e40c7ac`).
+the SDK with sender session, presence instance and the certificate hash the server
+reports) belongs to the PD lane, equivalently in `nuschl-session` and
+`crates/client-wasm`. It is not on main yet (`0e40c7ac`). PD is transport only:
+deciding who counts as an integration stays in the integrations layer (§3.4).
 
 **Data ids** (proposal, PD allocates; D6). There are two, one per direction, so
 neither side ever decodes what it never accepts:
@@ -714,8 +725,9 @@ partial catalog is discarded, so there is no reassembly of split bytes.
    dropped.
 2. **Accept** only from a present session with a certificate hash, tied to its
    presence instance. When the presence ends, its surfaces and catalog go.
-3. **Apply the authority rule** (§3.2): listed, or allowed → show; `only` and not
-   listed → drop; declined → drop; otherwise offer (once).
+3. **Apply consent** (§3.2), keyed by the certificate hash the server asserts in
+   `UserState`, never by anything in the payload: allowed → show, tagged
+   "Unverified"; declined → drop; otherwise at most one offer.
 4. **Bound** each sender to ≤ 4 surfaces, ≤ 16 commands and ≤ 4 accepted messages a
    second; the excess is dropped.
 5. **Place** the surface: its channel is the sender's current channel as this client
@@ -724,9 +736,11 @@ partial catalog is discarded, so there is no reassembly of split bytes.
 6. **Results** count only from the same integration presence, for an outstanding
    key, within the timeout.
 
-**Trust.** It is as described in §3.1. Plugin data has no channel authorisation, so
-the client's own checks (sender present, certificate, authority rule, placement by
-the sender's real channel) are the only filter. The server sees everything. Stock
+**Trust.** It is as described in §3.1: none beyond the user's own consent. Plugin
+data has no channel authorisation. The client's checks are the only filter: sender
+present, a server-reported certificate, consent, and placement by the sender's
+channel as the server reports it. They limit noise and keep consent attached to the
+same key, but do not make the sender verified. The server sees everything. Stock
 clients' plugin frameworks receive these ids and, as far as is known, ignore them.
 
 ### 8.3 End-to-end encrypted servers: not in v1
@@ -749,9 +763,9 @@ clients' plugin frameworks receive these ids and, as far as is known, ignore the
 The SDK logic (`crates/client/src/integrations.rs`) compiles for WASM, so validation
 and bounds are identical. The stock path works once PD's message-26 support reaches
 `crates/client-wasm/src/session.rs`. The Nuschl path waits for browser extension
-negotiation (`docs/web.md:298+`). Until then the web client shows no integration UI on
-nuschld, which is honest, because nuschld with `integrations/1` drops the stock
-carrier.
+negotiation (`docs/web.md:298+`). Until then the web client treats nuschld as a stock
+server. Registry integrations do not reach it, because they use typed messages.
+Anything on the stock carrier is consent-only and unverified, as on Murmur.
 
 ## 9. Isolation and security
 
@@ -784,15 +798,15 @@ carrier.
 
 | Threat | Mitigation |
 |---|---|
-| Any user adds an integration | Nuschl: only registry accounts can publish. Stock: marker, consent, one offer, `only` mode |
-| An impersonator with the same name | Keys are the IntegrationId or certificate hash, never names. Consent is per certificate. About shows the short id. Stock names come from `UserState`, not the payload |
+| Any user adds an integration | Nuschl: only registry accounts can publish. Stock: **cannot be prevented**; nothing shows without the user's consent, at most one offer at a time, always tagged "Unverified" |
+| An impersonator with the same name | Keys are the IntegrationId or the server-asserted certificate hash, never names. Consent is per certificate, so another certificate is another integration and must be allowed separately. About shows the short id. Stock names and hashes come from the server's `UserState`, never the payload. Against a malicious stock server none of this holds, hence "Unverified" |
 | A look-alike of Nuschl UI | A fixed frame always names the integration. The dock is its only place: no notices, dialogs, timeline rows, sounds, notifications, focus or window raising. No security or microphone icons, and no custom colours |
 | Phishing through buttons | Transport labels are fixed. Card labels are ≤ 24 bytes in a named frame. No links or inputs in v1. An action carries only ids, never user data |
 | A confused deputy | Actions and commands only send typed data to the integration. They cannot join channels, send messages as the user, open URLs, touch audio or change settings |
 | Flooding | Per-surface coalescing, per-integration caps, client per-sender limits, dock ≤ 3 cards, repaint ≤ 1 Hz (§10) |
 | A stale action hitting a new target | Ticket, generation and subject binding; no automatic retries (§5) |
-| A downgrade on Nuschl servers | Sticky `integrations/1`; plugin-data surfaces ignored there and dropped by nuschld |
-| A malicious stock server | Out of reach. Labels say "Listed by this server" and never "verified" |
+| A downgrade on Nuschl servers | Sticky `integrations/1`; clients that negotiated it ignore the stock carrier from that server |
+| A malicious stock server | Out of reach. It can forge any integration, including one the user allowed, because the certificate hash is its own assertion. Stock integrations are always shown as "Unverified" |
 | Privacy | The integration learns who pressed or invoked and when, and that the sender runs Nuschl. The server sees all of it in compatible and stock modes. About says so. E2EE is excluded |
 | Resource exhaustion in the client | Decode and aggregate bounds before allocation (§10) |
 
@@ -807,7 +821,7 @@ carrier.
   validated spans; nothing is rendered from unvalidated values.
 - **Binding of asynchronous results:** §5 and §6.4.
 - **Fail closed:**
-  - a malformed marker means nothing is shown;
+  - a stock integration without the user's consent shows nothing;
   - unknown templates are not shown;
   - an incomplete catalog is discarded;
   - `e2ee/1` has no integrations;
@@ -832,7 +846,6 @@ carrier.
 | Commands | ≤ 16 per catalog; spec ≤ 900 bytes; catalog ≤ 16 KiB; ≤ 4 args; text arg ≤ 256 bytes; args ≤ 600 bytes in total; ≤ 8 choices; 10 s timeout; text bucket (Nuschl) or plugin pacer (stock) | SDK; nuschld; integration | Refused |
 | Stock catalog assembly | One revision per sender at a time, complete within 10 s, ≤ 16 items | SDK | Discarded |
 | Integrations per server per client | ≤ 32 tracked (Nuschl list ≤ 64 entries, of which only those in scope arrive) | SDK | Least recently seen dropped |
-| Marker | Description ≤ 128 KiB scanned; ≤ 16 hashes; exactly one prefix | SDK | Treated as `only` with an empty list |
 | Local state | ≤ 256 entries, ≤ 64 KiB | SDK, each platform store | Least recently seen dropped |
 | Audit | ≤ 1,000 rows | nuschld storage | Oldest dropped |
 
@@ -882,8 +895,9 @@ carrier.
   it uses plugin data (after PD). With `integrations/1` but no entry it publishes
   nothing, and the web page says "Not added to this server's integrations."
 - **Identity for admins:** the web page's connection status and the startup log show
-  each connection's certificate SHA-1, for the stock marker or for registering the
-  account in the nuschld registry.
+  each connection's certificate SHA-1. Admins use it to find the right account when
+  they add the bot to the nuschld registry. On stock servers it is only a way to
+  recognise the instance, never authority.
 - **Unchanged:** the `!web` text command, the public comment, the codec worker, the
   web API and every security boundary in `docs/musicbot.md`. The bot gains no
   dependency: protobuf types come from `nuschl-protocol` and helpers from
@@ -908,11 +922,11 @@ Effort is focused agent-days including tests, excluding review queues and VM wai
 
 | Slice | Contents | Depends on | Effort |
 |---|---|---|---|
-| **F0** Pure foundation | `nuschl-core::integration`: ids, `Surface` and template view models, validators, sanitiser, interpolation, command spec and argument validation, marker scanner (if D1), provider helpers (revision counter, itemised catalog, per-actor rate, key memory); proto drafts | — | M: 3–4 |
+| **F0** Pure foundation | `nuschl-core::integration`: ids, `Surface` and template view models, validators, sanitiser, interpolation, command spec and argument validation, consent state rules, provider helpers (revision counter, itemised catalog, per-actor rate, key memory); proto drafts | — | M: 3–4 |
 | **F1** Protocol freeze | `integrations/1`, the INT block, both data ids, migration number, `docs/extension.md` section | F0; Root; PD; design review | S: 1 |
 | **S1** SDK | `crates/client/src/integrations.rs`: per-server integrations, surfaces, provenance, local state sidecar, tickets, completion candidates, results; native plumbing | F1 | M: 4–5 |
 | **N1** nuschld | Registry storage and CLI, `IntegrationSet`/`Remove` under `ManageIntegrations`, audit, publish enforcement, audience fan-out with epoch re-evaluation, action and command routing with attested actors, timeouts and budgets, dropping `nuschl/int` plugin data | F1 | L: 6–8 |
-| **P1** Stock path | Session and wasm hookup of `nuschl/int*` (after PD), receive rules, offers, marker, catalog sync, actions | F1; PD on main | M: 4–5 |
+| **P1** Stock path | The integrations layer on PD's reserved-id hook (transport only, §3.4), receive rules, consent and offers, the "Unverified" tag, catalog sync, actions | F1; PD on main | M: 4–5 |
 | **B1** Music bot | §11 on both transports | F0; N1 and/or P1 | M: 4–5 |
 | **U1** Desktop | Dock and card, menu and About, Integrations list, completion popup and chips (shared with MI), result line, AccessKit | S1 | M: 5–6 |
 | **U2** TUI | Bar, `/integrations`, Tab completion, plain lines | S1 | S–M: 2–3 |
@@ -931,13 +945,13 @@ profiles.
 
 | Layer | Cases |
 |---|---|
-| Unit: core | Every bound at the edge and one past; sanitiser (controls, bidi overrides, invalid UTF-8, empty after cleaning); interpolation (play, pause, unknown duration, 24 h, `age_ms` limits, sub-second corrections never backwards, subject change resets); spans; argument validation; marker grammar (both modes, empty list, 16 and 17 hashes, upper-case hex, two prefixes, adjacent letters, HTML around it, 128 KiB + 1 → `only` empty); itemised catalog (missing item, mixed revisions, timeout) |
-| Unit: SDK | Tickets refused after reconnect, generation change, subject change and disabled control; late results dropped; one in flight; authority matrix (listed, allowed, declined, `only`, no marker, unregistered, no certificate, sender left, sender outside voice places); offer limits; local state bounds and a corrupt file; sticky `integrations/1` ignores plugin-data surfaces; `e2ee/1` shows nothing |
+| Unit: core | Every bound at the edge and one past; sanitiser (controls, bidi overrides, invalid UTF-8, empty after cleaning); interpolation (play, pause, unknown duration, 24 h, `age_ms` limits, sub-second corrections never backwards, subject change resets); spans; argument validation; itemised catalog (missing item, mixed revisions, timeout) |
+| Unit: SDK | Tickets refused after reconnect, generation change, subject change and disabled control; late results dropped; one in flight; consent matrix (allowed, declined, unasked, unregistered, no certificate, a new certificate under the same name, sender left, sender outside voice places, a hash or name inside the payload ignored); "Unverified" on every stock view; offer limits; local state bounds and a corrupt file; sticky `integrations/1` ignores plugin-data surfaces; `e2ee/1` shows nothing |
 | Unit: server | Publishing by a non-entry account, outside scope, a disallowed template, too large, too fast; audience on move, listen, ACL change and opt-out; actions by a guest, someone outside the audience, a duplicate key, a timeout, a late reply; commands outside scope, an invalid argument, the text bucket; `ManageIntegrations` = Write on root; audit cap; `NOT_FOUND` uniformity; `nuschl/int` plugin data dropped |
 | Storage | Registry migration in SQLite and PostgreSQL; audit trimming |
-| Fuzz | `integration_messages` (the INT block into nuschld state), `integration_plugin` (both stock payloads, catalog assembly, marker scanner), additions to `client_messages` |
+| Fuzz | `integration_messages` (the INT block into nuschld state), `integration_plugin` (both stock payloads, catalog assembly), additions to `client_messages` |
 | Integration: nuschld (`tests/integrations.py`, new) | Bot plus two Nuschl clients plus a raw extension client: surface appears for the audience only; a move withdraws it; Next by a member skips; a raw unregistered client and a non-entry account cannot publish; `IntegrationSet` by a non-admin refused; admin add and remove visible live |
-| Integration: stock Murmur (`tests/stock_integrations.py`, new) | Bot plus two Nuschl clients (TUI test build) plus a raw stock client on a private Murmur: the stock client still uses `!web`; marker `allow` and `only` (with the root description edited by an owned admin); an unlisted bot gets one offer; an impostor with the same unregistered name and another certificate is a separate integration; a cross-channel injection by a raw client is not docked; burst above Murmur's bucket degrades without wrong state |
+| Integration: stock Murmur (`tests/stock_integrations.py`, new) | Bot plus two Nuschl clients (TUI test build) plus a raw stock client on a private Murmur: the stock client still uses `!web`; a bot gets one offer and shows nothing until allowed; a raw client claiming integration status also gets only an offer (the documented limit: shown, not prevented); an impostor with the same unregistered name and another certificate is a separate integration; a cross-channel injection by a raw client is not docked; burst above Murmur's bucket degrades without wrong state |
 | Music bot (`tests/musicbot.py` extension) | Surface tracks play, pause, seek and skip; previous semantics; stale subject refused; `/web` still sends the private link |
 | Accessibility (`tests/accessibility.py`) | Card group name, button names and disabled states, progress value text, Hide and restore through the Integrations list, completion listbox announcements, TUI plain transcript |
 | GUI | Desktop scenes at 100% and 200%, a narrow sidebar, long Unicode titles, three cards and "2 more" (`tests/screenshots.py` pattern) |
@@ -952,7 +966,7 @@ another.
 |---|---|---|
 | `crates/protocol/proto/nuschl.proto`, `src/nuschl/mod.rs` | INT block, capability | Medium: MI and polls are adding to the same files; freeze them together |
 | `crates/session/src/connection.rs`, `crates/client-wasm/src/session.rs` | Reserved-id delivery and pacer priority | **High:** PD and MI annotations share the outbox. Land after PD |
-| `apps/server/src/{handlers,authz,extension,config}.rs` | Plugin drop, `ManageIntegrations`, capability, settings | Medium |
+| `apps/server/src/{authz,extension,config}.rs`, new `integrations.rs` | `ManageIntegrations`, capability, settings, routing. The plugin-data relay is unchanged | Medium |
 | `crates/client/src/client.rs` | Hooks into the integrations module | High: a hub file shared with MI and LP |
 | `apps/desktop/src/view.rs` | Dock between the channel list and the voice card; composer popup | Medium: MI mention popup. Build one completion component |
 | `apps/tui/src/app.rs` | `/integrations`, Tab completion | Low–medium |
@@ -964,10 +978,11 @@ another.
 
 Recommendations come first. **(owner)** marks owner-level decisions.
 
-- **D1 (owner) Stock authority:** the root-description marker (`allow`/`only`,
-  certificate hashes, fail closed) plus personal consent with one offer (recommended),
-  versus consent only with no exception to the text rule. A third option, no
-  integrations on stock servers, is not recommended.
+- **D1 Stock authority: consent only** (recommended, and required by the
+  coordinator's policy). Each user allows each integration on each device, with one
+  offer at a time, and stock integrations are always shown as "Unverified". Text
+  markers and certificate hashes are not authority (§3.3). This is no longer an open
+  choice. The owner may only narrow it further, to no integrations on stock servers.
 - **D2 (owner) Nuschl authority:** Write on root manages the registry as an extension
   policy, with per-entry channel scope, the voice audience by default and an audit
   table (recommended), versus the operator CLI only.
@@ -980,9 +995,10 @@ Recommendations come first. **(owner)** marks owner-level decisions.
 - **D5 (owner) "Previous" in the bot:** restart if more than 5 s in, otherwise put the
   current song back and replay the last finished one (recommended), versus restart
   only, versus no previous button.
-- **D6 (integrator) Allocations:** the INT block (Root), the capability name
+- **D6 (integrator) Allocations, all proposals and nothing allocated here:** a
+  16-type block after the frozen ranges (Root), the capability name
   `integrations/1`, data ids `nuschl/int/1` and `nuschl/int-req/1` (PD), and the
-  migration number.
+  migration number (Root).
 - **D7 (owner) E2EE:** no integrations on `e2ee/1` servers in v1 (recommended); an
   MLS-member integration is a separate design.
 - **D8 Argument suggestions:** static choices only in v1 (recommended). Dynamic
