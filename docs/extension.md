@@ -117,7 +117,7 @@ separate protobuf package (`nuschl.v1`) in `crates/protocol`.
 - Voice, channel and user state stay Mumble messages. Video and screen sharing are
   not carried on this connection (see docs/architecture.md, WebRTC).
 
-**Message type registry** (2026-11-11). Each feature keeps to its range, so work on
+**Message type registry** (2026-11-13). Each feature keeps to its range, so work on
 several features never collides:
 
 | Range | Use |
@@ -132,6 +132,13 @@ several features never collides:
 | 0x4E60–0x4E67 | Knocking |
 | 0x4E68–0x4E7F | Spam holds and the moderation queue |
 | 0x4E90–0x4E97 | Share links (`share/1`, docs/web.md); 0x4E94–0x4E97 reserved |
+| 0x4E98–0x4E9F | Reserved for polls (#26) |
+| 0x4EA0–0x4EAF | Reserved for WebRTC signalling (#139, #141) |
+| 0x4EB0–0x4EBF | Reserved for replies, reactions, mentions and threads (#191, #195, #189, #192) |
+
+Reservations prevent concurrent designs from choosing the same message types.
+They do not enable a capability or define a wire format; each implementation
+must specify its messages and negotiation before using its range.
 
 ## 3. Identifiers
 
