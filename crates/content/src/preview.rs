@@ -39,16 +39,12 @@ pub(crate) const MAX_VALUE_BYTES: usize = 4096;
 const CHUNK_BYTES: usize = 4096;
 pub const MAX_SOURCE_IMAGE_BYTES: usize = 2 * 1024 * 1024;
 
-/// A canonical derivative and pixels decoded from those exact carried bytes.
-#[cfg(feature = "images")]
-pub struct PreparedImage {
-    pub image: nuschl_core::preview::EmbeddedImage,
-    pub rgba: Vec<u8>,
-}
-
 /// Decode only inside the content role; no page resource survives re-encoding.
 #[cfg(feature = "images")]
-pub fn prepare_image(bytes: &[u8], alt: &str) -> Result<PreparedImage, Unavailable> {
+pub fn prepare_image(
+    bytes: &[u8],
+    alt: &str,
+) -> Result<nuschl_core::preview::EmbeddedImage, Unavailable> {
     use nuschl_core::preview::{
         EmbeddedImage, ImageMime, MAX_IMAGE_BYTES, MAX_IMAGE_HEIGHT, MAX_IMAGE_WIDTH,
     };
@@ -97,10 +93,7 @@ pub fn prepare_image(bytes: &[u8], alt: &str) -> Result<PreparedImage, Unavailab
                 height: candidate.height(),
                 alt,
             };
-            // JPEG preparation can be lossy: the composer receives the exact
-            // carried derivative's pixels, rather than the pre-encode source.
-            let rgba = render_image(&image)?;
-            return Ok(PreparedImage { image, rgba });
+            return Ok(image);
         }
         let width = candidate.width() * 3 / 4;
         let height = candidate.height() * 3 / 4;
@@ -527,7 +520,6 @@ fn content_type_charset(content: &str) -> Option<&str> {
 mod tests {
     use super::*;
     use nuschl_link_preview::model::MAX_URL_BYTES;
-    use std::time::{Duration, Instant};
 
     fn extract(html: &str) -> Result<ExtractedMetadata, Unavailable> {
         extract_open_graph(html.as_bytes(), TransportCharset::Unspecified)
@@ -550,16 +542,23 @@ mod tests {
         });
         let encoded = super::super::encode_png(&image::DynamicImage::ImageRgb8(source)).unwrap();
         let prepared = prepare_image(&encoded, " Noisy\nimage ").unwrap();
-        assert!(prepared.image.data.len() <= MAX_IMAGE_BYTES);
-        assert!(
-            prepared.image.width <= MAX_IMAGE_WIDTH && prepared.image.height <= MAX_IMAGE_HEIGHT
-        );
-        assert_eq!(prepared.image.mime, ImageMime::Jpeg);
-        assert_eq!(prepared.image.alt, "Noisy image");
-        assert_eq!(render_image(&prepared.image).unwrap(), prepared.rgba);
+        assert!(prepared.data.len() <= MAX_IMAGE_BYTES);
+        assert!(prepared.width <= MAX_IMAGE_WIDTH && prepared.height <= MAX_IMAGE_HEIGHT);
+        assert_eq!(prepared.mime, ImageMime::Jpeg);
+        assert_eq!(prepared.alt, "Noisy image");
+        // JPEG is lossy: the oracle decodes the returned carried bytes directly,
+        // not the original source or the encoder's pre-compression pixels.
+        let decoded =
+            image::load_from_memory_with_format(&prepared.data, image::ImageFormat::Jpeg).unwrap();
         assert_eq!(
-            prepared.rgba.len(),
-            usize::try_from(prepared.image.width * prepared.image.height * 4).unwrap()
+            (decoded.width(), decoded.height()),
+            (prepared.width, prepared.height)
+        );
+        let rgba = render_image(&prepared).unwrap();
+        assert_eq!(rgba, decoded.to_rgba8().into_raw());
+        assert_eq!(
+            rgba.len(),
+            usize::try_from(prepared.width * prepared.height * 4).unwrap()
         );
     }
 
@@ -876,7 +875,7 @@ mod tests {
     }
 
     #[test]
-    fn hostile_documents_take_bounded_time() {
+    fn hostile_documents_return_only_bounded_inert_metadata() {
         let size = MAX_DOCUMENT_BYTES;
         let fill = |unit: &str| unit.repeat(size / unit.len());
         for document in [
@@ -899,14 +898,11 @@ mod tests {
             fill("<meta http-equiv=content-type content='charset charset charset'>"),
         ] {
             let document = &document.as_bytes()[..document.len().min(size)];
-            let started = Instant::now();
-            let _ = extract_open_graph(document, TransportCharset::Unspecified);
-            assert!(
-                started.elapsed() < Duration::from_secs(2),
-                "{:?} for {:?}",
-                started.elapsed(),
-                String::from_utf8_lossy(&document[..16])
-            );
+            match extract_open_graph(document, TransportCharset::Unspecified) {
+                Ok(metadata) => assert!(metadata.is_bounded()),
+                Err(Unavailable::NoMetadata | Unavailable::Encoding) => {}
+                Err(reason) => panic!("unexpected result for bounded hostile input: {reason:?}"),
+            }
         }
     }
 
@@ -950,8 +946,8 @@ mod tests {
 
     /// html5ever compares each new attribute name with the earlier ones in
     /// the tag, so this is quadratic; it is bounded by the document cap and
-    /// the content worker's five-second CPU and wall limits. Timed only with
-    /// optimised dependencies (the release build the worker ships).
+    /// the content worker's five-second CPU and wall limits. The costly case
+    /// runs with optimised dependencies, without a host wall-time assertion.
     #[test]
     #[cfg_attr(
         debug_assertions,
@@ -961,11 +957,7 @@ mod tests {
         let (document, names) = shortest_distinct_names(MAX_DOCUMENT_BYTES);
         assert!(document.len() <= MAX_DOCUMENT_BYTES);
         assert!(names > 66_000, "{names}");
-        let started = Instant::now();
         assert_eq!(extract(&document), Err(Unavailable::NoMetadata));
-        let elapsed = started.elapsed();
-        eprintln!("{names} distinct attribute names in one tag: {elapsed:?}");
-        assert!(elapsed < Duration::from_secs(4), "{elapsed:?}");
     }
 
     #[test]

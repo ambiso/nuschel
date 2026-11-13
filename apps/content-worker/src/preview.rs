@@ -77,16 +77,10 @@ pub fn answer(request: Request) -> Response {
         }
         Request::PrepareImage { image, alt, .. } => {
             let bytes = decode(&image, MAX_SOURCE_IMAGE_BYTES)?;
-            let prepared = preview::prepare_image(&bytes, &alt).map_err(failure)?;
-            let pixels = Pixels {
-                width: prepared.image.width,
-                height: prepared.image.height,
-                rgba: base64::engine::general_purpose::STANDARD.encode(prepared.rgba),
-            };
+            let image = preview::prepare_image(&bytes, &alt).map_err(failure)?;
             Ok(Response::Image {
                 schema: SCHEMA,
-                image: prepared.image,
-                pixels,
+                image,
             })
         }
         Request::RenderImage { image, .. } => {
@@ -157,7 +151,7 @@ mod tests {
 
     #[test]
     fn preparation_and_exact_carried_decode_return_the_same_source_free_pixels() {
-        let Response::Image { image, pixels, .. } = answer(Request::PrepareImage {
+        let Response::Image { image, .. } = answer(Request::PrepareImage {
             schema: SCHEMA,
             image: PNG.into(),
             alt: " A\nsmall image ".into(),
@@ -165,7 +159,6 @@ mod tests {
             panic!("expected prepared image");
         };
         assert_eq!(image.alt, "A small image");
-        assert_eq!(pixels.decode(), Some(vec![200, 80, 40, 255]));
         assert_eq!(
             answer(Request::RenderImage {
                 schema: SCHEMA,
@@ -173,7 +166,11 @@ mod tests {
             }),
             Response::Pixels {
                 schema: SCHEMA,
-                pixels
+                pixels: Pixels {
+                    width: 1,
+                    height: 1,
+                    rgba: base64::engine::general_purpose::STANDARD.encode([200, 80, 40, 255]),
+                }
             }
         );
         let mut wrong = image;
