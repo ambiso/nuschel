@@ -228,10 +228,10 @@ impl Parser {
                     }
                     match call.proceed().ok_or(Failure::Malformed)? {
                         RecvResponseResult::RecvBody(body) => {
-                            if let BodyMode::LengthDelimited(size) = body.body_mode() {
-                                if size > self.purpose.body_limit() as u64 {
-                                    return Err(Failure::TooLarge);
-                                }
+                            if let BodyMode::LengthDelimited(size) = body.body_mode()
+                                && size > self.purpose.body_limit() as u64
+                            {
+                                return Err(Failure::TooLarge);
                             }
                             self.phase = Some(Phase::Body(body));
                         }

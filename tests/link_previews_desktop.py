@@ -1,0 +1,451 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: EUPL-1.2
+"""Production native preview UI against synthetic peers in the dedicated VM.
+
+No host networking/device/profile is authorized by this script. The VM driver
+sets public-numbered loopback aliases and denies every non-loopback output.
+`peers` reuses the frozen native-fetch fixture's HTTP/SOCKS implementation;
+`desktop` reuses the private GNOME/AT-SPI/null-Pulse welcome fixture. This tests
+legacy one-message HTML fallback, not typed preview/1 or MLS completion.
+"""
+import argparse
+import hashlib
+import html
+import json
+import os
+import re
+from pathlib import Path
+import socket
+import socketserver
+import signal
+import struct
+import subprocess
+import threading
+import time
+import types
+import uuid
+
+
+def control(operation, port=39211):
+    from link_preview_fetch import exact
+    payload = json.dumps({"operation": operation}).encode()
+    with socket.create_connection(("127.0.0.1", port), timeout=3) as stream:
+        stream.settimeout(3)
+        stream.sendall(struct.pack("!I", len(payload)) + payload)
+        size = struct.unpack("!I", exact(stream, 4))[0]
+        assert size <= 512 * 1024
+        return json.loads(exact(stream, size))
+
+
+def peers(args):
+    import link_preview_fetch as peer
+    directory = args.directory.resolve(strict=True)
+    assert directory.is_dir() and directory.stat().st_uid == os.getuid()
+    # Refuse an accidental host invocation. The driver creates this marker
+    # only inside its fresh guest, with the exact guest network identity.
+    identity = json.loads((directory / "vm-identity.json").read_text())
+    assert identity["net_inode"] == os.stat("/proc/self/ns/net").st_ino
+    assert Path("/run/nuschl-preview-dedicated-vm").is_file()
+    routes = subprocess.check_output(["ip", "route", "show", "table", "all"], text=True, timeout=3)
+    assert "default" not in routes, routes
+    for address in (peer.PAGE, peer.DOH, peer.PROXY_SOURCE):
+        assert f"local {address} " in routes, routes
+
+    class State(peer.State):
+        def __init__(self):
+            super().__init__(directory)
+            self.gate_lock = threading.Lock()
+            self.gate_next = False
+            self.release_http = threading.Event()
+            self.release_http.set()
+
+        def event(self, kind, **values):
+            super().event(kind, **values)
+            if kind == "http" and values.get("path") == "/page":
+                with self.gate_lock:
+                    gate = self.gate_next
+                    self.gate_next = False
+                if gate:
+                    super().event("http_gate_entered")
+                    assert self.release_http.wait(8), "bounded HTTP gate was not released"
+
+    class Gate(socketserver.BaseRequestHandler):
+        def handle(self):
+            self.request.settimeout(3)
+            size = struct.unpack("!I", peer.exact(self.request, 4))[0]
+            assert size <= 128
+            value = json.loads(peer.exact(self.request, size))
+            if value == {"operation": "arm_http"}:
+                with state.gate_lock:
+                    state.gate_next = True
+                    state.release_http.clear()
+            elif value == {"operation": "release_http"}:
+                state.release_http.set()
+            else:
+                raise ValueError("unknown fixed gate action")
+            self.request.sendall(struct.pack("!I", 2) + b"{}")
+
+    state = State()
+    servers = [peer.Server((address, port), handler, state) for address, port, handler in (
+        (peer.PAGE, 80, peer.Http), (peer.PAGE, 443, peer.Http),
+        (peer.DOH, 443, peer.Http), ("127.0.0.1", 80, peer.Http),
+        ("127.0.0.1", 1080, peer.Socks), ("127.0.0.1", peer.CONTROL, peer.Control),
+        ("127.0.0.1", peer.CONTROL + 1, Gate),
+    )]
+    threads = [threading.Thread(target=server.serve_forever) for server in servers]
+    threads.append(threading.Thread(target=peer.dns, args=(state,)))
+    for thread in threads:
+        thread.start()
+    (directory / "ready.json").write_text(json.dumps({"pid": os.getpid(), "routes": routes}) + "\n")
+    try:
+        assert state.stop.wait(720), "peer service exceeded its bounded VM lifetime"
+    finally:
+        state.stop.set()
+        state.release_dns.set()
+        state.release_http.set()
+        for server in servers:
+            server.shutdown()
+            server.server_close()
+        for thread in threads:
+            thread.join(8)
+            assert not thread.is_alive()
+        (directory / "peers.json").write_text(json.dumps(state.snapshot(), indent=2) + "\n")
+
+
+def desktop(args):
+    import document_link_regression as scenario
+    import welcome_html
+    from accessibility import Node, items
+    from local_murmur import eventually
+    from local_nuschld import Nuschld
+
+    assert Path("/run/nuschl-preview-dedicated-vm").is_file(), "use the owned VM fixture"
+    args.output.mkdir(parents=True, exist_ok=False)
+    args.output.chmod(0o700)
+    cases = []
+    extra_children = []
+    scene_start = len(control("snapshot")["events"])
+    assert re.fullmatch(r"[0-9a-f]{40}", args.source_revision)
+    def digest(path):
+        value = hashlib.sha256()
+        with path.open("rb") as stream:
+            for block in iter(lambda: stream.read(1024 * 1024), b""):
+                value.update(block)
+        return value.hexdigest()
+    programs = {}
+    for directory in (args.binaries, args.binaries.parent / "libexec/nuschl"):
+        entries = sorted(directory.iterdir()) if directory.is_dir() else []
+        assert len(entries) <= 64
+        for path in entries:
+            if path.is_file():
+                assert path.stat().st_size <= 512 * 1024 * 1024
+                programs[str(path)] = dict(realpath=str(path.resolve()), sha256=digest(path))
+    required = ("nuschl", "nuschl-cli", "nuschld", "nuschl-content-worker")
+    assert all((args.binaries / name).is_file() for name in required)
+    fixture_hashes = {name: digest(Path(__file__).parent / name) for name in (
+        "link_previews_desktop.py", "link_preview_fetch.py", "welcome_html.py", "gnome_session.py",
+        "accessibility.py", "local_murmur.py", "local_nuschld.py", "mumble_client.py")}
+    (args.output / "identity.json").write_text(json.dumps(dict(
+        source_revision=args.source_revision, programs=programs, fixtures=fixture_hashes,
+        scope="Source revision supplied by trusted Nix invocation; file hashes independently measured in guest."), indent=2) + "\n")
+
+    def mark(name, **details):
+        cases.append(dict(case=name, **details))
+        (args.output / "cases.json").write_text(json.dumps(cases, indent=2) + "\n")
+
+    class RetainedDirectory:
+        def __init__(self, **_kwargs):
+            self.path = args.output / "runtime"
+            self.path.mkdir(mode=0o700)
+        def __enter__(self):
+            return str(self.path)
+        def __exit__(self, *_exc):
+            # Owned state remains private for failures and history inspection.
+            return False
+
+    class Compatible(Nuschld):
+        def __init__(self, _binary, root, port):
+            super().__init__(args.binaries, root, port, extra='[history]\nguests = "full"')
+            self.ini = root / "welcome-bridge.ini"
+            self.ini.write_text('welcometext="Welcome to the <b>Nuschl</b> screenshot server."')
+            self.database = root / "unused-legacy-database"
+        def seed(self):
+            super().seed()
+            welcome = self.ini.read_text().split('welcometext="', 1)[1].rsplit('"', 1)[0]
+            lines = self.config.read_text().splitlines()
+            self.config.write_text("\n".join("welcome_text = " + json.dumps(welcome)
+                if line.startswith("welcome_text =") else line for line in lines) + "\n")
+
+    def configure(_shell, root, _output):
+        # Explicit operator services are fixture inputs, never ambient proxies.
+        (root / "profile/config/link-previews.json").write_text(json.dumps({
+            "version": 1, "mode": "off", "proxy": "socks5://127.0.0.1:1080",
+            "dns": {"url": "https://resolver.preview.example/dns-query", "bootstrap": ["93.184.215.53"]},
+        }))
+        return {}
+
+    def actions(_args, root, shell, application, receiver, _server):
+        sender_pid = int(shell.eval("global.get_window_actors().map(a=>a.meta_window).find(w=>w.get_title().startsWith('Nuschl')).get_pid()"))
+        registry = Node(application.bus, "org.a11y.atspi.Registry", "/org/a11y/atspi/accessible/root")
+        before_apps = {node.destination for node in registry.children()}
+        recipient_profile = root / "recipient"
+        (recipient_profile / "config").mkdir(parents=True)
+        bookmarks = json.loads((root / "profile/config/servers.json").read_text())
+        bookmarks[0].update(username="Preview recipient", name="Preview recipient fixture")
+        (recipient_profile / "config/servers.json").write_text(json.dumps(bookmarks))
+        (recipient_profile / "config/settings.json").write_text(json.dumps({"audio": {"transmit": "push_to_talk"}}))
+        env = shell.app_environment() | {
+            "PULSE_SERVER": f"unix:{shell.runtime}/pulse/native", "PULSE_SINK": "speakers",
+            "PULSE_SOURCE": "microphone.monitor", "NUSCHL_AUDIO_BACKEND": "pulseaudio",
+            "PIPEWIRE_REMOTE": str(root / "no-pipewire"), "RUST_LOG": "nuschl=info",
+        }
+        env.pop("NO_AT_BRIDGE", None)
+        recipient = subprocess.Popen([str(args.binaries / "nuschl"), "--profile-dir", str(recipient_profile),
+            f"mumble://Preview%20recipient@127.0.0.1:{_server.port}/"], env=env,
+            stdout=(args.output / "recipient.log").open("w"), stderr=subprocess.STDOUT, start_new_session=True)
+        extra_children.append(recipient)
+        recipient_ui = eventually(lambda: next((node for node in registry.children()
+            if node.destination not in before_apps and node.name.lower() == "nuschl"), None),
+            "independent recipient UI missing")
+        receiver.wait(lambda event: event.get("kind") == "user" and event["user"]["name"] == "Preview recipient")
+
+        def focus_window(pid):
+            shell.eval("(()=>{const w=global.get_window_actors().map(a=>a.meta_window)"
+                f".find(w=>w.get_pid()==={pid}); if(!w)throw Error('owned window missing');"
+                "w.activate(global.get_current_time());return true;})()")
+        def window_rect(pid):
+            return json.loads(shell.eval("JSON.stringify((()=>{const w=global.get_window_actors().map(a=>a.meta_window)"
+                f".find(w=>w.get_pid()==={pid});const b=w.get_buffer_rect();"
+                "return [b.x,b.y,b.width,b.height];})())"))
+        def image_pixels(pid, path):
+            focus_window(pid)
+            shell.screenshot(path)
+            x, y, width, height = window_rect(pid)
+            assert min(x, y) >= 0 and 0 < width <= 1440 and 0 < height <= 900
+            assert x + width <= 1440 and y + height <= 900
+            raw = subprocess.run([os.environ.get("MAGICK", "magick"), str(path), "-crop",
+                f"{width}x{height}+{x}+{y}", "+repage", "-depth", "8", "rgb:-"],
+                check=True, capture_output=True, timeout=15).stdout
+            assert len(raw) == width * height * 3
+            # The synthetic PNG is a solid cyan, unrelated to theme text.
+            return sum(all(abs(raw[offset + channel] - target) <= 8
+                for channel, target in enumerate((0x20, 0x80, 0xc0))) for offset in range(0, len(raw), 3))
+        focus_window(sender_pid)
+        def named(name, role=None):
+            return next((node for node, kind, label, _ in items(application)
+                if label == name and (role is None or kind == role)), None)
+        def wait(name, role=None):
+            return eventually(lambda: named(name, role), f"missing preview UI {name}")
+        def ready_card():
+            card = named("Link preview", "grouping")
+            if card is None:
+                return None
+            pending = [(card, 0)]
+            while pending:
+                node, depth = pending.pop()
+                if node.name == "Synthetic preview":
+                    return card
+                assert depth <= 12
+                pending.extend((child, depth + 1) for child in node.children())
+            return None
+        def labels():
+            return [label for _, _, label, _ in items(application)]
+        def activate(name, role="push button"):
+            node = wait(name, role)
+            assert node.call("Component", "GrabFocus")[0]
+            if role == "radio button":
+                shell.key("space")
+            else:
+                node.press()
+            return node
+        def type_message(body):
+            node = wait("Message")
+            assert node.call("Component", "GrabFocus")[0]
+            shell.chord("Control_L", "a")
+            shell.type(body)
+            return node
+        def choose(mode):
+            activate("Settings")
+            activate(mode, "radio button")
+            eventually(lambda: not any("Saving preference" in label for label in labels())
+                and any(label.startswith(f"Active policy: {mode}.") for label in labels()),
+                f"{mode} preference did not complete")
+            activate("Done")
+        def events():
+            snapshot = control("snapshot")
+            assert not snapshot["overrun"]
+            return snapshot["events"]
+        def sent_by_reader():
+            return [event for event in list(receiver.events) if event.get("kind") == "text"
+                and event.get("author") == "Welcome reader"]
+        def send_and_receive(body, preview):
+            marker = body.split()[0]
+            before = len(sent_by_reader())
+            activate("Send")
+            event = receiver.wait(lambda event: event.get("kind") == "text"
+                and event.get("author") == "Welcome reader" and marker in event.get("body", ""))
+            eventually(lambda: named("Send", "push button"), "typed send receipt did not release composer")
+            time.sleep(.4)
+            assert len(sent_by_reader()) == before + 1, "preview became multiple logical messages"
+            wire = event["body"]
+            literal = html.unescape(re.sub(r"<[^>]+>", "", wire.split("<br/><blockquote>", 1)[0]))
+            assert literal == body, (literal, body)
+            assert ("Synthetic preview" in wire) == preview, wire
+            assert ("data:image/" in wire) == preview, wire
+            assert body.split()[1] in wire, "original target disappeared from the one message"
+            eventually(lambda: any(marker in label for _, _, label, _ in items(recipient_ui)), "real recipient did not render original text")
+            if preview:
+                assert any("Synthetic preview" in label for _, _, label, _ in items(recipient_ui))
+                eventually(lambda: image_pixels(recipient.pid, args.output / "recipient-card.png") > 300,
+                    "carried image was not actually painted in independent recipient")
+                focus_window(sender_pid)
+                if args.server == "nuschld":
+                    chat = eventually(lambda: next((event for event in list(receiver.events)
+                        if event.get("kind") == "chat" and marker in bytes(event.get("message", {}).get("content", [])).decode("utf-8", errors="strict")), None),
+                        "compatible server did not archive the projected message")
+                    request = 16000 + before
+                    receiver.send(kind="history", request_id=request, conversation=chat["conversation"], limit=32)
+                    page = receiver.wait(lambda event: event.get("kind") == "history_page" and event.get("request_id") == request)
+                    archived = [message for message in page["messages"] if marker in bytes(message["content"]).decode("utf-8", errors="strict")]
+                    assert len(archived) == 1 and archived[0]["format"] == "legacy_html", archived
+                    assert bytes(archived[0]["content"]).decode() == wire
+                    mark("compatible_history_keeps_one_legacy_html_message", seq=archived[0]["seq"])
+            mark("single_message_received_by_independent_native_ui", preview=preview,
+                wire_sha256=hashlib.sha256(wire.encode()).hexdigest())
+            return wire
+
+        initial = len(events())
+        assert initial == scene_start, "startup/receiver display unexpectedly contacted a synthetic peer"
+        assert image_pixels(sender_pid, args.output / "before-preview.png") < 300, "image pixel control is not discriminating"
+        plain = f"off-{uuid.uuid4().hex[:8]} http://93.184.215.14/page "
+        type_message(plain)
+        time.sleep(1.1)  # More than the actual750ms debounce, not a success retry.
+        assert len(events()) == initial, "default Off contacted a peer"
+        send_and_receive(plain, False)
+        mark("default_off_no_fetch_text_send")
+
+        choose("Direct")
+        body = f"card-{uuid.uuid4().hex[:8]} http://93.184.215.14/redirect "
+        type_message(body)
+        eventually(ready_card, "sender card never became ready")
+        wait("Remove link preview", "push button")
+        fetched = events()
+        assert any(event.get("path") == "/page" for event in fetched)
+        assert any(event.get("path") == "/image.png" for event in fetched)
+        eventually(lambda: image_pixels(sender_pid, args.output / "sender-card.png") > 300,
+            "sender safe worker image was not actually painted")
+        geometry = []
+        for width, zoom, steps in [(1280, 100, 0), (900, 200, 5)]:
+            focus_window(sender_pid)
+            shell.chord("Control_L", "0")
+            shell.eval("(()=>{const w=global.get_window_actors().map(a=>a.meta_window)"
+                f".find(w=>w.get_pid()==={sender_pid});w.move_resize_frame(false,40,40,{width},800);return true;}})()")
+            for _ in range(steps):
+                shell.chord("Control_L", "equal")
+                time.sleep(.1)
+            time.sleep(.3)
+            rect = window_rect(sender_pid)
+            controls = {name: wait(name).extents() for name in ("Link preview", "Remove link preview", "Message", "Send")}
+            for bounds in controls.values():
+                x, y, w, h = bounds
+                assert x >= 0 and y >= 0 and w > 0 and h > 0 and x + w <= rect[2] + 1 and y + h <= rect[3] + 1, (zoom, controls, rect)
+            shell.screenshot(args.output / f"sender-geometry-{zoom}.png")
+            geometry.append(dict(zoom=zoom, window=rect, controls=controls))
+        shell.chord("Control_L", "0")
+        mark("native_card_controls_and_input_fit_at_narrow_real_200_percent", geometry=geometry)
+        before_send = len(events())
+        send_and_receive(body, True)
+        time.sleep(.4)
+        assert len(events()) == before_send, "receiving/rendering a carried image initiated a fetch"
+        mark("direct_sender_only_embedded_image")
+
+        # Explicit removal of a ready card suppresses attachment while the
+        # entire original text still goes in one ordinary message.
+        removed = f"removed-{uuid.uuid4().hex[:8]} http://93.184.215.14/page "
+        type_message(removed)
+        wait("Remove link preview", "push button")
+        activate("Remove link preview")
+        wait("Link preview removed")
+        send_and_receive(removed, False)
+        mark("removed_card_text_only")
+
+        # Fresh URL and a real response gate exercise late-result suppression.
+        control("arm_http", 39212)
+        baseline = sum(event.get("kind") == "http_gate_entered" for event in events())
+        delayed = f"late-{uuid.uuid4().hex[:8]} http://93.184.215.14/page?late=1 "
+        type_message(delayed)
+        eventually(lambda: sum(event.get("kind") == "http_gate_entered" for event in events()) > baseline,
+            "controlled page request did not reach response gate")
+        activate("Remove link preview")
+        wait("Link preview removed")
+        control("release_http", 39212)
+        time.sleep(1.1)
+        wait("Link preview removed")
+        send_and_receive(delayed, False)
+        mark("late_response_cannot_undo_remove")
+
+        choose("Proxy required")
+        before = events()
+        proxy_text = f"proxy-{uuid.uuid4().hex[:8]} http://page.preview.example/page "
+        type_message(proxy_text)
+        wait("Link preview unavailable")
+        after = events()[len(before):]
+        assert any(event.get("kind") == "socks" and event.get("destination") == "93.184.215.53" for event in after), after
+        assert not any(event.get("kind") in ("dns", "doh") or event.get("destination") == "93.184.215.14" for event in after), after
+        send_and_receive(proxy_text, False)
+        mark("production_doh_untrusted_ca_refused_without_direct_or_dns_fallback")
+
+        # The saved user mode remains visible; repeated choices are real UI
+        # actions, while active policy only resumes after its serialized save.
+        choose("Off")
+        sidecar = json.loads((root / "profile/config/link-previews.json").read_text())
+        assert sidecar["mode"] == "off"
+        assert sidecar["proxy"] == "socks5://127.0.0.1:1080"
+        mark("policy_persisted_without_copying_or_losing_service_settings")
+        return {"server": args.server, "cases": cases, "modern_typed_preview": False,
+            "production_tls_bypass": False, "host_devices": False}
+
+    original = scenario.__dict__.copy()
+    scenario.WELCOME_EXTRA = ""
+    scenario.COMMENT = "Owned link preview fixture"
+    scenario.seed_description = lambda _path: None
+    scenario.configure_handler = configure
+    scenario.run_actions = actions
+    welcome_html.tempfile = types.SimpleNamespace(TemporaryDirectory=RetainedDirectory)
+    if args.server == "nuschld":
+        welcome_html.Murmur = Compatible
+    args.document_links, args.expect_markers = True, False
+    try:
+        welcome_html.run(args)
+    except BaseException:
+        # Root retains the owned profile/keys privately, never in a public log.
+        (args.output / "failed.json").write_text(json.dumps({"cases_completed": len(cases)}) + "\n")
+        raise
+    finally:
+        scenario.__dict__.update(original)
+        for child in extra_children:
+            if child.poll() is None:
+                os.killpg(child.pid, signal.SIGTERM)
+                try:
+                    child.wait(8)
+                except subprocess.TimeoutExpired:
+                    os.killpg(child.pid, signal.SIGKILL)
+                    child.wait(5)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    commands = parser.add_subparsers(dest="command", required=True)
+    server = commands.add_parser("peers")
+    server.add_argument("--directory", type=Path, required=True)
+    gui = commands.add_parser("desktop")
+    for name in ("binaries", "murmur", "at-spi", "gnome-shell", "pulse-bin", "output"):
+        gui.add_argument("--" + name, type=Path, required=True)
+    gui.add_argument("--server", choices=("stock", "nuschld"), required=True)
+    gui.add_argument("--source-revision", required=True)
+    args = parser.parse_args()
+    (peers if args.command == "peers" else desktop)(args)
+
+
+if __name__ == "__main__":
+    main()

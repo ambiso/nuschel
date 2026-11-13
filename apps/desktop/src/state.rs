@@ -2654,8 +2654,10 @@ impl Desktop {
     /// What the desktop's own services report (services.rs).
     fn apply_service_event(&mut self, event: ServiceEvent, cx: &mut Context<Self>) {
         match event {
-            ServiceEvent::LinkPreviewPolicy { revision, result } => {
-                self.link_preview_policy_saved(revision, result, cx)
+            ServiceEvent::LinkPreviewPolicy => {
+                if let Some(reply) = self.services.link_preview_policy_result() {
+                    self.link_preview_policy_saved(reply.revision, reply.result, cx);
+                }
             }
             ServiceEvent::LinkPreviewImage { ticket, pixels } => {
                 self.link_preview_pixels(ticket, pixels, cx)

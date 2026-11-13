@@ -32,51 +32,37 @@ pub struct PolicyAction {
     pub settings: Settings,
 }
 
-/// One physical save, one replaceable latest intent. GUI cancellation never
-/// releases the active save: only its completed background operation does.
+/// GUI intent only. Services owns disk ordering independently of GUI lifetime.
 #[derive(Default)]
 struct PolicyWrites {
     revision: u64,
-    active: Option<PolicyAction>,
     pending: Option<PolicyAction>,
     exhausted: bool,
 }
 
 impl PolicyWrites {
-    fn choose(&mut self, settings: Settings) -> Result<Option<PolicyAction>, ()> {
+    fn choose(&mut self, settings: Settings) -> Result<PolicyAction, ()> {
         let Some(revision) = self.revision.checked_add(1).filter(|_| !self.exhausted) else {
             self.exhausted = true;
             self.pending = None;
             return Err(());
         };
         self.revision = revision;
-        self.pending = Some(PolicyAction { revision, settings });
-        Ok(self.start_latest())
+        let action = PolicyAction { revision, settings };
+        self.pending = Some(action.clone());
+        Ok(action)
     }
 
-    fn start_latest(&mut self) -> Option<PolicyAction> {
-        if self.active.is_some() {
-            return None;
+    fn finished(&mut self, revision: u64) -> bool {
+        if self.exhausted || self.pending.as_ref().map(|action| action.revision) != Some(revision) {
+            return false;
         }
-        let next = self.pending.take()?;
-        self.active = Some(next.clone());
-        Some(next)
-    }
-
-    fn finished(&mut self, revision: u64) -> Option<(bool, Option<PolicyAction>)> {
-        if self.active.as_ref().map(|active| active.revision) != Some(revision) {
-            return None;
-        }
-        self.active = None;
-        let current = !self.exhausted && revision == self.revision;
-        Some((current, self.start_latest()))
+        self.pending = None;
+        true
     }
 
     fn desired(&self) -> Option<&Settings> {
-        self.pending
-            .as_ref()
-            .or(self.active.as_ref())
-            .map(|action| &action.settings)
+        self.pending.as_ref().map(|action| &action.settings)
     }
 }
 
@@ -108,10 +94,19 @@ impl Desktop {
         let mut settings = loaded.user.settings.clone();
         settings.mode = mode;
         match self.link_preview.writes.choose(settings) {
-            Ok(Some(action)) => self
-                .services
-                .save_link_preview_policy(self.profile.clone(), action),
-            Ok(None) => {}
+            Ok(action) => {
+                let revision = action.revision;
+                if self
+                    .services
+                    .save_link_preview_policy(self.profile.clone(), action)
+                    .is_err()
+                {
+                    self.link_preview.writes.finished(revision);
+                    self.error = Some(
+                        "Link preview settings could not be queued; previews remain off.".into(),
+                    );
+                }
+            }
             Err(()) => {
                 self.error = Some(
                     "Link preview settings cannot be changed in this session; previews remain off."
@@ -128,28 +123,21 @@ impl Desktop {
         result: Result<nuschl_session::config::LinkPreviewSettings, String>,
         cx: &mut Context<Self>,
     ) {
-        let Some((current, next)) = self.link_preview.writes.finished(revision) else {
+        if !self.link_preview.writes.finished(revision) {
             return;
-        };
-        if let Some(next) = next {
-            self.services
-                .save_link_preview_policy(self.profile.clone(), next);
         }
-        if current {
-            match result {
-                Ok(loaded) => {
-                    self.client.set_link_preview_settings(
-                        loaded.effective.settings.clone(),
-                        crate::state::monotonic_ms(),
-                    );
-                    self.link_preview.policy = Some(loaded);
-                    self.sync_link_preview(cx);
-                }
-                Err(_) => {
-                    self.error = Some(
-                        "Link preview settings could not be saved; previews remain off.".into(),
-                    )
-                }
+        match result {
+            Ok(loaded) => {
+                self.client.set_link_preview_settings(
+                    loaded.effective.settings.clone(),
+                    crate::state::monotonic_ms(),
+                );
+                self.link_preview.policy = Some(loaded);
+                self.sync_link_preview(cx);
+            }
+            Err(_) => {
+                self.error =
+                    Some("Link preview settings could not be saved; previews remain off.".into())
             }
         }
         cx.notify();
@@ -386,7 +374,7 @@ pub fn settings(this: &Desktop, cx: &mut Context<Desktop>) -> AnyElement {
         .when(!cfg!(target_os = "linux"), |settings| settings.child(div().text_sm().child(text!("Link previews are not available on this platform yet.").with_id("link-preview-platform-unavailable"))))
         .child(div().text_xs().text_color(color(TEXT_MUTED)).child(text!("Off makes no requests. Direct contacts the website. Proxy required stays disabled until an explicit proxy and proxied DNS are configured. Receivers never fetch previews.").with_id("link-preview-privacy")))
         .child(div().text_xs().text_color(color(TEXT_MUTED)).child(text!(effective).with_id("link-preview-effective-policy")))
-        .when(this.link_preview.writes.active.is_some(), |settings| settings.child(div().text_xs().text_color(color(TEXT_MUTED)).child(text!("Saving preference; previews stay off until it finishes.").with_id("link-preview-saving-policy"))))
+        .when(this.link_preview.writes.pending.is_some(), |settings| settings.child(div().text_xs().text_color(color(TEXT_MUTED)).child(text!("Saving preference; previews stay off until it finishes.").with_id("link-preview-saving-policy"))))
         .when_some(problem, |settings, problem| settings.child(div().text_xs().text_color(color(TEXT_MUTED)).child(text!(problem).with_id("link-preview-policy-status"))))
         .into_any_element()
 }
@@ -404,81 +392,25 @@ mod tests {
     }
 
     #[test]
-    fn policy_choices_serialize_writes_coalesce_and_only_apply_latest_reply() {
+    fn only_the_latest_policy_intent_may_apply_once() {
         let mut writes = PolicyWrites::default();
-        let first = writes.choose(choice(Mode::Direct)).unwrap().unwrap();
-        // This first write is physically blocked. No subsequent choice may
-        // start another writer, even after many pointer/key actions.
-        for index in 0_u64..1000 {
-            let mode = if index.is_multiple_of(2) {
-                Mode::Off
-            } else {
-                Mode::ProxyRequired
-            };
-            assert!(writes.choose(choice(mode)).unwrap().is_none());
-            assert_eq!(writes.active.as_ref().unwrap().revision, first.revision);
-        }
-        assert_eq!(writes.desired().unwrap().mode, Mode::ProxyRequired);
-        assert!(
-            writes.finished(first.revision + 1).is_none(),
-            "an unrelated reply cannot release active IO credit"
-        );
-        let (apply, latest) = writes.finished(first.revision).unwrap();
-        assert!(!apply, "obsolete success cannot enable Direct");
-        let latest = latest.unwrap();
-        assert_eq!(latest.settings.mode, Mode::ProxyRequired);
+        let first = writes.choose(choice(Mode::Direct)).unwrap();
+        let latest = writes.choose(choice(Mode::Off)).unwrap();
+        assert!(!writes.finished(first.revision));
+        assert_eq!(writes.desired().unwrap().mode, Mode::Off);
+        assert!(writes.finished(latest.revision));
+        assert!(!writes.finished(latest.revision));
         assert!(writes.pending.is_none());
-        assert_eq!(writes.active.as_ref().unwrap().revision, latest.revision);
-        assert!(
-            writes.finished(first.revision).is_none(),
-            "duplicate completion cannot retire the latest write"
-        );
-        let (apply, next) = writes.finished(latest.revision).unwrap();
-        assert!(apply);
-        assert!(next.is_none());
-        assert!(writes.active.is_none());
     }
 
     #[test]
-    fn policy_choice_during_replacement_write_still_wins_disk_order() {
+    fn exhausted_policy_revision_never_accepts_an_old_reply() {
         let mut writes = PolicyWrites::default();
-        let first = writes.choose(choice(Mode::Direct)).unwrap().unwrap();
-        writes.choose(choice(Mode::ProxyRequired)).unwrap();
-        let (_, second) = writes.finished(first.revision).unwrap();
-        let second = second.unwrap();
-        assert!(writes.choose(choice(Mode::Off)).unwrap().is_none());
-        let (apply, third) = writes.finished(second.revision).unwrap();
-        assert!(!apply);
-        let third = third.unwrap();
-        // Whether an older IO reports success or failure, only the latest
-        // completion may change effective policy, and Off is written last.
-        assert_eq!(
-            [
-                first.settings.mode,
-                second.settings.mode,
-                third.settings.mode
-            ],
-            [Mode::Direct, Mode::ProxyRequired, Mode::Off]
-        );
-        assert_eq!(
-            writes
-                .finished(third.revision)
-                .map(|(apply, next)| (apply, next.is_none())),
-            Some((true, true))
-        );
-    }
-
-    #[test]
-    fn exhausted_policy_revision_never_reuses_old_authority_or_starts_more_io() {
-        let mut writes = PolicyWrites::default();
-        let first = writes.choose(choice(Mode::Direct)).unwrap().unwrap();
+        let first = writes.choose(choice(Mode::Direct)).unwrap();
         writes.revision = u64::MAX;
         assert!(writes.choose(choice(Mode::Off)).is_err());
         assert!(writes.pending.is_none());
-        assert_eq!(writes.active.as_ref().unwrap().revision, first.revision);
-        let (apply, next) = writes.finished(first.revision).unwrap();
-        assert!(!apply);
-        assert!(next.is_none());
+        assert!(!writes.finished(first.revision));
         assert!(writes.choose(choice(Mode::Direct)).is_err());
     }
 }
