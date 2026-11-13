@@ -102,6 +102,29 @@ Reviews check that a change is:
 - checked by CI with a single command that also runs locally;
 - described plainly, without flattery or overstated results.
 
+## Benchmarks
+
+`nix build -f benchmarks.nix --cores 2 --max-jobs 2` measures performance locally;
+`ci` does not run it. Its parts are attributes:
+
+- `instructions`: `nuschl-media-worker --bench STAGE` runs a fixed synthetic minute
+  (far end, double talk, near end, through a simulated room) through the capture
+  chain (echo cancellation, noise suppression, speech detection, gain) and the Opus
+  encoder. `perf stat -e instructions:u` counts user-space instructions per second
+  of audio for each stage; the result also has the offline echo reduction. Repeated
+  runs of one build differ by less than 0.001%, so the build fails only when the
+  whole chain costs more than 5% over `bench/baseline.json`. Counts depend on the
+  CPU's SIMD support: compare runs on one machine.
+- `one-core`, `one-core-musicbot`: existing VM tests (media_live's jitter, echo and
+  double-talk checks, rtc_probe, desktop_recovery, the music bot's playback) on a
+  guest with one core and a busy loop, each `--arg runs N` times (default 5). For
+  each test: the pass rate and the workers' CPU seconds per second alive. Where the
+  test starts the media worker itself (media_live), `NUSCHL_AUDIO_TIMING=1` makes it
+  print `audio-stats` lines: capture gaps and playback underruns per minute and
+  capture-to-send latency percentiles; media_live's jitter check adds silent 20 ms
+  playback windows per minute. Sandboxed workers do not receive that variable. The
+  results (`one-core.json`, each run's log) are printed beside the baseline.
+
 ## Packages and cross builds
 
 The Linux package (`nix build .#default`, also used by the VM tests) is built per

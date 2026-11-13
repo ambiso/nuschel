@@ -67,6 +67,8 @@ in
       media-jitter = mediaLive "jitter";
       media-echo = mediaLive "echo_test";
       media-double-talk = mediaLive "double_talk";
+      # Transmits continuously: capture-to-send latency.
+      media-sounds = mediaLive "sounds";
       rtc-probe = "su - tester -c '${python} ${./tests}/rtc_probe.py ${nuschl}/bin --probe ${rtcProbe}/bin/nuschl-rtc-probe ${opus}'";
       desktop-recovery = "su - tester -c 'xvfb-run -a -s \"-screen 0 1120x850x24\" ${python} ${./tests}/desktop_recovery.py ${nuschl}/bin --murmur ${pkgs.murmur}/bin/mumble-server --pulse-bin ${pkgs.pulseaudio}/bin ${opus} --at-spi ${pkgs.at-spi2-core} --dbus-daemon ${pkgs.dbus}/bin/dbus-daemon --output $(mktemp -d)'";
     };

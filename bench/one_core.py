@@ -5,6 +5,7 @@ seconds per second alive (bench/worker_cpu.py) and, from the media worker's
 `audio-stats` lines (apps/media-worker/src/stats.rs), capture gaps and playback
 underruns per minute and capture-to-send latency percentiles. Writes
 one-core.json and prints it beside the baseline; numbers, not a gate."""
+import datetime
 import json
 import re
 
@@ -24,7 +25,7 @@ def percentile(histogram, fraction):
 
 def measure(machine, command, sampler):
     machine.succeed(f"systemd-run --unit=worker-cpu --property=StandardOutput=truncate:/tmp/worker-cpu.json {sampler}")
-    status, output = machine.execute(f"{command} 2>&1", timeout=3600)
+    status, output = machine.execute(f"{command} 2>&1", timeout=datetime.timedelta(hours=1))
     machine.succeed("systemctl stop worker-cpu")
     cpu = json.loads(machine.succeed("cat /tmp/worker-cpu.json") or "{}")
     last = {match[0]: match for match in STATS.findall(output)}

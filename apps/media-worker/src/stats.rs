@@ -7,6 +7,8 @@ use std::time::{Duration, Instant};
 
 const BINS: usize = 500;
 const FRAME_NS: u64 = 10_000_000;
+/// Stamps settle during the first second after the devices open (48 kHz frames).
+const SETTLE: u64 = 48_000;
 const EVERY: Duration = Duration::from_secs(10);
 
 pub struct Stats {
@@ -32,13 +34,14 @@ impl Stats {
     }
 
     /// Microphone frame `index` (since the devices opened) captured at `start`.
-    /// A frame starting 10 ms or more after the previous one ended follows lost samples.
+    /// A frame starting 10 ms or more after the previous one ended follows lost
+    /// samples; the first second is not counted.
     pub fn capture(&mut self, index: u64, start: Option<u64>) {
         if index == 0 {
             self.newest = None;
         }
         if let Some(start) = start {
-            if self.newest.is_some_and(|end| start >= end + FRAME_NS) {
+            if index >= SETTLE && self.newest.is_some_and(|end| start >= end + FRAME_NS) {
                 self.capture_gaps += 1;
             }
             self.newest = Some(start + FRAME_NS);
@@ -77,5 +80,26 @@ impl Stats {
             self.underruns,
             histogram.join(",")
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn capture_gaps_and_capture_to_send_latency() {
+        let mut stats = Stats::new();
+        stats.capture(0, Some(0));
+        // A jump while the stamps settle is not counted.
+        stats.capture(480, Some(2 * FRAME_NS));
+        stats.capture(SETTLE, Some(3 * FRAME_NS));
+        // 10 ms of samples were lost before this frame.
+        stats.capture(SETTLE + 480, Some(5 * FRAME_NS));
+        assert_eq!(stats.capture_gaps, 1);
+        // The newest frame ends at 60 ms; one frame waits behind the packet,
+        // whose last sample ends at 50 ms. Sent at 70 ms: 20 ms.
+        stats.send(7 * FRAME_NS, 1);
+        assert_eq!(stats.send_ms[20], 1);
     }
 }
