@@ -818,12 +818,12 @@ impl Desktop {
         let Some(server) = self.client.servers.get(index) else {
             return;
         };
-        if self
+        let switching = self
             .client
             .navigation
             .selection()
-            .is_none_or(|selection| selection.server != server.id)
-        {
+            .is_none_or(|selection| selection.server != server.id);
+        if switching {
             self.unread.reset_channels();
             self.channel_motion.cancel();
             self.channel_scroll.set_offset(point(px(0.), px(0.)));
@@ -834,6 +834,9 @@ impl Desktop {
             .remembered_channel(&server.id)
             .filter(|id| server.channels.iter().any(|channel| channel.id == *id))
             .unwrap_or(0);
+        if switching && self.channels_open {
+            self.cancel_modal_scroll();
+        }
         self.browse_channel(index, channel, window, cx);
     }
     pub fn browse_channel(
@@ -992,6 +995,13 @@ impl Desktop {
     pub fn cancel_modal_scroll(&mut self) {
         self.modal_motion.cancel();
         self.nested.cancel();
+    }
+    /// Closing the sheet retires its wheel transaction and easing.
+    pub fn close_channels(&mut self) {
+        if self.channels_open {
+            self.channels_open = false;
+            self.cancel_modal_scroll();
+        }
     }
 
     /// Move one nested list or the dialog per wheel run (`scrolling::WheelRun`).
@@ -1638,7 +1648,7 @@ impl Desktop {
                 .is_empty();
         }
         if keystroke.key == "escape" && self.channels_open {
-            self.channels_open = false;
+            self.close_channels();
             return true;
         }
         if keystroke.key == "escape" && self.viewer.is_some() && self.menu.is_none() {

@@ -25,6 +25,7 @@ const RAIL_WIDTH: f32 = 72. + layout::SCROLLBAR_GUTTER;
 const SPLITTER_WIDTH: f32 = 5.;
 const CONTROL_HEIGHT: f32 = 32.;
 const CHANNELS_DIALOG: u8 = 1 << 6;
+const CHANNELS_SHEET_LIST: &str = "channels-sheet-list";
 
 #[derive(Clone, Copy)]
 struct PaneLayout {
@@ -110,7 +111,7 @@ impl Render for Desktop {
                 .update(cx, |input, cx| input.set_auto_grow(1, pane.rows, cx));
         }
         if pane.sidebar.is_some() || self.open_dialogs() & !CHANNELS_DIALOG != 0 {
-            self.channels_open = false;
+            self.close_channels();
         }
         self.keep_dialog_focus(window, cx);
         // What commands since the last frame changed (events apply theirs).
@@ -124,7 +125,7 @@ impl Render for Desktop {
         self.present_selected();
         let selected = self.selected_indices();
         if selected.is_none() {
-            self.channels_open = false;
+            self.close_channels();
         }
         let voice_places = crate::voice::places(self);
         let title = selected
@@ -678,6 +679,22 @@ fn sidebar(
 ) -> AnyElement {
     let (server_index, selected_channel) = selected;
     let server = &this.client.servers[server_index];
+    let sheet_owner = sheet.then(|| {
+        let owner = server.id.clone();
+        let generation = server.generation;
+        Rc::new(move |this: &Desktop| {
+            this.channels_open
+                && this.modal_shown.get() == Some("channels-sheet")
+                && this
+                    .selected_indices()
+                    .is_some_and(|(index, _)| index == server_index)
+                && this
+                    .client
+                    .servers
+                    .get(server_index)
+                    .is_some_and(|server| server.id == owner && server.generation == generation)
+        })
+    });
     let voice_channel = server
         .has_mumble_voice()
         .then(|| server.voice_channel())
@@ -869,6 +886,16 @@ fn sidebar(
                     tree.h(window.viewport_size().height / 2.).flex_shrink_0()
                 })
                 .relative()
+                .when_some(sheet_owner.clone(), |frame, current| {
+                    frame.capture_any_mouse_down(cx.listener(
+                        move |this, event: &MouseDownEvent, _, _| {
+                            if event.button == MouseButton::Left && current(this) {
+                                this.cancel_channel_scroll();
+                                this.cancel_modal_scroll();
+                            }
+                        },
+                    ))
+                })
                 .child(
                     div()
                         .id(SharedString::from(format!("channel-tree:{}", server.id)))
@@ -893,6 +920,26 @@ fn sidebar(
                             list.child(div().h_3().flex_shrink_0())
                                 .child(section_label("direct-heading", "DIRECT MESSAGES"))
                                 .children(directs)
+                        })
+                        .when_some(sheet_owner, |tree, current| {
+                            let generation = server.generation;
+                            let handle = this.channel_scroll.clone();
+                            tree.child(layout::capture_scroll(
+                                handle.clone(),
+                                cx.listener(move |this, event, window, cx| {
+                                    if !current(this) {
+                                        cx.stop_propagation();
+                                        return;
+                                    }
+                                    this.cancel_channel_scroll();
+                                    this.nested.register(
+                                        CHANNELS_SHEET_LIST,
+                                        generation,
+                                        handle.clone(),
+                                    );
+                                    this.scroll_modal(Some(CHANNELS_SHEET_LIST), event, window, cx);
+                                }),
+                            ))
                         }),
                 )
                 .child(
@@ -959,7 +1006,7 @@ fn channels_sheet(
                     TEXT_MUTED,
                     None,
                     |this, _, cx| {
-                        this.channels_open = false;
+                        this.close_channels();
                         cx.notify();
                     },
                     cx,
@@ -991,7 +1038,7 @@ fn channels_sheet(
         width,
         content.into_any_element(),
         cx,
-        |this| this.channels_open = false,
+        Desktop::close_channels,
     )
 }
 
