@@ -847,6 +847,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     format: v1::Format::Text as i32,
                     content,
                     reply_to: 0,
+                    preview: None,
                 })),
                 Ok(Input::History {
                     request_id,
@@ -888,6 +889,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     target,
                     format: v1::Format::Text as i32,
                     content,
+                    preview: None,
                 })),
                 Ok(Input::ChatDelete {
                     request_id,

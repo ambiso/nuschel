@@ -3262,6 +3262,7 @@ impl State {
                 format: v1::Format::Text as i32,
                 content: pending.content.clone(),
                 reply_to: 0,
+                preview: None,
             },
         );
         let attempts = self

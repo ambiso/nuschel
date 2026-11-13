@@ -795,6 +795,7 @@ impl Driver {
                 target: change.seq,
                 format: v1::Format::Text as i32,
                 content: content.clone(),
+                preview: None,
             }),
             None => NuschlRequest::Delete(v1::ChatDelete {
                 request_id,
