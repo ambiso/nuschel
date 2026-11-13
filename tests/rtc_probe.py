@@ -9,7 +9,6 @@ import subprocess
 
 from workers import exchange
 from mumble_client import ReferenceOpus
-import quarantine
 
 
 def check(binaries, opus_library, probe=None):
@@ -56,5 +55,4 @@ if __name__ == "__main__":
         metadata = subprocess.run(["cargo", "metadata", "--no-deps", "--format-version", "1"],
                                   capture_output=True, text=True, check=True)
         args.binaries = Path(json.loads(metadata.stdout)["target_directory"]) / "debug"
-    with quarantine.step("vm-smoke/rtc-probe"):
-        check(args.binaries, args.opus_library, args.probe)
+    check(args.binaries, args.opus_library, args.probe)

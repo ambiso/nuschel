@@ -3,5 +3,4 @@
 # Removing a line makes that step a hard check again; each fix removes its own.
 # step                                  issue  reason
 vm-smoke/desktop-recovery-reconnect     #263   the user event after the server restart is missed in CI
-vm-smoke/rtc-probe                      #263   the loopback WebRTC probe fails intermittently (own issue pending)
 vm-home-manager/config-folder-listing   #254   an extra file appeared in the config folder once (#261)
