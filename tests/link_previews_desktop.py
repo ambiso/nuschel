@@ -227,6 +227,7 @@ def desktop(args):
             return sum(all(abs(raw[offset + channel] - target) <= 8
                 for channel, target in enumerate((0x20, 0x80, 0xc0))) for offset in range(0, len(raw), 3))
         focus_window(sender_pid)
+        last_policy_labels = []
         def named(name, role=None):
             return next((node for node, kind, label, _ in items(application)
                 if label == name and (role is None or kind == role)), None)
@@ -279,6 +280,8 @@ def desktop(args):
             eventually(lambda: not any("Saving preference" in label for label in labels())
                 and any(label.startswith(f"Active policy: {mode}.") for label in labels()),
                 f"{mode} preference did not complete")
+            last_policy_labels[:] = [label[:512] for label in labels()
+                if label.startswith("Active policy:")][:4]
             activate("Done")
         def events():
             snapshot = control("snapshot")
@@ -343,7 +346,62 @@ def desktop(args):
         choose("Direct")
         body = f"card-{uuid.uuid4().hex[:8]} http://93.184.215.14/redirect "
         type_message(body)
-        eventually(ready_card, "sender card never became ready")
+        try:
+            eventually(ready_card, "sender card never became ready")
+        except AssertionError:
+            diagnostic = {"last_observed_policy_labels": last_policy_labels,
+                "expected_composer": body, "nodes": [], "nodes_truncated": False}
+            def expired(_signal, _frame):
+                raise TimeoutError("ready-card failure capture exceeded 12 seconds")
+            previous_handler = signal.signal(signal.SIGALRM, expired)
+            previous_timer = signal.setitimer(signal.ITIMER_REAL, 12)
+            started = time.monotonic()
+            try:
+                observed = items(application)
+                diagnostic["node_count"] = len(observed)
+                diagnostic["nodes_truncated"] = len(observed) > 1024
+                retained_bytes = 0
+                composer_node = None
+                for node, role, name, states in observed[:1024]:
+                    row = {"role": role[:64], "name": name[:256], "states": states}
+                    retained_bytes += len(json.dumps(row).encode())
+                    if retained_bytes > 128 * 1024:
+                        diagnostic["nodes_truncated"] = True
+                        break
+                    diagnostic["nodes"].append(row)
+                    if name == "Message" and role in ("entry", "text"):
+                        composer_node = node
+                diagnostic["preview_labels"] = [row["name"] for row in diagnostic["nodes"]
+                    if "preview" in row["name"].lower() or row["name"].startswith("Text only")][:64]
+                diagnostic["policy_labels"] = [row["name"] for row in diagnostic["nodes"]
+                    if row["name"].startswith("Active policy:")][:4]
+                if composer_node is not None:
+                    try:
+                        count = composer_node.bus("get-property", composer_node.destination, composer_node.path,
+                            "org.a11y.atspi.Text", "CharacterCount")
+                        assert type(count) is int and count >= 0
+                        diagnostic["composer_character_count"] = count
+                        diagnostic["composer_text"] = composer_node.call("Text", "GetText", "ii", "0", str(min(count, 4096)))[0]
+                    except (AssertionError, RuntimeError, ValueError, TypeError, KeyError, IndexError) as error:
+                        diagnostic["composer_error"] = f"{type(error).__name__}: {error}"[:512]
+                snapshot = json.dumps(control("snapshot"), separators=(",", ":")).encode()
+                assert len(snapshot) <= 512 * 1024
+                (args.output / "ready-timeout-peers.json").write_bytes(snapshot + b"\n")
+                shell.screenshot(args.output / "ready-timeout.png")
+            except (AssertionError, EOFError, OSError, RuntimeError, ValueError,
+                    TypeError, KeyError, IndexError, subprocess.SubprocessError) as error:
+                diagnostic["capture_error"] = f"{type(error).__name__}: {error}"[:512]
+            finally:
+                signal.setitimer(signal.ITIMER_REAL, 0)
+                signal.signal(signal.SIGALRM, previous_handler)
+                if previous_timer[0]:
+                    signal.setitimer(signal.ITIMER_REAL,
+                        max(.001, previous_timer[0] - (time.monotonic() - started)), previous_timer[1])
+                diagnostic["capture_seconds"] = time.monotonic() - started
+                encoded = json.dumps(diagnostic, separators=(",", ":")).encode()
+                assert len(encoded) <= 256 * 1024
+                (args.output / "ready-timeout.json").write_bytes(encoded + b"\n")
+            raise
         wait("Remove link preview", "push button")
         fetched = events()
         assert any(event.get("path") == "/page" for event in fetched)
