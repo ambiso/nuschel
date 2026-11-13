@@ -223,9 +223,11 @@ pub fn validate(
                         }))?;
                     }
                 }
-                TextTarget::Channel(target) => {
-                    require(target == channel.id && selected.peer.is_none())?
-                }
+                TextTarget::Channel(target) => require(
+                    target == channel.id
+                        && selected.peer.is_none()
+                        && (call.method != "send_text" || channel.instance != 0),
+                )?,
                 _ if call.method == "older" => require(selected.peer.is_none())?,
                 _ => return Err(STALE.into()),
             }
@@ -258,7 +260,11 @@ pub fn validate(
                         .ok_or(STALE)?;
                     require(expected == id && counter(&instance) == Some(channel.instance))?;
                     match channel.target {
-                        TextTarget::Channel(target) => require(target == id && peer.is_none())?,
+                        TextTarget::Channel(target) => require(
+                            target == id
+                                && peer.is_none()
+                                && (call.method != "join" || channel.instance != 0),
+                        )?,
                         TextTarget::Direct(session) if call.method == "open" => {
                             let expected = peer.ok_or(STALE)?;
                             let captured = channel.direct_peer.as_ref().ok_or(STALE)?;
@@ -717,5 +723,41 @@ mod tests {
         ));
         assert!(validate(&servers, &catalog, None, None, &"x".repeat(513), "{}").is_err());
         assert!(validate(&servers, &catalog, None, None, "{}", &"x".repeat(4097)).is_err());
+    }
+    #[test]
+    fn cached_channel_lifetime_is_for_local_navigation_not_new_live_wire_actions() {
+        let (mut servers, catalog) = model();
+        servers[0].channels[0].instance = 0;
+        let mut p = proof(&servers, &catalog);
+        p["selected"]["instance"] = json!("0");
+        p["target"] = json!({"kind":"channel","id":0,"instance":"0","peer":null});
+        assert!(guard(
+            &servers,
+            &catalog,
+            Some((0, 0)),
+            json!({"method":"older"}),
+            &p
+        ));
+        assert!(guard(
+            &servers,
+            &catalog,
+            None,
+            json!({"method":"open","index":0,"target":0}),
+            &p
+        ));
+        assert!(!guard(
+            &servers,
+            &catalog,
+            Some((0, 0)),
+            json!({"method":"send_text"}),
+            &p
+        ));
+        assert!(!guard(
+            &servers,
+            &catalog,
+            None,
+            json!({"method":"join","index":0,"target":0}),
+            &p
+        ));
     }
 }
