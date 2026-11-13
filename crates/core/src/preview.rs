@@ -140,17 +140,16 @@ impl Preview {
         {
             return Err(Error::Metadata);
         }
-        if let Some(image) = &self.image {
-            if image.data.is_empty()
+        if let Some(image) = &self.image
+            && (image.data.is_empty()
                 || image.data.len() > MAX_IMAGE_BYTES
                 || image.width == 0
                 || image.height == 0
                 || image.width > MAX_IMAGE_WIDTH
                 || image.height > MAX_IMAGE_HEIGHT
-                || !inert(&image.alt, MAX_ALT_BYTES)
-            {
-                return Err(Error::Image);
-            }
+                || !inert(&image.alt, MAX_ALT_BYTES))
+        {
+            return Err(Error::Image);
         }
         Ok(())
     }

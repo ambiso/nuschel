@@ -724,10 +724,11 @@ impl Session {
                 if self.phase != Phase::LoggedIn || self.voice_policy().1 || !self.opus_allowed {
                     return;
                 }
-                if let Ok(packet) = nuschl_protocol::voice::decode_voice(&payload) {
-                    if self.users.contains_key(&packet.sender) && self.events.len() < MAX_EVENTS {
-                        self.events.push_back(Event::Voice(packet));
-                    }
+                if let Ok(packet) = nuschl_protocol::voice::decode_voice(&payload)
+                    && self.users.contains_key(&packet.sender)
+                    && self.events.len() < MAX_EVENTS
+                {
+                    self.events.push_back(Event::Voice(packet));
                 }
             }
             kind::SERVER_SYNC => {
@@ -817,17 +818,16 @@ impl Session {
             }
 
             kind::PERMISSION_QUERY => {
-                if let Ok(query) = proto::PermissionQuery::decode(payload) {
-                    if let (Some(channel), Some(permissions)) =
+                if let Ok(query) = proto::PermissionQuery::decode(payload)
+                    && let (Some(channel), Some(permissions)) =
                         (query.channel_id, query.permissions)
-                    {
-                        self.events
-                            .push_back(Event::Server(ServerEvent::Permissions {
-                                channel,
-                                permissions: permissions as u32,
-                                flush: query.flush.unwrap_or(false),
-                            }));
-                    }
+                {
+                    self.events
+                        .push_back(Event::Server(ServerEvent::Permissions {
+                            channel,
+                            permissions,
+                            flush: query.flush.unwrap_or(false),
+                        }));
                 }
             }
             kind::PERMISSION_DENIED => {

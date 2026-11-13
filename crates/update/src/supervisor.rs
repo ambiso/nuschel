@@ -108,7 +108,7 @@ async fn one(executable: &Path, post_quantum: bool, request: Request) -> Result<
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
     let mut child = command.spawn().map_err(|_| Error::Verifier)?;
-    let containment = match nuschl_ipc::host::contain(&child) {
+    let _containment = match nuschl_ipc::host::contain(&child) {
         Ok(value) => value,
         Err(_) => {
             let _ = child.kill().await;
@@ -149,6 +149,5 @@ async fn one(executable: &Path, post_quantum: bool, request: Request) -> Result<
         let _ = child.kill().await;
         let _ = child.wait().await;
     }
-    drop(containment);
     result
 }
