@@ -168,7 +168,7 @@ def main():
 
             registry = start_registry(args.at_spi, shell.app_environment(), spawn)
             pulse = shell.runtime / "pulse"
-            pulse.mkdir(mode=0o700)
+            pulse.mkdir(mode=0o700, exist_ok=True)  # GNOME Shell may already have made it
             (pulse / "default.pa").write_text(
                 f"load-module module-native-protocol-unix socket={pulse / 'native'} auth-anonymous=1\n"
                 "load-module module-null-sink sink_name=speakers rate=48000\n"
