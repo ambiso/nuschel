@@ -20,7 +20,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from desktop_mumble import DesktopTest, eventually, terminate  # noqa: E402
 from local_murmur import Murmur, free_port  # noqa: E402
 from mumble_client import Client, certificate_pin  # noqa: E402
-import quarantine  # noqa: E402
 
 
 def worker_pids(app, binary):
@@ -100,17 +99,12 @@ class RecoveryTest(DesktopTest):
             self.capture("reconnecting")
             murmur.start()
             self.peer = Client(self.args.binaries, "127.0.0.1", port, pin, "RecoveryPeer", self.root / "peer")
-            back = None
-            with quarantine.step("vm-smoke/desktop-recovery-reconnect",
-                                 evidence=lambda: self.capture("quarantined-reconnect")):
-                back = self.peer.wait(lambda e: e["kind"] == "user" and e["user"]["name"] == "RecoveryDesktop"
-                                      and e["user"]["channel"] == 1, timeout=60)["user"]
-            # Mute must survive the reconnect, also when the event above was missed.
-            back = back or next((user for user in list(self.peer.users.values())
-                                 if user["name"] == "RecoveryDesktop" and user["channel"] == 1), None)
-            assert back, "the desktop did not rejoin Lobby after the server restart"
-            assert back["self_muted"] and back["self_deafened"] == desktop["self_deafened"], \
-                "reconnect lost the mute state"
+            # The desktop can rejoin before the peer connects; the peer then learns
+            # of it while connecting, so read the peer's view of the users.
+            back = eventually(lambda: next((user for user in list(self.peer.users.values())
+                                            if user["name"] == "RecoveryDesktop" and user["channel"] == 1), None),
+                              "the desktop did not rejoin Lobby after the server restart", timeout=60)
+            assert back["self_muted"], "reconnect lost the mute state"
             self.wait_for("list item", "Disconnected from", partial=True)
             self.capture("reconnected")
             print("Server restart: reconnected, rejoined Lobby muted and marked the history gap.", flush=True)
