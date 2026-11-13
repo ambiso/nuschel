@@ -413,6 +413,10 @@ def desktop(args):
         def sent_by_reader():
             return [event for event in list(receiver.events) if event.get("kind") == "text"
                 and event.get("author") == "Welcome reader"]
+        def archive_content(message):
+            content = message["content"]
+            assert isinstance(content, str), "CLI archive content must be a JSON string"
+            return content
         def capture_recipient_failure(failure, pixel_count):
             diagnostic = dict(error_type=type(failure).__name__, last_cyan_pixels=pixel_count,
                 nodes=[], nodes_truncated=False)
@@ -487,14 +491,15 @@ def desktop(args):
                 focus_window(sender_pid)
                 if args.server == "nuschld":
                     chat = eventually(lambda: next((event for event in list(receiver.events)
-                        if event.get("kind") == "chat" and marker in bytes(event.get("message", {}).get("content", [])).decode("utf-8", errors="strict")), None),
+                        if event.get("kind") == "chat" and marker in archive_content(event["message"])), None),
                         "compatible server did not archive the projected message")
                     request = 16000 + before
                     receiver.send(kind="history", request_id=request, conversation=chat["conversation"], limit=32)
                     page = receiver.wait(lambda event: event.get("kind") == "history_page" and event.get("request_id") == request)
-                    archived = [message for message in page["messages"] if marker in bytes(message["content"]).decode("utf-8", errors="strict")]
-                    assert len(archived) == 1 and archived[0]["format"] == "legacy_html", archived
-                    assert bytes(archived[0]["content"]).decode() == wire
+                    archived = [message for message in page["messages"] if marker in archive_content(message)]
+                    # The protocol's Format::LegacyHtml value is 2.
+                    assert len(archived) == 1 and archived[0]["format"] == 2, archived
+                    assert archive_content(archived[0]) == wire
                     mark("compatible_history_keeps_one_legacy_html_message", seq=archived[0]["seq"])
             mark("single_message_received_by_independent_native_ui", preview=preview,
                 wire_sha256=hashlib.sha256(wire.encode()).hexdigest())
