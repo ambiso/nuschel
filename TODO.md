@@ -25,7 +25,9 @@ Open work is tracked in [GitHub issues](https://github.com/ambiso/nuschl/issues)
 
 Record new work in an issue, agree on ownership before concurrent edits, and link any real prerequisites. Keep implementation and validation gaps open until their stated completion conditions are met. A staged branch or a passing unit suite does not establish platform or deployment readiness. Follow [AGENTS.md](AGENTS.md) for implementation boundaries and evidence.
 
-Set the issue's **Priority** field to Urgent, High, Medium or Low. Work is selected by that priority first, then by the number of 👍 reactions on the original issue post within the same priority; necessary prerequisites may run first. See [GitHub's issue-field instructions](https://docs.github.com/en/issues/tracking-your-work-with-issues/using-issues/adding-and-managing-issue-fields). To browse a priority by votes, filter with `field.priority:high sort:reactions-+1-desc`.
+Only explicit user requests or user-approved issues are eligible for implementation. `source:user-request` records verified direct requests; agent proposals carry `status:needs-approval` until the user applies `status:approved` or explicitly approves them in the working conversation. Imported issues were created through the owner's account, so their author alone does not prove approval. 👍 reactions rank eligible work; they do not approve it.
+
+For eligible work, set the issue's **Priority** field to Urgent, High, Medium or Low. Work is selected by that priority first, then by the number of 👍 reactions on the original issue post within the same priority; necessary prerequisites may run first. See [GitHub's issue-field instructions](https://docs.github.com/en/issues/tracking-your-work-with-issues/using-issues/adding-and-managing-issue-fields). To browse a priority by votes, filter with `field.priority:high sort:reactions-+1-desc`.
 
 Private security reports, credentials, recordings and profiles belong outside Git and public issues. Keep public task descriptions separate from private evidence.
 

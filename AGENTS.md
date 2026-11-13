@@ -112,6 +112,14 @@ Read [SECURITY.md](SECURITY.md), [architecture](docs/architecture.md) and
   reactions on the original issue post within that priority. Refresh these values
   before assigning new tasks. Necessary prerequisites may run first; explicit
   priorities in the current conversation take precedence.
+- Implement only explicit user requests or issues approved by the user. Use
+  `source:user-request` only for a verified direct request with preserved provenance;
+  agent proposals use `status:needs-approval` until the user applies
+  `status:approved` or explicitly approves them in the conversation. Do not grant
+  that approval yourself. An imported issue's GitHub author, a broad queue goal
+  or thumbs-up reactions do not establish approval. Necessary implementation
+  details and tests stay within the approved scope; independent features need
+  their own approval.
 - Historical TODO snapshots under `docs/history/` preserve evidence and old status.
   Do not recreate issues from their checkboxes or rewrite these frozen snapshots.
 - Do not mark a broad feature complete from one green suite. Existing gaps are work
