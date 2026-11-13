@@ -32,7 +32,10 @@ const FLOOR: Range<u32> = 10..BASELINE;
 /// compared with: full-level signal and its tail, never a fade-in.
 const MEASURED: Range<u32> = BASELINE + SETTLE..BASELINE + FADE_OUT_START + TAIL;
 /// Frames of one test on each side, playback and microphone: the report
-/// comes only once both have passed the faded signal and its tail.
+/// comes only once both have passed the faded signal and its tail. Settings
+/// says "about 7 seconds", and gives up on a test that has not reported 12 s
+/// after the click (`TEST_DEADLINE` in apps/desktop/src/preview.rs), worker
+/// start and device opening included: see the tests on both below.
 const FRAMES: u32 = BASELINE + SIGNAL + TAIL;
 const FRAME_SAMPLES: u32 = FRAME as u32;
 const _: () = assert!(FADE_IN <= SETTLE, "no fade-in is measured");
@@ -361,10 +364,42 @@ mod tests {
         );
         // A restarted test is a new probe: the same signal from silence again.
         assert_eq!(played, self::played());
-        // The report ends the test after the tail, FRAMES (7.25 s) in.
+        // The report ends the test after the tail, FRAMES in.
         let (_, frames) = run(0., 0, 1., |_| false);
         assert_eq!(frames, FRAMES);
-        assert_eq!(FRAMES * FRAME_SAMPLES, 7_250 * RATE / 1_000);
+    }
+
+    fn seconds(frames: u32) -> f64 {
+        f64::from(frames * FRAME_SAMPLES) / f64::from(RATE)
+    }
+
+    /// Settings (`audio_check` in apps/desktop/src/settings.rs) says the test
+    /// plays its sound "for about 7 seconds": the whole test, until the
+    /// verdict, lasts 6.5 to 7.5 s, and what sounds of it barely less.
+    #[test]
+    fn settings_says_about_seven_seconds() {
+        let (_, frames) = run(0., 0, 1., |_| false);
+        let test = seconds(frames);
+        assert!((6.5..7.5).contains(&test), "test: {test} s");
+        let played = played();
+        let first = played.iter().position(|sample| *sample != 0.);
+        let last = played.iter().rposition(|sample| *sample != 0.);
+        let sound = (last.unwrap() + 1 - first.unwrap()) as f64 / f64::from(RATE);
+        assert!((6. ..=test).contains(&sound), "sound: {sound} s");
+    }
+
+    /// Settings' fixed deadline (`TEST_DEADLINE`, 12 s, in
+    /// apps/desktop/src/preview.rs) runs from the click and so also covers
+    /// starting the worker and opening the devices. From starting an
+    /// unsandboxed worker to its report, against a private PulseAudio, this
+    /// took 7.3 to 8.7 s (2026-11-13).
+    #[test]
+    fn the_test_leaves_room_to_start_within_settings_deadline() {
+        const DEADLINE: f64 = 12.;
+        // Starting the sandboxed worker and opening the devices, generously.
+        const START: f64 = 3.;
+        let test = seconds(FRAMES);
+        assert!(test + START <= DEADLINE, "{test} s + {START} s");
     }
 
     #[test]
