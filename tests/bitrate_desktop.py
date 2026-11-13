@@ -24,11 +24,12 @@ audio device, profile or recording is used. Checks and screenshots:
   application's 860 px minimum width, and the run records both sizes.
   1280×800 at 100 % is the gated control; 860×520 at 200 % is recorded but
   not gated, because the sidebar's width budget keeps it cramped. Synthetic
-  timeline content: a long link, a long code token, a wide image, joins and
-  a file offer. Checks:
-  * walking the timeline entry by entry with the keyboard, every laid-out
-    accessible node except push buttons stays inside the timeline, short of
-    its scrollbar gutter. No text or image pixel lands in that gutter.
+  timeline content in Lobby: a long link, a long code token, a wide image,
+  joins and a file offer. Checks:
+  * walking the Root and Lobby timelines entry by entry with the keyboard,
+    every laid-out accessible node except push buttons stays inside the
+    timeline, short of its scrollbar gutter. No text or image pixel lands
+    in that gutter.
     Entries that are not laid out are 1x1 stand-ins with no real bounds;
     they are counted, not measured;
   * "You joined Lobby" is one line at 100 % and at most five lines at 175 %
@@ -90,7 +91,6 @@ THUMB = (0x35, 0x3E, 0x4E)  # dark theme BORDER_STRONG
 # channel at or above this; surfaces, the scrollbar track and its thumb are
 # all below it.
 BRIGHT = 0x70
-WELCOME = "Welcome to Root"
 JOINED = "You joined Lobby"
 OFFER_NAME = "holiday-photos-from-the-long-trip-2026.zip"
 
@@ -310,8 +310,11 @@ class DesktopBitrate:
         return x1 - x0, y1 - y0, raw
 
     def post_content(self):
-        """Synthetic messages from the Narrow peer into Narrow's Root, the
-        conversation on screen; Murmur allows a text message a second."""
+        """Synthetic messages from the Narrow peer into Narrow's Lobby, where
+        Andi is (a channel message reaches only the channel's members);
+        Murmur allows a text message a second. The peer's joins go between
+        Lobby and Music, never Root, whose timeline keeps the standalone
+        "You joined Lobby" line the defect was recorded on."""
         peer = self.peers["Narrow"]
         url = ("https://example.org/" + "-".join(["averyveryverylongpathsegment"] * 3)
                + "?query=unbrokentoken0123456789")
@@ -319,17 +322,19 @@ class DesktopBitrate:
         encoded = base64.b64encode(make_png(480, 200)).decode()
         image = "\n".join(urllib.parse.quote(encoded[i:i + 72], safe="") for i in range(0, len(encoded), 72))
         offer = f"📎 {OFFER_NAME} (48 MB) — receive with magic-wormhole: wormhole receive 7-guitarist-revenge"
-        for command in (dict(kind="text", channel=0, body=f"A long link: {url}"),
-                        dict(kind="text", channel=0, body=f"```\n{token}\n```"),
-                        dict(kind="html", channel=0,
+        for command in (dict(kind="text", channel=1, body=f"A long link: {url}"),
+                        dict(kind="text", channel=1, body=f"```\n{token}\n```"),
+                        dict(kind="html", channel=1,
                              html=f"A wide picture:<br/><img src=\"data:image/PNG;base64,{image}\" />"),
-                        dict(kind="text", channel=0, body=offer)):
+                        dict(kind="text", channel=1, body=offer)):
             peer.send(**command)
             time.sleep(1.3)
-        # Joins and leaves in the conversation on screen: a run of activity.
-        for channel in (0, 1, 0, 1):
+        # Moves out of and back into Lobby: a run of activity there.
+        for channel in (6, 1, 6, 1):
             peer.send(kind="join", channel=channel)
             time.sleep(1.3)
+
+        self.press("tree item", "Lobby")
 
         def arrived():
             info, _ = self.tree()
@@ -355,10 +360,12 @@ class DesktopBitrate:
                 return True
         return False
 
-    def timeline_pass(self, label, zoom, directory):
-        """Walk the timeline from the newest entry up to the welcome, one
-        entry per Up, measuring every laid-out node and the gutter pixels."""
-        timeline = self.node("Messages in #Root", "list")
+    def timeline_pass(self, label, zoom, directory, channel):
+        """Walk a channel's timeline from the newest entry up to the welcome,
+        one entry per Up, measuring every laid-out node and the gutter pixels."""
+        self.press("tree item", channel)
+        welcome_name = f"Welcome to {channel}"
+        timeline = self.node(f"Messages in #{channel}", "list")
         record = dict(focused=self.focus_timeline(timeline), steps=[], violations=[], controls=[],
                       joined_heights=[], not_laid_out=0, laid_out=0, top_reached=False)
         self.shell.key("End")
@@ -388,10 +395,10 @@ class DesktopBitrate:
                     (record["controls"] if role in CONTROL_ROLES else record["violations"]).append(entry)
                 if role == "label" and name == JOINED:
                     record["joined_heights"].append(h)
-                if role == "label" and name == WELCOME:
+                if role == "label" and name == welcome_name:
                     welcome = True
             bx, by, _, _ = self.rects()["buffer"]
-            shot = directory / f"{label}-step{step:02}.png"
+            shot = directory / f"{label}-{channel}-step{step:02}.png"
             self.shell.screenshot(shot)
             strip = (bx + right + 1, by + box[1], box[0] + box[2] - right - 1, box[3])
             width, height, raw = self.pixels(shot, strip)
@@ -496,23 +503,25 @@ class DesktopBitrate:
             self.shot("9-narrow-zoomed" if label.startswith("requested-760") else f"layout-{label}")
             entry = dict(label=label, requested=[width, height], zoom=zoom, gated=gated,
                          committed=committed, committed_zoomed=zoomed)
-            entry["timeline"] = self.timeline_pass(label, zoom, directory)
+            entry["timeline"] = {channel: self.timeline_pass(label, zoom, directory, channel)
+                                 for channel in ("Root", "Lobby")}
             entry["voice"] = self.voice_pass(label, zoom, directory)
             info, _ = self.tree()
             entry["unnamed_interactive"] = sorted({role for _, role, name in info.values()
                                                    if role in INTERACTIVE and not name.strip()})
-            heights = entry["timeline"]["joined_heights"]
+            heights = [h for walk in entry["timeline"].values() for h in walk["joined_heights"]]
             if label.startswith("control"):
                 report["reference_line_height"] = max(heights) if heights else None
             reference = report["reference_line_height"]
             entry["joined_lines"] = (round(max(heights) / (reference * zoom))
                                      if heights and reference else None)
             report["geometries"].append(entry)
+            walks = entry["timeline"].values()
             print(f"  {label}: committed frame {committed['frame'][2]}×{committed['frame'][3]} "
                   f"({zoomed['frame'][2]}×{zoomed['frame'][3]} zoomed), timeline "
-                  f"{entry['timeline']['timeline_logical_width']} logical px, "
-                  f"{len(entry['timeline']['violations'])} node overflows, "
-                  f"{sum(s['bright_pixels'] for s in entry['timeline']['steps'])} gutter pixels, "
+                  f"{entry['timeline']['Lobby']['timeline_logical_width']} logical px, "
+                  f"{sum(len(walk['violations']) for walk in walks)} node overflows, "
+                  f"{sum(s['bright_pixels'] for walk in walks for s in walk['steps'])} gutter pixels, "
                   f"'{JOINED}' {entry['joined_lines']} line(s), voice wheel {entry['voice']['wheel']} "
                   f"tab+end {entry['voice']['tab_end']} thumb {entry['voice']['thumb_rows']}", flush=True)
         self.shell.chord("Control_L", "0")
@@ -520,17 +529,19 @@ class DesktopBitrate:
         for entry in report["geometries"]:
             if not entry["gated"]:
                 continue
-            label, timeline, voice = entry["label"], entry["timeline"], entry["voice"]
-            if not timeline["focused"]:
-                failures.append(f"{label}: Shift+Tab from the composer did not reach the timeline")
-            if not timeline["top_reached"]:
-                failures.append(f"{label}: the walk did not reach '{WELCOME}'")
-            if timeline["violations"]:
-                failures.append(f"{label}: {len(timeline['violations'])} laid-out nodes leave the timeline, "
-                                f"e.g. {timeline['violations'][:3]}")
-            bright = [(s["step"], s["bright_pixels"]) for s in timeline["steps"] if s["bright_pixels"]]
-            if bright:
-                failures.append(f"{label}: text or image pixels in the scrollbar gutter at steps {bright}")
+            label, voice = entry["label"], entry["voice"]
+            for channel, timeline in entry["timeline"].items():
+                where = f"{label} #{channel}"
+                if not timeline["focused"]:
+                    failures.append(f"{where}: Shift+Tab from the composer did not reach the timeline")
+                if not timeline["top_reached"]:
+                    failures.append(f"{where}: the walk did not reach 'Welcome to {channel}'")
+                if timeline["violations"]:
+                    failures.append(f"{where}: {len(timeline['violations'])} laid-out nodes leave the "
+                                    f"timeline, e.g. {timeline['violations'][:3]}")
+                bright = [(s["step"], s["bright_pixels"]) for s in timeline["steps"] if s["bright_pixels"]]
+                if bright:
+                    failures.append(f"{where}: text or image pixels in the scrollbar gutter at steps {bright}")
             limit = 1 if entry["zoom"] == 1.0 else 5
             if entry["joined_lines"] is None or entry["joined_lines"] > limit:
                 failures.append(f"{label}: '{JOINED}' takes {entry['joined_lines']} lines (at most {limit})")
