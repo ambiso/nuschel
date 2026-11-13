@@ -4,7 +4,7 @@
 //! connection would report them, and the screen read back from ratatui's
 //! test backend.
 use crate::{
-    app::{App, Options, Overlay, Pane},
+    app::{App, Options, Overlay, Pane, Row},
     plain::Transcript,
     view,
 };
@@ -23,6 +23,7 @@ use ratatui::{
     Terminal,
     backend::TestBackend,
     crossterm::event::{KeyCode, KeyEvent, KeyModifiers},
+    style::{Color, Modifier},
 };
 use std::sync::{Arc, Mutex};
 
@@ -464,6 +465,124 @@ fn unread_messages_are_counted_in_the_tree_and_the_cursor_marks_the_row() {
     let (lines, _) = screen(&mut app, 110, 24);
     assert!(shows(&lines, "Gaming on Test"));
     assert!(!shows(&lines, "unread"), "{}", lines.join("\n"));
+}
+
+/// Each channel pane row's colour and boldness, by the conversation name
+/// (for channel and direct rows), read from the drawn screen.
+fn tree_styles(app: &mut App, kind: &str) -> Vec<(String, Color, bool)> {
+    let (width, height) = (110, 24);
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+    let buffer = terminal
+        .draw(|frame| view::draw(frame, app))
+        .unwrap()
+        .buffer
+        .clone();
+    let rows = app.rows();
+    // The server's row is the pane's first; rows follow one per line.
+    let first = view::row_text(app, &rows[0]);
+    let (x, y) = (0..height)
+        .find_map(|y| {
+            let symbols: Vec<&str> = (0..width).map(|x| buffer[(x, y)].symbol()).collect();
+            let line = symbols.concat();
+            let at = line.find(&first)?;
+            let x = (0..symbols.len()).find(|&x| symbols[..x].concat().len() == at)?;
+            Some((x as u16, y))
+        })
+        .expect("the server row is drawn");
+    rows.iter()
+        .enumerate()
+        .filter_map(|(at, row)| {
+            let index = match (kind, row) {
+                ("channel", Row::Channel { row, .. }) => row.index,
+                ("direct", Row::Direct { index, .. }) => *index,
+                _ => return None,
+            };
+            let text = view::row_text(app, row);
+            let y = y + at as u16;
+            let drawn: String = (x..x + text.len() as u16)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect();
+            assert_eq!(drawn, text, "row {at} is on line {y}");
+            let column = x + text.find(|c: char| c != ' ').unwrap() as u16;
+            let cell = &buffer[(column, y)];
+            Some((
+                app.client.servers[0].channels[index].name.clone(),
+                cell.fg,
+                cell.modifier.contains(Modifier::BOLD),
+            ))
+        })
+        .collect()
+}
+
+#[test]
+fn unread_direct_conversations_are_emphasised_like_unread_channels() {
+    let (mut app, _, id) = connected();
+    let bob = app.client.servers[0].users[&2].clone();
+    let zed = User {
+        session: 3,
+        name: "Zed".into(),
+        channel: 2,
+        user_id: Some(13),
+        ..Default::default()
+    };
+    // A stock direct message between Ada and `peer`.
+    let direct = |peer: &User, author: &str, body: &str| {
+        let mut input = message(&id, 0, author, body, None);
+        if let Input::Message {
+            target,
+            storage_key,
+            peer: with,
+            ..
+        } = &mut input
+        {
+            *target = TextTarget::Direct(peer.session);
+            *storage_key = format!("direct:{}", peer.name);
+            *with = Some(peer.clone());
+        }
+        input
+    };
+    app.client.handle(direct(&bob, "Bob", "A word, Ada?"));
+    app.client.handle(direct(&zed, "Ada", "Hello Zed"));
+    app.client.handle(message(&id, 2, "Bob", "In Gaming", None));
+    app.settle();
+    // Direct rows (named "@ peer") index the same `channels` as channel
+    // rows, after them.
+    let channels = &app.client.servers[0].channels;
+    let directs: Vec<usize> = app
+        .rows()
+        .iter()
+        .filter_map(|row| match row {
+            Row::Direct { index, .. } => Some(*index),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(directs, [3, 4]);
+    assert!(directs.iter().all(|&index| channels[index].is_direct()));
+    let (yellow, blue) = (Color::Yellow, Color::LightBlue);
+    let unread = |name: &str| (name.to_string(), yellow, true);
+    let read = |name: &str| (name.to_string(), blue, false);
+    assert_eq!(
+        tree_styles(&mut app, "direct"),
+        [unread("@ Bob"), read("@ Zed")]
+    );
+    assert_eq!(
+        tree_styles(&mut app, "channel"),
+        [read("Root"), unread("Gaming"), read("Lobby")]
+    );
+    // Reading Bob's conversation ends only its emphasis; Zed's message
+    // marks only Zed's row.
+    let bob_conversation = app.client.servers[0].channels[3].id;
+    app.browse(0, bob_conversation);
+    app.client.handle(direct(&zed, "Zed", "Hi Ada"));
+    app.settle();
+    assert_eq!(
+        tree_styles(&mut app, "direct"),
+        [read("@ Bob"), unread("@ Zed")]
+    );
+    assert_eq!(
+        tree_styles(&mut app, "channel"),
+        [read("Root"), unread("Gaming"), read("Lobby")]
+    );
 }
 
 #[test]
