@@ -1,8 +1,15 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! Versioned preview policy, kept separate from the released settings schema.
 use super::{Profile, atomic_private_write};
-use nuschl_link_preview::{policy::Settings, settings_file::{self, Loaded, Origin, Source}};
-use std::{fs::File, io::{self, Read}, path::{Path, PathBuf}};
+use nuschl_link_preview::{
+    policy::Settings,
+    settings_file::{self, Loaded, Origin, Source},
+};
+use std::{
+    fs::File,
+    io::{self, Read},
+    path::{Path, PathBuf},
+};
 
 #[derive(Clone, Debug)]
 pub struct LinkPreviewSettings {
@@ -24,7 +31,10 @@ fn load(path: &Path, origin: Origin) -> Loaded {
         Err(_) => return settings_file::parse(origin, Source::Unreadable),
     };
     let mut bytes = Vec::new();
-    match file.take(settings_file::MAX_FILE_BYTES as u64 + 1).read_to_end(&mut bytes) {
+    match file
+        .take(settings_file::MAX_FILE_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)
+    {
         Ok(_) => settings_file::parse(origin, Source::Bytes(&bytes)),
         Err(_) => settings_file::parse(origin, Source::Unreadable),
     }
@@ -51,15 +61,21 @@ impl Profile {
     /// Load bounded sidecars without rewriting, renaming or repairing them.
     /// Explicit profiles never consult the host's managed configuration.
     pub fn load_link_previews(&self) -> LinkPreviewSettings {
-        let user = load(&self.config_dir.join(settings_file::FILE_NAME), Origin::User);
+        let user = load(
+            &self.config_dir.join(settings_file::FILE_NAME),
+            Origin::User,
+        );
         let mut effective = user.clone();
         let inherited = self.system_link_previews.clone().or_else(|| {
-            self.system_managed.as_ref().and_then(|path| path.parent())
+            self.system_managed
+                .as_ref()
+                .and_then(|path| path.parent())
                 .map(|directory| directory.join(settings_file::MANAGED_FILE_NAME))
         });
-        for path in inherited.into_iter().chain([
-            self.config_dir.join(settings_file::MANAGED_FILE_NAME),
-        ]) {
+        for path in inherited
+            .into_iter()
+            .chain([self.config_dir.join(settings_file::MANAGED_FILE_NAME)])
+        {
             let managed = load(&path, Origin::Managed);
             effective = settings_file::effective(&effective, &managed);
         }
@@ -90,13 +106,25 @@ mod tests {
         std::fs::write(&path, future).unwrap();
         let loaded = profile.load_link_previews();
         assert_eq!(loaded.effective.settings.mode, Mode::Off);
-        assert!(matches!(loaded.user.problem, Some(Problem::Version(Origin::User,999))));
+        assert!(matches!(
+            loaded.user.problem,
+            Some(Problem::Version(Origin::User, 999))
+        ));
         assert_eq!(std::fs::read(&path).unwrap(), future);
-        let saved = profile.save_link_previews(&Settings { mode: Mode::Direct, ..Settings::default() }).unwrap();
+        let saved = profile
+            .save_link_previews(&Settings {
+                mode: Mode::Direct,
+                ..Settings::default()
+            })
+            .unwrap();
         assert_eq!(saved.effective.settings.mode, Mode::Direct);
-        #[cfg(unix)] {
+        #[cfg(unix)]
+        {
             use std::os::unix::fs::PermissionsExt as _;
-            assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+            assert_eq!(
+                std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
         }
     }
 
@@ -109,13 +137,27 @@ mod tests {
         let own = profile.config_dir.join(settings_file::MANAGED_FILE_NAME);
         std::fs::write(&system, br#"{"version":1,"mode":"off"}"#).unwrap();
         std::fs::write(&own, br#"{"version":1,"mode":"direct"}"#).unwrap();
-        assert_eq!(profile.save_link_previews(&Settings {mode:Mode::Direct,..Settings::default()}).unwrap().effective.settings.mode,Mode::Off);
-        for bytes in [b"invalid".to_vec(),vec![b' ';settings_file::MAX_FILE_BYTES+1]] {
-            std::fs::write(&system,&bytes).unwrap();
-            let loaded=profile.load_link_previews();
-            assert_eq!(loaded.effective.settings.mode,Mode::Off);
+        assert_eq!(
+            profile
+                .save_link_previews(&Settings {
+                    mode: Mode::Direct,
+                    ..Settings::default()
+                })
+                .unwrap()
+                .effective
+                .settings
+                .mode,
+            Mode::Off
+        );
+        for bytes in [
+            b"invalid".to_vec(),
+            vec![b' '; settings_file::MAX_FILE_BYTES + 1],
+        ] {
+            std::fs::write(&system, &bytes).unwrap();
+            let loaded = profile.load_link_previews();
+            assert_eq!(loaded.effective.settings.mode, Mode::Off);
             assert!(loaded.effective.problem.is_some());
-            assert_eq!(std::fs::read(&system).unwrap(),bytes);
+            assert_eq!(std::fs::read(&system).unwrap(), bytes);
         }
     }
 }

@@ -64,7 +64,10 @@ pub(super) fn scoped_send(
     Ok((
         context.server,
         request.connection,
-        Command::Scoped { authority, command: Box::new(command) },
+        Command::Scoped {
+            authority,
+            command: Box::new(command),
+        },
     ))
 }
 

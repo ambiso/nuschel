@@ -311,7 +311,13 @@ async fn bounded_content_request(
     let _containment = match contain(&child) {
         Ok(guard) => guard,
         Err(error) => {
-            reap_content(&mut child).await;
+            match retirement {
+                Some(mut retirement) => {
+                    let _ = retirement.ready().await;
+                    retirement.retire(&mut child).await;
+                }
+                None => reap_content(&mut child).await,
+            }
             return Err(error);
         }
     };
