@@ -97,7 +97,9 @@ impl Loaded {
     pub fn may_overwrite(&self) -> bool {
         !matches!(
             self.problem,
-            Some(Problem::Unreadable | Problem::TooLarge | Problem::Malformed | Problem::Version(_))
+            Some(
+                Problem::Unreadable | Problem::TooLarge | Problem::Malformed | Problem::Version(_)
+            )
         )
     }
 }
@@ -225,7 +227,10 @@ mod tests {
             proxy: Some("socks5://127.0.0.1:9050".into()),
             dns: Some(DnsSettings {
                 url: "https://dns.example/dns-query".into(),
-                bootstrap: vec!["192.0.2.53".parse().unwrap(), "2001:db8::53".parse().unwrap()],
+                bootstrap: vec![
+                    "192.0.2.53".parse().unwrap(),
+                    "2001:db8::53".parse().unwrap(),
+                ],
             }),
         }
     }
@@ -248,7 +253,9 @@ mod tests {
         }
         let text = String::from_utf8(serialize(&Json, &Settings::default()).unwrap()).unwrap();
         assert_eq!(text, "{\n  \"version\": 1,\n  \"mode\": \"off\"\n}");
-        let loaded = read(r#"{"version":1,"mode":"proxy_required","proxy":"socks5://127.0.0.1:9050","dns":{"url":"https://dns.example/dns-query","bootstrap":["192.0.2.53"]}}"#);
+        let loaded = read(
+            r#"{"version":1,"mode":"proxy_required","proxy":"socks5://127.0.0.1:9050","dns":{"url":"https://dns.example/dns-query","bootstrap":["192.0.2.53"]}}"#,
+        );
         assert!(matches!(loaded.settings.route(), Ok(Route::Proxy { .. })));
     }
 
@@ -261,7 +268,10 @@ mod tests {
             parse(&Json, Source::Unreadable).problem,
             Some(Problem::Unreadable)
         );
-        let padded = format!(r#"{{"version":1,"mode":"direct","proxy":"{}"}}"#, "x".repeat(MAX_FILE_BYTES));
+        let padded = format!(
+            r#"{{"version":1,"mode":"direct","proxy":"{}"}}"#,
+            "x".repeat(MAX_FILE_BYTES)
+        );
         for (text, problem) in [
             (padded.as_str(), Problem::TooLarge),
             ("", Problem::Malformed),
@@ -270,11 +280,20 @@ mod tests {
             (r#"{"mode":"direct"}"#, Problem::Malformed),
             (r#"{"version":"1","mode":"direct"}"#, Problem::Malformed),
             (r#"{"version":-1,"mode":"direct"}"#, Problem::Malformed),
-            (r#"{"version":1,"mode":"direct","extra":true}"#, Problem::Malformed),
+            (
+                r#"{"version":1,"mode":"direct","extra":true}"#,
+                Problem::Malformed,
+            ),
             (r#"{"version":1,"mode":"sometimes"}"#, Problem::Malformed),
             (r#"{"version":1}"#, Problem::Malformed),
-            (r#"{"version":1,"mode":"direct","dns":{"url":"x","bootstrap":["nope"]}}"#, Problem::Malformed),
-            (r#"{"version":2,"mode":"direct","new":"field"}"#, Problem::Version(2)),
+            (
+                r#"{"version":1,"mode":"direct","dns":{"url":"x","bootstrap":["nope"]}}"#,
+                Problem::Malformed,
+            ),
+            (
+                r#"{"version":2,"mode":"direct","new":"field"}"#,
+                Problem::Version(2),
+            ),
             (r#"{"version":0,"mode":"direct"}"#, Problem::Version(0)),
         ] {
             let loaded = read(text);
@@ -299,7 +318,10 @@ mod tests {
         ] {
             let loaded = read(text);
             assert_eq!(loaded.settings.mode, Mode::ProxyRequired, "{text}");
-            assert!(matches!(loaded.problem, Some(Problem::Incomplete(_))), "{text}");
+            assert!(
+                matches!(loaded.problem, Some(Problem::Incomplete(_))),
+                "{text}"
+            );
             assert!(loaded.settings.route().is_err());
             assert!(loaded.may_overwrite());
         }
@@ -308,9 +330,15 @@ mod tests {
             mode: Mode::ProxyRequired,
             ..Settings::default()
         };
-        let loaded = parse(&Json, Source::Bytes(&serialize(&Json, &incomplete).unwrap()));
+        let loaded = parse(
+            &Json,
+            Source::Bytes(&serialize(&Json, &incomplete).unwrap()),
+        );
         assert_eq!(loaded.settings, incomplete);
-        assert_eq!(loaded.problem, Some(Problem::Incomplete(PolicyError::MissingProxy)));
+        assert_eq!(
+            loaded.problem,
+            Some(Problem::Incomplete(PolicyError::MissingProxy))
+        );
         // Settings too large for the file are refused, not cut.
         let huge = Settings {
             mode: Mode::ProxyRequired,
@@ -327,8 +355,14 @@ mod tests {
         assert_eq!(effective(&direct, &absent), direct);
         let managed_off = read(r#"{"version":1,"mode":"off"}"#);
         assert_eq!(effective(&direct, &managed_off).settings.mode, Mode::Off);
-        let managed_proxy = parse(&Json, Source::Bytes(&serialize(&Json, &proxy_settings()).unwrap()));
-        assert_eq!(effective(&direct, &managed_proxy).settings, proxy_settings());
+        let managed_proxy = parse(
+            &Json,
+            Source::Bytes(&serialize(&Json, &proxy_settings()).unwrap()),
+        );
+        assert_eq!(
+            effective(&direct, &managed_proxy).settings,
+            proxy_settings()
+        );
         // A managed file that cannot be used is Off, never the user's Direct.
         for broken in [
             parse(&Json, Source::Unreadable),

@@ -314,7 +314,12 @@ pub(crate) mod tests {
     }
 
     pub(crate) fn card(url: &str, title: &str, description: &str) -> Card {
-        Card::new(&Target::parse(url).unwrap(), &metadata(title, description), None).unwrap()
+        Card::new(
+            &Target::parse(url).unwrap(),
+            &metadata(title, description),
+            None,
+        )
+        .unwrap()
     }
 
     fn with_image(card: &Card, image: EmbeddedImage) -> Result<Card, CardError> {
@@ -349,7 +354,10 @@ pub(crate) mod tests {
         )
         .unwrap();
         assert_eq!(pictured.image().unwrap().alt, "An alt");
-        assert_eq!(Card::from_preview(&pictured.to_preview()).unwrap(), pictured);
+        assert_eq!(
+            Card::from_preview(&pictured.to_preview()).unwrap(),
+            pictured
+        );
         assert_eq!(pictured.without_image(), card);
         assert!(pictured.weight() > card.weight());
     }
@@ -489,7 +497,10 @@ pub(crate) mod tests {
         zero_length.resize(64, 0);
         assert_eq!(image_dimensions(ImageMime::Jpeg, &zero_length), None);
         // A segment length past the end stops the walk.
-        assert_eq!(image_dimensions(ImageMime::Jpeg, b"\xff\xd8\xff\xe1\xff\xff\0\0"), None);
+        assert_eq!(
+            image_dimensions(ImageMime::Jpeg, b"\xff\xd8\xff\xe1\xff\xff\0\0"),
+            None
+        );
         let mut cut = jpeg(4, 4);
         cut.truncate(cut.len() - 14);
         assert_eq!(image_dimensions(ImageMime::Jpeg, &cut), None);

@@ -246,7 +246,13 @@ impl<K: Clone + Eq> DraftPreviews<K> {
             (phase @ (Phase::Fetching(_) | Phase::Ready(_) | Phase::Unavailable(_)), _) => phase,
             (_, Some(target)) => {
                 let target = target.clone();
-                self.evaluate(draft.conversation, draft.connection, target, now, &mut effects)
+                self.evaluate(
+                    draft.conversation,
+                    draft.connection,
+                    target,
+                    now,
+                    &mut effects,
+                )
             }
             (_, None) => Phase::Idle,
         };
@@ -304,7 +310,10 @@ impl<K: Clone + Eq> DraftPreviews<K> {
             return None;
         }
         let target = candidate(draft.text, draft.candidate)?;
-        let (_, state) = self.drafts.iter().find(|(key, _)| key == draft.conversation)?;
+        let (_, state) = self
+            .drafts
+            .iter()
+            .find(|(key, _)| key == draft.conversation)?;
         let Phase::Ready(card) = &state.phase else {
             return None;
         };
@@ -537,7 +546,11 @@ mod tests {
         previews
     }
 
-    fn draft<'a>(conversation: &'a u32, text: &'a str, candidate: Option<&'a str>) -> Draft<'a, u32> {
+    fn draft<'a>(
+        conversation: &'a u32,
+        text: &'a str,
+        candidate: Option<&'a str>,
+    ) -> Draft<'a, u32> {
         Draft {
             conversation,
             connection: 1,
@@ -610,7 +623,11 @@ mod tests {
         ] {
             previews.set_policy(&settings);
             assert!(previews.update(draft(&1, &text, Some(URL)), 0).is_empty());
-            assert!(previews.update(draft(&1, &format!("{text}x"), Some(URL)), 0).is_empty());
+            assert!(
+                previews
+                    .update(draft(&1, &format!("{text}x"), Some(URL)), 0)
+                    .is_empty()
+            );
             assert_eq!(previews.status(&1), Status::Disabled);
             assert_eq!(previews.for_send(draft(&1, &text, Some(URL))), None);
         }
@@ -623,7 +640,10 @@ mod tests {
                 bootstrap: vec!["192.0.2.53".parse().unwrap()],
             }),
         });
-        assert_eq!(fetched(&previews.update(draft(&1, &text, Some(URL)), 0)).len(), 1);
+        assert_eq!(
+            fetched(&previews.update(draft(&1, &text, Some(URL)), 0)).len(),
+            1
+        );
     }
 
     #[test]
@@ -642,11 +662,17 @@ mod tests {
         // Send before the card is ready: text only.
         assert_eq!(previews.for_send(draft(&1, &text, Some(URL))), None);
         let card = card(URL, "Title", "");
-        assert_eq!(previews.deliver(ticket.id, Ok(card.clone()), 0), Delivery::Accepted);
+        assert_eq!(
+            previews.deliver(ticket.id, Ok(card.clone()), 0),
+            Delivery::Accepted
+        );
         assert_eq!(previews.status(&1), Status::Ready(&card));
         assert_eq!(previews.for_send(draft(&1, &text, Some(URL))), Some(&card));
         // Any other text, conversation, connection or carry decision: none.
-        assert_eq!(previews.for_send(draft(&1, &format!("{text}!"), Some(URL))), None);
+        assert_eq!(
+            previews.for_send(draft(&1, &format!("{text}!"), Some(URL))),
+            None
+        );
         assert_eq!(previews.for_send(draft(&2, &text, Some(URL))), None);
         assert_eq!(
             previews.for_send(Draft {
@@ -672,20 +698,43 @@ mod tests {
         let mut previews = enabled();
         let kept = ready(&mut previews, &1, &format!("{URL} a"), URL);
         // Ready: rebinding to the edited text needs no fetch.
-        assert!(previews.update(draft(&1, &format!("{URL} ab"), Some(URL)), 1).is_empty());
-        assert_eq!(previews.for_send(draft(&1, &format!("{URL} ab"), Some(URL))), Some(&kept));
-        assert_eq!(previews.for_send(draft(&1, &format!("{URL} a"), Some(URL))), None);
+        assert!(
+            previews
+                .update(draft(&1, &format!("{URL} ab"), Some(URL)), 1)
+                .is_empty()
+        );
+        assert_eq!(
+            previews.for_send(draft(&1, &format!("{URL} ab"), Some(URL))),
+            Some(&kept)
+        );
+        assert_eq!(
+            previews.for_send(draft(&1, &format!("{URL} a"), Some(URL))),
+            None
+        );
 
         // Fetching: the request in flight serves the edited text.
         let mut previews = enabled();
         let ticket = fetched(&previews.update(draft(&1, &format!("{URL} a"), Some(URL)), 0))
             .pop()
             .unwrap();
-        assert!(previews.update(draft(&1, &format!("{URL} ab"), Some(URL)), 0).is_empty());
+        assert!(
+            previews
+                .update(draft(&1, &format!("{URL} ab"), Some(URL)), 0)
+                .is_empty()
+        );
         let card = card(URL, "T", "");
-        assert_eq!(previews.deliver(ticket.id, Ok(card.clone()), 0), Delivery::Accepted);
-        assert_eq!(previews.for_send(draft(&1, &format!("{URL} a"), Some(URL))), None);
-        assert_eq!(previews.for_send(draft(&1, &format!("{URL} ab"), Some(URL))), Some(&card));
+        assert_eq!(
+            previews.deliver(ticket.id, Ok(card.clone()), 0),
+            Delivery::Accepted
+        );
+        assert_eq!(
+            previews.for_send(draft(&1, &format!("{URL} a"), Some(URL))),
+            None
+        );
+        assert_eq!(
+            previews.for_send(draft(&1, &format!("{URL} ab"), Some(URL))),
+            Some(&card)
+        );
     }
 
     #[test]
@@ -698,15 +747,24 @@ mod tests {
         assert_eq!(cancelled(&effects), vec![first.id]);
         let second = fetched(&effects).pop().unwrap();
         assert!(second.id > first.id);
-        assert_eq!(previews.deliver(first.id, Ok(card(URL, "Old", "")), 0), Delivery::Stale);
+        assert_eq!(
+            previews.deliver(first.id, Ok(card(URL, "Old", "")), 0),
+            Delivery::Stale
+        );
         assert_eq!(previews.status(&1), Status::Fetching);
         // The worker cannot answer with another page's card.
         assert_eq!(
             previews.deliver(second.id, Ok(card(URL, "Old", "")), 0),
             Delivery::Accepted
         );
-        assert_eq!(previews.status(&1), Status::Unavailable(Unavailable::Malformed));
-        assert_eq!(previews.for_send(draft(&1, &format!("{OTHER} "), Some(OTHER))), None);
+        assert_eq!(
+            previews.status(&1),
+            Status::Unavailable(Unavailable::Malformed)
+        );
+        assert_eq!(
+            previews.for_send(draft(&1, &format!("{OTHER} "), Some(OTHER))),
+            None
+        );
         // Removing the link drops everything.
         assert!(previews.update(draft(&1, "no link", None), 0).is_empty());
         assert_eq!(previews.status(&1), Status::None);
@@ -721,15 +779,31 @@ mod tests {
             .unwrap();
         assert_eq!(cancelled(&previews.remove(&1)), vec![ticket.id]);
         assert_eq!(previews.status(&1), Status::Removed);
-        assert_eq!(previews.deliver(ticket.id, Ok(card(URL, "T", "")), 0), Delivery::Stale);
+        assert_eq!(
+            previews.deliver(ticket.id, Ok(card(URL, "T", "")), 0),
+            Delivery::Stale
+        );
         assert_eq!(previews.status(&1), Status::Removed);
         // Edits keeping the URL stay removed and fetch nothing.
-        assert!(previews.update(draft(&1, &format!("{text}more"), Some(URL)), 0).is_empty());
+        assert!(
+            previews
+                .update(draft(&1, &format!("{text}more"), Some(URL)), 0)
+                .is_empty()
+        );
         assert_eq!(previews.status(&1), Status::Removed);
-        assert_eq!(previews.for_send(draft(&1, &format!("{text}more"), Some(URL))), None);
+        assert_eq!(
+            previews.for_send(draft(&1, &format!("{text}more"), Some(URL))),
+            None
+        );
         // A different URL may preview; going back is a change too.
-        assert_eq!(fetched(&previews.update(draft(&1, OTHER, Some(OTHER)), 0)).len(), 1);
-        assert_eq!(fetched(&previews.update(draft(&1, &text, Some(URL)), 0)).len(), 1);
+        assert_eq!(
+            fetched(&previews.update(draft(&1, OTHER, Some(OTHER)), 0)).len(),
+            1
+        );
+        assert_eq!(
+            fetched(&previews.update(draft(&1, &text, Some(URL)), 0)).len(),
+            1
+        );
 
         // Removing a ready card, then sending: the next draft may preview
         // the same URL again, from the remembered result.
@@ -763,7 +837,10 @@ mod tests {
         assert_eq!(cancelled(&effects), vec![ticket.id]);
         let again = fetched(&effects).pop().unwrap();
         assert_eq!(again.connection, 2);
-        assert_eq!(previews.deliver(ticket.id, Ok(card(URL, "T", "")), 0), Delivery::Stale);
+        assert_eq!(
+            previews.deliver(ticket.id, Ok(card(URL, "T", "")), 0),
+            Delivery::Stale
+        );
 
         // Another conversation takes the single pipeline.
         let mut previews = enabled();
@@ -774,10 +851,16 @@ mod tests {
         assert_eq!(cancelled(&effects), vec![first.id]);
         let second = fetched(&effects).pop().unwrap();
         assert_eq!(second.conversation, 2);
-        assert_eq!(previews.deliver(first.id, Ok(card(URL, "T", "")), 0), Delivery::Stale);
+        assert_eq!(
+            previews.deliver(first.id, Ok(card(URL, "T", "")), 0),
+            Delivery::Stale
+        );
         assert_eq!(previews.status(&1), Status::None);
         let card = card(URL, "T", "");
-        assert_eq!(previews.deliver(second.id, Ok(card.clone()), 0), Delivery::Accepted);
+        assert_eq!(
+            previews.deliver(second.id, Ok(card.clone()), 0),
+            Delivery::Accepted
+        );
         assert_eq!(previews.for_send(draft(&1, &text, Some(URL))), None);
         assert_eq!(previews.for_send(draft(&2, &text, Some(URL))), Some(&card));
         // The first conversation's next update is served from the result.
@@ -790,9 +873,15 @@ mod tests {
             .unwrap();
         assert!(previews.remove(&2).is_empty());
         assert_eq!(cancelled(&previews.set_policy(&direct())), vec![pending.id]);
-        assert_eq!(previews.deliver(pending.id, Ok(card.clone()), 0), Delivery::Stale);
+        assert_eq!(
+            previews.deliver(pending.id, Ok(card.clone()), 0),
+            Delivery::Stale
+        );
         assert_eq!(previews.for_send(draft(&1, &text, Some(URL))), None);
-        assert_eq!(fetched(&previews.update(draft(&1, &text, Some(URL)), 0)).len(), 1);
+        assert_eq!(
+            fetched(&previews.update(draft(&1, &text, Some(URL)), 0)).len(),
+            1
+        );
         assert!(previews.update(draft(&2, &text, Some(URL)), 0).is_empty());
         assert_eq!(previews.status(&2), Status::Removed);
         // Off: nothing pending, nothing sent.
@@ -831,7 +920,10 @@ mod tests {
             0,
         );
         assert_eq!(cancelled(&effects), vec![ticket.id]);
-        assert_eq!(previews.deliver(ticket.id, Ok(card(URL, "T", "")), 0), Delivery::Stale);
+        assert_eq!(
+            previews.deliver(ticket.id, Ok(card(URL, "T", "")), 0),
+            Delivery::Stale
+        );
     }
 
     #[test]
@@ -844,7 +936,11 @@ mod tests {
             ("https://example.org:8443/ x", "https://example.org:8443/"),
             ("mumble://example.org/ x", "mumble://example.org/"),
         ] {
-            assert!(previews.update(draft(&1, text, Some(candidate)), 0).is_empty());
+            assert!(
+                previews
+                    .update(draft(&1, text, Some(candidate)), 0)
+                    .is_empty()
+            );
             assert_eq!(previews.status(&1), Status::None, "{text}");
         }
         let long = format!("{URL} {}", "x".repeat(MAX_DRAFT_BYTES));
@@ -857,22 +953,47 @@ mod tests {
         let mut previews = enabled();
         let card = ready(&mut previews, &1, URL, URL);
         // Back to a remembered URL within its lifetime: no fetch.
-        assert_eq!(fetched(&previews.update(draft(&1, OTHER, Some(OTHER)), 1)).len(), 1);
+        assert_eq!(
+            fetched(&previews.update(draft(&1, OTHER, Some(OTHER)), 1)).len(),
+            1
+        );
         assert!(fetched(&previews.update(draft(&1, URL, Some(URL)), CARD_TTL_MS - 1)).is_empty());
         assert_eq!(previews.for_send(draft(&1, URL, Some(URL))), Some(&card));
         // After it: fetched again.
-        assert_eq!(fetched(&previews.update(draft(&1, OTHER, Some(OTHER)), CARD_TTL_MS)).len(), 1);
-        assert_eq!(fetched(&previews.update(draft(&1, URL, Some(URL)), CARD_TTL_MS)).len(), 1);
+        assert_eq!(
+            fetched(&previews.update(draft(&1, OTHER, Some(OTHER)), CARD_TTL_MS)).len(),
+            1
+        );
+        assert_eq!(
+            fetched(&previews.update(draft(&1, URL, Some(URL)), CARD_TTL_MS)).len(),
+            1
+        );
 
         // Failures are remembered for a shorter time.
         let mut previews = enabled();
-        let ticket = fetched(&previews.update(draft(&1, URL, Some(URL)), 0)).pop().unwrap();
+        let ticket = fetched(&previews.update(draft(&1, URL, Some(URL)), 0))
+            .pop()
+            .unwrap();
         previews.deliver(ticket.id, Err(Unavailable::NoMetadata), 0);
-        assert_eq!(fetched(&previews.update(draft(&1, OTHER, Some(OTHER)), 1)).len(), 1);
-        assert!(fetched(&previews.update(draft(&1, URL, Some(URL)), FAILURE_TTL_MS - 1)).is_empty());
-        assert_eq!(previews.status(&1), Status::Unavailable(Unavailable::NoMetadata));
-        assert_eq!(fetched(&previews.update(draft(&1, OTHER, Some(OTHER)), FAILURE_TTL_MS)).len(), 1);
-        assert_eq!(fetched(&previews.update(draft(&1, URL, Some(URL)), FAILURE_TTL_MS)).len(), 1);
+        assert_eq!(
+            fetched(&previews.update(draft(&1, OTHER, Some(OTHER)), 1)).len(),
+            1
+        );
+        assert!(
+            fetched(&previews.update(draft(&1, URL, Some(URL)), FAILURE_TTL_MS - 1)).is_empty()
+        );
+        assert_eq!(
+            previews.status(&1),
+            Status::Unavailable(Unavailable::NoMetadata)
+        );
+        assert_eq!(
+            fetched(&previews.update(draft(&1, OTHER, Some(OTHER)), FAILURE_TTL_MS)).len(),
+            1
+        );
+        assert_eq!(
+            fetched(&previews.update(draft(&1, URL, Some(URL)), FAILURE_TTL_MS)).len(),
+            1
+        );
 
         // At most MAX_CACHE_ENTRIES results.
         let mut previews = enabled();
@@ -883,14 +1004,19 @@ mod tests {
             ready(&mut previews, &1, url, url);
         }
         assert_eq!(previews.cache.len(), MAX_CACHE_ENTRIES);
-        assert_eq!(fetched(&previews.update(draft(&1, &urls[0], Some(&urls[0])), 0)).len(), 1);
+        assert_eq!(
+            fetched(&previews.update(draft(&1, &urls[0], Some(&urls[0])), 0)).len(),
+            1
+        );
         assert!(previews.cache.iter().map(Cached::weight).sum::<usize>() <= MAX_CACHE_BYTES);
     }
 
     #[test]
     fn drafts_are_bounded_in_count_and_kept_text() {
         let mut previews = enabled();
-        let ticket = fetched(&previews.update(draft(&0, URL, Some(URL)), 0)).pop().unwrap();
+        let ticket = fetched(&previews.update(draft(&0, URL, Some(URL)), 0))
+            .pop()
+            .unwrap();
         for conversation in 1..MAX_CONVERSATIONS as u32 {
             previews.update(draft(&conversation, "text", None), 0);
         }
@@ -899,14 +1025,26 @@ mod tests {
         let effects = previews.update(draft(&999, "text", None), 0);
         assert_eq!(cancelled(&effects), vec![ticket.id]);
         assert_eq!(previews.drafts.len(), MAX_CONVERSATIONS);
-        assert_eq!(previews.deliver(ticket.id, Ok(card(URL, "T", "")), 0), Delivery::Stale);
+        assert_eq!(
+            previews.deliver(ticket.id, Ok(card(URL, "T", "")), 0),
+            Delivery::Stale
+        );
 
         let big = "x".repeat(MAX_DRAFT_BYTES);
         for conversation in 0..MAX_CONVERSATIONS as u32 {
             previews.update(draft(&conversation, &big, None), 0);
         }
-        let kept: usize = previews.drafts.iter().map(|(_, state)| state.text.len()).sum();
+        let kept: usize = previews
+            .drafts
+            .iter()
+            .map(|(_, state)| state.text.len())
+            .sum();
         assert!(kept <= MAX_KEPT_TEXT_BYTES);
-        assert!(previews.drafts.iter().any(|(key, _)| *key == MAX_CONVERSATIONS as u32 - 1));
+        assert!(
+            previews
+                .drafts
+                .iter()
+                .any(|(key, _)| *key == MAX_CONVERSATIONS as u32 - 1)
+        );
     }
 }

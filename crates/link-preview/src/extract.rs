@@ -306,10 +306,12 @@ impl<'a> Scanner<'a> {
                         true
                     }
                 }
-                Some(b'?') => self.count_tag() && {
-                    self.skip_past(b">");
-                    true
-                },
+                Some(b'?') => {
+                    self.count_tag() && {
+                        self.skip_past(b">");
+                        true
+                    }
+                }
                 Some(b'/') => {
                     self.at += 1;
                     match self.peek() {
@@ -321,10 +323,12 @@ impl<'a> Scanner<'a> {
                             self.at += 1;
                             true
                         }
-                        Some(_) => self.count_tag() && {
-                            self.skip_past(b">");
-                            true
-                        },
+                        Some(_) => {
+                            self.count_tag() && {
+                                self.skip_past(b">");
+                                true
+                            }
+                        }
                         None => false,
                     }
                 }
@@ -767,9 +771,9 @@ fn numeric_character(value: u32) -> char {
     const WINDOWS_1252: [char; 32] = [
         '\u{20ac}', '\u{81}', '\u{201a}', '\u{192}', '\u{201e}', '\u{2026}', '\u{2020}',
         '\u{2021}', '\u{2c6}', '\u{2030}', '\u{160}', '\u{2039}', '\u{152}', '\u{8d}', '\u{17d}',
-        '\u{8f}', '\u{90}', '\u{2018}', '\u{2019}', '\u{201c}', '\u{201d}', '\u{2022}',
-        '\u{2013}', '\u{2014}', '\u{2dc}', '\u{2122}', '\u{161}', '\u{203a}', '\u{153}', '\u{9d}',
-        '\u{17e}', '\u{178}',
+        '\u{8f}', '\u{90}', '\u{2018}', '\u{2019}', '\u{201c}', '\u{201d}', '\u{2022}', '\u{2013}',
+        '\u{2014}', '\u{2dc}', '\u{2122}', '\u{161}', '\u{203a}', '\u{153}', '\u{9d}', '\u{17e}',
+        '\u{178}',
     ];
     match value {
         0 => '\u{fffd}',
@@ -966,9 +970,10 @@ mod tests {
             Err(ExtractError::NoMetadata)
         );
         // An empty og:title gives way to a later one.
-        let found =
-            extract(r#"<meta property="og:title" content=" "><meta property="og:title" content="b">"#)
-                .unwrap();
+        let found = extract(
+            r#"<meta property="og:title" content=" "><meta property="og:title" content="b">"#,
+        )
+        .unwrap();
         assert_eq!(found.title, "b");
     }
 
@@ -978,9 +983,13 @@ mod tests {
             "<title>  A&#x20;&#32;&#9;b &#150; &eacute;&hellip; &unknown; &amp &#0; &#xD800; &#1114112; \u{1b}[31m \u{202e}x\u{2066}\n\n</title>",
         )
         .unwrap();
-        assert_eq!(found.title, "A b – é… &unknown; &amp \u{fffd} \u{fffd} \u{fffd} [31m x");
+        assert_eq!(
+            found.title,
+            "A b – é… &unknown; &amp \u{fffd} \u{fffd} \u{fffd} [31m x"
+        );
         // Numeric references cannot smuggle controls or bidi overrides back in.
-        let found = extract(r#"<meta property="og:title" content="a&#27;b&#x202E;c&#x7;">"#).unwrap();
+        let found =
+            extract(r#"<meta property="og:title" content="a&#27;b&#x202E;c&#x7;">"#).unwrap();
         assert_eq!(found.title, "abc");
         // Invalid UTF-8 is replaced, not trusted.
         let found = extract_open_graph(
@@ -1034,17 +1043,38 @@ mod tests {
         );
         // The first declaration counts; UTF-16 in a meta tag means UTF-8.
         for (page, ok) in [
-            (r#"<meta charset=" UTF-8 "><meta charset="koi8-r"><title>x</title>"#, true),
+            (
+                r#"<meta charset=" UTF-8 "><meta charset="koi8-r"><title>x</title>"#,
+                true,
+            ),
             (r#"<meta charset="utf-16le"><title>x</title>"#, true),
-            (r#"<meta http-equiv="Content-Type" content="text/html; charset=utf8"><title>x</title>"#, true),
-            (r#"<meta http-equiv="content-type" content='text/html;charset="Shift_JIS"'><title>x</title>"#, false),
-            (r#"<meta http-equiv="refresh" content="0; charset=koi8-r"><title>x</title>"#, true),
+            (
+                r#"<meta http-equiv="Content-Type" content="text/html; charset=utf8"><title>x</title>"#,
+                true,
+            ),
+            (
+                r#"<meta http-equiv="content-type" content='text/html;charset="Shift_JIS"'><title>x</title>"#,
+                false,
+            ),
+            (
+                r#"<meta http-equiv="refresh" content="0; charset=koi8-r"><title>x</title>"#,
+                true,
+            ),
         ] {
             assert_eq!(extract(page).is_ok(), ok, "{page}");
         }
-        assert_eq!(TransportCharset::from_label(None), TransportCharset::Unspecified);
-        assert_eq!(TransportCharset::from_label(Some("UTF-8")), TransportCharset::Utf8);
-        assert_eq!(TransportCharset::from_label(Some("latin1")), TransportCharset::Other);
+        assert_eq!(
+            TransportCharset::from_label(None),
+            TransportCharset::Unspecified
+        );
+        assert_eq!(
+            TransportCharset::from_label(Some("UTF-8")),
+            TransportCharset::Utf8
+        );
+        assert_eq!(
+            TransportCharset::from_label(Some("latin1")),
+            TransportCharset::Other
+        );
     }
 
     #[test]
@@ -1133,7 +1163,12 @@ mod tests {
                 assert!(found.title.len() <= MAX_TITLE_BYTES);
                 assert!(found.description.len() <= MAX_DESCRIPTION_BYTES);
                 assert!(found.image_alt.len() <= MAX_ALT_BYTES);
-                assert!(found.image.as_ref().is_none_or(|image| image.len() <= MAX_URL_BYTES));
+                assert!(
+                    found
+                        .image
+                        .as_ref()
+                        .is_none_or(|image| image.len() <= MAX_URL_BYTES)
+                );
                 for text in [&found.title, &found.description, &found.image_alt] {
                     assert!(crate::text::is_normalized(text, usize::MAX));
                 }

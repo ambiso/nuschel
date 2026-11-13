@@ -131,7 +131,9 @@ fn name_at(bytes: &[u8], from: usize) -> Option<(&[u8], usize)> {
     }
     let len = bytes[from..]
         .iter()
-        .take_while(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'-'))
+        .take_while(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'-')
+        })
         .count();
     Some((&bytes[from..from + len], from + len))
 }
@@ -232,11 +234,13 @@ mod tests {
         ] {
             assert!(!well_formed(fragment), "{fragment:?}");
         }
-        let attributes = |count: usize| -> String {
-            (0..count).map(|n| format!(" a{n}=\"\"")).collect()
-        };
+        let attributes =
+            |count: usize| -> String { (0..count).map(|n| format!(" a{n}=\"\"")).collect() };
         assert!(well_formed(&format!("<a{}/>", attributes(MAX_ATTRIBUTES))));
-        assert!(!well_formed(&format!("<a{}/>", attributes(MAX_ATTRIBUTES + 1))));
+        assert!(!well_formed(&format!(
+            "<a{}/>",
+            attributes(MAX_ATTRIBUTES + 1)
+        )));
         let nested = |depth: usize| format!("{}{}", "<b>".repeat(depth), "</b>".repeat(depth));
         assert!(well_formed(&nested(MAX_DEPTH)));
         assert!(!well_formed(&nested(MAX_DEPTH + 1)));

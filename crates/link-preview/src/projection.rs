@@ -77,7 +77,12 @@ pub fn project(text_html: &str, card: &Card, limits: &ServerLimits) -> Projectio
             continue;
         }
         let image = image.as_ref().filter(|_| with_image);
-        let html = card_html(text_html, card, with_description, image.map(|(element, _)| &**element));
+        let html = card_html(
+            text_html,
+            card,
+            with_description,
+            image.map(|(element, _)| &**element),
+        );
         let source_units = image.map_or(0, |(_, source_units)| *source_units);
         if fits(&html, source_units, image.is_some(), limits) && xml::well_formed(&html) {
             return Projection::Card {
@@ -116,7 +121,10 @@ fn card_html(text_html: &str, card: &Card, description: bool, image: Option<&str
     html.push_str("</i><br/><a href=\"");
     push_escaped(&mut html, card.url());
     html.push_str("\"><b>");
-    push_escaped(&mut html, &truncate_utf16(card.display_title(), MAX_TITLE_UNITS));
+    push_escaped(
+        &mut html,
+        &truncate_utf16(card.display_title(), MAX_TITLE_UNITS),
+    );
     html.push_str("</b></a>");
     if description {
         html.push_str("<br/>");
@@ -456,8 +464,24 @@ mod tests {
     #[test]
     fn arbitrary_card_strings_always_project_to_well_formed_xml() {
         let pieces = [
-            "<", ">", "&", "\"", "'", "]]>", "&amp;", "&#0;", "é", "😀", "\u{202e}", "\u{7}",
-            "\u{fffe}", " ", "<br>", "</blockquote>", "a", "\n",
+            "<",
+            ">",
+            "&",
+            "\"",
+            "'",
+            "]]>",
+            "&amp;",
+            "&#0;",
+            "é",
+            "😀",
+            "\u{202e}",
+            "\u{7}",
+            "\u{fffe}",
+            " ",
+            "<br>",
+            "</blockquote>",
+            "a",
+            "\n",
         ];
         let mut state = 0x9e37_79b9_u32;
         let mut next = || {
