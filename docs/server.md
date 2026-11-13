@@ -333,7 +333,10 @@ It prints a report and exits.
   error, so it can be run again with `--replace-existing` once the cause is fixed.
 - **Untrusted input.** The storage worker reads the file (`--read-murmur`)
   confined by Landlock to reading that one file (no other file, no TCP, no abstract
-  Unix sockets; the report says whether the kernel enforced it). It opens it
+  Unix sockets). Where the kernel cannot enforce all of it (Landlock before ABI 6,
+  that is Linux 6.12, or Landlock not enabled), the import refuses before reading
+  and says what is missing; `--allow-unconfined-murmur-read` reads the file anyway,
+  and the report says so. It opens it
   read-only and immutable (a `-wal` or journal next to it is never looked at), with
   `query_only`, `trusted_schema = OFF`, cell size checks, a 1 GiB heap limit and
   `quick_check` first. Files in WAL mode (Murmur's `sqlite_wal`) are refused with the
@@ -380,7 +383,8 @@ server: the file is copied into the state directory for the dynamic user, import
 and removed; `murmur-imported` in the state directory records that it ran. If the
 import fails or refuses (the server already has state; `importMurmur.replaceExisting`
 replaces it), `nuschl.service` does not start and the journal says why; nothing
-retries in a loop.
+retries in a loop. `importMurmur.allowUnconfinedRead` passes
+`--allow-unconfined-murmur-read`.
 
 ## Administration
 
@@ -871,5 +875,5 @@ descriptor exhaustion.
 | `just test-postgres` (`cargo test -p nuschl-storage-worker --test postgres`) | the storage worker as `nuschld` drives it, on SQLite and on a throwaway PostgreSQL from nixpkgs (`initdb` in a temporary directory, a unix socket only, no TCP): migrations, users, history pages, idempotency, edits, deletions, retention, live-only heads, erasure, purging, a second worker on the same database, and the operator lock (one holder; the others answer `Held` without opening the database). Without `initdb`/`postgres` on `PATH` (or in `NUSCHL_POSTGRES_BIN`) the PostgreSQL half says SKIPPED and passes |
 | `cargo test -p nuschl-crypto-worker` | key transparency end to end: nuschld, the session and the crypto worker in its sandbox (publish and look up, TOFU and verification, key changes, the self-monitoring alarm, a forked and a replaced log), and the worker against a malicious directory in process |
 | `python3 tests/with_local_nuschld.py <bins> tests/<suite>.py <bins> --port PORT …` | `mumble_client.py`, `udp_voice.py`, `protocol_features.py` against nuschld; `with_local_murmur.py` runs the same scripts against stock Murmur |
-| `nix build .#checks.x86_64-linux.vm-server --cores 2` | the module with SQLite and PostgreSQL, restarts, the client suites (with loss and blocked UDP), key transparency (`tests/key_transparency.py`, keys as credentials and generated), and the stock Mumble GUI (login with a Nuschl-exported certificate, voice both ways); the statistics line, SIGHUP, and `services.nuschl.importMurmur` importing the Murmur fixture into a fresh database, then logins with its PBKDF2 and SHA-1 passwords (tests/murmur_import.py) |
+| `nix build .#checks.x86_64-linux.vm-server --cores 2` | the module with SQLite and PostgreSQL, restarts, the client suites (with loss and blocked UDP), key transparency (`tests/key_transparency.py`, keys as credentials and generated), and the stock Mumble GUI (login with a Nuschl-exported certificate, voice both ways); the statistics line, SIGHUP, the Murmur reader refusing where Landlock is unavailable and reading with `--allow-unconfined-murmur-read`, and `services.nuschl.importMurmur` importing the Murmur fixture into a fresh database, then logins with its PBKDF2 and SHA-1 passwords (tests/murmur_import.py) |
 | `just fuzz server_messages [seconds]` (SECURITY.md, "Fuzzing") | also `control_frames`, `relay`, `crypt`, `extension_messages`, `kt_messages` |

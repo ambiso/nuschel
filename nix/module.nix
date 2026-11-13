@@ -223,7 +223,8 @@ let
       # Takes the operator lock, as every admin command does.
       ${cfg.package}/bin/nuschld --config ${configFile} --state-directory ${stateDirectory} "$@" \
         admin import-murmur ${murmurCopy} --murmur-server-id ${toString cfg.importMurmur.serverId} \
-        ${lib.optionalString cfg.importMurmur.replaceExisting "--replace-existing"}
+        ${lib.optionalString cfg.importMurmur.replaceExisting "--replace-existing"} \
+        ${lib.optionalString cfg.importMurmur.allowUnconfinedRead "--allow-unconfined-murmur-read"}
       ${pkgs.coreutils}/bin/touch ${murmurMarker}
       ${pkgs.coreutils}/bin/rm -f ${murmurCopy}
     fi
@@ -410,6 +411,11 @@ in
       replaceExisting = lib.mkEnableOption ''
         replacing this server's channels, registered users and bans with the import
         (`--replace-existing`); without it, a server with state refuses the import
+      '';
+      allowUnconfinedRead = lib.mkEnableOption ''
+        reading the Murmur database where Landlock cannot fully confine the reader,
+        such as a kernel older than Linux 6.12 or without Landlock
+        (`--allow-unconfined-murmur-read`); without it, the import refuses there
       '';
     };
     tls = {
