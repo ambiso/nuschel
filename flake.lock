@@ -31,6 +31,19 @@
         "type": "github"
       }
     },
+    "emojibase-data": {
+      "flake": false,
+      "locked": {
+        "lastModified": 499162500,
+        "narHash": "sha256-zXqdNh61bse6wES1olFEyMyaYYk6OlgaFZ9/Kzl3MD4=",
+        "type": "tarball",
+        "url": "https://registry.npmjs.org/emojibase-data/-/emojibase-data-17.0.0.tgz"
+      },
+      "original": {
+        "type": "tarball",
+        "url": "https://registry.npmjs.org/emojibase-data/-/emojibase-data-17.0.0.tgz"
+      }
+    },
     "flake-utils": {
       "inputs": {
         "systems": "systems"
@@ -121,12 +134,14 @@
       "inputs": {
         "advisory-db": "advisory-db",
         "crane": "crane",
+        "emojibase-data": "emojibase-data",
         "flake-utils": "flake-utils",
         "home-manager": "home-manager",
         "nixpkgs": "nixpkgs",
         "nixpkgs-mumble13": "nixpkgs-mumble13",
         "nixpkgs-mumble14": "nixpkgs-mumble14",
-        "rust-overlay": "rust-overlay"
+        "rust-overlay": "rust-overlay",
+        "twemoji": "twemoji"
       }
     },
     "rust-overlay": {
@@ -161,6 +176,23 @@
       "original": {
         "owner": "nix-systems",
         "repo": "default",
+        "type": "github"
+      }
+    },
+    "twemoji": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1780352164,
+        "narHash": "sha256-qgdguv5/EhjLlKxIvvQF7+s+AkY7KnFhaKRziOR1hhY=",
+        "owner": "jdecked",
+        "repo": "twemoji",
+        "rev": "b6b55fef1e8636b540a6d016a4729ca8cdf2e60b",
+        "type": "github"
+      },
+      "original": {
+        "owner": "jdecked",
+        "ref": "v17.0.3",
+        "repo": "twemoji",
         "type": "github"
       }
     }

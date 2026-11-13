@@ -31,8 +31,15 @@ wasm-client profile="release":
         wasm-bindgen --target web --out-dir web/app/src/sdk \
             "${CARGO_TARGET_DIR:-target}/wasm32-unknown-unknown/$directory/nuschl_client_wasm.wasm"'
 
+# Twemoji images and the emoji picker's data (nix/emoji.nix, from the pinned
+# flake inputs) for builds outside Nix: the desktop's build script falls back
+# to ./emoji-assets, and the web client serves web/app/public/emoji.
+emoji-assets:
+    nix build .#emojiAssets -o emoji-assets
+    ln -sfn ../../../emoji-assets web/app/public/emoji
+
 # The Svelte client (web/app) with the SDK, into web/app/dist.
-web: wasm-client
+web: wasm-client emoji-assets
     cd web/app && npm ci --no-audit --no-fund && npm test && npm run build
 
 # The music bot's Svelte UI, served by nuschl-musicbot from this directory.

@@ -36,6 +36,7 @@ the `stable` channel independently of `flake.lock`. Commits are made with `jj`.
 | `just rtc` | the WebRTC trial with the worker's Opus (below) |
 | `just readme-screenshot` | the picture at the top of the README (`tests/readme_screenshot.py`) |
 | `just crate2nix` | regenerate the per-crate Nix build after dependency changes |
+| `just emoji-assets` | link the emoji images and picker data for builds outside Nix ([emoji.md](emoji.md)) |
 | `just fmt` | format Rust, Nix and TOML |
 
 Other VM checks run with `nix build --cores 2 .#checks.x86_64-linux.<name>`:
@@ -107,6 +108,15 @@ one. This removes workspace outputs while retaining third-party dependencies;
 do not clean another agent's build or the shared artifact source. Confirm from the
 build log that the intended workspace packages were checked or compiled. Record
 the source revision, seed artifact, command and result with the evidence.
+
+## Emoji assets
+
+The desktop compiles in, and the web client serves, Twemoji images and the picker's
+data built from two pinned flake inputs (`nix build .#emojiAssets`,
+[emoji.md](emoji.md)). Nix builds and the development shell set
+`NUSCHL_EMOJI_ASSETS`; without it, the desktop's build script reads `emoji-assets/`,
+which `just emoji-assets` links (with `web/app/public/emoji` for `npm run dev` and
+`npm test`). Both are ignored by version control.
 
 ## The icon
 

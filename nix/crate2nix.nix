@@ -8,6 +8,8 @@
 }:
 let
   inherit (pkgs) lib;
+  # Read by the desktop's build script (apps/desktop/build.rs).
+  emojiAssets = import ./emoji.nix { inherit pkgs; };
   pkgConfig = [ pkgs.pkg-config ];
   # Libraries the final binaries link against (and whose -sys crates probe).
   linuxLibraries = [
@@ -52,7 +54,7 @@ let
           '"${../tests/fixtures/rtc-keyframe.vp8}"'
       '';
     };
-    nuschl = withLibraries;
+    nuschl = attrs: withLibraries attrs // { NUSCHL_EMOJI_ASSETS = emojiAssets; };
     nuschl-media-worker = withLibraries;
     nuschl-cli = withLibraries;
   };
