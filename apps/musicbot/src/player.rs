@@ -1,16 +1,20 @@
 // SPDX-License-Identifier: EUPL-1.2
-//! A queue and its playback. Each player encodes once and sends the same Opus
-//! packets to every channel attached to it; with nobody attached it waits.
+//! A queue and its playback. Each player encodes once for attached Mumble
+//! channels and shares unducked PCM with browser listeners; with nobody it waits.
 use crate::{
     decode::{self, CHANNELS, Decoding, FRAME},
     subsonic::{Library, LibraryIdentity, Track},
 };
+use axum::body::Bytes;
 use nuschl_ipc::musicbot::{Client, Role};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, VecDeque},
     path::PathBuf,
-    sync::{Arc, Mutex, MutexGuard},
+    sync::{
+        Arc, Mutex, MutexGuard,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tokio::{
@@ -27,6 +31,8 @@ const MIN_BITRATE: u32 = 6_000;
 const UNDERRUN_END: u32 = 10;
 /// After this many frames without audio, viewers see the song buffering.
 const UNDERRUN_SHOWN: u32 = 5;
+/// A short, bounded PCM window; lagging browsers discard it and rejoin live.
+const BROWSER_FRAMES: usize = 16;
 
 /// Zero means this destination cannot support even the minimum Opus rate.
 pub(crate) fn bitrate_for_bandwidth(configured: u32, bandwidth: u32) -> u32 {
@@ -100,7 +106,7 @@ pub struct HistoryItem {
     pub source: Option<LibraryIdentity>,
     pub started_at_ms: Option<i64>,
     pub ended_at_ms: i64,
-    /// Duration of audio packets successfully broadcast, not the track position.
+    /// Duration of frames successfully sent to either output, not track position.
     pub played_ms: u64,
     pub position_ms: u64,
     pub outcome: HistoryOutcome,
@@ -283,6 +289,8 @@ pub struct Player {
     state: Mutex<State>,
     wake: Notify,
     packets: broadcast::Sender<Arc<Packet>>,
+    browser: broadcast::Sender<BrowserRecord>,
+    browser_generation: AtomicU64,
     /// Bandwidth limits of the attached connections, by channel.
     limits: Mutex<BTreeMap<usize, u32>>,
     /// When somebody in an attached channel last spoke.
@@ -302,6 +310,59 @@ impl Drop for Subscription {
     fn drop(&mut self) {
         lock(&self.owner.limits).remove(&self.channel);
         // One listener fewer: the position may stop advancing.
+        self.owner.changes.notify();
+        self.owner.wake.notify_one();
+    }
+}
+
+#[derive(Clone, Debug)]
+struct BrowserRecord {
+    generation: u64,
+    bytes: Bytes,
+}
+
+/// A browser's live PCM subscription. Dropping it releases its listener.
+pub(crate) struct BrowserSubscription {
+    records: Option<broadcast::Receiver<BrowserRecord>>,
+    owner: Arc<Player>,
+    generation: u64,
+    reset: bool,
+}
+
+impl BrowserSubscription {
+    pub(crate) async fn recv(&mut self) -> Option<Bytes> {
+        loop {
+            let generation = self.owner.browser_generation.load(Ordering::Acquire);
+            if self.generation != generation {
+                self.records = Some(self.owner.browser.subscribe());
+                self.generation = generation;
+                self.reset = true;
+            }
+            if std::mem::take(&mut self.reset) {
+                return Some(Bytes::from_static(&[0]));
+            }
+            match self.records.as_mut().unwrap().recv().await {
+                Ok(record) => {
+                    if record.generation == self.generation
+                        && record.generation
+                            == self.owner.browser_generation.load(Ordering::Acquire)
+                    {
+                        return Some(record.bytes);
+                    }
+                }
+                Err(broadcast::error::RecvError::Lagged(_)) => {
+                    self.records = Some(self.owner.browser.subscribe());
+                    self.reset = true;
+                }
+                Err(broadcast::error::RecvError::Closed) => return None,
+            }
+        }
+    }
+}
+
+impl Drop for BrowserSubscription {
+    fn drop(&mut self) {
+        drop(self.records.take());
         self.owner.changes.notify();
         self.owner.wake.notify_one();
     }
@@ -338,6 +399,8 @@ impl Player {
             wake: Notify::new(),
             // About a second; a slower connection skips ahead.
             packets: broadcast::channel(50).0,
+            browser: broadcast::channel(BROWSER_FRAMES).0,
+            browser_generation: AtomicU64::new(0),
             limits: Mutex::new(BTreeMap::new()),
             speech: Mutex::new(None),
             changes,
@@ -395,6 +458,32 @@ impl Player {
         subscription
     }
 
+    pub(crate) fn subscribe_browser(self: &Arc<Self>) -> BrowserSubscription {
+        // Register at a state boundary, not halfway through sending a frame.
+        let _state = self.state();
+        let subscription = BrowserSubscription {
+            records: Some(self.browser.subscribe()),
+            owner: self.clone(),
+            generation: self.browser_generation.load(Ordering::Acquire),
+            reset: true,
+        };
+        self.wake.notify_one();
+        self.changes.notify();
+        subscription
+    }
+
+    /// Called with the state lock held, so a reset cannot precede stale PCM.
+    fn reset_browser(&self) {
+        let generation = self
+            .browser_generation
+            .fetch_add(1, Ordering::AcqRel)
+            .wrapping_add(1);
+        let _ = self.browser.send(BrowserRecord {
+            generation,
+            bytes: Bytes::from_static(&[0]),
+        });
+    }
+
     pub(crate) fn update_bandwidth(&self, channel: usize, bandwidth: u32) {
         let changed = {
             let mut limits = lock(&self.limits);
@@ -416,7 +505,7 @@ impl Player {
     }
 
     pub fn listeners(&self) -> usize {
-        self.packets.receiver_count()
+        self.packets.receiver_count() + self.browser.receiver_count()
     }
 
     /// Adds songs in order at `index` (clamped; `None`: at the end); returns
@@ -473,6 +562,7 @@ impl Player {
                     (position.as_millis() / TICK.as_millis()).min(u128::from(length)) as u64;
                 playing.generation += 1;
                 playing.buffering = true;
+                self.reset_browser();
             }
         });
     }
@@ -480,6 +570,7 @@ impl Player {
     /// Restores a saved queue before it plays, retaining entry IDs and position.
     pub fn restore(&self, restored: Restored) {
         self.change(|state| {
+            self.reset_browser();
             state.current = restored.current.map(|current| {
                 let frames = current.position.as_millis() / TICK.as_millis();
                 let length = current
@@ -527,8 +618,10 @@ impl Player {
     /// Startup restoration cannot resume a current track from a removed library.
     pub(crate) fn fail_restored(&self, error: String) {
         self.change(|state| {
-            if let Some(playing) = &state.current {
-                state.fail(playing.entry.id, playing.generation, error, wall_clock_ms);
+            if let Some(playing) = &state.current
+                && state.fail(playing.entry.id, playing.generation, error, wall_clock_ms)
+            {
+                self.reset_browser();
             }
         });
     }
@@ -539,11 +632,21 @@ impl Player {
 
     /// Ends the current song; the next one starts unless paused.
     pub fn skip(&self) {
-        self.change(|state| state.finish_current(HistoryOutcome::Skipped, None, wall_clock_ms));
+        self.change(|state| {
+            if state.current.is_some() {
+                state.finish_current(HistoryOutcome::Skipped, None, wall_clock_ms);
+                self.reset_browser();
+            }
+        });
     }
 
     pub fn set_paused(&self, paused: bool) {
-        self.change(|state| state.paused = paused);
+        self.change(|state| {
+            if state.paused != paused {
+                state.paused = paused;
+                self.reset_browser();
+            }
+        });
     }
 
     pub fn set_volume(&self, volume: u8) {
@@ -559,26 +662,52 @@ impl Player {
             .fold(configured, u32::min)
     }
 
-    /// The caller holds the current-state lock through sending and recording.
-    fn broadcast_audio(
+    /// Send original PCM before the isolated encoder's ducked native packet.
+    /// The caller holds the state lock through both outputs and accounting.
+    fn broadcast_frame(
         &self,
         playing: &mut Playing,
-        opus: &[u8],
+        frame: &[f32],
+        opus: Option<Vec<u8>>,
         now: impl FnOnce() -> i64,
     ) -> bool {
-        playing.frames = playing.frames.saturating_add(1);
-        if self
-            .packets
-            .send(Arc::new(Packet {
-                opus: opus.to_vec(),
-                end: false,
-            }))
-            .is_err()
-        {
-            return false;
+        let browser_sent = if self.browser.receiver_count() > 0 {
+            let mut bytes = Vec::with_capacity(1 + FRAME * CHANNELS * 4);
+            bytes.push(1);
+            for sample in frame.iter() {
+                bytes.extend_from_slice(&sample.to_le_bytes());
+            }
+            self.browser
+                .send(BrowserRecord {
+                    generation: self.browser_generation.load(Ordering::Acquire),
+                    bytes: Bytes::from(bytes),
+                })
+                .is_ok()
+        } else {
+            false
+        };
+        let native_sent = opus.is_some_and(|opus| {
+            self.packets
+                .send(Arc::new(Packet { opus, end: false }))
+                .is_ok()
+        });
+        if browser_sent || native_sent {
+            playing.frames = playing.frames.saturating_add(1);
+            playing.record_audio(now);
         }
-        playing.record_audio(now);
-        true
+        native_sent
+    }
+
+    fn native_bitrate(&self, configured: u32) -> u32 {
+        if self.packets.receiver_count() > 0 {
+            self.bitrate(configured)
+        } else {
+            0
+        }
+    }
+
+    fn has_output(&self, configured: u32) -> bool {
+        self.browser.receiver_count() > 0 || self.native_bitrate(configured) > 0
     }
 
     /// Plays the queue for as long as the program runs.
@@ -630,6 +759,7 @@ impl Player {
             let replace = {
                 let mut state = self.state();
                 if state.start_next(|track| libraries.get(track.library).map(Library::identity)) {
+                    self.reset_browser();
                     self.changes.notify();
                 }
                 match &state.current {
@@ -681,9 +811,10 @@ impl Player {
                 let state = self.state();
                 (state.paused, state.volume, state.ducking)
             };
-            let Some(running) = decoding.as_mut().filter(|_| {
-                !paused && self.listeners() > 0 && self.bitrate(configured_bitrate) > 0
-            }) else {
+            let Some(running) = decoding
+                .as_mut()
+                .filter(|_| !paused && self.has_output(configured_bitrate))
+            else {
                 if talking {
                     self.end(&mut encoder, last_bitrate).await;
                     talking = false;
@@ -709,12 +840,10 @@ impl Player {
                 was_ducked = ducked;
                 self.changes.notify();
             }
-            let bitrate = self.bitrate(configured_bitrate);
             let receive = {
                 let state = self.state();
                 if state.paused
-                    || self.listeners() == 0
-                    || bitrate == 0
+                    || !self.has_output(configured_bitrate)
                     || !state.matches(running.entry, running.generation)
                 {
                     continue;
@@ -725,47 +854,63 @@ impl Player {
             };
             match receive {
                 Ok(Ok(frame)) => {
-                    let target = target_gain(volume, &ducking, ducked);
-                    let next = next_gain(gain, target);
-                    let mut samples = frame.clone();
-                    apply_gain(&mut samples, gain, next);
-                    let encoded = encoder.encode(samples, bitrate).await;
+                    let bitrate = self.native_bitrate(configured_bitrate);
+                    if talking && bitrate == 0 {
+                        self.end(&mut encoder, last_bitrate).await;
+                        talking = false;
+                    }
+                    // Browser-only frames neither wait for nor reset the encoder.
+                    let encoded = if bitrate > 0 {
+                        let target = target_gain(volume, &ducking, ducked);
+                        let next = next_gain(gain, target);
+                        let mut samples = frame.clone();
+                        apply_gain(&mut samples, gain, next);
+                        Some((encoder.encode(samples, bitrate).await, next))
+                    } else {
+                        None
+                    };
                     // Revalidate after IPC, before any broadcast/accounting.
                     // Seek, skip, pause and destination changes remain immediate
                     // while the unique encoder owns its one outstanding request.
                     let mut state = self.state();
                     if !state.matches(running.entry, running.generation) {
-                        reset_encoder = true;
+                        reset_encoder |= encoded.is_some();
                         continue;
                     }
                     if state.paused
-                        || self.listeners() == 0
-                        || self.bitrate(configured_bitrate) < bitrate
+                        || !self.has_output(configured_bitrate)
+                        || (encoded.is_some() && self.native_bitrate(configured_bitrate) < bitrate)
                     {
                         held = Some(frame);
-                        reset_encoder = true;
+                        reset_encoder |= encoded.is_some();
                         continue;
                     }
-                    match encoded {
-                        Ok(opus) => {
+                    let opus = match encoded {
+                        Some((Ok(opus), next)) => {
                             last_bitrate = bitrate;
                             gain = next;
-                            let playing = state.current.as_mut().unwrap();
-                            talking |= self.broadcast_audio(playing, &opus, wall_clock_ms);
-                            if std::mem::take(&mut playing.buffering) {
-                                self.changes.notify();
+                            Some(opus)
+                        }
+                        Some((Err(error), _)) => {
+                            if state.fail(running.entry, running.generation, error, wall_clock_ms) {
+                                self.reset_browser();
                             }
-                        }
-                        Err(error) => {
-                            state.fail(running.entry, running.generation, error, wall_clock_ms);
                             self.changes.notify();
+                            continue;
                         }
+                        None => None,
+                    };
+                    let playing = state.current.as_mut().unwrap();
+                    talking |= self.broadcast_frame(playing, &frame, opus, wall_clock_ms);
+                    if std::mem::take(&mut playing.buffering) {
+                        self.changes.notify();
                     }
                     underrun = 0;
                 }
                 Ok(Err(error)) => {
                     let mut state = self.state();
                     if state.fail(running.entry, running.generation, error, wall_clock_ms) {
+                        self.reset_browser();
                         self.changes.notify();
                     }
                 }
@@ -781,6 +926,7 @@ impl Player {
                         && let Some(playing) = state.current.as_mut()
                         && !std::mem::replace(&mut playing.buffering, true)
                     {
+                        self.reset_browser();
                         self.changes.notify();
                     }
                 }
@@ -822,6 +968,7 @@ impl Player {
             Err(error) => state.fail(entry, generation, error, wall_clock_ms),
         };
         if changed {
+            self.reset_browser();
             self.changes.notify();
         }
     }
@@ -1026,7 +1173,174 @@ mod tests {
         if state.paused || !state.matches(entry, generation) {
             return false;
         }
-        player.broadcast_audio(state.current.as_mut().unwrap(), &[1, 2, 3], now)
+        player.broadcast_frame(
+            state.current.as_mut().unwrap(),
+            &[0.0; FRAME * CHANNELS],
+            Some(vec![1, 2, 3]),
+            now,
+        )
+    }
+
+    fn browser_audio(player: &Player, entry: u64, generation: u64, sample: f32) -> bool {
+        let mut state = player.state();
+        if state.paused || !player.has_output(96_000) || !state.matches(entry, generation) {
+            return false;
+        }
+        let playing = state.current.as_mut().unwrap();
+        let before = playing.frames;
+        player.broadcast_frame(playing, &[sample; FRAME * CHANNELS], None, || 1000);
+        playing.frames > before
+    }
+
+    fn pcm(record: &Bytes) -> Vec<f32> {
+        assert_eq!(record.len(), 1 + FRAME * CHANNELS * 4);
+        assert_eq!(record[0], 1);
+        record[1..]
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|bytes| f32::from_le_bytes(*bytes))
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn browser_listeners_bypass_native_bandwidth_and_release_playback() {
+        let player = Arc::new(player());
+        let native = player.subscribe(0, 0, 0);
+        assert!(!player.has_output(96_000));
+        let mut browser = player.subscribe_browser();
+        assert_eq!(player.listeners(), 2);
+        assert!(player.has_output(96_000));
+        assert_eq!(browser.recv().await.unwrap().as_ref(), &[0]);
+        player.enqueue(vec![track("a")], "ada", None);
+        let (entry, generation) = start_next(&player);
+        assert!(browser_audio(&player, entry, generation, 0.5));
+        assert!(
+            pcm(&browser.recv().await.unwrap())
+                .iter()
+                .all(|sample| *sample == 0.5)
+        );
+        assert_eq!(player.state().current.as_ref().unwrap().played_ms, 20);
+        drop(native);
+        assert_eq!(player.listeners(), 1);
+        assert!(
+            player.has_output(96_000),
+            "a browser alone keeps playback active"
+        );
+        assert!(browser_audio(&player, entry, generation, 0.25));
+        drop(browser);
+        assert_eq!(player.listeners(), 0);
+        assert!(!player.has_output(96_000));
+        assert!(!browser_audio(&player, entry, generation, 1.0));
+        let state = player.state();
+        let playing = state.current.as_ref().unwrap();
+        assert_eq!((playing.frames, playing.played_ms), (2, 40));
+    }
+
+    #[tokio::test]
+    async fn browsers_share_original_pcm_and_dual_outputs_count_once() {
+        let player = Arc::new(player());
+        let mut native = player.subscribe(0, 0, u32::MAX);
+        let mut first = player.subscribe_browser();
+        let mut second = player.subscribe_browser();
+        assert_eq!(first.recv().await.unwrap().as_ref(), &[0]);
+        assert_eq!(second.recv().await.unwrap().as_ref(), &[0]);
+        player.enqueue(vec![track("a")], "ada", None);
+        start_next(&player);
+        let original: Vec<f32> = (0..FRAME * CHANNELS)
+            .map(|sample| {
+                ((sample / CHANNELS) as f32 * 440.0 * std::f32::consts::TAU / 48_000.0).sin()
+                    * 0.8
+            })
+            .collect();
+        {
+            let mut state = player.state();
+            assert!(player.broadcast_frame(
+                state.current.as_mut().unwrap(),
+                &original,
+                Some(vec![7, 8, 9]),
+                || 1000
+            ));
+        }
+        let a = first.recv().await.unwrap();
+        let b = second.recv().await.unwrap();
+        assert_eq!(
+            a.as_ptr(),
+            b.as_ptr(),
+            "all browsers share one serialized allocation"
+        );
+        assert_eq!(pcm(&a), original);
+        assert_eq!(native.packets.try_recv().unwrap().opus, [7, 8, 9]);
+        {
+            let mut state = player.state();
+            let playing = state.current.as_mut().unwrap();
+            assert_eq!((playing.frames, playing.played_ms), (1, 20));
+            assert!(
+                !player.broadcast_frame(playing, &original, None, || panic!("already started"))
+            );
+            assert_eq!(
+                (playing.frames, playing.played_ms),
+                (2, 40),
+                "a frame without native audio still counts browser delivery"
+            );
+        }
+        player.skip();
+        assert_eq!(player.state().history[0].played_ms, 40);
+    }
+
+    #[tokio::test]
+    async fn browser_seek_pause_and_skip_reset_without_stale_audio() {
+        let player = Arc::new(player());
+        let mut browser = player.subscribe_browser();
+        assert_eq!(browser.recv().await.unwrap().as_ref(), &[0]);
+        player.enqueue(vec![track("a"), track("b")], "ada", None);
+        let (entry, generation) = start_next(&player);
+        assert!(browser_audio(&player, entry, generation, 0.1));
+        player.seek(Duration::from_secs(2));
+        assert!(!browser_audio(&player, entry, generation, 0.2));
+        assert_eq!(browser.recv().await.unwrap().as_ref(), &[0]);
+        assert!(browser_audio(&player, entry, generation + 1, 0.3));
+        assert!(
+            pcm(&browser.recv().await.unwrap())
+                .iter()
+                .all(|sample| *sample == 0.3)
+        );
+        assert!(browser_audio(&player, entry, generation + 1, 0.4));
+        player.set_paused(true);
+        assert_eq!(browser.recv().await.unwrap().as_ref(), &[0]);
+        assert!(!browser_audio(&player, entry, generation + 1, 0.5));
+        player.set_paused(false);
+        assert_eq!(browser.recv().await.unwrap().as_ref(), &[0]);
+        assert!(browser_audio(&player, entry, generation + 1, 0.6));
+        player.skip();
+        assert_eq!(browser.recv().await.unwrap().as_ref(), &[0]);
+        assert!(!browser_audio(&player, entry, generation + 1, 0.7));
+        let (next, next_generation) = start_next(&player);
+        assert!(browser_audio(&player, next, next_generation, 0.8));
+        assert!(
+            pcm(&browser.recv().await.unwrap())
+                .iter()
+                .all(|sample| *sample == 0.8)
+        );
+    }
+
+    #[tokio::test]
+    async fn slow_browser_resets_and_discards_backlog_at_the_live_edge() {
+        let player = Arc::new(player());
+        let mut browser = player.subscribe_browser();
+        assert_eq!(browser.recv().await.unwrap().as_ref(), &[0]);
+        player.enqueue(vec![track("a")], "ada", None);
+        let (entry, generation) = start_next(&player);
+        for _ in 0..BROWSER_FRAMES * 4 {
+            assert!(browser_audio(&player, entry, generation, 0.1));
+        }
+        assert_eq!(browser.recv().await.unwrap().as_ref(), &[0]);
+        assert!(browser_audio(&player, entry, generation, 0.9));
+        assert!(
+            pcm(&browser.recv().await.unwrap())
+                .iter()
+                .all(|sample| *sample == 0.9)
+        );
     }
 
     #[test]
@@ -1287,7 +1601,12 @@ mod tests {
             skipping.skip();
         });
         started.recv().unwrap();
-        assert!(player.broadcast_audio(state.current.as_mut().unwrap(), &[1], || 100));
+        assert!(player.broadcast_frame(
+            state.current.as_mut().unwrap(),
+            &[0.0; FRAME * CHANNELS],
+            Some(vec![1]),
+            || 100,
+        ));
         assert!(
             state.history.is_empty(),
             "skip cannot finish while sending holds the state lock"

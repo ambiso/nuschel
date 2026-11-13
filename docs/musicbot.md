@@ -1,8 +1,8 @@
 # Music bot
 
-`nuschl-musicbot` plays music from Subsonic servers in Mumble channels. People
-control what plays on a web page; they get their link to it by writing `!web` to the
-bot in Mumble. It works with any Mumble server, stock Murmur as well as `nuschld`.
+`nuschl-musicbot` plays music from Subsonic servers in Mumble channels and web
+browsers. People control what plays on a web page; they get their link by writing
+`!web` to the bot in Mumble. It works with stock Murmur and `nuschld`.
 
 ## What it does
 
@@ -31,6 +31,10 @@ bot in Mumble. It works with any Mumble server, stock Murmur as well as `nuschld
   People may also subscribe to listen to the bot's channel while staying in
   another channel. These subscriptions count as listeners and keep the queue
   playing; others in their current channel do not receive the music.
+- **Browser listening.** Press **Listen** in the player bar to hear the selected
+  queue in the browser. Its volume is local and independent of Mumble volume and
+  speech ducking. Browser listeners keep the queue playing even with nobody in
+  its Mumble channel. **Stop** releases the listening connection.
 - **Queues.** Drag songs, albums or playlists from the library into the queue,
   then drag entries to reorder them. The move handles also accept Alt+Up/Down.
   Remove entries, clear upcoming tracks, skip, pause and set the volume. The player
@@ -38,8 +42,9 @@ bot in Mumble. It works with any Mumble server, stock Murmur as well as `nuschld
   five-second steps and Home/End. Space toggles playback outside controls.
   Playback status has a reserved row below the progress bar, so speech activity,
   pauses and buffering keep the surrounding controls in place.
-  A queue waits when no channel with listeners is receiving it. Deafened people
-  do not count as listeners. Changes appear for every viewer through a live stream.
+  A queue waits when it has neither Mumble recipients nor browser listeners.
+  Deafened Mumble users do not count as recipients. Changes appear for every
+  viewer through a live stream.
 - **History.** The History view keeps the latest 1,000 finished plays or failed
   attempts per queue, newest first. It shows track details, who queued the track,
   local start/end times, transmitted duration, and whether it completed, was
@@ -50,7 +55,7 @@ bot in Mumble. It works with any Mumble server, stock Murmur as well as `nuschld
 - **Ratings.** Click one of the five stars on the playing song, a library track
   or a History entry to save its rating. Click the star for the current rating
   again to clear it. Listeners share the configured library account.
-- **Ducking.** While somebody in a channel speaks, the queue playing there gets
+- **Ducking.** While somebody in a channel speaks, its Mumble music output gets
   quieter (by default to 30 % of its volume) and comes back 0.8 s after the last
   speech. It fades down in about 60 ms and up in about half a second, so nothing
   clicks. It reacts to speech, not to a microphone that is merely open: the bot
@@ -368,6 +373,36 @@ python3 tests/with_local_murmur.py "$(nix build --inputs-from . nixpkgs#murmur -
 `nix build .#checks.x86_64-linux.vm-musicbot` runs the bot under its NixOS module
 against Murmur in a VM, then the same script.
 
+## Browser listening
+
+**Listen** starts audio for the selected queue after a browser gesture. The
+**Browser volume** slider changes only local playback; **Mumble volume** controls
+the bot's channel output. Speech ducking applies to Mumble output. Browser audio
+uses the original decoded stereo samples, so every format the bot decodes can be
+heard here. Selecting another queue switches the listening stream while keeping
+the browser's audio context and volume.
+
+Pause, seek and skip follow the shared queue and clear buffered browser audio.
+Browser subscriptions count as listeners. When the last receiving Mumble channel
+and browser listener leave, playback waits. Listening connections and browser
+audio state are temporary; the saved queue retains its ordinary playback state.
+
+Use HTTPS, or localhost during development. Listening requires streaming fetch,
+AudioWorklet and a 48 kHz AudioContext. Browser suspension, page closure, revoked
+links and connection/library changes stop listening and release its subscription.
+Press **Listen** again to restart after an interruption.
+
+The live stream carries 48 kHz stereo float32 PCM, about **3.1 Mbit/s per listener**.
+The server admits at most 16 browser streams, with bounded shared frame storage
+and a one-record HTTP handoff. The worklet starts after 60 ms of audio and retains
+at most 200 ms in its ring; slow readers discard old frames and resume at the live
+edge. Network and browser scheduling add their own latency.
+
+Verified in real Chromium with stock Murmur: browser-only playback with Mumble
+volume zero, independent local mute/volume, pause/seek/skip, queue switching,
+listener release and suspension cleanup. Reference-Opus Mumble output fell to
+the configured speech-ducking level while measured browser output stayed steady.
+
 ## Song ratings
 
 Click a star to save one to five stars immediately. Click the star for the current
@@ -432,10 +467,11 @@ Back up `queues.json` together with the bot's state directory. Keep the channel
 names and library names/URLs stable: queues are matched by channel name, and
 tracks by library name plus URL, rather than configuration order.
 
-History starts with the first successfully transmitted audio packet. Its
-transmitted duration counts audio sent by the bot; it excludes paused/buffering
-time, listenerless waits and skipped-over audio after a seek. Reaching EOF marks a
-play completed even if the user sought past part of it. Failed attempts that sent
+History starts with the first audio frame successfully broadcast to Mumble or a
+browser. A shared queue counts each frame once across both outputs. Transmitted
+duration excludes paused/buffering time, listenerless waits and skipped-over audio
+after a seek. Reaching EOF marks a play completed even if the user sought past part
+of it. Failed attempts that sent
 no audio show **Never started**. Removing an upcoming track or skipping before
 any audio does not enter history. Pause, seek and restart preserve one ongoing
 play; its history entry appears when it finishes or an error is processed.
@@ -455,8 +491,8 @@ as failed before decoding resumes.
 
 Server bandwidth changes apply live. A channel whose budget cannot support the
 6 kbit/s codec minimum plus transport overhead stops receiving music; other
-attached channels may continue. With no eligible channel, position and history
-duration stop advancing until the budget recovers.
+attached channels and browser listeners may continue. Position and history duration
+stop advancing only when no eligible Mumble or browser output remains.
 
 Seeking restarts decoding and discards audio before the requested position, which
 works with all supported formats and server transcodes. On a slow connection or a
@@ -471,6 +507,18 @@ latest state when they can read again. Revoked links lose access to the stream.
 At most 32 streams may remain open across all tokens; excess viewers receive 503.
 The permit belongs to the response stream, not merely its request handler.
 Proxies must pass SSE through without buffering; the bot sends `X-Accel-Buffering: no`.
+
+`GET listen?player=N` opens the authenticated live browser audio stream. Invalid
+links return 404, unknown queues return 400, and exhausted browser-stream admission
+returns 503. Responses use `application/octet-stream`, `Cache-Control: no-store`
+and `X-Accel-Buffering: no`. Format headers are `X-Audio-Format: f32le`,
+`X-Audio-Rate: 48000`, `X-Audio-Channels: 2` and `X-Audio-Frame-Samples: 960`.
+
+The first body record is byte 0, which clears buffered audio. Byte 1 is followed
+by exactly 7,680 bytes: 960 interleaved stereo frames of little-endian float32 PCM.
+Reset records also delimit pauses, seeks and song changes. The stream remains open
+while the queue waits; disconnecting releases its subscription. Revoked links are
+checked during playback and at least once per second while idle or backpressured.
 
 The authenticated `GET /u/<token>/licenses` route serves the installed, bounded
 licence text. Nix packages are gated by the scoped Rust/npm notice inventory;

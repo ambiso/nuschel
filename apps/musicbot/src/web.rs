@@ -6,12 +6,13 @@
 //! contract is described in docs/musicbot.md ("Web API").
 use crate::{
     Bot,
-    player::{Ducking, MAX_DUCK_HOLD},
+    player::{BrowserSubscription, Ducking, MAX_DUCK_HOLD},
     subsonic::{self, Album, AlbumList, Artist, Library, Playlist, Track},
     tokens::Owner,
 };
 use axum::{
     Json, Router,
+    body::{Body, Bytes},
     extract::{Path, Query, State},
     http::{HeaderName, HeaderValue, StatusCode, header},
     response::{
@@ -25,10 +26,12 @@ use serde::{Deserialize, Serialize};
 use std::{
     convert::Infallible,
     path::PathBuf,
+    pin::Pin,
     sync::{Arc, atomic::Ordering},
+    task::{Context, Poll},
     time::Duration,
 };
-use tokio::sync::Semaphore;
+use tokio::sync::{Semaphore, SemaphorePermit, mpsc};
 use uuid::Uuid;
 
 /// Searches longer than this are cut.
@@ -44,6 +47,9 @@ static SSE_WATCHERS: Semaphore = Semaphore::const_new(MAX_SSE_WATCHERS);
 /// Includes fetching and the actual isolated worker exit, not HTTP lifetime.
 const MAX_COVER_JOBS: usize = 2;
 static COVER_JOBS: Semaphore = Semaphore::const_new(MAX_COVER_JOBS);
+/// Live bodies have their own admission, independent of library metadata calls.
+const MAX_LISTEN_STREAMS: usize = 16;
+static LISTEN_STREAMS: Semaphore = Semaphore::const_new(MAX_LISTEN_STREAMS);
 /// Albums per page of an album list.
 const PAGE_SIZE: u32 = 48;
 /// Changes that come in a burst are sent as one state.
@@ -62,6 +68,7 @@ pub fn router(bot: Arc<Bot>) -> Router {
         .route("/u/{token}/api/state", get(state))
         .route("/u/{token}/api/history", get(history))
         .route("/u/{token}/api/events", get(events))
+        .route("/u/{token}/api/listen", get(listen))
         .route("/u/{token}/api/command", post(command))
         .route("/u/{token}/api/rating", get(rating).post(set_rating))
         .route("/u/{token}/api/albums", get(albums))
@@ -665,6 +672,121 @@ async fn history(
     }))
 }
 
+#[derive(Deserialize)]
+struct ListenQuery {
+    player: usize,
+}
+
+/// An admitted body owns its producer; disconnecting cancels all listening work.
+struct ListenBody {
+    records: mpsc::Receiver<Bytes>,
+    producer: tokio::task::JoinHandle<()>,
+}
+
+impl Stream for ListenBody {
+    type Item = Result<Bytes, Infallible>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        if self.producer.is_finished() {
+            self.records.close();
+            return Poll::Ready(None);
+        }
+        self.records.poll_recv(cx).map(|record| record.map(Ok))
+    }
+}
+
+impl Drop for ListenBody {
+    fn drop(&mut self) {
+        self.producer.abort();
+    }
+}
+
+/// Keeping the subscription and permit together prevents early capacity release
+/// when a body is dropped but cancellation has not run yet.
+struct ListenLease {
+    subscription: BrowserSubscription,
+    _permit: SemaphorePermit<'static>,
+}
+
+async fn listen(
+    State(bot): State<Arc<Bot>>,
+    Path(token): Path<String>,
+    Query(query): Query<ListenQuery>,
+) -> Result<Response, ApiError> {
+    listen_response(bot, token, query.player, &LISTEN_STREAMS)
+}
+
+fn listen_response(
+    bot: Arc<Bot>,
+    token: String,
+    index: usize,
+    admission: &'static Semaphore,
+) -> Result<Response, ApiError> {
+    let token = Uuid::parse_str(&token)
+        .ok()
+        .filter(|token| bot.tokens.is_valid(token))
+        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, INVALID_LINK.to_owned()))?;
+    let player = bot.players.get(index).ok_or_else(|| bad("no such queue"))?;
+    let permit = admission.try_acquire().map_err(|_| {
+        ApiError(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "too many browser listeners".to_owned(),
+        )
+    })?;
+    let lease = ListenLease {
+        subscription: player.subscribe_browser(),
+        _permit: permit,
+    };
+    // Only one record may leave the shared live fanout before the body polls.
+    // A separate task checks revocation even while HTTP backpressure stops polls.
+    let (send, records) = mpsc::channel(1);
+    let producer = tokio::spawn(async move {
+        let mut lease = lease;
+        let mut check = tokio::time::interval(Duration::from_secs(1));
+        check.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            if !bot.tokens.is_valid(&token) {
+                break;
+            }
+            let space = tokio::select! {
+                biased;
+                _ = check.tick() => continue,
+                result = send.reserve() => match result {
+                    Ok(space) => space,
+                    Err(_) => break,
+                },
+            };
+            let record = tokio::select! {
+                biased;
+                _ = check.tick() => continue,
+                _ = send.closed() => break,
+                record = lease.subscription.recv() => match record {
+                    Some(record) => record,
+                    None => break,
+                },
+            };
+            if !bot.tokens.is_valid(&token) {
+                break;
+            }
+            space.send(record);
+        }
+    });
+    let body = Body::from_stream(ListenBody { records, producer });
+    Ok((
+        [
+            (header::CONTENT_TYPE, "application/octet-stream"),
+            (header::CACHE_CONTROL, "no-store"),
+            (HeaderName::from_static("x-accel-buffering"), "no"),
+            (HeaderName::from_static("x-audio-format"), "f32le"),
+            (HeaderName::from_static("x-audio-rate"), "48000"),
+            (HeaderName::from_static("x-audio-channels"), "2"),
+            (HeaderName::from_static("x-audio-frame-samples"), "960"),
+        ],
+        body,
+    )
+        .into_response())
+}
+
 /// The state now and after every change, until the link is revoked.
 async fn events(
     State(bot): State<Arc<Bot>>,
@@ -1194,6 +1316,155 @@ mod tests {
             rating_revision: std::sync::atomic::AtomicU64::new(0),
         });
         (directory, bot, token)
+    }
+
+    fn listening_bot() -> (tempfile::TempDir, Arc<Bot>, String) {
+        let (directory, mut bot, token) = test_bot("http://unused.invalid", 0);
+        let unique = Arc::get_mut(&mut bot).unwrap();
+        unique.players.push(Arc::new(crate::player::Player::new(
+            "Browser queue".into(),
+            50,
+            Ducking::default(),
+            unique.changes.clone(),
+        )));
+        (directory, bot, token)
+    }
+
+    async fn released(bot: &Bot, count: usize) {
+        let mut changes = bot.changes.subscribe();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while bot.players[0].listeners() != count {
+                changes.changed().await.unwrap();
+            }
+        })
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn listening_validates_links_and_queues_before_admission_and_bounds_live_bodies() {
+        static ADMISSION: Semaphore = Semaphore::const_new(MAX_LISTEN_STREAMS);
+        let (_directory, bot, token) = listening_bot();
+        assert_eq!(
+            listen_response(bot.clone(), "invalid".into(), 0, &ADMISSION)
+                .err()
+                .unwrap()
+                .0,
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            listen_response(bot.clone(), token.clone(), 1, &ADMISSION)
+                .err()
+                .unwrap()
+                .0,
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(ADMISSION.available_permits(), MAX_LISTEN_STREAMS);
+        let mut responses = Vec::new();
+        for _ in 0..MAX_LISTEN_STREAMS {
+            responses.push(
+                listen_response(bot.clone(), token.clone(), 0, &ADMISSION)
+                    .ok()
+                    .unwrap(),
+            );
+        }
+        assert_eq!(bot.players[0].listeners(), MAX_LISTEN_STREAMS);
+        assert_eq!(ADMISSION.available_permits(), 0);
+        assert_eq!(
+            listen_response(bot.clone(), token.clone(), 0, &ADMISSION)
+                .err()
+                .unwrap()
+                .0,
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        assert_eq!(
+            listen_response(bot.clone(), "invalid".into(), 0, &ADMISSION)
+                .err()
+                .unwrap()
+                .0,
+            StatusCode::NOT_FOUND,
+            "auth precedes overload"
+        );
+        assert_eq!(
+            listen_response(bot.clone(), token.clone(), 1, &ADMISSION)
+                .err()
+                .unwrap()
+                .0,
+            StatusCode::BAD_REQUEST,
+            "queue validation precedes overload"
+        );
+        drop(responses.pop());
+        released(&bot, MAX_LISTEN_STREAMS - 1).await;
+        assert_eq!(ADMISSION.available_permits(), 1);
+        responses.push(
+            listen_response(bot.clone(), token, 0, &ADMISSION)
+                .ok()
+                .unwrap(),
+        );
+        drop(responses);
+        released(&bot, 0).await;
+        assert_eq!(ADMISSION.available_permits(), MAX_LISTEN_STREAMS);
+    }
+
+    #[tokio::test]
+    async fn listening_emits_initial_reset_and_keeps_ownership_until_body_disconnects() {
+        static ADMISSION: Semaphore = Semaphore::const_new(1);
+        let (_directory, bot, token) = listening_bot();
+        let response = listen_response(bot.clone(), token, 0, &ADMISSION)
+            .ok()
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        for (name, value) in [
+            ("content-type", "application/octet-stream"),
+            ("cache-control", "no-store"),
+            ("x-accel-buffering", "no"),
+            ("x-audio-format", "f32le"),
+            ("x-audio-rate", "48000"),
+            ("x-audio-channels", "2"),
+            ("x-audio-frame-samples", "960"),
+        ] {
+            assert_eq!(response.headers()[name], value);
+        }
+        let mut stream = response.into_body().into_data_stream();
+        assert_eq!(stream.next().await.unwrap().unwrap().as_ref(), &[0]);
+        assert_eq!(
+            ADMISSION.available_permits(),
+            0,
+            "headers do not release admission"
+        );
+        assert_eq!(bot.players[0].listeners(), 1);
+        drop(stream);
+        released(&bot, 0).await;
+        assert_eq!(ADMISSION.available_permits(), 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn revoked_idle_unpolled_listening_is_reaped_within_one_second() {
+        static ADMISSION: Semaphore = Semaphore::const_new(1);
+        let (_directory, bot, token) = listening_bot();
+        bot.players[0].set_paused(true);
+        let response = listen_response(bot.clone(), token.clone(), 0, &ADMISSION)
+            .ok()
+            .unwrap();
+        tokio::task::yield_now().await;
+        let viewer = owner(&bot, &token).ok().unwrap();
+        bot.tokens.issue(viewer, true).unwrap();
+        tokio::time::advance(Duration::from_secs(1)).await;
+        released(&bot, 0).await;
+        assert_eq!(
+            ADMISSION.available_permits(),
+            1,
+            "revocation drops the real lease even with HTTP backpressure"
+        );
+        let mut stream = response.into_body().into_data_stream();
+        assert!(
+            stream.next().await.is_none(),
+            "revoked queued records are not delivered"
+        );
+        assert_eq!(
+            listen_response(bot, token, 0, &ADMISSION).err().unwrap().0,
+            StatusCode::NOT_FOUND
+        );
     }
 
     async fn response_json(response: Response) -> serde_json::Value {

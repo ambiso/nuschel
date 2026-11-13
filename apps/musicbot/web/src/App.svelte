@@ -95,7 +95,7 @@
             <a href={buildRoute(link.route)} class:active={link.views.includes(route.view)} aria-current={link.views.includes(route.view) ? "page" : undefined} onclick={() => (menuOpen = false)}><Icon name={link.icon} />{link.name}</a>
           {/each}
         </nav>
-        <p class="sidebar-help muted">Music plays in Mumble. Changes here are live for everyone sharing the queue.</p>
+        <p class="sidebar-help muted">Music plays in Mumble, or use Listen to hear it in this browser. Changes here are live for everyone sharing the queue.</p>
         <p class="sidebar-help"><a href="licenses">Licences</a></p>
       </aside>
 

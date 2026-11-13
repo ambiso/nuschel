@@ -8,6 +8,7 @@
   import Progress from "./Progress.svelte";
   import DuckingPanel from "./DuckingPanel.svelte";
   import SongRating from "./SongRating.svelte";
+  import BrowserListen from "./BrowserListen.svelte";
 
   const index = $derived(store.selected);
   const player = $derived(store.player);
@@ -22,7 +23,7 @@
     if (player.paused) return "Paused";
     if (player.listeners === 0) return "Waiting for listeners";
     if (current.buffering) return "Buffering…";
-    if (player.ducked) return "Quieter while someone talks";
+    if (player.ducked) return "Mumble quieter while someone talks";
     return null;
   });
   let dropping = $state(false);
@@ -109,10 +110,11 @@
         </select>
       </label>
     {/if}
+    <BrowserListen player={index} />
     {#if player}
-      <label class="volume" title="Volume {volume}%">
+      <label class="volume" title="Mumble volume {volume}%; does not change browser volume">
         <Icon name="volume" />
-        <span class="visually-hidden">Volume</span>
+        <span>Mumble <span class="visually-hidden">volume</span></span>
         <input type="range" min="0" max="100" value={volume} oninput={(event) => store.setVolume(index, Number(event.currentTarget.value))} />
       </label>
       <DuckingPanel player={index} />
@@ -171,5 +173,9 @@
     .side { grid-area: side; }
     .volume input { width: 5rem; }
     .queue-select select { max-width: 8rem; }
+  }
+  @media (max-width: 480px) {
+    .player { grid-template-columns: minmax(0, 1fr); grid-template-areas: "song" "center" "side"; }
+    .side { justify-content: flex-start; }
   }
 </style>
