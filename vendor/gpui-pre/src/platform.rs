@@ -830,6 +830,10 @@ pub enum WindowDecorations {
     Server,
     /// Client side decorations
     Client,
+    /// No preference: the platform decides who decorates (Nuschl patch). On
+    /// Wayland the compositor chooses (xdg-decoration `unset_mode`), and the
+    /// window decorates itself until it has; elsewhere this acts as `Server`.
+    Compositor,
 }
 
 /// A type to describe how this window is currently configured

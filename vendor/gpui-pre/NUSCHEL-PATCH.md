@@ -49,6 +49,15 @@ futures-concurrency) and Zed's assets. They run in a throwaway build that
 gates every other test module out of its own copy of the source; the source
 here keeps all of upstream's tests.
 
-Drop this copy if upstream gains an equivalent window scale and a way for
-custom elements to handle accessibility actions, and keeps the requested
-weight and style through fallback.
+`WindowDecorations::Compositor` (`src/platform.rs`) asks for no decoration
+mode, so the compositor picks one. xdg-decoration has three requests,
+`set_mode(client_side)`, `set_mode(server_side)` and `unset_mode`, and upstream
+could send only the first two. A compositor honours an explicit client-side
+request even where its user asked apps to omit their decorations (niri's
+`prefer-no-csd`), so "client" overrides that choice, while "server" overrides
+compositors that prefer client-side ones. `gpui-pre-linux` implements it
+(see its NUSCHL-PATCH.md); every other backend treats it as `Server`.
+
+Drop this copy if upstream gains an equivalent window scale, a way for
+custom elements to handle accessibility actions and a no-preference
+decoration request, and keeps the requested weight and style through fallback.
