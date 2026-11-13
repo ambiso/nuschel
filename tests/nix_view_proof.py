@@ -42,8 +42,12 @@ the browser intercepts the page's clipboard API. Limits: GNOME and GPUI use
 the host render node (/dev/dri) under the existing GPUI rendering exception;
 this is not a device-confinement or OS-sandbox claim, nor proof on physical
 Windows/macOS/mobile. Desktop colours are measured in pixels with tolerances
-(GPUI exposes no AT-SPI text attributes); the TUI has no in-application copy,
-so its terminal-selection evidence is the rendered cells and the --plain lines.
+(GPUI exposes no AT-SPI text attributes), only for token colours with
+MIN_TOKEN_CHARS characters on a line: rarer ones (here the #8fa1b3 braces of
+the function's formals) are listed as not pixel-measured on the desktop and
+are checked per character by the TUI and browser views only. The TUI has no
+in-application copy, so its terminal-selection evidence is the rendered cells
+and the --plain lines.
 """
 
 import argparse
@@ -583,12 +587,21 @@ def desktop_pixels(ctx, magick, crops):
                                  "present": pixels >= MIN_PIXELS})
     totals = {"nix": [sum(row[i] for row in nix) for i in range(len(palette))],
               "control": [sum(row[i] for row in control) for i in range(len(palette))]}
-    tokens = [{"colour": list(palette[i]), "nix_pixels": totals["nix"][i], "control_pixels": totals["control"][i]}
-              for i in range(1, len(palette))]
+    # Pixel-measured: colours with an expectation above (MIN_TOKEN_CHARS on one line), chosen
+    # from the reference alone, never from either crop. Rarer colours are too few pixels to
+    # tell from the plain text's anti-aliasing: the control's edge pixels come within TOLERANCE
+    # of colours on or near the background-to-plain blend (185 for #8fa1b3 in run nix185-32f).
+    measured = {tuple(e["colour"]) for e in expectations}
+    tokens = [{"colour": list(palette[i]), "nix_pixels": totals["nix"][i], "control_pixels": totals["control"][i],
+               "pixel_measured": palette[i] in measured} for i in range(1, len(palette))]
+    unmeasured = [{"colour": list(rgb), "reason": f"fewer than {MIN_TOKEN_CHARS} characters on every line",
+                   "cells": [{"line": n, "column": x, "char": c} for n, line in enumerate(lines)
+                             for x, (c, colour) in enumerate(line) if colour == rgb and not c.isspace()]}
+                  for rgb in palette[1:] if rgb not in measured]
     report = {"tolerance": TOLERANCE, "min_pixels": MIN_PIXELS, "min_token_chars": MIN_TOKEN_CHARS,
               "line_height": line_height, "lines": len(lines), "plain": list(plain),
               "plain_pixels": {"nix": totals["nix"][0], "control": totals["control"][0]},
-              "tokens": tokens, "expectations": expectations,
+              "tokens": tokens, "expectations": expectations, "not_pixel_measured": unmeasured,
               "ratio": found / len(expectations) if expectations else 0.0}
     write_json(ctx.out / "desktop-pixels.json", report)
     checks = ctx.checks
@@ -596,12 +609,17 @@ def desktop_pixels(ctx, magick, crops):
                10 <= line_height <= 60, line_height=line_height, crops={k: v[1] for k, v in crops.items()})
     checks.add("highlight", "desktop: the token colours of each code line are drawn on that line (>= 90%)",
                len(expectations) >= 8 and report["ratio"] >= 0.9, found=found, expected=len(expectations))
-    drawn = [t for t in tokens if t["nix_pixels"] >= 3 * MIN_PIXELS]
-    checks.add("highlight", "desktop: at least four distinct token colours are drawn in the Nix block",
+    drawn = [t for t in tokens if t["pixel_measured"] and t["nix_pixels"] >= 3 * MIN_PIXELS]
+    checks.add("highlight", "desktop: at least four distinct pixel-measured token colours are drawn in the Nix block",
                len(drawn) >= 4, drawn=[t["colour"] for t in drawn])
-    leaked = [t for t in tokens if t["control_pixels"] > max(MIN_PIXELS, 0.1 * t["nix_pixels"])]
-    checks.add("highlight", "desktop: the unknown-language control block shows none of them (plain fallback)",
-               not leaked and totals["control"][0] >= 50, leaked=leaked, control_plain=totals["control"][0])
+    leaked = [t for t in tokens if t["pixel_measured"] and t["control_pixels"] > max(MIN_PIXELS, 0.1 * t["nix_pixels"])]
+    # Plain glyph cores make the plain colour the control's most frequent palette colour.
+    dominant = all(totals["control"][0] > t["control_pixels"] for t in tokens)
+    checks.add("highlight", "desktop: the unknown-language control block shows none of the pixel-measured token "
+               "colours, and the plain colour dominates it (plain fallback)",
+               len(measured) >= 4 and not leaked and dominant and totals["control"][0] >= 50, leaked=leaked,
+               control_plain=totals["control"][0], compared=sorted(list(c) for c in measured),
+               not_pixel_measured=[u["colour"] for u in unmeasured])
 
 
 def scenario_desktop(ctx):
