@@ -5,6 +5,7 @@
 No host networking/device/profile is authorized by this script. The VM driver
 sets public-numbered loopback aliases and denies every non-loopback output.
 `peers` reuses the frozen native-fetch fixture's HTTP/SOCKS implementation;
+`native-peers` runs those same peers with only the guest's low-port capability;
 `desktop` reuses the private GNOME/AT-SPI/null-Pulse welcome fixture. This tests
 legacy one-message HTML fallback, not typed preview/1 or MLS completion.
 """
@@ -103,6 +104,58 @@ def peers(args):
         state.stop.set()
         state.release_dns.set()
         state.release_http.set()
+        for server in servers:
+            server.shutdown()
+            server.server_close()
+        for thread in threads:
+            thread.join(8)
+            assert not thread.is_alive()
+        (directory / "peers.json").write_text(json.dumps(state.snapshot(), indent=2) + "\n")
+
+
+def native_peers(args):
+    """Fixed native-test peers; the guest root already configured the aliases."""
+    import link_preview_fetch as peer
+    directory = args.directory.resolve(strict=True)
+    assert directory.is_dir() and directory.stat().st_uid == os.getuid()
+    assert os.getuid() != 0 and os.getgid() != 0
+    assert Path("/run/nuschl-preview-dedicated-vm").is_file()
+    with (directory / "vm-identity.json").open() as stream:
+        identity_text = stream.read(4097)
+    assert len(identity_text) <= 4096
+    identity = json.loads(identity_text)
+    assert identity["net_inode"] == os.stat("/proc/self/ns/net").st_ino
+    assert not any((directory / name).exists() for name in ("server.pem", "server-key.pem", "peers-ready.json"))
+    with Path("/proc/self/status").open() as stream:
+        status = stream.read(16 * 1024 + 1)
+    assert len(status) <= 16 * 1024
+    authority = {name: next(line.split(":", 1)[1].strip() for line in status.splitlines()
+                            if line.startswith(name + ":"))
+                 for name in ("CapEff", "CapPrm", "CapAmb", "NoNewPrivs")}
+    assert all(int(authority[name], 16) == 1 << 10 for name in ("CapEff", "CapPrm", "CapAmb")), authority
+    assert authority["NoNewPrivs"] == "1"
+    routes = subprocess.check_output(["ip", "route", "show", "table", "all"], text=True, timeout=3)
+    assert len(routes) <= 16 * 1024 and "default" not in routes, routes
+    for address in (peer.PAGE, peer.DOH, peer.PROXY_SOURCE):
+        assert f"local {address} " in routes, routes
+    state = peer.State(directory)
+    servers = [peer.Server((address, port), handler, state) for address, port, handler in (
+        (peer.PAGE, 80, peer.Http), (peer.PAGE, 443, peer.Http), (peer.DOH, 443, peer.Http),
+        ("127.0.0.1", 80, peer.Http), ("127.0.0.1", 1080, peer.Socks),
+        ("127.0.0.1", peer.CONTROL, peer.Control),
+    )]
+    threads = [threading.Thread(target=server.serve_forever) for server in servers]
+    threads.append(threading.Thread(target=peer.dns, args=(state,)))
+    for thread in threads:
+        thread.start()
+    (directory / "peers-ready.json").write_text(json.dumps(dict(
+        pid=os.getpid(), net_inode=identity["net_inode"], routes=routes, authority=authority,
+        scope="Dedicated VM native peers; only NET_BIND_SERVICE, no test outcome implied")) + "\n")
+    try:
+        assert state.stop.wait(180), "native peer service exceeded its bounded VM lifetime"
+    finally:
+        state.stop.set()
+        state.release_dns.set()
         for server in servers:
             server.shutdown()
             server.server_close()
@@ -465,13 +518,15 @@ def main():
     commands = parser.add_subparsers(dest="command", required=True)
     server = commands.add_parser("peers")
     server.add_argument("--directory", type=Path, required=True)
+    native = commands.add_parser("native-peers")
+    native.add_argument("--directory", type=Path, required=True)
     gui = commands.add_parser("desktop")
     for name in ("binaries", "murmur", "at-spi", "gnome-shell", "pulse-bin", "output"):
         gui.add_argument("--" + name, type=Path, required=True)
     gui.add_argument("--server", choices=("stock", "nuschld"), required=True)
     gui.add_argument("--source-identity", required=True)
     args = parser.parse_args()
-    (peers if args.command == "peers" else desktop)(args)
+    {"peers": peers, "native-peers": native_peers, "desktop": desktop}[args.command](args)
 
 
 if __name__ == "__main__":
