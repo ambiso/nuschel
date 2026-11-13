@@ -95,11 +95,17 @@ fn frame_edges(window: &Window) -> Option<Tiling> {
     })
 }
 
+/// Keep the content's curve aligned with the border actually painted below.
+fn frame_border(edges: Tiling) -> Pixels {
+    if edges.is_tiled() {
+        px(0.)
+    } else {
+        FRAME_BORDER
+    }
+}
+
 /// The frame's corner radii: a corner is round where neither of its edges is tiled.
-fn frame_radii(window: &Window, radius: Pixels) -> Corners<Pixels> {
-    let Some(edges) = frame_edges(window) else {
-        return Corners::default();
-    };
+fn frame_radii(edges: Tiling, radius: Pixels) -> Corners<Pixels> {
     let corner = |a: bool, b: bool| if a || b { px(0.) } else { radius };
     Corners {
         top_left: corner(edges.top, edges.left),
@@ -113,7 +119,11 @@ fn frame_radii(window: &Window, radius: Pixels) -> Corners<Pixels> {
 /// paints a background into a corner of the window rounds it by these (see
 /// [`round`]); otherwise its square corner shows outside the frame's curve.
 pub fn corner_radii(window: &Window) -> Corners<Pixels> {
-    frame_radii(window, RADIUS - FRAME_BORDER)
+    frame_edges(window).map(inner_radii).unwrap_or_default()
+}
+
+fn inner_radii(edges: Tiling) -> Corners<Pixels> {
+    frame_radii(edges, RADIUS - frame_border(edges))
 }
 
 /// Rounds `element`'s corners by `radii`, as from [`corner_radii`].
@@ -130,7 +140,7 @@ pub fn frame(window: &mut Window, content: AnyElement) -> AnyElement {
     let Some(edges) = frame_edges(window) else {
         return div().size_full().child(content).into_any_element();
     };
-    let outer = frame_radii(window, RADIUS);
+    let outer = frame_radii(edges, RADIUS);
     window.set_client_inset(if edges.is_tiled() { px(0.) } else { INSET });
     div()
         .id("window-frame")
@@ -175,14 +185,12 @@ pub fn frame(window: &mut Window, content: AnyElement) -> AnyElement {
                 .cursor(CursorStyle::Arrow)
                 .bg(color(MAIN))
                 .map(|surface| round(surface, outer))
+                .border(frame_border(edges))
                 .when(!edges.is_tiled(), |surface| {
-                    surface
-                        .border(FRAME_BORDER)
-                        .border_color(color(BORDER_STRONG))
-                        .shadow(vec![
-                            BoxShadow::new(px(0.), px(2.), color(SHADOW).into())
-                                .blur_radius(INSET * 0.8),
-                        ])
+                    surface.border_color(color(BORDER_STRONG)).shadow(vec![
+                        BoxShadow::new(px(0.), px(2.), color(SHADOW).into())
+                            .blur_radius(INSET * 0.8),
+                    ])
                 })
                 .on_mouse_move(|_, _, cx| cx.stop_propagation())
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -382,8 +390,77 @@ fn control(
 
 #[cfg(test)]
 mod tests {
-    use super::DecorationChoice;
-    use gpui_kit::WindowDecorations;
+    use super::{DecorationChoice, RADIUS, frame_border, frame_radii, inner_radii};
+    use gpui_kit::{Corners, Pixels, Tiling, WindowDecorations, px};
+
+    fn corner_contains((x, y): (f32, f32), radius: f32) -> bool {
+        x >= radius || y >= radius || (x - radius).powi(2) + (y - radius).powi(2) <= radius.powi(2)
+    }
+
+    fn four(corners: Corners<Pixels>) -> [Pixels; 4] {
+        [
+            corners.top_left,
+            corners.top_right,
+            corners.bottom_left,
+            corners.bottom_right,
+        ]
+    }
+
+    #[test]
+    fn partially_tiled_content_cannot_paint_outside_the_unbordered_curve() {
+        let edges = Tiling {
+            left: true,
+            top: false,
+            right: false,
+            bottom: false,
+        };
+        let point = (1.5, 4.5);
+        // The old 9px inner curve admitted this point outside the 10px frame:
+        // with no border both curves start at the same corner, not 1px apart.
+        assert!(corner_contains(point, 9.));
+        assert!(!corner_contains(point, 10.));
+        assert_eq!(frame_border(edges), px(0.));
+        assert!(!corner_contains(
+            point,
+            f32::from(inner_radii(edges).top_right)
+        ));
+        assert_eq!(inner_radii(Tiling::default()).top_right, px(9.));
+        assert_eq!(frame_border(Tiling::default()), px(1.));
+        assert_eq!(four(inner_radii(Tiling::tiled())), [px(0.); 4]);
+    }
+
+    #[test]
+    fn every_tiling_pattern_keeps_inner_paint_inside_the_outer_corners() {
+        for bits in 0..16 {
+            let edges = Tiling {
+                top: bits & 1 != 0,
+                left: bits & 2 != 0,
+                right: bits & 4 != 0,
+                bottom: bits & 8 != 0,
+            };
+            let border = f32::from(frame_border(edges));
+            for (outer, inner) in four(frame_radii(edges, RADIUS))
+                .into_iter()
+                .zip(four(inner_radii(edges)))
+            {
+                for x in 0..48 {
+                    for y in 0..48 {
+                        let point = ((x as f32 + 0.5) / 4., (y as f32 + 0.5) / 4.);
+                        let child = (point.0 - border, point.1 - border);
+                        if child.0 >= 0.
+                            && child.1 >= 0.
+                            && corner_contains(child, f32::from(inner))
+                        {
+                            assert!(
+                                corner_contains(point, f32::from(outer)),
+                                "tiling={bits}, outer={outer:?}, inner={inner:?}, border={border}, point={point:?}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn decoration_choices_become_requests() {
