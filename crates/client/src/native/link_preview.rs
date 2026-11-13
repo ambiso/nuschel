@@ -85,6 +85,21 @@ async fn run(mut requests: watch::Receiver<Option<Work>>, events: mpsc::Sender<E
                 }
                 continue;
             }
+            _ = tokio::time::sleep(nuschl_session::link_preview::LOGICAL_TIMEOUT) => {
+                cancel.send_replace(true);
+                let event = Event::Input(Input::LinkPreview {
+                    id: work.ticket.id,
+                    result: Err(Unavailable::Timeout),
+                });
+                // Completion and retirement are separate. Report the bounded
+                // logical result, while retaining ownership of an OS resolver
+                // or child that has not actually finished yet.
+                let _ = tokio::join!(events.send(event), &mut fetch);
+                if requests.changed().await.is_err() {
+                    return;
+                }
+                continue;
+            }
             result = &mut fetch => result,
         };
         let event = Event::Input(Input::LinkPreview {
