@@ -14,7 +14,14 @@
 //! it for every line (vendor/gpui-pre, `EmojiImages`), so messages and the
 //! composer's text show the same images as the picker.
 use crate::{state::Desktop, theme::*};
-use gpui_kit::{prelude::*, *};
+use gpui_kit::{
+    base::{
+        Scrollbar, ScrollbarMode,
+        input::{Input, InputEvent, InputState},
+    },
+    prelude::*,
+    *,
+};
 use std::{fmt::Write as _, future::Future, ops::Range, sync::Arc, sync::OnceLock};
 
 mod assets {
@@ -261,11 +268,126 @@ fn all() -> impl Iterator<Item = &'static Emoji> {
     groups().iter().flat_map(|group| group.emoji.iter())
 }
 
-/// Emoji with a word of their name, keywords or short codes starting with
-/// each word of `query`.
+/// How much of a search is looked at: a long paste searches by its start.
+const MAX_QUERY_CHARS: usize = 64;
+
+/// Without U+FE0F, which a typed or pasted emoji may or may not carry.
+fn bare(text: &str) -> String {
+    text.chars().filter(|&c| c != EMOJI_STYLE).collect()
+}
+
+/// Every emoji of the table, and each of its skin tones, by its bare text;
+/// and the longest of those texts, in characters.
+fn by_text() -> &'static (std::collections::HashMap<String, &'static Emoji>, usize) {
+    static BY_TEXT: OnceLock<(std::collections::HashMap<String, &'static Emoji>, usize)> =
+        OnceLock::new();
+    BY_TEXT.get_or_init(|| {
+        let mut map = std::collections::HashMap::new();
+        for emoji in all() {
+            let tones = emoji.tones.iter().flatten().filter(|tone| !tone.is_empty());
+            for text in std::iter::once(&emoji.emoji).chain(tones) {
+                map.entry(bare(text)).or_insert(emoji);
+            }
+        }
+        let longest = map.keys().map(|key| key.chars().count()).max().unwrap_or(0);
+        (map, longest)
+    })
+}
+
+/// A search split into the emoji it contains (in order, once each) and its
+/// other words, lower-cased.
+fn parse_query(query: &str) -> (Vec<&'static Emoji>, Vec<String>) {
+    let (map, longest) = by_text();
+    let chars: Vec<char> = bare(query).chars().take(MAX_QUERY_CHARS).collect();
+    let (mut found, mut text) = (Vec::<&'static Emoji>::new(), String::new());
+    let mut at = 0;
+    while at < chars.len() {
+        // The longest emoji starting here: ❤️‍🔥 before ❤️.
+        let emoji = (1..=(*longest).min(chars.len() - at))
+            .rev()
+            .find_map(|length| {
+                map.get(&chars[at..at + length].iter().collect::<String>())
+                    .map(|emoji| (*emoji, length))
+            });
+        match emoji {
+            Some((emoji, length)) => {
+                if !found.iter().any(|seen| std::ptr::eq(*seen, emoji)) {
+                    found.push(emoji);
+                }
+                text.push(' ');
+                at += length;
+            }
+            None => {
+                text.push(chars[at]);
+                at += 1;
+            }
+        }
+    }
+    let words = text.split_whitespace().map(str::to_lowercase).collect();
+    (found, words)
+}
+
+/// What a search finds. Words: emoji with a word of their name, keywords or
+/// short codes starting with each of them. An emoji in the search: itself,
+/// then every emoji sharing any of its words (most shared first), still
+/// narrowed by the typed words.
 fn matches(query: &str) -> Vec<&'static Emoji> {
-    let words: Vec<String> = query.split_whitespace().map(str::to_lowercase).collect();
-    all().filter(|emoji| emoji.matches(&words)).collect()
+    let (found, words) = parse_query(query);
+    if found.is_empty() {
+        return all().filter(|emoji| emoji.matches(&words)).collect();
+    }
+    let wanted: std::collections::HashSet<&str> = found
+        .iter()
+        .flat_map(|emoji| emoji.search.split(' '))
+        .filter(|word| !word.is_empty())
+        .collect();
+    let mut related: Vec<(usize, &'static Emoji)> = all()
+        .filter(|emoji| !found.iter().any(|seen| std::ptr::eq(*seen, *emoji)))
+        .filter(|emoji| emoji.matches(&words))
+        .filter_map(|emoji| {
+            let mut shared: Vec<&str> = emoji
+                .search
+                .split(' ')
+                .filter(|word| wanted.contains(word))
+                .collect();
+            shared.sort_unstable();
+            shared.dedup();
+            (!shared.is_empty()).then_some((shared.len(), emoji))
+        })
+        .collect();
+    // Stable: equally related emoji keep the table's order.
+    related.sort_by(|a, b| b.0.cmp(&a.0));
+    found
+        .into_iter()
+        .chain(related.into_iter().map(|(_, emoji)| emoji))
+        .collect()
+}
+
+/// The category tabs, from the table: each group's name and its first emoji.
+fn categories() -> impl Iterator<Item = (&'static str, &'static str)> {
+    groups()
+        .iter()
+        .filter_map(|group| Some((group.name, group.emoji.first()?.emoji)))
+}
+
+/// Where a group's heading is among `rows` (none while searching).
+fn heading_row(rows: &[Row], group: &str) -> Option<usize> {
+    rows.iter()
+        .position(|row| matches!(row, Row::Heading(name) if *name == group))
+}
+
+/// The group whose lines are at the top when line `top` is: its tab is the
+/// current one. None above the first group (recently used) and while
+/// searching.
+fn current_category(rows: &[Row], top: usize) -> Option<&'static str> {
+    rows[..(top + 1).min(rows.len())]
+        .iter()
+        .rev()
+        .find_map(|row| match row {
+            Row::Heading(name) => Some(*name),
+            _ => None,
+        })
+        .filter(|name| groups().iter().any(|group| group.name == *name))
 }
 
 /// Whether a keystroke opens the picker.
@@ -293,49 +415,49 @@ enum Row {
     Nothing,
 }
 
-/// The open picker: its tab, what is typed, and the lines it shows.
+/// The open picker: its tab, its search field, and the lines it shows.
 pub struct Picker {
     tab: Tab,
-    query: String,
+    /// A real text field: cursor, selection, clipboard and word editing.
+    search: Entity<InputState>,
     rows: Vec<Row>,
+    scroll: UniformListScrollHandle,
     /// The skin tone choices are shown in place of the search.
     choosing_tone: bool,
+    _changes: Subscription,
+}
+
+/// The lines of the emoji tab for what is typed: everything by group
+/// (recently used first), or what matches.
+fn rows(query: &str, recent: &[&'static Emoji]) -> Vec<Row> {
+    let mut rows = Vec::new();
+    let add = |rows: &mut Vec<Row>, emoji: Vec<&'static Emoji>| {
+        rows.extend(
+            emoji
+                .chunks(COLUMNS)
+                .map(|chunk| Row::Emoji(chunk.to_vec())),
+        );
+    };
+    if query.trim().is_empty() {
+        if !recent.is_empty() {
+            rows.push(Row::Heading("Recently used"));
+            add(&mut rows, recent.to_vec());
+        }
+        for group in groups() {
+            rows.push(Row::Heading(group.name));
+            add(&mut rows, group.emoji.iter().collect());
+        }
+    } else {
+        let found = matches(query);
+        if found.is_empty() {
+            rows.push(Row::Nothing);
+        }
+        add(&mut rows, found);
+    }
+    rows
 }
 
 impl Picker {
-    fn new(tab: Tab, query: String, recent: &[&'static Emoji]) -> Self {
-        let mut rows = Vec::new();
-        let add = |rows: &mut Vec<Row>, emoji: Vec<&'static Emoji>| {
-            rows.extend(
-                emoji
-                    .chunks(COLUMNS)
-                    .map(|chunk| Row::Emoji(chunk.to_vec())),
-            );
-        };
-        if query.trim().is_empty() {
-            if !recent.is_empty() {
-                rows.push(Row::Heading("Recently used"));
-                add(&mut rows, recent.to_vec());
-            }
-            for group in groups() {
-                rows.push(Row::Heading(group.name));
-                add(&mut rows, group.emoji.iter().collect());
-            }
-        } else {
-            let found = matches(&query);
-            if found.is_empty() {
-                rows.push(Row::Nothing);
-            }
-            add(&mut rows, found);
-        }
-        Self {
-            tab,
-            query,
-            rows,
-            choosing_tone: false,
-        }
-    }
-
     /// What Enter inserts: the first emoji shown.
     fn first(&self) -> Option<&'static Emoji> {
         self.rows.iter().find_map(|row| match row {
@@ -347,8 +469,83 @@ impl Picker {
 
 impl Desktop {
     pub fn open_emoji(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.emoji = Some(Picker::new(Tab::Emoji, String::new(), &self.emoji_recent));
-        window.focus(&self.emoji_focus, cx);
+        let search = cx.new(|cx| {
+            crate::state::accessible(
+                InputState::new(window, cx).placeholder("Search emoji"),
+                "Search emoji",
+                false,
+                false,
+            )
+        });
+        search.update(cx, |input, cx| input.focus(window, cx));
+        let changes = cx.subscribe_in(&search, window, |this, _, event, window, cx| {
+            match event {
+                InputEvent::Change => this.emoji_search_changed(cx),
+                // Enter inserts the first emoji shown; Shift keeps the picker open.
+                InputEvent::PressEnter { shift, .. } => {
+                    match this.emoji.as_ref().and_then(Picker::first) {
+                        Some(emoji) => this.pick_emoji(emoji, *shift, window, cx),
+                        None => this.close_emoji(window, cx),
+                    }
+                }
+                _ => return,
+            }
+            cx.notify();
+        });
+        self.emoji = Some(Picker {
+            tab: Tab::Emoji,
+            search,
+            rows: rows("", &self.emoji_recent),
+            scroll: UniformListScrollHandle::new(),
+            choosing_tone: false,
+            _changes: changes,
+        });
+    }
+
+    /// The search changed: list what it finds, from the top.
+    fn emoji_search_changed(&mut self, cx: &mut Context<Self>) {
+        let Some(picker) = &mut self.emoji else {
+            return;
+        };
+        let query = picker.search.read(cx).value();
+        picker.rows = rows(&query, &self.emoji_recent);
+        picker.scroll.scroll_to_item(0, ScrollStrategy::Top);
+    }
+
+    /// Show a category from its heading. A search hides the headings, so it
+    /// is cleared first.
+    fn show_emoji_category(
+        &mut self,
+        name: &'static str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(picker) = &mut self.emoji else {
+            return;
+        };
+        if !picker.search.read(cx).value().is_empty() {
+            let search = picker.search.clone();
+            search.update(cx, |input, cx| input.set_value("", window, cx));
+            self.emoji_search_changed(cx);
+        }
+        if let Some(picker) = &self.emoji
+            && let Some(at) = heading_row(&picker.rows, name)
+        {
+            picker.scroll.scroll_to_item_strict(at, ScrollStrategy::Top);
+        }
+    }
+
+    /// Keys go back to the search field, or, while the skin tones are shown,
+    /// to the picker (Escape closes them).
+    fn focus_emoji_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        match &self.emoji {
+            Some(picker) if !picker.choosing_tone => {
+                let search = picker.search.clone();
+                search.update(cx, |input, cx| input.focus(window, cx));
+            }
+            Some(_) => window.focus(&self.emoji_focus, cx),
+            None => {}
+        }
     }
 
     pub fn toggle_emoji(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -383,7 +580,7 @@ impl Desktop {
         if keep_open {
             self.composer
                 .update(cx, |input, cx| input.insert(text, window, cx));
-            window.focus(&self.emoji_focus, cx);
+            self.focus_emoji_search(window, cx);
         } else {
             self.close_emoji(window, cx);
             self.composer
@@ -414,6 +611,7 @@ impl Desktop {
         match keystroke.key.as_str() {
             "escape" if picker.choosing_tone => {
                 picker.choosing_tone = false;
+                self.focus_emoji_search(window, cx);
                 cx.stop_propagation();
                 cx.notify();
                 return;
@@ -422,31 +620,22 @@ impl Desktop {
             _ if shortcut(keystroke) => return self.close_emoji(window, cx),
             _ => {}
         }
-        if picker.tab != Tab::Emoji {
+        // The search field types, pastes and edits itself; a key that reaches
+        // the picker (a tab or tone button had the focus) goes back to it.
+        let typed = match &keystroke.key_char {
+            Some(text) if !modifiers.control && !modifiers.alt && !modifiers.platform => text,
+            _ => return,
+        };
+        if picker.tab != Tab::Emoji || picker.choosing_tone || keystroke.key == "enter" {
             return;
         }
-        let mut query = picker.query.clone();
-        match keystroke.key.as_str() {
-            "enter" => {
-                return match picker.first() {
-                    Some(emoji) => self.pick_emoji(emoji, modifiers.shift, window, cx),
-                    None => self.close_emoji(window, cx),
-                };
-            }
-            "backspace" => {
-                query.pop();
-            }
-            _ => match &keystroke.key_char {
-                Some(text) if !modifiers.control && !modifiers.alt && !modifiers.platform => {
-                    query.push_str(text);
-                }
-                _ => return,
-            },
-        }
-        let choosing_tone = picker.choosing_tone;
-        let mut picker = Picker::new(Tab::Emoji, query, &self.emoji_recent);
-        picker.choosing_tone = choosing_tone;
-        self.emoji = Some(picker);
+        let search = picker.search.clone();
+        let typed = typed.clone();
+        search.update(cx, |input, cx| {
+            input.focus(window, cx);
+            input.insert(typed, window, cx);
+        });
+        self.emoji_search_changed(cx);
         cx.stop_propagation();
         cx.notify();
     }
@@ -552,12 +741,13 @@ fn tone_button(
     cx: &mut Context<Desktop>,
 ) -> AnyElement {
     let name = TONE_NAMES[tone];
-    // The button is replaced by what it opens or chooses, so the picker
-    // takes the focus back (typing goes on searching).
+    // The button is replaced by what it opens or chooses, so the focus
+    // moves on: to the search (typing goes on searching), or to the picker
+    // while the tones are shown.
     let action = std::rc::Rc::new(
         move |this: &mut Desktop, window: &mut Window, cx: &mut Context<Desktop>| {
             action(this);
-            window.focus(&this.emoji_focus, cx);
+            this.focus_emoji_search(window, cx);
         },
     );
     let key_action = action.clone();
@@ -617,16 +807,11 @@ fn search_bar(picker: &Picker, tone: usize, cx: &mut Context<Desktop>) -> AnyEle
             }))
             .into_any_element();
     }
-    let search = if picker.query.is_empty() {
-        div()
-            .flex_1()
-            .text_color(color(TEXT_FAINT))
-            .child(text!("Search emoji").with_id("emoji-search"))
-    } else {
-        div()
-            .flex_1()
-            .child(text!(picker.query.clone()).with_id("emoji-search"))
-    };
+    let search = div()
+        .id("emoji-search")
+        .flex_1()
+        .min_w_0()
+        .child(Input::new(&picker.search));
     div()
         .mx_2()
         .mb_2()
@@ -637,7 +822,7 @@ fn search_bar(picker: &Picker, tone: usize, cx: &mut Context<Desktop>) -> AnyEle
             div()
                 .flex_1()
                 .px_3()
-                .py_2()
+                .py(px(6.))
                 .rounded(px(6.))
                 .bg(color(INPUT))
                 .border_1()
@@ -660,6 +845,84 @@ fn search_bar(picker: &Picker, tone: usize, cx: &mut Context<Desktop>) -> AnyEle
             },
             cx,
         ))
+        .into_any_element()
+}
+
+/// The emoji, a line at a time: only the visible lines are built.
+fn grid(picker: &Picker, cx: &mut Context<Desktop>) -> AnyElement {
+    uniform_list(
+        "emoji-grid",
+        picker.rows.len(),
+        cx.processor(|this, range: Range<usize>, _, cx| {
+            let Some(picker) = &this.emoji else {
+                return Vec::new();
+            };
+            let tone = this.emoji_tone;
+            let rows = &picker.rows;
+            rows[range.start.min(rows.len())..range.end.min(rows.len())]
+                .iter()
+                .map(|line| row(line, tone, cx))
+                .collect()
+        }),
+    )
+    .track_scroll(&picker.scroll)
+    .size_full()
+    .px_2()
+    .pb_2()
+    .into_any_element()
+}
+
+/// The line at the top of the grid (all lines are one cell high), or the
+/// one a jump is about to bring there.
+fn top_row(scroll: &UniformListScrollHandle) -> usize {
+    let state = scroll.0.borrow();
+    match &state.deferred_scroll_to_item {
+        Some(deferred) => deferred.item_index,
+        None => (-f32::from(state.base_handle.offset().y) / CELL + 0.5).max(0.) as usize,
+    }
+}
+
+/// A tab per category, drawn with its first emoji; a click shows the whole
+/// category from its heading (and leaves the search).
+fn category_tabs(picker: &Picker, cx: &mut Context<Desktop>) -> AnyElement {
+    let current = current_category(&picker.rows, top_row(&picker.scroll));
+    div()
+        .id("emoji-categories")
+        .role(Role::TabList)
+        .aria_label("Categories")
+        .mx_2()
+        .mb_1()
+        .flex()
+        .children(categories().map(|(name, icon)| {
+            let selected = current == Some(name);
+            div()
+                .id(SharedString::from(format!("emoji-category-{name}")))
+                .role(Role::Tab)
+                .aria_label(name)
+                .aria_selected(selected)
+                .tab_index(0)
+                .size(px(CELL))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(6.))
+                .cursor_pointer()
+                .when(selected, |tab| tab.bg(color(SELECTED)))
+                .hover(|style| style.bg(color(HOVER)))
+                .tooltip(move |_, cx| cx.new(|_| crate::dialogs::Tooltip(name.into())).into())
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.show_emoji_category(name, window, cx);
+                    cx.notify();
+                }))
+                .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
+                    if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                        this.show_emoji_category(name, window, cx);
+                        cx.stop_propagation();
+                        cx.notify();
+                    }
+                }))
+                .children(image_of(icon).map(|id| image(id, 22.)))
+        }))
         .into_any_element()
 }
 
@@ -686,26 +949,36 @@ pub fn overlay(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement> 
             .flex()
             .flex_col()
             .child(search_bar(picker, tone, cx))
+            .child(category_tabs(picker, cx))
             .child(
-                uniform_list(
-                    "emoji-grid",
-                    picker.rows.len(),
-                    cx.processor(|this, range: Range<usize>, _, cx| {
-                        let Some(picker) = &this.emoji else {
-                            return Vec::new();
-                        };
-                        let tone = this.emoji_tone;
-                        let rows = &picker.rows;
-                        rows[range.start.min(rows.len())..range.end.min(rows.len())]
-                            .iter()
-                            .map(|line| row(line, tone, cx))
-                            .collect()
-                    }),
-                )
-                .flex_1()
-                .min_h_0()
-                .px_2()
-                .pb_2(),
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .relative()
+                    // The current category follows the scrolling.
+                    .on_scroll_wheel(cx.listener(|_, _, _, cx| cx.notify()))
+                    .child(grid(picker, cx))
+                    .child(
+                        div().absolute().inset_0().child(
+                            Scrollbar::vertical(&picker.scroll)
+                                .id("emoji-scrollbar")
+                                .mode(ScrollbarMode::Always)
+                                .styles(|styles| {
+                                    styles
+                                        .track(|track| {
+                                            track.width(px(8.)).bg(color(ELEVATED).into())
+                                        })
+                                        .thumb(|thumb| {
+                                            thumb
+                                                .width(px(4.))
+                                                .bg(color(BORDER_STRONG))
+                                                .radius(px(2.))
+                                        })
+                                        .thumb_hover(|thumb| thumb.bg(color(TEXT_FAINT)))
+                                        .thumb_active(|thumb| thumb.bg(color(TEXT_MUTED)))
+                                }),
+                        ),
+                    ),
             )
             .child(
                 div()
@@ -780,7 +1053,10 @@ pub fn overlay(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement> 
 #[cfg(test)]
 mod tests {
     // Not `super::*`: gpui_kit's glob import brings GPUI's own `test` attribute.
-    use super::{TONES, Twemoji, all, assets, find_images, groups, image_of, matches};
+    use super::{
+        Row, TONES, Twemoji, all, assets, bare, categories, current_category, find_images, groups,
+        heading_row, image_of, matches, rows,
+    };
     use gpui_kit::{DevicePixels, EmojiImages, SvgRenderer, SvgSize, size};
     use std::sync::Arc;
 
@@ -804,6 +1080,71 @@ mod tests {
                 assert!(image_of(shown).is_some(), "{shown} ({})", emoji.name);
             }
         }
+    }
+
+    #[test]
+    fn an_emoji_in_the_search_finds_itself_then_those_sharing_its_words() {
+        // Compared without U+FE0F: the table has the fully qualified form.
+        let shown = |query: &str| -> Vec<String> {
+            matches(query)
+                .iter()
+                .map(|emoji| bare(emoji.emoji))
+                .collect()
+        };
+        let has = |found: &[String], emoji: &str| found.contains(&bare(emoji));
+        for query in ["❤️", "❤", " ❤️ ", "❤️\u{FE0F}"] {
+            let found = shown(query);
+            assert_eq!(found.first(), Some(&bare("❤️")), "{query:?}: {found:?}");
+            for heart in ["🧡", "💛", "💚", "💙", "💜", "🖤", "🤍", "💔", "😍"] {
+                assert!(has(&found, heart), "{query:?} misses {heart}: {found:?}");
+            }
+            assert_eq!(
+                found.iter().filter(|emoji| **emoji == bare("❤️")).count(),
+                1
+            );
+        }
+        // A skin tone finds the emoji it is a tone of.
+        assert_eq!(shown("👍🏽").first(), Some(&bare("👍")));
+        // Two emoji: both, then what shares a word with either.
+        let both = shown("❤️ 👍");
+        assert_eq!(both[..2], [bare("❤️"), bare("👍")]);
+        assert!(has(&both, "🧡") && has(&both, "👎"), "{both:?}");
+        // Words narrow what an emoji finds.
+        let orange = shown("❤️ orange");
+        assert!(has(&orange, "🧡") && !has(&orange, "💚"), "{orange:?}");
+        // Text that is not an emoji searches as before; a long paste is bounded.
+        assert!(shown("→xyzzy").is_empty() && shown("xyzzy").is_empty());
+        // An emoji typed is always shown, even with words that match nothing.
+        assert_eq!(shown("☃xyzzy"), [bare("☃️")]);
+        assert_eq!(shown(&"❤️".repeat(10_000)).first(), Some(&bare("❤️")));
+    }
+
+    #[test]
+    fn category_tabs_come_from_the_table_and_jump_to_their_heading() {
+        let icons: Vec<String> = categories().map(|(_, icon)| bare(icon)).collect();
+        let expected = ["😀", "👋", "🐵", "🍇", "🌍", "🎃", "👓", "🏧", "🏁"];
+        assert_eq!(icons, expected.map(bare));
+        assert_eq!(categories().count(), groups().len());
+        let recent = [&groups()[3].emoji[0], &groups()[0].emoji[5]];
+        for listed in [rows("", &[]), rows("", &recent)] {
+            for (name, icon) in categories() {
+                let at = heading_row(&listed, name).expect(name);
+                match (&listed[at], &listed[at + 1]) {
+                    (Row::Heading(heading), Row::Emoji(first)) => {
+                        assert_eq!(*heading, name);
+                        assert_eq!(first[0].emoji, icon);
+                    }
+                    _ => panic!("{name} is not a heading followed by emoji"),
+                }
+                // Anywhere in a group, its tab is the current one.
+                assert_eq!(current_category(&listed, at), Some(name));
+                assert_eq!(current_category(&listed, at + 2), Some(name));
+            }
+        }
+        // Above the first group (recently used), no tab is current.
+        assert_eq!(current_category(&rows("", &recent), 0), None);
+        // While searching there are no headings to jump to.
+        assert_eq!(heading_row(&rows("heart", &[]), groups()[0].name), None);
     }
 
     #[test]

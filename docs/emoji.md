@@ -85,8 +85,15 @@ if an image does not render, the font's glyphs are painted.
 
 The picker opens with the smiley button beside the composer, or with Ctrl+. or
 Ctrl+; as in GTK. It has three tabs: Emoji, and Stickers and GIFs, which are
-placeholders for now. Typing searches names, keywords and short codes; each word
-must start a word of one of them. The hand beside the search chooses the skin
+placeholders for now. The search is an ordinary text field (cursor, selection,
+clipboard, Ctrl+Backspace). Typing searches names, keywords and short codes; each
+word must start a word of one of them. An emoji in the search, typed or pasted,
+with or without U+FE0F or a skin tone, finds itself first, then every emoji sharing
+any of its words, those sharing most first: ❤️ lists the other hearts. Other words
+beside it narrow that list. Only the first 64 characters are searched. Under the
+search, a tab per category of the table, drawn with its first emoji, jumps to that
+category (leaving the search); the tab of the category in view is selected. The grid
+has a scrollbar, like the channel list. The hand beside the search chooses the skin
 tone, which applies to every emoji that has tones. A click or Enter inserts at the
 composer's cursor, replacing the selection, and closes the picker; with Shift held
 it stays open for more. Escape closes it. Recently used emoji come first. The skin
@@ -113,12 +120,13 @@ cannot be loaded, emoji stay text and the picker says so.
 - The picker matches the desktop's: the same tabs, search, skin tone, click,
   Shift+click and Enter, with Ctrl+. or Ctrl+; from the composer, and Escape or a
   click outside to close it. The skin tone is kept in `localStorage`; the recent
-  emoji last as long as the page.
+  emoji last as long as the page. Not yet on the web: the category tabs and
+  searching by an emoji, which so far only the desktop has.
 
 ## Tests
 
 - `cargo test -p nuschl` (`emoji::tests`, crate2nix: `checks.<system>.desktop-unit`):
-  the table and its tones, search, the presentation rule (`™` and `™️`, ©, ®, ❤, ☝,
+  the table and its tones, search (also by an emoji), the category tabs, the presentation rule (`™` and `™️`, ©, ®, ❤, ☝,
   U+FE0E, sequences, flags, keycaps, plain text), the images' shape, and that an
   image renders at the requested size.
 - `node --test src/emoji.test.js` in `web/app`, run by the web build: the same
@@ -128,7 +136,11 @@ cannot be loaded, emoji stay text and the picker says so.
   Shell. It checks by pixel colours that `™` paints no Twemoji and `™️` does, that
   😀 is Twemoji's yellow, that the picker's search, skin tone, Shift+Enter,
   Shift+click and click insert the expected text into the composer, which shows
-  them as Twemoji, and that the sent message is that text.
+  them as Twemoji, and that the sent message is that text. Then the search field:
+  that it shows a cursor, that a click on a result inserts it (also in the last
+  column), that Ctrl+V pastes and Ctrl+Backspace deletes a word; that the grid has
+  a scrollbar; and that the Flags tab jumps to 🏁. `--no-category-row` runs these
+  against a build from before the category tabs, to see them fail there.
 
 The GPUI patch itself has no test in its crate, whose test target does not build
 here (`vendor/gpui-pre/NUSCHEL-PATCH.md`); the smoke test checks what it paints.
