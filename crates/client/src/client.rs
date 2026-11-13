@@ -289,6 +289,9 @@ struct PendingSend {
     conversation: Conversation,
     target: TextTarget,
     body: String,
+    /// The outgoing body a legacy HTML send reports; never the logical draft.
+    wire: Option<String>,
+    preview: Option<(crate::preview::Context, crate::preview::SubmissionToken)>,
 }
 
 #[derive(Default)]
@@ -365,6 +368,7 @@ pub struct Client {
     pub preferences: Preferences,
     platform: Box<dyn Platform>,
     sending: Option<PendingSend>,
+    pub(crate) previews: crate::preview::Previews,
     /// Direct conversations asked for (`OpenDirect`), by request id: the
     /// server, the peer's session, and whether to open it once known.
     direct_requests: BTreeMap<u64, (String, u32, bool)>,
@@ -396,6 +400,7 @@ impl Client {
             preferences,
             platform,
             sending: None,
+            previews: crate::preview::Previews::default(),
             direct_requests: BTreeMap::new(),
             share_requests: BTreeMap::new(),
             typing_sent: None,
@@ -1113,6 +1118,8 @@ impl Client {
         if body.len() > MAX_CONTENT_BYTES {
             return Err(SendError::TooLong);
         }
+        let preview_wire = self.link_preview_wire(&body);
+        let preview = self.link_preview_submission(&body);
         let server = &mut self.servers[server];
         if server.status != Status::Connected {
             return Err(SendError::Refused(server.refuse_send(
@@ -1147,6 +1154,8 @@ impl Client {
             },
             target: target.clone(),
             body: body.clone(),
+            wire: preview_wire.clone(),
+            preview,
         };
         let request = if server.mls {
             let Some(conversation) = channel.conversation else {
@@ -1166,6 +1175,12 @@ impl Client {
                 conversation,
                 text: body,
             }
+        } else if let Some(html) = preview_wire {
+            Request::SendHtml {
+                target,
+                html: vec![html],
+                expected_peer,
+            }
         } else {
             Request::SendText {
                 target,
@@ -1178,6 +1193,7 @@ impl Client {
                 self.sending = Some(pending);
                 // Sent: we are no longer typing it.
                 self.typing_sent = None;
+                self.pause_submitted_link_preview(self.now_ms);
                 Ok(())
             }
             Err(error) => Err(SendError::Refused(server.refuse_send(error, self.now_ms))),
@@ -1423,6 +1439,9 @@ impl Client {
     /// Apply what the platform reported; call [`Client::settle`] after a batch.
     pub fn handle(&mut self, input: Input) {
         match input {
+            Input::LinkPreview { id, result } => {
+                self.receive_link_preview(id, result, self.now_ms);
+            }
             Input::Sent {
                 server,
                 generation,
@@ -1436,12 +1455,15 @@ impl Client {
                     && self.sending.as_ref().is_some_and(|pending| {
                         pending.conversation.server == server
                             && pending.target == target
-                            && pending.body == body
+                            && pending.wire.as_ref().unwrap_or(&pending.body) == &body
                     })
                     && let Some(pending) = self.sending.take()
                 {
                     if let Some(index) = self.current(&server, generation) {
                         self.servers[index].clear_sent_refusal(pending.notice_lease);
+                    }
+                    if let Some((context, token)) = pending.preview {
+                        self.acknowledge_link_preview(&context, token, self.now_ms);
                     }
                     self.updates.push(Update::Sent {
                         conversation: pending.conversation,
@@ -1843,6 +1865,7 @@ impl Client {
     /// After a batch of inputs: channels in display order again, and edits
     /// and deletions that came before their message's page.
     pub fn settle(&mut self) {
+        self.validate_link_preview(self.now_ms);
         for server in &mut self.servers {
             if std::mem::take(&mut server.unsorted) {
                 server.sort_channels();
