@@ -96,7 +96,8 @@ beside it narrow that list. Only the first 64 characters are searched. Under the
 search, a tab per category of the table, drawn with its first emoji, jumps to that
 category (leaving the search); the tab of the category in view is underlined. The
 emoji to click are on the message area's colour (white in the light theme), below a
-line that separates them from the tabs, and have a scrollbar, like the channel list.
+line that separates them from the tabs, and have the app's shared scrollbar
+(`layout::scroll_frame`, in a gutter right of the emoji), as the other lists do.
 Each cell's element id is its place in the grid, not the emoji: an emoji shown twice
 (recently used and in its group) would otherwise share hover, tooltip and click
 state, and neither would show its tooltip or take a click. The hand beside the search chooses the skin

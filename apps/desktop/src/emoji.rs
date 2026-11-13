@@ -25,10 +25,7 @@ pub use shortcodes::{ShortcodeKey, Shortcodes, list as shortcode_list};
 
 use crate::{state::Desktop, theme::*};
 use gpui_kit::{
-    base::{
-        Scrollbar, ScrollbarMode,
-        input::{Input, InputEvent, InputState},
-    },
+    base::input::{Input, InputEvent, InputState},
     prelude::*,
     *,
 };
@@ -905,9 +902,10 @@ fn search_bar(picker: &Picker, tone: usize, cx: &mut Context<Desktop>) -> AnyEle
         .into_any_element()
 }
 
-/// The emoji, a line at a time: only the visible lines are built.
+/// The emoji, a line at a time: only the visible lines are built. The
+/// scrollbar is the app's shared one, in a gutter right of the emoji.
 fn grid(picker: &Picker, cx: &mut Context<Desktop>) -> AnyElement {
-    uniform_list(
+    let lines = uniform_list(
         "emoji-grid",
         picker.rows.len(),
         cx.processor(|this, range: Range<usize>, _, cx| {
@@ -926,10 +924,13 @@ fn grid(picker: &Picker, cx: &mut Context<Desktop>) -> AnyElement {
     )
     .track_scroll(&picker.scroll)
     .size_full()
-    .px_2()
+    .pl_2()
+    .pr(px(crate::layout::SCROLLBAR_GUTTER))
     .pt(px(3.))
-    .pb_2()
-    .into_any_element()
+    .pb_2();
+    crate::layout::scroll_frame("emoji-grid", &picker.scroll, lines, MAIN)
+        .size_full()
+        .into_any_element()
 }
 
 /// The line at the top of the grid (all lines are one cell high), or the
@@ -1029,27 +1030,8 @@ pub fn overlay(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement> 
                     .border_t_1()
                     .border_color(color(BORDER_STRONG))
                     // The current category follows the scrolling.
-                    .on_scroll_wheel(cx.listener(|_, _, _, cx| cx.notify()))
-                    .child(grid(picker, cx))
-                    .child(
-                        div().absolute().inset_0().child(
-                            Scrollbar::vertical(&picker.scroll)
-                                .id("emoji-scrollbar")
-                                .mode(ScrollbarMode::Always)
-                                .styles(|styles| {
-                                    styles
-                                        .track(|track| track.width(px(8.)).bg(color(MAIN).into()))
-                                        .thumb(|thumb| {
-                                            thumb
-                                                .width(px(4.))
-                                                .bg(color(BORDER_STRONG))
-                                                .radius(px(2.))
-                                        })
-                                        .thumb_hover(|thumb| thumb.bg(color(TEXT_FAINT)))
-                                        .thumb_active(|thumb| thumb.bg(color(TEXT_MUTED)))
-                                }),
-                        ),
-                    ),
+                    .on_scroll(cx.listener(|_, _, _, cx| cx.notify()))
+                    .child(grid(picker, cx)),
             )
             .child(
                 div()
