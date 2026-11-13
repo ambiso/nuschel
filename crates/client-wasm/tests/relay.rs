@@ -32,7 +32,7 @@ async fn mumble_server_with_limits(
 ) -> (u16, String) {
     let certified = rcgen::generate_simple_self_signed(vec!["localhost".into()]).expect("cert");
     let certificate = certified.cert.der().clone();
-    let fingerprint = nuschl_client_wasm::session::hex(&sha2_digest(certificate.as_ref()));
+    let fingerprint = hex::encode(sha2_digest(certificate.as_ref()));
     let key = rustls::pki_types::PrivateKeyDer::Pkcs8(certified.signing_key.serialize_der().into());
     let config = rustls::ServerConfig::builder_with_provider(Arc::new(
         rustls::crypto::ring::default_provider(),

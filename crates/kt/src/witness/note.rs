@@ -231,12 +231,13 @@ pub struct CosignerKey {
 
 impl fmt::Debug for CosignerKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "CosignerKey({}+{})", self.name, hex4(self.key_id()))
+        write!(
+            f,
+            "CosignerKey({}+{})",
+            self.name,
+            hex::encode(self.key_id())
+        )
     }
-}
-
-fn hex4(id: [u8; 4]) -> String {
-    id.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// A cosignature that verified.
@@ -273,7 +274,7 @@ impl CosignerKey {
         format!(
             "{}+{}+{}",
             self.name,
-            hex4(self.key_id()),
+            hex::encode(self.key_id()),
             base64_encode(&bytes)
         )
     }
@@ -300,7 +301,7 @@ impl CosignerKey {
         let public: [u8; MLDSA44_PUBLIC_KEY_BYTES] =
             public.try_into().map_err(|_| invalid("vkey.key"))?;
         let parsed = Self::new(name, public).ok_or_else(|| invalid("vkey.name"))?;
-        if id != hex4(parsed.key_id()) {
+        if id != hex::encode(parsed.key_id()) {
             return Err(invalid("vkey.id"));
         }
         Ok(parsed)
@@ -460,7 +461,7 @@ mod tests {
             name: name.into(),
             key: LogSigningKey::ed25519(key[1..].try_into().unwrap()).unwrap(),
         };
-        assert_eq!(hex4(log.key_id()), id);
+        assert_eq!(hex::encode(log.key_id()), id);
         assert!(log.verify(&parsed));
         // Another text with the same signature fails; an unknown key is ignored.
         let mut other = parsed.clone();

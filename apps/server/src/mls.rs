@@ -69,7 +69,7 @@
 use crate::{
     authz::Action,
     config::Mls as MlsConfig,
-    conversations::{Id, Kind, hex},
+    conversations::{Id, Kind},
     history::{Delivery, Done},
     kt::StorageKt,
     limits::LeakyBucket,
@@ -918,7 +918,7 @@ async fn find_commit_row(
     let mut anchor = after;
     for _ in 0..MAX_RESOLVE_PAGES {
         let query = PageQuery {
-            conversation: hex(conversation),
+            conversation: hex::encode(conversation),
             anchor: Anchor::After(anchor),
             limit: nuschl::MAX_PAGE_MESSAGES as u32,
             ranges: vec![(1, u64::MAX)],
@@ -2045,19 +2045,19 @@ impl State {
             content.push_str(&base64(&message.archive));
         }
         let row = StoredMessage {
-            conversation: hex(&conversation),
+            conversation: hex::encode(conversation),
             seq,
             kind: MessageKind::Message,
-            author_account: Some(hex(&account)),
+            author_account: Some(hex::encode(account)),
             author_user_id: user_id,
             author_name: name,
             format,
             content,
             sent_ms: crate::chat::now_ms(),
-            idempotency_key: Some(crate::tls::hex(&key)),
+            idempotency_key: Some(hex::encode(key)),
             // The key names the message: a resend after STALE_EPOCH re-encrypts the
             // same envelope and gets the original seq back.
-            body_hash: Some(crate::tls::hex(&sha256(&[&conversation, &[format], &key]))),
+            body_hash: Some(hex::encode(sha256(&[&conversation, &[format], &key]))),
             ..StoredMessage::default()
         };
         let wire = self.wire_message(row.clone());
@@ -2183,7 +2183,7 @@ impl State {
         for row in rows {
             let seq = self.conversations.next_seq(conversation);
             let stored = StoredMessage {
-                conversation: hex(&conversation),
+                conversation: hex::encode(conversation),
                 seq,
                 kind: MessageKind::Message,
                 author_account: None,
@@ -2193,7 +2193,7 @@ impl State {
                 content: base64(&row),
                 sent_ms: crate::chat::now_ms(),
                 idempotency_key: None,
-                body_hash: Some(crate::tls::hex(&sha256(&[&row]))),
+                body_hash: Some(hex::encode(sha256(&[&row]))),
                 ..StoredMessage::default()
             };
             let wire = self.wire_message(stored.clone());
@@ -2440,17 +2440,17 @@ impl State {
         cache.established = true;
         let (_, user_id, name) = self.mls_author(session);
         let row = StoredMessage {
-            conversation: hex(&conversation),
+            conversation: hex::encode(conversation),
             seq,
             kind: MessageKind::Message,
-            author_account: Some(hex(&account)),
+            author_account: Some(hex::encode(account)),
             author_user_id: user_id,
             author_name: name,
             format: v1::Format::MlsHandshake as u8,
             content: base64(&commit),
             sent_ms: crate::chat::now_ms(),
-            idempotency_key: Some(crate::tls::hex(&key)),
-            body_hash: Some(crate::tls::hex(&hash)),
+            idempotency_key: Some(hex::encode(key)),
+            body_hash: Some(hex::encode(hash)),
             ..StoredMessage::default()
         };
         let wire = self.wire_message(row.clone());

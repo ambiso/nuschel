@@ -90,7 +90,7 @@ impl<S: AsyncWrite + Unpin> AsyncWrite for Recorded<S> {
 async fn mumble_server(udp: bool) -> (u16, String, Recording) {
     let certified = rcgen::generate_simple_self_signed(vec!["localhost".into()]).expect("cert");
     let certificate = certified.cert.der().clone();
-    let fingerprint = hex(&Sha256::digest(certificate.as_ref()));
+    let fingerprint = hex::encode(Sha256::digest(certificate.as_ref()));
     let key = rustls::pki_types::PrivateKeyDer::Pkcs8(certified.signing_key.serialize_der().into());
     let config = rustls::ServerConfig::builder_with_provider(Arc::new(
         rustls::crypto::ring::default_provider(),
@@ -170,10 +170,6 @@ async fn mumble_server(udp: bool) -> (u16, String, Recording) {
         }
     });
     (port, fingerprint, recording)
-}
-
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 /// A relay on loopback that may connect to loopback (tests only) on any port.

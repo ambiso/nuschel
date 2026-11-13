@@ -7,6 +7,7 @@ use crate::state::{
     State, Verified,
 };
 use crate::store::Store;
+use hex::FromHex as _;
 use nuschl_identity::{
     AccountStatement, DeviceCertificate, DeviceKeystore, DeviceRevocation,
     DeviceSigningCertificate, DisplayName, IdentityFingerprint, NewIdentity, RecoveryBlob,
@@ -35,28 +36,10 @@ const MAX_DUE_HISTORIES: usize = 64;
 const STATE_FILE: &str = "state";
 const RECOVERY_FILE: &str = "recovery";
 
-fn hex(bytes: &[u8]) -> String {
-    use std::fmt::Write as _;
-    bytes.iter().fold(String::new(), |mut out, byte| {
-        let _ = write!(out, "{byte:02x}");
-        out
-    })
-}
-
-fn unhex<const N: usize>(text: &str) -> Option<[u8; N]> {
-    if text.len() != N * 2 {
-        return None;
-    }
-    let mut out = [0u8; N];
-    for (index, pair) in text.as_bytes().chunks(2).enumerate() {
-        let digit = |c: u8| (c as char).to_digit(16);
-        out[index] = (digit(pair[0])? * 16 + digit(pair[1])?) as u8;
-    }
-    Some(out)
-}
-
 fn fingerprint(text: &str) -> Option<IdentityFingerprint> {
-    unhex::<32>(text).map(IdentityFingerprint::from_bytes)
+    <[u8; 32]>::from_hex(text)
+        .ok()
+        .map(IdentityFingerprint::from_bytes)
 }
 
 fn account_id(bytes: &[u8]) -> Result<[u8; 16], String> {
@@ -978,7 +961,7 @@ impl Worker {
     ) -> Result<&mut Contact, String> {
         let entry = self.server_mut(key)?;
         let full = entry.contacts.len() >= MAX_CONTACTS;
-        let id = hex(account);
+        let id = hex::encode(account);
         if full && !entry.contacts.contains_key(&id) {
             return Err("too many contacts on this server".into());
         }
@@ -1142,7 +1125,7 @@ impl Worker {
     /// account for the same number gets a notice (the server cannot rename someone
     /// into a stranger silently).
     fn alias(&mut self, key: &str, user_id: u32, account: &[u8; 16]) -> Result<(), String> {
-        let id = hex(account);
+        let id = hex::encode(account);
         let entry = self.server_mut(key)?;
         let previous = entry.aliases.get(&user_id).cloned();
         if previous.is_none() && entry.aliases.len() >= MAX_CONTACTS {
@@ -1272,7 +1255,7 @@ impl Worker {
     fn view(&self, key: &str, account: &[u8; 16]) -> ContactView {
         let entry = self.state.servers.get(key);
         let contact = entry
-            .and_then(|entry| entry.contacts.get(&hex(account)))
+            .and_then(|entry| entry.contacts.get(&hex::encode(account)))
             .cloned()
             .unwrap_or_default();
         let own_account = entry.is_some_and(|entry| entry.account == account);
@@ -1350,7 +1333,7 @@ impl Worker {
                         .is_some_and(|r| self.is_verified(r)))
                     && (connected || now.saturating_sub(contact.last_history_ms) >= DAY_MS)
             })
-            .filter_map(|(id, _)| unhex::<16>(id).map(|id| id.to_vec()))
+            .filter_map(|(id, _)| <[u8; 16]>::from_hex(id).ok().map(|id| id.to_vec()))
             .take(MAX_DUE_HISTORIES)
             .collect();
         Due {

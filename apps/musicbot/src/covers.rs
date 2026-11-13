@@ -245,8 +245,7 @@ fn expired(stored: SystemTime) -> bool {
 }
 
 fn file_name(key: &CoverKey) -> String {
-    let digest = Md5::digest(serde_json::to_vec(key).unwrap_or_default());
-    digest.iter().map(|byte| format!("{byte:02x}")).collect()
+    hex::encode(Md5::digest(serde_json::to_vec(key).unwrap_or_default()))
 }
 
 struct Collision;

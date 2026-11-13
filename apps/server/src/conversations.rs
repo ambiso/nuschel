@@ -16,19 +16,8 @@ use std::collections::{BTreeSet, HashMap};
 
 pub type Id = nuschl::Id;
 
-pub fn hex(id: &Id) -> String {
-    crate::tls::hex(id)
-}
-
 pub fn parse(text: &str) -> Option<Id> {
-    if text.len() != 32 {
-        return None;
-    }
-    let mut out = [0; 16];
-    for (index, byte) in out.iter_mut().enumerate() {
-        *byte = u8::from_str_radix(text.get(index * 2..index * 2 + 2)?, 16).ok()?;
-    }
-    Some(out)
+    hex::FromHex::from_hex(text).ok()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -423,8 +412,8 @@ impl State {
         }
         let intervals = intervals.clone();
         self.history.write(Request::HistorySetAccess {
-            conversation: hex(&id),
-            account: hex(&account),
+            conversation: hex::encode(id),
+            account: hex::encode(account),
             intervals,
         });
     }
@@ -451,8 +440,8 @@ impl State {
                     .or_default()
                     .insert(account, intervals.clone());
                 self.history.write(Request::HistorySetAccess {
-                    conversation: hex(&id),
-                    account: hex(&account),
+                    conversation: hex::encode(id),
+                    account: hex::encode(account),
                     intervals,
                 });
             }

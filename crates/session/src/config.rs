@@ -1778,10 +1778,7 @@ impl ClientIdentity {
     /// SHA-1 of the certificate, the hash Mumble servers show and register.
     pub fn mumble_hash(&self) -> String {
         use sha1::Digest as _;
-        sha1::Sha1::digest(&self.certificate)
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect()
+        hex::encode(sha1::Sha1::digest(&self.certificate))
     }
 
     pub fn from_pkcs12(pkcs12: &[u8], password: &str) -> Result<Self, String> {

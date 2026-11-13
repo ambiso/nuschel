@@ -55,21 +55,11 @@ pub enum TlsError {
 }
 
 pub fn sha1_hex(der: &[u8]) -> String {
-    hex(ring::digest::digest(&ring::digest::SHA1_FOR_LEGACY_USE_ONLY, der).as_ref())
+    hex::encode(ring::digest::digest(&ring::digest::SHA1_FOR_LEGACY_USE_ONLY, der).as_ref())
 }
 
 pub fn sha256_hex(der: &[u8]) -> String {
-    hex(ring::digest::digest(&ring::digest::SHA256, der).as_ref())
-}
-
-pub fn hex(bytes: &[u8]) -> String {
-    use std::fmt::Write as _;
-    bytes
-        .iter()
-        .fold(String::with_capacity(bytes.len() * 2), |mut out, byte| {
-            let _ = write!(out, "{byte:02x}");
-            out
-        })
+    hex::encode(ring::digest::digest(&ring::digest::SHA256, der).as_ref())
 }
 
 pub struct Identity {

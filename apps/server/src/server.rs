@@ -601,7 +601,7 @@ pub async fn erase_account(
 ) -> Result<u64, StartError> {
     match storage
         .request(nuschl_ipc::server::ServerStorageRequest::HistoryErase {
-            account: conversations::hex(&account),
+            account: hex::encode(account),
             deleted_ms: crate::chat::now_ms(),
         })
         .await

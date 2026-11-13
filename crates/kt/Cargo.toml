@@ -11,6 +11,7 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+hex = "0.4.3"
 nuschl-identity.workspace = true
 # The directory backend (docs/e2ee.md §5.2). Default features are off: no auditing
 # helpers (`public_auditing`), no WhatsApp configuration; the directory uses akd's
@@ -45,5 +46,4 @@ tokio = { version = "1.54.1", features = ["rt", "sync"] }
 zeroize = "1.9.1"
 
 [dev-dependencies]
-hex = "0.4.3"
 tokio = { version = "1.54.1", features = ["macros", "rt", "rt-multi-thread"] }

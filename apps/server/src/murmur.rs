@@ -19,7 +19,6 @@
 use crate::{
     acl::{AclEntry, Group, perm},
     config::Settings,
-    conversations::hex,
     handlers::{MAX_STORED_NAME, truncate_bytes, truncate_chars},
     password,
     server::{self, StartError},
@@ -312,7 +311,7 @@ fn clear(state: &mut State) {
             state
                 .storage
                 .send(ServerStorageRequest::HistoryForgetAccount {
-                    account: hex(&removed.account),
+                    account: hex::encode(removed.account),
                 });
         }
     }

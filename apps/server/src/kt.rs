@@ -164,7 +164,7 @@ fn load_key(configured: Option<&Path>, generated: PathBuf) -> io::Result<Zeroizi
     let mut key = Zeroizing::new([0u8; 32]);
     ring::rand::SecureRandom::fill(&ring::rand::SystemRandom::new(), &mut key[..])
         .map_err(|_| io::Error::other("no system randomness"))?;
-    let text = Zeroizing::new(format!("{}\n", crate::tls::hex(&key[..])));
+    let text = Zeroizing::new(format!("{}\n", hex::encode(&key[..])));
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
@@ -408,7 +408,7 @@ pub async fn open(
     let (tasks, receiver) = mpsc::channel(QUEUE);
     let log_id = descriptor.log_id();
     tracing::info!(
-        log = %crate::tls::hex(&log_id.0),
+        log = %hex::encode(log_id.0),
         epoch = latest.epoch,
         "key-transparency log"
     );

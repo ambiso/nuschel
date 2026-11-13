@@ -58,7 +58,7 @@ pub fn parse(bytes: &[u8]) -> Result<Vec<PublicKey>, Error> {
         decode(&entry.ed25519, &mut bytes[..32])?;
         decode(&entry.mldsa44, &mut bytes[32..])?;
         let key = PublicKey::from_bytes(&bytes)?;
-        if entry.key_id != crate::hex(&key.id())
+        if entry.key_id != hex::encode(key.id())
             || keys.iter().any(|other: &PublicKey| other.id() == key.id())
         {
             return Err(Error::KeyDocument);
@@ -72,9 +72,9 @@ pub fn encode(key: &PublicKey) -> Result<Vec<u8>, Error> {
         format: FORMAT_VERSION,
         algorithm: ALGORITHM_NAME.into(),
         keys: vec![Entry {
-            key_id: crate::hex(&key.id()),
-            ed25519: crate::hex(key.ed25519()),
-            mldsa44: crate::hex(key.mldsa44()),
+            key_id: hex::encode(key.id()),
+            ed25519: hex::encode(key.ed25519()),
+            mldsa44: hex::encode(key.mldsa44()),
         }],
     })
     .map_err(|_| Error::KeyDocument)
@@ -94,7 +94,7 @@ mod tests {
         let keys = parse(bytes).unwrap();
         assert_eq!(keys.len(), 1);
         assert_eq!(
-            crate::hex(&keys[0].id()),
+            hex::encode(keys[0].id()),
             "dbc40ac478b51573eaebebb0a40532bec7cf2a87282a98ae08f1a25ee5b42535"
         );
         #[cfg(feature = "client")]

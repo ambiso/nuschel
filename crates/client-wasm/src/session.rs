@@ -203,7 +203,7 @@ impl ServerCertVerifier for Verifier {
         ocsp: &[u8],
         now: UnixTime,
     ) -> Result<ServerCertVerified, rustls::Error> {
-        let actual = hex(&Sha256::digest(end_entity.as_ref()));
+        let actual = hex::encode(Sha256::digest(end_entity.as_ref()));
         let result = match &self.pin {
             Some(pin) if pin.eq_ignore_ascii_case(&actual) => Ok(ServerCertVerified::assertion()),
             Some(_) => Err(rustls::Error::General(
@@ -247,10 +247,6 @@ impl ServerCertVerifier for Verifier {
             .signature_verification_algorithms
             .supported_schemes()
     }
-}
-
-pub fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2479,7 +2475,7 @@ mod tests {
                     .iter()
                     .any(|e| matches!(e, Event::Server(ServerEvent::PeerCertificate(_))))
             );
-            let current = hex(&Sha256::digest(leaf.as_ref()));
+            let current = hex::encode(Sha256::digest(leaf.as_ref()));
             if let Some(old) = previous {
                 assert_ne!(old, current);
             }

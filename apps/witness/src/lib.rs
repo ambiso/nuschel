@@ -102,22 +102,9 @@ fn parse_seed(bytes: &[u8]) -> io::Result<Zeroizing<[u8; 32]>> {
         return Ok(key);
     }
     let text = bytes.trim_ascii();
-    let bad = || io::Error::other("a key file holds 32 bytes or 64 hex digits");
-    if text.len() != 64 {
-        return Err(bad());
-    }
-    for (index, pair) in text.chunks(2).enumerate() {
-        let digit = |c: u8| (c as char).to_digit(16);
-        match (digit(pair[0]), digit(pair[1])) {
-            (Some(high), Some(low)) => key[index] = (high * 16 + low) as u8,
-            _ => return Err(bad()),
-        }
-    }
+    hex::decode_to_slice(text, &mut key[..])
+        .map_err(|_| io::Error::other("a key file holds 32 bytes or 64 hex digits"))?;
     Ok(key)
-}
-
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// The configured seed, or the one generated once in the state directory.
@@ -142,7 +129,7 @@ pub fn load_seed(
     std::fs::create_dir_all(state_directory)?;
     let mut seed = Zeroizing::new([0u8; 32]);
     getrandom::fill(&mut seed[..]).map_err(|_| io::Error::other("no system randomness"))?;
-    let text = Zeroizing::new(format!("{}\n", hex(&seed[..])));
+    let text = Zeroizing::new(format!("{}\n", hex::encode(&seed[..])));
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
@@ -210,7 +197,7 @@ struct Witness {
 }
 
 fn file_stem(origin: &str) -> String {
-    hex(&Sha256::digest(origin.as_bytes()))
+    hex::encode(Sha256::digest(origin.as_bytes()))
 }
 
 fn logs_directory(state_directory: &Path) -> PathBuf {

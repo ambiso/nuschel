@@ -786,11 +786,7 @@ impl ServerState {
 
 /// The local storage key of a direct conversation on a Nuschl server.
 pub fn direct_conversation_key(conversation: &[u8; 16]) -> String {
-    let hex: String = conversation
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect();
-    format!("conversation:{hex}")
+    format!("conversation:{}", hex::encode(conversation))
 }
 
 #[cfg(test)]

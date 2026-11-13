@@ -1500,7 +1500,7 @@ async fn revoking_access_ends_subscriptions_fan_out_and_pages_in_flight() {
         request_id: 4242,
         conversation,
         query: nuschl_ipc::server::PageQuery {
-            conversation: nuschld::conversations::hex(&conversation),
+            conversation: hex::encode(conversation),
             anchor: nuschl_ipc::server::Anchor::Latest,
             limit: 10,
             ranges: vec![(1, u64::MAX)],
@@ -1511,7 +1511,7 @@ async fn revoking_access_ends_subscriptions_fan_out_and_pages_in_flight() {
     };
     let rows = nuschl_ipc::server::StoredPage {
         rows: vec![nuschl_ipc::server::StoredMessage {
-            conversation: nuschld::conversations::hex(&conversation),
+            conversation: hex::encode(conversation),
             seq: 1,
             content: "secret".into(),
             ..Default::default()
@@ -1658,7 +1658,7 @@ async fn a_listener_that_loses_listen_ends_for_stock_and_nuschl_clients() {
         request_id: 4343,
         conversation,
         query: nuschl_ipc::server::PageQuery {
-            conversation: nuschld::conversations::hex(&conversation),
+            conversation: hex::encode(conversation),
             anchor: nuschl_ipc::server::Anchor::Latest,
             limit: 10,
             ranges: vec![(1, u64::MAX)],
@@ -1738,7 +1738,7 @@ async fn a_listener_that_loses_listen_ends_for_stock_and_nuschl_clients() {
         page,
         Some(nuschl_ipc::server::StoredPage {
             rows: vec![nuschl_ipc::server::StoredMessage {
-                conversation: nuschld::conversations::hex(&conversation),
+                conversation: hex::encode(conversation),
                 seq: 1,
                 content: "secret".into(),
                 ..Default::default()
@@ -2297,7 +2297,7 @@ fn backdate(fixture: &Fixture, conversation: &[u8; 16], seq: u64, days: i64) {
     let row = store
         .history
         .messages
-        .get_mut(&(nuschld::conversations::hex(conversation), seq))
+        .get_mut(&(hex::encode(conversation), seq))
         .unwrap();
     row.sent_ms -= days * 86_400_000;
 }
@@ -2367,7 +2367,7 @@ async fn channel_retention_needs_write_and_shortening_needs_confirmation() {
     {
         let store = fixture.store.lock().unwrap();
         let rows = &store.history.messages;
-        let hex = nuschld::conversations::hex(&conversation);
+        let hex = hex::encode(conversation);
         assert_eq!(rows[&(hex.clone(), old)].content, "");
         assert_eq!(rows[&(hex.clone(), old)].delete_reason, Some(2));
         assert_eq!(rows[&(hex, recent)].content, "recent words");
@@ -2436,7 +2436,7 @@ async fn live_only_channels_deliver_without_storing() {
     assert_eq!(seq, before + 1);
     let chat = bob.chat().await;
     assert_eq!(chat.message.unwrap().content, "live words");
-    let hex = nuschld::conversations::hex(&conversation);
+    let hex = hex::encode(conversation);
     {
         let store = fixture.store.lock().unwrap();
         assert!(

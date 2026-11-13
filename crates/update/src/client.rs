@@ -1,5 +1,5 @@
 use crate::{
-    Error, FileEntry, Manifest, hex,
+    Error, FileEntry, Manifest,
     manifest::safe_relative,
     supervisor::{VerifierPaths, verify_hybrid},
 };
@@ -284,7 +284,7 @@ pub fn download(
             progress(done + written, total);
         }
         output.sync_all()?;
-        let digest = hex(&hasher.finalize());
+        let digest = hex::encode(hasher.finalize());
         if written != file.size || !digest.eq_ignore_ascii_case(&file.sha256) {
             return Err(Error::Corrupt(file.path.clone()));
         }
@@ -398,7 +398,7 @@ pub fn verify_files(root: &Path, files: &[FileEntry]) -> Result<(), Error> {
     let dir = open_root(root)?;
     for file in files {
         let bytes = dir.read(safe_relative(&file.path)?)?;
-        if bytes.len() as u64 != file.size || hex(&Sha256::digest(&bytes)) != file.sha256 {
+        if bytes.len() as u64 != file.size || hex::encode(Sha256::digest(&bytes)) != file.sha256 {
             return Err(Error::Corrupt(file.path.clone()));
         }
     }
@@ -525,7 +525,7 @@ mod tests {
         let entry = |path: &str, body: &[u8]| FileEntry {
             path: path.into(),
             url: String::new(),
-            sha256: hex(&Sha256::digest(body)),
+            sha256: hex::encode(Sha256::digest(body)),
             size: body.len() as u64,
         };
         (

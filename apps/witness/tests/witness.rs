@@ -180,12 +180,9 @@ async fn servers_enrol_and_their_checkpoints_are_cosigned() {
     ));
 
     // Monitors read the newest cosigned checkpoint.
-    let stem: String = {
+    let stem = {
         use sha2::Digest as _;
-        sha2::Sha256::digest(origin.as_bytes())
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect()
+        hex::encode(sha2::Sha256::digest(origin.as_bytes()))
     };
     let url = format!("http://{}/nuschl-kt/v1/checkpoints/{stem}", running.address);
     let published = tokio::task::spawn_blocking(move || {

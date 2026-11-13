@@ -23228,6 +23228,10 @@ rec {
             features = [ "derive" ];
           }
           {
+            name = "hex";
+            packageId = "hex";
+          }
+          {
             name = "nuschl-ipc";
             packageId = "nuschl-ipc";
           }
@@ -23273,6 +23277,10 @@ rec {
         src = lib.cleanSourceWith { filter = sourceFilter;  src = ../../crates/client; };
         libName = "nuschl_client";
         dependencies = [
+          {
+            name = "hex";
+            packageId = "hex";
+          }
           {
             name = "nuschl-core";
             packageId = "nuschl-core";
@@ -23339,6 +23347,10 @@ rec {
           {
             name = "bytes";
             packageId = "bytes";
+          }
+          {
+            name = "hex";
+            packageId = "hex";
           }
           {
             name = "js-sys";
@@ -23469,6 +23481,10 @@ rec {
             packageId = "base64 0.22.1";
           }
           {
+            name = "hex";
+            packageId = "hex";
+          }
+          {
             name = "html5ever";
             packageId = "html5ever 0.40.1";
           }
@@ -23597,6 +23613,10 @@ rec {
             packageId = "base64 0.22.1";
           }
           {
+            name = "hex";
+            packageId = "hex";
+          }
+          {
             name = "serde";
             packageId = "serde";
             features = [ "derive" ];
@@ -23641,6 +23661,10 @@ rec {
         src = lib.cleanSourceWith { filter = sourceFilter;  src = ../../apps/crypto-worker; };
         libName = "nuschl_crypto_worker";
         dependencies = [
+          {
+            name = "hex";
+            packageId = "hex";
+          }
           {
             name = "nuschl-e2ee";
             packageId = "nuschl-e2ee";
@@ -23793,6 +23817,10 @@ rec {
             packageId = "getrandom 0.4.3";
           }
           {
+            name = "hex";
+            packageId = "hex";
+          }
+          {
             name = "hpke-rs";
             packageId = "hpke-rs 0.8.0";
           }
@@ -23934,6 +23962,10 @@ rec {
             packageId = "getrandom 0.4.3";
           }
           {
+            name = "hex";
+            packageId = "hex";
+          }
+          {
             name = "libcrux-ml-dsa";
             packageId = "libcrux-ml-dsa";
             usesDefaultFeatures = false;
@@ -23962,10 +23994,6 @@ rec {
           }
         ];
         devDependencies = [
-          {
-            name = "hex";
-            packageId = "hex";
-          }
           {
             name = "tokio";
             packageId = "tokio";
@@ -24220,6 +24248,10 @@ rec {
             features = [ "std" ];
           }
           {
+            name = "hex";
+            packageId = "hex";
+          }
+          {
             name = "md-5";
             packageId = "md-5 0.11.0";
           }
@@ -24429,6 +24461,10 @@ rec {
         src = lib.cleanSourceWith { filter = sourceFilter;  src = ../../apps/rtc-probe; };
         dependencies = [
           {
+            name = "hex";
+            packageId = "hex";
+          }
+          {
             name = "nuschl-rtc";
             packageId = "nuschl-rtc";
           }
@@ -24497,6 +24533,10 @@ rec {
           {
             name = "directories";
             packageId = "directories";
+          }
+          {
+            name = "hex";
+            packageId = "hex";
           }
           {
             name = "nuschl-core";
@@ -24822,6 +24862,10 @@ rec {
             optional = true;
           }
           {
+            name = "hex";
+            packageId = "hex";
+          }
+          {
             name = "nuschl-ipc";
             packageId = "nuschl-ipc";
             optional = true;
@@ -25029,6 +25073,10 @@ rec {
             features = [ "sink" "std" ];
           }
           {
+            name = "hex";
+            packageId = "hex";
+          }
+          {
             name = "nuschl-protocol";
             packageId = "nuschl-protocol";
           }
@@ -25127,6 +25175,10 @@ rec {
           {
             name = "getrandom";
             packageId = "getrandom 0.4.3";
+          }
+          {
+            name = "hex";
+            packageId = "hex";
           }
           {
             name = "httparse";
@@ -25229,6 +25281,10 @@ rec {
             name = "clap";
             packageId = "clap";
             features = [ "derive" ];
+          }
+          {
+            name = "hex";
+            packageId = "hex";
           }
           {
             name = "nuschl-e2ee";

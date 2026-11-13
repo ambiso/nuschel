@@ -7,7 +7,7 @@
 //! conversation" and "not allowed" are the same answer.
 use crate::{
     authz::Action,
-    conversations::{Conversations, Id, Kind, hex, parse},
+    conversations::{Conversations, Id, Kind, parse},
     history::{Delivery, Done, Read, Stock},
     state::{State, random},
     text,
@@ -55,7 +55,7 @@ fn body_hash(conversation: &Id, format: i32, reply_to: u64, content: &str) -> St
     context.update(&format.to_be_bytes());
     context.update(&reply_to.to_be_bytes());
     context.update(content.as_bytes());
-    crate::tls::hex(context.finish().as_ref())
+    hex::encode(context.finish().as_ref())
 }
 
 fn wire_kind(kind: MessageKind) -> v1::message::Kind {
@@ -374,16 +374,16 @@ impl State {
         // a live-only conversation stores none.
         let keyed = account.filter(|_| !self.live_only(&id));
         let row = StoredMessage {
-            conversation: hex(&id),
+            conversation: hex::encode(id),
             seq,
             kind: MessageKind::Message,
-            author_account: account.map(|account| hex(&account)),
+            author_account: account.map(hex::encode),
             author_user_id: user_id,
             author_name: name,
             format: v1::Format::Text as u8,
             reply_to: (message.reply_to > 0).then_some(message.reply_to),
             sent_ms: now_ms(),
-            idempotency_key: keyed.map(|_| crate::tls::hex(&key)),
+            idempotency_key: keyed.map(|_| hex::encode(key)),
             body_hash: keyed
                 .map(|_| body_hash(&id, message.format, message.reply_to, &message.content)),
             content: message.content,
@@ -436,11 +436,11 @@ impl State {
         let seq = self.conversations.next_seq(id);
         let sent_ms = now_ms();
         let event = StoredMessage {
-            conversation: hex(&id),
+            conversation: hex::encode(id),
             seq,
             kind: MessageKind::Edit,
             target: Some(message.target),
-            author_account: Some(hex(&account)),
+            author_account: Some(hex::encode(account)),
             author_user_id: user_id,
             author_name: name,
             format: v1::Format::Text as u8,
@@ -453,7 +453,7 @@ impl State {
         self.history.store(
             Request::HistoryEdit {
                 target: message.target,
-                author_account: hex(&account),
+                author_account: hex::encode(account),
                 format: v1::Format::Text as u8,
                 content: message.content,
                 edit_limit: self.settings.config.history.edit_limit,
@@ -492,11 +492,11 @@ impl State {
         let seq = self.conversations.next_seq(id);
         let sent_ms = now_ms();
         let event = StoredMessage {
-            conversation: hex(&id),
+            conversation: hex::encode(id),
             seq,
             kind: MessageKind::Delete,
             target: Some(message.target),
-            author_account: account.map(|account| hex(&account)),
+            author_account: account.map(hex::encode),
             author_user_id: user_id,
             author_name: name,
             sent_ms,
@@ -511,7 +511,7 @@ impl State {
                 author_account: if moderator {
                     None
                 } else {
-                    account.map(|account| hex(&account))
+                    account.map(hex::encode)
                 },
                 reason,
                 event,
@@ -713,10 +713,10 @@ impl State {
         let (account, user_id, name) = self.author(source);
         let seq = self.conversations.next_seq(id);
         let row = StoredMessage {
-            conversation: hex(&id),
+            conversation: hex::encode(id),
             seq,
             kind: MessageKind::Message,
-            author_account: account.map(|account| hex(&account)),
+            author_account: account.map(hex::encode),
             author_user_id: user_id,
             author_name: name,
             format: v1::Format::LegacyHtml as u8,
@@ -807,7 +807,7 @@ impl State {
             request_id: message.request_id,
             conversation: id,
             query: PageQuery {
-                conversation: hex(&id),
+                conversation: hex::encode(id),
                 anchor,
                 limit: if message.limit == 0 {
                     50
@@ -1000,8 +1000,8 @@ impl State {
         }
         markers.insert(id, message.seq);
         self.history.write(Request::HistorySetReadMarker {
-            account: hex(&account),
-            conversation: hex(&id),
+            account: hex::encode(account),
+            conversation: hex::encode(id),
             seq: message.seq,
         });
         // Synced to the account's other devices.
@@ -1096,9 +1096,9 @@ impl State {
         let (a, b) = Conversations::pair(me, peer);
         self.history.write(Request::HistoryCreateDirect {
             direct: StoredDirect {
-                conversation: hex(&id),
-                account_a: hex(&a),
-                account_b: hex(&b),
+                conversation: hex::encode(id),
+                account_a: hex::encode(a),
+                account_b: hex::encode(b),
             },
         });
         id

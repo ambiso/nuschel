@@ -15,6 +15,7 @@ name = "nuschld"
 path = "src/main.rs"
 
 [dependencies]
+hex = "0.4.3"
 nuschl-protocol.workspace = true
 nuschl-ipc.workspace = true
 nuschl-legacy-html.workspace = true

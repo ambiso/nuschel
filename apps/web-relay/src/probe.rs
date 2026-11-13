@@ -65,7 +65,7 @@ impl ServerCertVerifier for Pin {
         _: &[u8],
         _: UnixTime,
     ) -> Result<ServerCertVerified, rustls::Error> {
-        let actual = hex(&Sha256::digest(end_entity.as_ref()));
+        let actual = hex::encode(Sha256::digest(end_entity.as_ref()));
         *self.seen.lock().unwrap_or_else(PoisonError::into_inner) = Some(actual.clone());
         match &self.expected {
             Some(pin) if !pin.eq_ignore_ascii_case(&actual) => Err(rustls::Error::General(
@@ -105,10 +105,6 @@ impl ServerCertVerifier for Pin {
             .signature_verification_algorithms
             .supported_schemes()
     }
-}
-
-pub fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 pub async fn run(probe: Probe) -> Result<Outcome, String> {
