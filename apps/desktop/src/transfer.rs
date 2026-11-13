@@ -753,15 +753,20 @@ pub fn card(
         "{kind} {}, {size}, from {}. {}",
         offer.name, message.author, shown.status
     );
+    // In a card too narrow for the badge beside the name, the name and its
+    // actions wrap below the badge, and the badge is at most the card's width.
     let header = div()
         .w_full()
         .min_w_0()
         .flex()
+        .flex_wrap()
         .items_center()
         .gap_3()
         .child(
             div()
-                .size(px(40.))
+                .w(px(40.))
+                .max_w_full()
+                .h(px(40.))
                 .flex_shrink_0()
                 .rounded(px(6.))
                 .bg(tint(tone, 0x33))
@@ -778,6 +783,7 @@ pub fn card(
         // overflowing it.
         .child(
             crate::layout::flexible()
+                .flex_basis(px(120.))
                 .flex()
                 .flex_wrap()
                 .items_center()
