@@ -12,6 +12,10 @@ use tokio::{
 };
 
 pub enum ServiceEvent {
+    LinkPreviewPolicy {
+        revision: u64,
+        result: Result<nuschl_session::config::LinkPreviewSettings, String>,
+    },
     LinkPreviewImage {
         ticket: crate::link_preview::ImageTicket,
         pixels: Option<nuschl_ipc::preview::Pixels>,
@@ -48,6 +52,28 @@ pub struct Services {
 }
 
 impl Services {
+    /// One composer-owned physical save at a time. The blocking operation
+    /// owns only a local Profile clone and finishes before reporting credit.
+    pub fn save_link_preview_policy(
+        &self,
+        profile: nuschl_session::config::Profile,
+        action: crate::link_preview::PolicyAction,
+    ) {
+        let events = self.sender.clone();
+        self.handle.spawn(async move {
+            let revision = action.revision;
+            let result =
+                tokio::task::spawn_blocking(move || profile.save_link_previews(&action.settings))
+                    .await
+                    .map_err(|_| "Link preview settings could not be saved.".to_owned())
+                    .and_then(|result| {
+                        result.map_err(|_| "Link preview settings could not be saved.".to_owned())
+                    });
+            let _ = events
+                .send(ServiceEvent::LinkPreviewPolicy { revision, result })
+                .await;
+        });
+    }
     /// Exact carried bytes are decoded only in the confined content worker.
     /// The composer admits one such request until its completion is received.
     pub fn render_link_preview(
