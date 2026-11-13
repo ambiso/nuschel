@@ -553,4 +553,21 @@ sys.stdout.write('\n'.join(out))
         });
         assert_eq!(element.matches('\n').count(), 1);
     }
+
+    #[test]
+    fn the_shared_writer_matches_this_one_byte_for_byte() {
+        for mime in [ImageMime::Png, ImageMime::Jpeg] {
+            let mut data = image(mime, 640, 360).data;
+            data.extend((0..=255u8).cycle().take(MAX_IMAGE_BYTES - data.len()));
+            for length in (1..=110).chain([MAX_IMAGE_BYTES - 1, MAX_IMAGE_BYTES]) {
+                let picture = EmbeddedImage {
+                    data: data[..length].to_vec(),
+                    ..image(mime, 640, 360)
+                };
+                let shared = crate::model::img_element(mime, &picture.data);
+                let units = utf16_len(&shared) - utf16_len(r#"<img src="" />"#);
+                assert_eq!(img_element(&picture), (shared, units), "{mime:?} {length}");
+            }
+        }
+    }
 }

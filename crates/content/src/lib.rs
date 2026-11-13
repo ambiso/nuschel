@@ -767,6 +767,34 @@ mod tests {
 
     #[test]
     #[cfg(feature = "images")]
+    fn the_shared_writer_matches_this_one_byte_for_byte() {
+        use nuschl_core::preview::{ImageMime, img_element as shared};
+        let noisy = image::load_from_memory(&picture(640, 400, true)).unwrap();
+        let png = encode_png(&noisy).unwrap();
+        let jpeg = encode_jpeg(&flatten(&noisy), 85).unwrap();
+        let mut percent = [0; 3];
+        for (kind, mime, bytes) in [
+            ("png", ImageMime::Png, &png),
+            ("jpeg", ImageMime::Jpeg, &jpeg),
+        ] {
+            // The prefix length at which the element outgrows the paste limit.
+            let lengths: Vec<usize> = (0..=bytes.len()).collect();
+            let fits =
+                lengths.partition_point(|&n| img_element(kind, &bytes[..n]).len() <= 131_072);
+            assert!(fits < bytes.len(), "{kind} {}", bytes.len());
+            for n in (0..=110).chain([fits - 1, fits, fits + 1, bytes.len()]) {
+                let old = img_element(kind, &bytes[..n]);
+                assert_eq!(old, shared(mime, &bytes[..n]), "{kind} {n}");
+                for (count, code) in percent.iter_mut().zip(["%2B", "%2F", "%3D"]) {
+                    *count += old.matches(code).count();
+                }
+            }
+        }
+        assert!(percent.iter().all(|&count| count > 0), "{percent:?}");
+    }
+
+    #[test]
+    #[cfg(feature = "images")]
     fn pasted_images_that_cannot_fit_or_decode_are_rejected() {
         assert!(matches!(
             encode_image_message(&picture(64, 64, true), 40),
