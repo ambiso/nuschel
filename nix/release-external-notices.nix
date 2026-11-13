@@ -102,8 +102,9 @@ in
           ++ [
             {
               package = "nuschl-content";
-              version = customSyntax.version;
-              path = customSyntax.path;
+              version =
+                (builtins.fromTOML (builtins.readFile (projectRoot + "/Cargo.toml"))).workspace.package.version;
+              path = customSyntax.crate_relative_path;
               sha256 = customSyntax.sha256;
             }
           ];

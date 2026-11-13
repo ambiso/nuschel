@@ -167,7 +167,7 @@
           "local": "ASSET-PROVENANCE.json",
           "url": "https://github.com/trishume/syntect/tree/e4670846ecf16d8832db6c43d531bec466214e27",
           "description": "Exact package asset hashes, default generation recipe and pinned submodule/source identities",
-          "sha256": "d9f650ac2566dc1b96934e0ae29b7b4a550d23dc963af04dbce5cd8d288c0791"
+          "sha256": "8a0511077e49457d26d309a5d616de7a08321f7a4be1ae3c1e3c51ac2df78ace"
         },
         {
           "local": "nix/Nix.sublime-syntax",

@@ -353,6 +353,7 @@
     "recipe_sha256": "7807ac8992f1c32097c018653396395851854297293eac19d1079577c870e68b",
     "preserved_default_definitions": 75,
     "total_definitions": 76,
-    "unresolved_contexts": 0
+    "unresolved_contexts": 0,
+    "crate_relative_path": "assets/default-nix.packdump"
   }
 }
