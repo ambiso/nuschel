@@ -517,7 +517,7 @@ impl Session {
     /// The next live chat event.
     async fn chat(&mut self) -> v1::ChatEvent {
         self.wait(|event| match event {
-            SessionEvent::Nuschl(NuschlEvent::Chat(chat)) => Some(chat.clone()),
+            SessionEvent::Nuschl(NuschlEvent::Chat(chat)) => Some((**chat).clone()),
             _ => None,
         })
         .await
