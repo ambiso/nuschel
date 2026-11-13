@@ -162,9 +162,8 @@ impl Preview {
     }
 }
 
-/// `<img src="data:image/…;base64,…" />` as stock Mumble writes it
-/// (`Log::imageToImg`): the base64 text in lines of 72 characters, each
-/// percent-encoded. The element is ASCII and well-formed XML.
+/// Write an embedded PNG/JPEG as percent-encoded base64 with 72-character lines.
+/// The element is ASCII and well-formed XML.
 pub fn img_element(mime: ImageMime, data: &[u8]) -> String {
     let encoded = base64::engine::general_purpose::STANDARD.encode(data);
     let mut element = format!("<img src=\"data:{};base64,", mime.as_str());
@@ -266,10 +265,14 @@ mod tests {
             img_element(ImageMime::Jpeg, &[0xfb, 0xff]),
             "<img src=\"data:image/jpeg;base64,%2B%2F8%3D\" />"
         );
-        // 54 bytes are exactly one line of 72 characters; no trailing break.
-        for (bytes, breaks) in [(54, 0), (55, 1), (108, 1), (109, 2)] {
-            let element = img_element(ImageMime::Png, &vec![0; bytes]);
-            assert_eq!(element.matches('\n').count(), breaks, "{bytes}");
-        }
+        // 57 bytes encode to 76 slashes. Wrap before percent-encoding, at 72.
+        assert_eq!(
+            img_element(ImageMime::Png, &[0xff; 57]),
+            format!(
+                "<img src=\"data:image/png;base64,{}\n{}\" />",
+                "%2F".repeat(72),
+                "%2F".repeat(4)
+            )
+        );
     }
 }
