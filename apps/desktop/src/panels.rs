@@ -491,6 +491,13 @@ pub fn panel(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement> {
                     ));
                 }
             }
+            if let Some(bitrate) = crate::bitrate::connection_value(
+                &this.client.servers,
+                *server,
+                this.settings.voice_bitrate,
+            ) {
+                rows.push(row("Voice bitrate", bitrate, 12));
+            }
             (
                 "Connection".into(),
                 560.,
