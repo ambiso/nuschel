@@ -324,10 +324,13 @@ connection and are not written to IndexedDB.
 The voice transport slice supports bounded Opus `UDPTunnel` frames in the same
 verified TLS session, for legacy Mumble/compatible servers. `join(index,channel)`
 selects **one explicit voice route** and leaves the microphone muted. The route is
-published as `joined`, and allows listening, only after the server acknowledges
-both the channel and the self-state the join requested (or that request's retries
-are exhausted), so this acknowledgement cannot replace the first joined
-`voice_generation` that mute/deafen proofs carry. Single-click text navigation
+published as `joined` only after the server acknowledges both the channel and the
+self-state the join requested, or once that request's retries are exhausted, so
+this acknowledgement cannot replace the first joined `voice_generation` that
+mute/deafen proofs carry. Joining is necessary, not sufficient, for listening:
+sound also needs the server to report the user undeafened. After exhausted retries
+the route is joined with capture blocked, and with sound blocked unless the server
+did report that. Single-click text navigation
 never changes this route. Moving to another voice destination first mutes the
 previous one through shared SDK policy. `toggle_mute(index)` and
 `toggle_deaf(index)` operate only on the joined route; deaf implies mute. Server
@@ -337,7 +340,9 @@ until a subsequent matching own self-state observation; absent/default false
 fields and unrelated sparse channel updates do not count as that acknowledgement.
 Stock Murmur silently rate-limits these controls alongside text and Version
 messages. The session retries only the latest desired state at intervals of at
-least 1.1 seconds, with at most five automatic retries. An exhausted retry budget
+least 1.1 seconds, with at most five automatic retries, so the budget ends 6.6
+seconds after the request at the earliest and, at the SDK worker's 250 ms tick,
+within 8.1 seconds. An exhausted retry budget
 produces a notice and keeps capture blocked; a timeout never grants permission.
 The call UI invokes audio gestures before awaiting commands and serializes mute
 and deafen controls until the shared SDK's matching local-intent snapshot arrives.
