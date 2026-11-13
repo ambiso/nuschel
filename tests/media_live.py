@@ -242,6 +242,22 @@ def check_clipping(binary, pulse, output):
           flush=True)
 
 
+def cpu_counters():
+    """Now, the CPU seconds the hypervisor took from this machine, and the seconds tasks waited for a CPU."""
+    steal = int(Path("/proc/stat").read_text().split()[8]) / os.sysconf("SC_CLK_TCK")
+    waited = int(Path("/proc/pressure/cpu").read_text().split()[4].removeprefix("total=")) / 1e6
+    return time.monotonic(), steal, waited
+
+
+def conditions(worker, before):
+    """What one attempt ran under: the canceller's delay estimates and the CPU load since `before`."""
+    now, steal, waited = cpu_counters()
+    seconds = now - before[0]
+    delays = [event["delay_ms"] for event in worker.events if event["kind"] == "echo"]
+    return (f"canceller delay {delays} ms; {seconds:.1f} s, {(steal - before[1]) / seconds / os.cpu_count():.0%} "
+            f"stolen, tasks waiting for a CPU {(waited - before[2]) / seconds:.0%} of the time")
+
+
 def check_echo_test(binary, pulse):
     """The Settings echo test, without a server: nothing is sent, and the verdict is right."""
     pulse.ctl("set-default-source", "mic.monitor")
@@ -253,6 +269,7 @@ def check_echo_test(binary, pulse):
                     if entry["properties"].get("media.name") == "room")
         pulse.ctl("set-sink-input-volume", str(room), "30%")  # about -31 dB of acoustic coupling
         def run(mode):
+            before = cpu_counters()
             worker = Worker(binary, pulse)
             worker.send({"kind": "configure", "bitrate": 40000, "packet_loss_percent": 5,
                          "settings": {"echo_cancellation": mode}})
@@ -262,6 +279,8 @@ def check_echo_test(binary, pulse):
             result = worker.wait(lambda e: e["kind"] == "echo_test", "no echo test result", timeout=20)
             assert not any(e["kind"] == "packet" for e in worker.events), "a preview sent audio"
             worker.stop()
+            print(f"Echo test attempt, canceller {mode}: removed {result['reduction_db']:.1f} dB, sent "
+                  f"{result['transmitted']:.0%}; {conditions(worker, before)}", flush=True)
             return result
         # Convergence still varies from run to run (TODO.md: PulseAudio's own
         # canceller does better in this rig). Prefer an attempt meeting every
@@ -316,6 +335,7 @@ def check_double_talk(binary, pulse, root):
             return sum(levels) / max(1, len(levels)), sum(e["transmitting"] for e in events) / max(1, len(events))
 
         def run():
+            before = cpu_counters()
             worker = Worker(binary, pulse)
             worker.send({"kind": "configure", "bitrate": 40000, "packet_loss_percent": 5, "settings": {}})
             worker.send({"kind": "preview", "capture": True, "loopback": False})
@@ -330,6 +350,8 @@ def check_double_talk(binary, pulse, root):
             # Far end playing, after the canceller's first two seconds.
             together = peaks([e for e in worker.events[start:] if e["kind"] == "level"][28:66])
             worker.stop()
+            print(f"Double talk attempt: ducked {alone[0] - together[0]:.1f} dB, gate open {together[1]:.0%}; "
+                  f"{conditions(worker, before)}", flush=True)
             return alone[0] - together[0], together[1]
         # Convergence still varies from run to run (see check_echo_test). Prefer an attempt
         # meeting both limits: the least ducking alone can come with a gate that cut the user.
