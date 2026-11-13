@@ -260,6 +260,13 @@ pub fn settings(this: &Desktop, cx: &mut Context<Desktop>) -> AnyElement {
         .as_ref()
         .and_then(|loaded| loaded.effective.problem.as_ref())
         .map(ToString::to_string);
+    let effective = match this.client.link_preview_settings().mode {
+        Mode::Off => "Off",
+        Mode::Direct => "Direct",
+        Mode::ProxyRequired => "Proxy required",
+    };
+    let effective =
+        format!("Active policy: {effective}. System configuration may restrict your saved choice.");
     div().flex().flex_col().gap_2()
         .child(crate::settings::segmented("link-preview-mode", "Link previews", [
             ("Off", Mode::Off), ("Direct", Mode::Direct), ("Proxy required", Mode::ProxyRequired),
@@ -269,6 +276,7 @@ pub fn settings(this: &Desktop, cx: &mut Context<Desktop>) -> AnyElement {
             }) as crate::settings::Action)
         }).collect(), cx))
         .child(div().text_xs().text_color(color(TEXT_MUTED)).child(text!("Off makes no requests. Direct contacts the website. Proxy required stays disabled until an explicit proxy and proxied DNS are configured. Receivers never fetch previews.").with_id("link-preview-privacy")))
+        .child(div().text_xs().text_color(color(TEXT_MUTED)).child(text!(effective).with_id("link-preview-effective-policy")))
         .when_some(problem, |settings, problem| settings.child(div().text_xs().text_color(color(TEXT_MUTED)).child(text!(problem).with_id("link-preview-policy-status"))))
         .into_any_element()
 }
