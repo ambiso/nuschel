@@ -151,6 +151,9 @@ def actions(args, root, shell, application, bot, _murmur):
         # Native Entry currently has no AT-SPI Text interface. Locate by its
         # accessible name, then read only its rendered value as other fixtures
         # do for text with no accessible counterpart. Never use the clipboard.
+        # Remove the blinking caret before OCR; its vertical stroke can merge
+        # with the last glyph. Dialog focus leaves the revealed viewport still.
+        assert dialog.call("Component", "GrabFocus")[0]
         park_pointer()
         time.sleep(.2)
         shot = args.output / f"{name}.png"
