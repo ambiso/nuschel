@@ -57,6 +57,8 @@ fn dump() {
         let mut out = [[0.; 2]; FRAME];
         mixer.mix(&mut wide);
         finish(2, &wide, &[0.; FRAME], &mut out);
+        // Interleaved stereo little-endian f64 before the device's final clip
+        // (tests/output_resample.py `read_mix_dump`).
         raw.extend(out.iter().flatten().flat_map(|value| value.to_le_bytes()));
     }
     std::fs::write(output, raw).unwrap();

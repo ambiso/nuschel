@@ -23,6 +23,25 @@ def write_pcm(path, values):
     path.write_bytes(struct.pack(f'<{len(values)}f', *values))
 
 
+def read_mix_dump(path, frames):
+    """`mixer::mixer_fixture::dump` output: interleaved stereo little-endian f64
+    frames of the wide mix, before the device's final clip."""
+    raw = path.read_bytes()
+    if len(raw) != frames * 2 * 8:
+        raise ValueError(f'{path}: {len(raw)} bytes are not {frames} stereo f64 frames')
+    values = struct.unpack(f'<{frames * 2}d', raw)
+    if not all(math.isfinite(v) for v in values):
+        raise ValueError(f'{path}: nonfinite sample')
+    return values
+
+
+def device_clip(values):
+    """What a 48 kHz device plays from the wide mix: `device_sample` in
+    playback.rs clamps to unit amplitude and converts to f32."""
+    clipped = [max(-1., min(1., v)) for v in values]
+    return struct.unpack(f'<{len(clipped)}f', struct.pack(f'<{len(clipped)}f', *clipped))
+
+
 def read_pcm(path):
     raw = path.read_bytes()
     assert len(raw) % 8 == 0
