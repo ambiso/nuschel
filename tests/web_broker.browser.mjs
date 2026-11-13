@@ -376,14 +376,15 @@ try {
   observer=await legacyPeer(Number(port),"broker-pressure-peer");
   await observer.wait(()=>[...observer.users.values()].some(user=>user.name==="broker-recovery"),"pressure peer sees the browser user");
   const browserSession=[...observer.users.values()].find(user=>user.name==="broker-recovery").session;
-  const peerSources=Array.from({length:6},(_,index)=>`PRESSURE_PEER_${index}`);
+  const peerSources=Array.from({length:4},(_,index)=>`PRESSURE_PEER_${index}`);
   const pressureErrors=await recovery.evaluate(()=>{brokerFixture.delayRequestResults=2000;brokerFixture.requestsPeak=brokerFixture.requestsOutstanding;return brokerFixture.errors.length;});
   const pressureStart=await recovery.evaluate(()=>({at:performance.now(),acks:brokerFixture.ackPosts}));
   await rpc(recovery,"open",0,0);
   await recovery.waitForFunction(()=>brokerFixture.last?.timeline?.channel===0&&!brokerFixture.last.timeline.loading&&brokerFixture.last.timeline.messages.length>=900);
   await recovery.waitForFunction(()=>brokerFixture.requestsOutstanding>0);
   const outstandingAtSend=await recovery.evaluate(()=>brokerFixture.requestsOutstanding);
-  for(const source of peerSources)directText(observer,browserSession,source);
+  // Spaced below the stock server's default text flood limit.
+  for(const source of peerSources){directText(observer,browserSession,source);await new Promise(resolve=>setTimeout(resolve,1100));}
   try {
    await recovery.waitForFunction(()=>brokerFixture.last.timeline.messages.every(message=>!message.content_failed&&!message.document.blocks.some(block=>block.kind==="text"&&block.text.startsWith("["))),null,{timeout:60000});
    await recovery.waitForFunction(sources=>sources.every(source=>{const entry=brokerFixture.watch.get(source);return entry&&entry.error===null&&typeof entry.value==="string"&&entry.value!=="null";}),peerSources,{timeout:30000});
