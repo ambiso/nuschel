@@ -117,6 +117,7 @@ class RecoveryTest(DesktopTest):
 
             # Starting Nuschl again (no link) connects and rejoins the channel it was last in.
             terminate(self.app)
+            self.peer.wait(lambda e: e["kind"] == "user_removed" and e["session"] == back["session"])
             self.start_app()
             again = self.peer.wait(lambda e: e["kind"] == "user" and e["user"]["name"] == "RecoveryDesktop"
                                    and e["user"]["channel"] == 1, timeout=60)["user"]
