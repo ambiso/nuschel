@@ -4,7 +4,7 @@
   probe allocate --server ADDR --username U --password P [--transport udp|tcp|tls]
                  [--relay-transport udp|tcp] [--allocations N] [--family 4|6]
                  [--peer ADDR:PORT ...] [--cafile PEM --sni NAME]
-  probe echo --port N [--port M ...]
+  probe echo --bind ADDR [--bind ADDR ...] --port N [--port M ...]
 
 Results are printed as one JSON object; the test script asserts on them.
 """
@@ -102,6 +102,7 @@ class Connection:
             self.sock = socket.create_connection((args.server, port), timeout=5)
             if args.transport == "tls":
                 context = ssl.create_default_context(cafile=args.cafile)
+                context.minimum_version = ssl.TLSVersion.TLSv1_2
                 self.sock = context.wrap_socket(self.sock, server_hostname=args.sni)
         self.buffer = b""
         self.indications = []
@@ -167,6 +168,7 @@ class Session:
             if realm is None or nonce is None:
                 return cls, reply, txid
             if self.key is None or error_text(reply).startswith("error 438"):
+                # The long-term credential key is MD5(username:realm:password) (RFC 8489 §9.2.2).
                 secret = f"{self.args.username}:{realm.decode()}:{self.args.password}"
                 self.key = hashlib.md5(secret.encode()).digest()
                 self.auth = [
@@ -260,14 +262,14 @@ def run_binding(args):
 
 
 def run_echo(args):
-    sockets = []
-    for port in args.port:
-        sock = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM)
-        sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
-        sock.bind(("::", port))
-        sockets.append((sock, port))
-    print(f"echo listening on {args.port}", flush=True)
-    ports = {sock: port for sock, port in sockets}
+    ports = {}
+    for address in args.bind:
+        for port in args.port:
+            family = socket.AF_INET6 if ":" in address else socket.AF_INET
+            sock = socket.socket(family, socket.SOCK_DGRAM)
+            sock.bind((address, port))
+            ports[sock] = port
+    print(f"echo listening on {args.bind} {args.port}", flush=True)
     while True:
         for sock in select.select(list(ports), [], [])[0]:
             data, source = sock.recvfrom(65536)
@@ -280,6 +282,7 @@ def main():
     parser.add_argument("mode", choices=["binding", "allocate", "echo"])
     parser.add_argument("--server")
     parser.add_argument("--port", type=int, action="append")
+    parser.add_argument("--bind", action="append", default=[])
     parser.add_argument("--transport", choices=["udp", "tcp", "tls"], default="udp")
     parser.add_argument("--relay-transport", choices=["udp", "tcp"], default="udp")
     parser.add_argument("--family", type=int, choices=[4, 6], default=4)

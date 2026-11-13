@@ -79,13 +79,18 @@ let
                 head = b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %d\r\nConnection: close\r\n" % len(body)
             connection.sendall(head + b"Set-Cookie: tracking=1\r\n\r\n" + body)
   '';
-  echo = ports: {
+  # Bound to the given addresses only; retried until IPv6 addresses are usable.
+  echo = addresses: ports: {
     description = "UDP echo peer";
     wantedBy = [ "multi-user.target" ];
     after = [ "network.target" ];
-    serviceConfig.ExecStart = "${probe}/bin/turn-probe echo ${
-      lib.concatMapStringsSep " " (port: "--port ${toString port}") ports
-    }";
+    serviceConfig = {
+      ExecStart = "${probe}/bin/turn-probe echo ${
+        lib.concatMapStringsSep " " (address: "--bind ${address}") addresses
+      } ${lib.concatMapStringsSep " " (port: "--port ${toString port}") ports}";
+      Restart = "on-failure";
+      RestartSec = "1s";
+    };
   };
 
   # Evaluation-time checks: misconfigurations the modules must refuse.
@@ -265,8 +270,15 @@ pkgs.testers.runNixOSTest {
               -keyout key.pem -out cert.pem 2>/dev/null
           '';
         };
-        # A loopback service a relay must not reach.
-        systemd.services.echo = echo [ 40000 ];
+        # Local services a relay must not reach.
+        systemd.services.echo =
+          echo
+            [
+              "127.0.0.1"
+              "::1"
+              nodes.turn.networking.primaryIPAddress
+            ]
+            [ 40000 ];
         services.nuschl-turn = {
           enable = true;
           hostName = "turn.test";
@@ -304,25 +316,41 @@ pkgs.testers.runNixOSTest {
           };
         };
       };
-    sfu = {
-      networking.firewall.allowedUDPPorts = [
-        40000
-        40001
-      ];
-      systemd.services.echo = echo [
-        40000
-        40001
-      ];
-    };
-    client = {
-      environment.systemPackages = [
-        probe
-        pkgs.curl
-        pkgs.python3
-      ];
-      networking.firewall.allowedUDPPorts = [ 40000 ];
-      systemd.services.echo = echo [ 40000 ];
-    };
+    sfu =
+      { config, ... }:
+      {
+        networking.firewall.allowedUDPPorts = [
+          40000
+          40001
+        ];
+        systemd.services.echo =
+          echo
+            [
+              config.networking.primaryIPAddress
+              config.networking.primaryIPv6Address
+            ]
+            [
+              40000
+              40001
+            ];
+      };
+    client =
+      { config, ... }:
+      {
+        environment.systemPackages = [
+          probe
+          pkgs.curl
+          pkgs.python3
+        ];
+        networking.firewall.allowedUDPPorts = [ 40000 ];
+        systemd.services.echo =
+          echo
+            [
+              config.networking.primaryIPAddress
+              config.networking.primaryIPv6Address
+            ]
+            [ 40000 ];
+      };
   };
   testScript =
     { nodes, ... }:
