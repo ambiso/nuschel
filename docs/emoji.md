@@ -200,7 +200,9 @@ cannot be loaded, emoji stay text and the picker says so.
 
 The GPUI patch itself has no test in its crate, whose test target does not build
 here (`vendor/gpui-pre/NUSCHEL-PATCH.md`); the smoke test checks what it paints.
-The web picker has no browser test; its logic is in `emoji.js`, which is tested.
+`tests/web_emoji.py` runs the packaged web client in a confined Chromium through an
+owned loopback Murmur and relay: Twemoji in messages under the production CSP, and
+the picker's tabs, search, skin tone, Shift+click and click.
 
 ## Updating
 

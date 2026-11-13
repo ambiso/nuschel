@@ -2,9 +2,9 @@
 //! Emoji: the picker beside the composer (also on Ctrl+. or Ctrl+; as in
 //! GTK), and Twemoji images for emoji in all text the window draws.
 //!
-//! The images and the picker's names, groups and keywords come from the
-//! pinned `twemoji` and `emojibase-data` flake inputs (nix/emoji.nix) and are
-//! compiled in by build.rs; nothing is loaded at run time. They are trusted
+//! The images and the picker's names, groups and keywords come from Twemoji
+//! and emojibase-data, pinned in nix/emoji.nix, and are compiled in by
+//! build.rs; nothing is loaded at run time. They are trusted
 //! build inputs, checked by nix/emoji.py to be static drawings, and drawn by
 //! GPUI's SVG renderer like the interface icons.
 //!
