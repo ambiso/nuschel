@@ -217,6 +217,10 @@ pub struct Desktop {
     pub profile: Profile,
     pub form: Option<ServerForm>,
     pub composer: Entity<TextareaState>,
+    /// Actual logical body bounds, excluding the window chrome and update bar.
+    pub body_size: std::rc::Rc<std::cell::Cell<Size<Pixels>>>,
+    pub composer_rows: usize,
+    pub channels_open: bool,
     pub scroll: ScrollHandle,
     pub channel_scroll: ScrollHandle,
     pub server_scroll: ScrollHandle,
@@ -362,7 +366,7 @@ impl Desktop {
             accessible(
                 TextareaState::new(window, cx)
                     .placeholder("Write a message…")
-                    .auto_grow(1, 10)
+                    .auto_grow(1, 1)
                     .submit_on_enter(true),
                 "Message",
                 true,
@@ -521,6 +525,9 @@ impl Desktop {
             profile,
             form: None,
             composer,
+            body_size: Default::default(),
+            composer_rows: 1,
+            channels_open: false,
             scroll: ScrollHandle::new(),
             channel_scroll: ScrollHandle::new(),
             server_scroll: ScrollHandle::new(),
@@ -1626,6 +1633,10 @@ impl Desktop {
                 .shortcuts
                 .window_actions(&self.settings, keystroke, true)
                 .is_empty();
+        }
+        if keystroke.key == "escape" && self.channels_open {
+            self.channels_open = false;
+            return true;
         }
         if keystroke.key == "escape" && self.viewer.is_some() && self.menu.is_none() {
             self.viewer = None;
