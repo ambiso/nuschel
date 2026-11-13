@@ -149,15 +149,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let (mut first_processed, mut first_transmit, mut first_packet) = (true, true, true);
     let (tx, rx) = mpsc::sync_channel(256);
     let input_tx = tx.clone();
-    std::thread::spawn(move || {
-        let mut input = io::stdin().lock();
-        while let Ok(Some(frame)) = read_frame::<LiveMediaRequest>(&mut input) {
-            if input_tx.send(Event::Request(frame.payload)).is_err() {
-                return;
-            }
-        }
-        let _ = input_tx.send(Event::Closed);
-    });
+    std::thread::spawn(move || forward_requests(io::stdin().lock(), &input_tx));
     // Windows rounds the receive timeout below up to its 15.6 ms timer tick;
     // this ticker wakes the loop on time instead (see `Ticker`). Without it
     // (the thread could not start) the loop keeps its own timeout.
@@ -712,6 +704,31 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         std::process::exit(0);
     }
     Ok(())
+}
+
+/// Hand the supervisor's requests to the main loop until its pipe closes.
+/// Voice and sound effects are dropped while the loop is behind, so a
+/// control request after them is still read at once; control requests wait
+/// for room in the loop's queue and keep their order.
+fn forward_requests(mut input: impl io::Read, tx: &SyncSender<Event>) {
+    while let Ok(Some(frame)) = read_frame::<LiveMediaRequest>(&mut input) {
+        let request = frame.payload;
+        let queued = if matches!(
+            request,
+            LiveMediaRequest::Playback { .. } | LiveMediaRequest::PlaySound { .. }
+        ) {
+            !matches!(
+                tx.try_send(Event::Request(request)),
+                Err(mpsc::TrySendError::Disconnected(_))
+            )
+        } else {
+            tx.send(Event::Request(request)).is_ok()
+        };
+        if !queued {
+            return;
+        }
+    }
+    let _ = tx.send(Event::Closed);
 }
 
 /// Close a transmission with a terminator packet so receivers stop promptly.
@@ -1945,6 +1962,47 @@ mod tests {
             }
             assert!(samples.pop().is_err());
         }
+    }
+
+    #[test]
+    fn a_control_request_behind_a_voice_backlog_reaches_a_busy_loop() {
+        // The real reader over a pipe holding a burst of voice and then a
+        // push-to-talk release; the main loop is busy and takes an event only
+        // now and then.
+        let mut pipe = Vec::new();
+        for sequence in 0..64 {
+            let voice = LiveMediaRequest::Playback {
+                stream: 1,
+                sender: 1,
+                sequence,
+                opus: vec![0; 60],
+                end: false,
+                volume: 1.,
+            };
+            write_frame(&mut pipe, &Envelope::new(0, voice)).unwrap();
+        }
+        let release = LiveMediaRequest::PushToTalk { active: false };
+        write_frame(&mut pipe, &Envelope::new(0, release)).unwrap();
+        let (tx, rx) = mpsc::sync_channel(4);
+        let reader = std::thread::spawn(move || forward_requests(io::Cursor::new(pipe), &tx));
+        let mut taken = 0;
+        let mut released = false;
+        while taken < 8 && !released {
+            std::thread::sleep(Duration::from_millis(20));
+            match rx.recv_timeout(Duration::from_secs(2)) {
+                Ok(Event::Request(LiveMediaRequest::PushToTalk { active: false, .. })) => {
+                    released = true;
+                }
+                Ok(Event::Request(_)) => taken += 1,
+                _ => break,
+            }
+        }
+        assert!(
+            released,
+            "the release still waits behind voice after {taken} events"
+        );
+        drop(rx);
+        reader.join().unwrap();
     }
 
     #[test]
