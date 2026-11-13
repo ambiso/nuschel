@@ -690,7 +690,10 @@ impl WaylandWindowState {
     pub fn inset(&self) -> Pixels {
         match self.decorations {
             WindowDecorations::Server => px(0.0),
-            WindowDecorations::Client => self.client_inset.unwrap_or(px(0.0)),
+            // The window state never holds `Compositor` (see `request_decorations`).
+            WindowDecorations::Client | WindowDecorations::Compositor => {
+                self.client_inset.unwrap_or(px(0.0))
+            }
         }
     }
 }
@@ -2180,7 +2183,7 @@ impl PlatformWindow for WaylandWindow {
         let state = self.borrow();
         match state.decorations {
             WindowDecorations::Server => Decorations::Server,
-            WindowDecorations::Client => Decorations::Client {
+            WindowDecorations::Client | WindowDecorations::Compositor => Decorations::Client {
                 tiling: state.tiling,
             },
         }
@@ -2190,8 +2193,19 @@ impl PlatformWindow for WaylandWindow {
         let mut state = self.borrow_mut();
         match state.surface_state.decoration().as_ref() {
             Some(decoration) => {
-                decoration.set_mode(decorations.to_xdg());
-                state.decorations = decorations;
+                match decorations.to_xdg() {
+                    Some(mode) => {
+                        decoration.set_mode(mode);
+                        state.decorations = decorations;
+                    }
+                    // No preference: the compositor's `configure` picks the mode. Until
+                    // it arrives the window decorates itself, as the protocol asks of a
+                    // client that has not negotiated server-side decorations.
+                    None => {
+                        decoration.unset_mode();
+                        state.decorations = WindowDecorations::Client;
+                    }
+                }
                 update_window(state);
             }
             None => {
@@ -2524,14 +2538,16 @@ fn update_window(mut state: RefMut<WaylandWindowState>) {
 }
 
 pub(crate) trait WindowDecorationsExt {
-    fn to_xdg(self) -> zxdg_toplevel_decoration_v1::Mode;
+    /// The mode to ask for; `None` asks for none (`unset_mode`).
+    fn to_xdg(self) -> Option<zxdg_toplevel_decoration_v1::Mode>;
 }
 
 impl WindowDecorationsExt for WindowDecorations {
-    fn to_xdg(self) -> zxdg_toplevel_decoration_v1::Mode {
+    fn to_xdg(self) -> Option<zxdg_toplevel_decoration_v1::Mode> {
         match self {
-            WindowDecorations::Client => zxdg_toplevel_decoration_v1::Mode::ClientSide,
-            WindowDecorations::Server => zxdg_toplevel_decoration_v1::Mode::ServerSide,
+            WindowDecorations::Client => Some(zxdg_toplevel_decoration_v1::Mode::ClientSide),
+            WindowDecorations::Server => Some(zxdg_toplevel_decoration_v1::Mode::ServerSide),
+            WindowDecorations::Compositor => None,
         }
     }
 }

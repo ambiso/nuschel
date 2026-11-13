@@ -1848,7 +1848,8 @@ impl PlatformWindow for X11Window {
         }
 
         match state.decorations {
-            WindowDecorations::Server => Decorations::Server,
+            // The window state never holds `Compositor` (see `request_decorations`).
+            WindowDecorations::Server | WindowDecorations::Compositor => Decorations::Server,
             WindowDecorations::Client => {
                 let tiling = if state.fullscreen {
                     Tiling::tiled()
@@ -1918,6 +1919,11 @@ impl PlatformWindow for X11Window {
     fn request_decorations(&self, mut decorations: gpui::WindowDecorations) {
         let mut state = self.0.state.borrow_mut();
 
+        // X11 has no negotiation: without a preference, the window manager decorates.
+        if decorations == gpui::WindowDecorations::Compositor {
+            decorations = gpui::WindowDecorations::Server;
+        }
+
         if matches!(decorations, gpui::WindowDecorations::Client)
             && !state.client_side_decorations_supported
         {
@@ -1929,7 +1935,7 @@ impl PlatformWindow for X11Window {
 
         // https://github.com/rust-windowing/winit/blob/master/src/platform_impl/linux/x11/util/hint.rs#L53-L87
         let hints_data: [u32; 5] = match decorations {
-            WindowDecorations::Server => [1 << 1, 0, 1, 0, 0],
+            WindowDecorations::Server | WindowDecorations::Compositor => [1 << 1, 0, 1, 0, 0],
             WindowDecorations::Client => [1 << 1, 0, 0, 0, 0],
         };
 
@@ -1952,7 +1958,7 @@ impl PlatformWindow for X11Window {
         };
 
         match decorations {
-            WindowDecorations::Server => {
+            WindowDecorations::Server | WindowDecorations::Compositor => {
                 state.decorations = WindowDecorations::Server;
                 state.update_transparency();
             }
