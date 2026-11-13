@@ -148,7 +148,7 @@ async function send(page,text) {
  await page.getByRole("button",{name:"Send",exact:true}).click();
  await page.waitForFunction(()=>document.querySelector("textarea")?.value==="");
 }
-const result={passed:false,artifact:root,stale:null,retired:null,expiry:null,slow:null,ack_loss:null,recovery:null,pressure:null,reconnect:null,stress:process.argv[7]==="stress",throughput:[]};
+const result={passed:false,artifact:root,stale:null,retired:null,expiry:null,slow:null,ack_loss:null,direct:null,recovery:null,pressure:null,reconnect:null,stress:process.argv[7]==="stress",throughput:[]};
 let observer;
 async function hold(page){
  await page.evaluate(()=>{brokerFixture.holdAck=true;brokerFixture.heldAck=null;});
@@ -328,6 +328,32 @@ try {
  assert.equal(result.ack_loss.errors,1);assert.equal(result.ack_loss.reload_client,false,"chat stays usable");
  assert.equal(result.ack_loss.content_workers,1);assert.equal(result.ack_loss.sdk_workers,1);assert.equal(result.ack_loss.capture_calls,0);
  await lost.screenshot({path:screenshot.replace(".png","-ack-loss.png")});
+
+ // A selected direct conversation keeps its exact verified derivative across a
+ // reconnect: connect changes the generation outside a poll, and a direct
+ // conversation's instance never changes.
+ const direct=await open("broker-dm");
+ const dmPeer=await legacyPeer(Number(port),"broker-dm-peer");
+ try {
+  await dmPeer.wait(()=>[...dmPeer.users.values()].some(user=>user.name==="broker-dm"),"direct peer sees the browser user");
+  directText(dmPeer,[...dmPeer.users.values()].find(user=>user.name==="broker-dm").session,"dm-reconnect-canary");
+  await direct.waitForFunction(()=>(brokerFixture.last?.servers[0].channels??[]).some(channel=>channel.name.includes("broker-dm-peer")),null,{timeout:20000});
+  const conversation=await direct.evaluate(()=>brokerFixture.last.servers[0].channels.find(channel=>channel.name.includes("broker-dm-peer")).id);
+  await rpc(direct,"open",0,conversation);
+  // Read the rendered row atomically from one settled snapshot.
+  const before=await (await direct.waitForFunction(id=>{const timeline=brokerFixture.last?.timeline;if(timeline?.channel!==id||timeline.loading)return null;const message=timeline.messages.find(message=>message.content_token&&!message.content_failed&&message.document.blocks.some(block=>block.kind==="text"&&block.text.includes("dm-reconnect-canary")));return message?{channel:timeline.channel,instance:timeline.instance,serial:message.serial,token:message.content_token}:null;},conversation,{timeout:20000})).jsonValue();
+  await rpc(direct,"disconnect",0);await rpc(direct,"connect",0);
+  await direct.waitForFunction(()=>brokerFixture.last?.servers[0].status==="connected",null,{timeout:20000});
+  try { await direct.waitForFunction(before=>brokerFixture.last?.timeline?.channel===before.channel&&brokerFixture.last.timeline.messages.find(message=>message.serial===before.serial)?.content_token===before.token,before,{timeout:10000}); }
+  catch(error) {
+   const diagnostic=await direct.evaluate(before=>({before,channel:brokerFixture.last?.timeline?.channel,instance:brokerFixture.last?.timeline?.instance,row:brokerFixture.last?.timeline?.messages.find(message=>message.serial===before.serial),retries:[...document.querySelectorAll("article button")].filter(node=>node.textContent==="Retry message preview").length}),before);
+   console.error("direct-diagnostic",JSON.stringify(diagnostic));result.direct_failure=diagnostic;await direct.screenshot({path:screenshot.replace(".png","-direct-failure.png")});throw error;
+  }
+  result.direct=await direct.evaluate(before=>({channel:before.channel,instance_before:before.instance,instance_after:brokerFixture.last.timeline.instance,token:before.token,token_kept:brokerFixture.last.timeline.messages.find(message=>message.serial===before.serial).content_token===before.token,retries:[...document.querySelectorAll("article button")].filter(node=>node.textContent==="Retry message preview").length,content_workers:brokerFixture.workers.filter(url=>url.includes("content-worker-")).length,capture_calls:captureCalls}),before);
+  assert.equal(result.direct.token_kept,true);assert.equal(result.direct.instance_after,result.direct.instance_before,"a direct conversation keeps its instance");
+  assert.equal(result.direct.retries,0);assert.equal(result.direct.content_workers,1);assert.equal(result.direct.capture_calls,0);
+  await direct.screenshot({path:screenshot.replace(".png","-direct.png")});
+ } finally { dmPeer.socket.destroy(); }
  if(result.stress) {
   const recovery=await open("broker-recovery");
   const sdk=recovery.workers().find(worker=>worker.url().includes("sdk.worker-"));assert.ok(sdk);
