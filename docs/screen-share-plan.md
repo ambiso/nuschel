@@ -1,11 +1,12 @@
 # Screen sharing plan: Nuschl and stock Mumble servers, with browser watch links
 
-Status: plan, 2026-11-13, against main 8781be09. It folds in the frozen #139 signalling design (`83a5b5a7:docs/legacy-signalling-plan.md`), the frozen #93 plugin-data work (`0e40c7ac`), #35, #135 and #139–#147, the owner's request for link-secret key agreement that only an active server can defeat, and the domain decisions (stream.nuschl.eu/watch, turn.nuschl.eu). Nothing here is implemented; effort figures are rough estimates.
+Status: plan, 2026-11-13, against main 8781be09; revised the same day on main ae1bb887 for the owner's 4K60, direct-or-relay and adaptation target (§4). It folds in the frozen #139 signalling design (`83a5b5a7:docs/legacy-signalling-plan.md`), the frozen #93 plugin-data work (`0e40c7ac`), #35, #135 and #139–#147, the owner's request for link-secret key agreement that only an active server can defeat, and the domain decisions (stream.nuschl.eu/watch, turn.nuschl.eu). Nothing here is implemented; effort figures are rough estimates.
 
 ## 0. Bottom line
 
 - **Nothing user-visible exists yet.** What exists is a str0m transport trial with synthetic frames, the #139 design, #93 plugin data (frozen, off main), and reusable post-quantum crypto (HPKE with X-Wing) in `nuschl-identity`. There is no capture, encoder, decoder, SFU, watch page or SFrame code.
 - **Topology:** for one sharer and many viewers, use a forward-only **companion SFU at stream.nuschl.eu**. I don't recommend mesh. TURN at turn.nuschl.eu is a reachability fallback, restricted so it can only relay to the SFU. It is not on the critical path.
+- **Quality (owner target, §4):** up to 4K60 where the sharer has a hardware AV1 encoder and the viewer can decode it; everyone else gets a lower tier automatically. Only resolution, frame rate and bitrate ever adapt.
 - **Fastest route to "working":**
   - **Phase 1:** browser-captured sharing launched from Nuschl. Nuschl opens `stream.nuschl.eu/share` in the system browser, and viewers use `stream.nuschl.eu/watch#…`. It works on stock Mumble and on compatible-mode Nuschl servers.
   - **Phase 2, in parallel lanes:** native Linux capture and AV1 encoding in a new isolated video worker; native viewing comes after.
@@ -20,10 +21,10 @@ Status: plan, 2026-11-13, against main 8781be09. It folds in the frozen #139 sig
 
 | Item | State | Where |
 | --- | --- | --- |
-| `nuschl-rtc` | **Code, trial.** Socket-independent str0m 0.25 with the `rust-crypto` feature (DTLS adapter patched, `vendor/str0m-rust-crypto/NUSCHL-PATCH.md`). Opus and VP8 only (AV1 must be added for screen sharing; str0m supports it). Up to 2 audio + 2 video tracks, roles bound to track IDs (`Purpose::ScreenVideo`). One offer/answer only. Host candidate only: no TURN, no ICE restart, no SFrame. Limits: SDP 32 KiB, datagram 2 KiB, video frame 256 KiB. 17 tests (12 transport, 5 signalling). | `crates/rtc/src/lib.rs:1-13, 27-31, 43-49, 157-190, 204, 421, 488-520`; `signaling.rs:7-13, 48-57`; `crates/rtc/tests/` |
+| `nuschl-rtc` | **Code, trial.** Socket-independent str0m 0.25 with the `rust-crypto` feature (DTLS adapter patched, `vendor/str0m-rust-crypto/NUSCHL-PATCH.md`). Opus and VP8 only (AV1 must be added for screen sharing; str0m supports it). Up to 2 audio + 2 video tracks, roles bound to track IDs (`Purpose::ScreenVideo`). One offer/answer only. Host candidate only: no TURN, no ICE restart, no SFrame. Limits: SDP 32 KiB, datagram 2 KiB, video frame 256 KiB; admission within 120 ms of send time, budget capped at 10 Mbit/s (too small for 4K, §4.2). 17 tests (12 transport, 5 signalling). | `crates/rtc/src/lib.rs:1-13, 27-31, 43-49, 157-190, 204, 421, 488-520`; `signaling.rs:7-13, 48-57`; `crates/rtc/tests/` |
 | `apps/rtc-probe` | **Code, trial only.** Two loopback UDP endpoints, synthetic Opus and VP8 keyframes, delay/BWE readout. Not an application call path. | `apps/rtc-probe/src/main.rs:1-60` |
 | WebRTC stack | **str0m only.** C++/Go stacks are excluded even behind bindings or workers (`docs/architecture.md:200-206`). str0m has no TURN client (sans-IO, its `lib.rs:470-489`). It has an RTP mode for SFU forwarding. Its VP8 keyframe detection reads the first payload byte (`packet/vp8.rs:341, 403`), so SFrame must leave the VP8 header unencrypted. str0m 0.25 also packetizes and depacketizes AV1 and detects AV1 keyframes (`packet/av1.rs`); it has **no** Dependency Descriptor support (S0c: it only carries the raw header-extension bytes), so DD parsing, layer selection and per-leg sequence/timestamp rewriting are Nuschl code (prototyped in S0c). cargo-deny allows only `nuschl-rtc` to use str0m (`deny.toml:60-63`). | — |
-| Capture, encode, decode | **Nothing first-party.** GPUI ships capture code (`vendor/gpui-pre/src/platform/scap_screen_capture.rs`, via zed-scap: X11/xcb, ScreenCaptureKit, windows-capture). It runs inside the desktop shell, so it can't be used: capture APIs belong in a capture worker (`docs/screen-share-audio.md:61-66`), and AGENTS.md forbids extending the GPUI exception by analogy. `rav1e` is in the lockfile only through image→ravif. #35 (decoder isolation) is open. | `Cargo.lock` |
+| Capture, encode, decode | **Nothing first-party.** GPUI ships capture code (`vendor/gpui-pre/src/platform/scap_screen_capture.rs`, via zed-scap: X11/xcb, ScreenCaptureKit, windows-capture). It runs inside the desktop shell, so it can't be used: capture APIs belong in a capture worker (`docs/screen-share-audio.md:61-66`), and AGENTS.md forbids extending the GPUI exception by analogy. `rav1e` is in the lockfile only through image→ravif. #35 (decoder isolation) is open. Spike only: VA-API AV1 encoding worked in a sandbox prototype (S0e, §4.3). | `Cargo.lock` |
 | Media worker isolation | **Code.** One media worker per application: CPAL, opus-pure, Sonora, nnnoiseless, pipewire. Linux bubblewrap profile: audio sockets, `/dev/snd`, no network/home/D-Bus, 1 GiB address space. Windows: AppContainer with the microphone capability. macOS: deny-list Seatbelt. Supervised with generations and revisions. **Not suitable for video:** it holds microphone and audio-socket capabilities. Precedent for a new role: the music-bot codec worker's fixed roles (`SECURITY.md:43`). | `crates/ipc/src/host.rs:773-829`; `SECURITY.md:28-29, 79-84, 228-231`; `crates/client/src/native/media.rs:1-13` |
 | Browser media paths | **Audio only, over the WebSocket TLS tunnel:** `crates/client-wasm`, separate Opus WASM worker (`web/app/audio-codec.worker.js`), AudioWorklet. No RTCPeerConnection, no getDisplayMedia. Web CSP allows only the microphone (`nix/web-module.nix:64-83`). Video and screen sharing are listed as unsupported (`docs/web.md:376-385`). | — |
 | `docs/screen-share-audio.md` | **Design only**, for #146. Separate capture worker; the portal grants video, not audio (`:128-136`); exclusion barrier; SFrame keys never in capture or codec workers (`:251-256`); relay-only rules (`:246-250`). | — |
@@ -38,7 +39,7 @@ Status: plan, 2026-11-13, against main 8781be09. It folds in the frozen #139 sig
 
 **Phase 1, the first shippable release:**
 - **Who shares:** a Nuschl desktop user clicks "Share screen" in a channel. Nuschl generates the link secret S and a separate publisher secret P, opens `https://stream.nuschl.eu/share#v=1&k=S&p=P` in the system browser, and posts the legacy line containing `https://stream.nuschl.eu/watch#v=1&k=S`. P is never posted.
-- **Capture:** the browser's own picker and recording indicator, via getDisplayMedia. Video only, at most 1080p and 15 fps, up to 2.5 Mbit/s. **AV1 only** (owner, 2026-11-13): hardware encoding wherever the device has it, software AV1 as the fallback, no VP8 and no H.264 (§7.6). Screen-content tuning and an L1T3 scalability mode where the browser offers them. S0b found that only Chromium applies `scalabilityMode` and sends the Dependency Descriptor, and only when the mode is set before the offer. Firefox silently ignores the mode and never sends the descriptor. So a Firefox sharer is single-layer, and the SFU cannot drop layers for it.
+- **Capture:** the browser's own picker and recording indicator, via getDisplayMedia. Video only. **What Phase 1 can realistically reach:** up to 1080p30 with software AV1 (S0b got 1080p at about 15 fps in Chromium and 9 fps in Firefox, headless, at 2.5 Mbit/s). Higher tiers, up to 4K60, only where the browser uses a hardware AV1 encoder and `getStats` shows it keeping up (§4.3). That varies by OS, GPU and browser version and is unmeasured (S0b had no GPU). 4K60 is most achievable natively (Phase 2). **AV1 only** (owner, 2026-11-13): hardware encoding wherever the device has it, software AV1 as the fallback, no VP8 and no H.264 (§8.6). Screen-content tuning and an L1T3 scalability mode where the browser offers them. S0b found that only Chromium applies `scalabilityMode` and sends the Dependency Descriptor, and only when the mode is set before the offer. Firefox silently ignores the mode and never sends the descriptor. So a Firefox sharer is single-layer, and the SFU cannot drop layers for it.
 - **Viewers:** anyone with the link, in a browser. Nuschl users get the same link (no in-app player yet).
 - **Media path:** browser → companion SFU → browsers. SFrame with a random key per epoch, delivered per viewer by the X-Wing PSK exchange.
 - **Servers:** stock Murmur 1.x and compatible-mode nuschld (both use the chat-link path). End-to-end-mode nuschld refuses with "not available yet" (fail closed; #139 §2).
@@ -47,7 +48,7 @@ Status: plan, 2026-11-13, against main 8781be09. It folds in the frozen #139 sig
 **Phase 1 is an intermediate milestone, not the end state.** Native capture and native viewing remain the requested result; browser-launched capture is only the owner-approved step towards it.
 
 **Phase 2, in parallel lanes:**
-- Native Linux sharer: portal picker, `nuschl-video-worker` with VA-API AV1 hardware encoding and a software AV1 fallback (§7.6), the SDK driver's str0m connection to the SFU.
+- Native Linux sharer: portal picker, `nuschl-video-worker` with VA-API AV1 hardware encoding and a software AV1 fallback (§8.6), the SDK driver's str0m connection to the SFU.
 - Native in-app viewer: isolated decoder (#35), GPUI rendering (#145), identity-bound key exchange (#139 B), plugin-data stream cards (#93 + #139 C).
 - End-to-end servers (#139 I0/I, #135).
 
@@ -148,7 +149,59 @@ Status: plan, 2026-11-13, against main 8781be09. It folds in the frozen #139 sig
 
 **Supersedes in #139:** the §0 row "ephemeral keys + PSK: refuted", §5.2 `sframe_base`, and the §3.1/§8 "Not end-to-end encrypted" labels. Record this as a new descendant revision of the plan; don't rewrite frozen `83a5b5a7`.
 
-## 4. Critical path
+## 4. Quality, bandwidth and paths (4K60 target)
+
+**Owner target (2026-11-13):** "ideally we can support 4K 60fps at a good bitrate, with the client opting into relay forwarding if their upload bandwidth doesn't suffice for direct streaming (and clients would request more bandwidth) and downgrading the bitrate automatically to what can be sent over the connection (or what the clients can process)."
+
+In short:
+- 4K60 is the top tier, not a promise for every device. Each device gets what its encoder, decoder and network measurably sustain.
+- Only resolution, frame rate and bitrate adapt. Encryption, key agreement, labels and relay-only never change because of quality or bandwidth.
+
+### 4.1 Tiers
+
+Estimates for realtime AV1 (8-bit 4:2:0), from published streaming guidance. **Not measured here; expect ±50 %.** Hardware encoders need more bits than software ones for the same quality, and most lack AV1's screen-content tools.
+
+| Tier | Screen content (text, UI) | Motion (video, games) | Key frame, uncapped |
+| --- | --- | --- | --- |
+| 4K60 (3840×2160) | 6–15 Mbit/s | 20–40 Mbit/s | 0.4–2.5 MB |
+| 4K30 | 4–10 | 12–25 | 0.4–2.5 MB |
+| 1440p60 | 3–8 | 10–20 | 0.2–1 MB |
+| 1080p60 | 2–5 | 6–12 | 0.1–0.6 MB |
+| 1080p30 | 1.5–3 | 3–6 | 0.1–0.6 MB |
+| 720p30 | 0.8–1.5 | 1.5–3 | 40–250 KB |
+| 720p15 (floor) | 0.4–0.8 | 0.8–1.5 | 40–250 KB |
+
+- "Good bitrate" defaults for 4K60: 12 Mbit/s for screen content, 25 Mbit/s for motion, never above 40.
+- A static screen costs almost nothing. Scrolling or zooming a 4K page of text costs about as much as motion.
+- Key-frame evidence so far is small and synthetic: 720p VA-API key frames of 38,774 B and 54,759 B (S0e, §4.3), 1080p libaom ≤152 KB over WebRTC and ≤195 KB in WebCodecs (S0b), rav1e up to 589 KB at 1080p (rav1d spike). The 4K column scales these by the pixel count.
+
+### 4.2 Key frames and bounds
+
+At 25 Mbit/s a 1 MB key frame takes about a third of a second to send, and every viewer pays for it. Today's bounds don't fit 4K:
+- **`nuschl-rtc` trial:** frames ≤256 KiB, a frame is admitted only if it fits 120 ms of send time at the current estimate, and the budget is capped at 10 Mbit/s. At its 2 Mbit/s start estimate that is only about 22–26 KB per frame (S0e checked against 26,000 B), so both 720p hardware key frames would already be rejected.
+- **S0c SFU policy:** a leg queue clamps at 256 KiB plus at most 128 KiB of overshoot, so it would abort a 4K key frame.
+- **WASM delivery path (rav1d spike):** 1 MiB per frame message.
+
+Proposed per-tier bounds (S0f checks them):
+- **Encoder caps:** key frames ≤1 MiB at 1440p and above, ≤512 KiB at 1080p and below, through the encoder's max-frame-size control (radeonsi advertises one; FFmpeg set 262,144 B in S0e). Delta frames ≤ half the key cap. An oversized frame is dropped, never split or queued, and the encoder is asked for a capped key frame.
+- **Admission:** a key frame may take up to 500 ms at the leg's estimate; deltas keep the 120 ms window. A leg that can't carry the tier's key frame in 500 ms is too slow for that tier and steps down.
+- **SFU queues:** soft cap ≈300 ms at the leg's estimate, clamped to 32 KiB–2 MiB; a key frame may overshoot up to the key cap. RTX caches are sized by time (≈1 s at the tier's rate, about 4 MB for a 4K leg), not by packet count. That is ≤ about 100 MB for a 4K room with 16 viewers.
+- **Fewer key frames:** joins already batch with rekeys (≤2 s). Key-frame requests stay rate-limited: per viewer at most one per 2 s, and at 4K at least 1 s apart per room. Native senders repair loss with rolling intra refresh (radeonsi advertises it) rather than full key frames. A new viewer still needs one key frame, because AV1 decoding starts there.
+- **SFrame doesn't care about size.** In the browser stream worker it costs about 0.6 ms per 64 KiB (maintained-crypto-wasm: Chromium 0.56–0.57 ms, Firefox 0.65–0.67 ms). That is ~10 ms for a 1 MiB key frame and 3–4 % of one core at 30 Mbit/s. Natively it is 0.05–0.06 ms per 64 KiB.
+
+### 4.3 What each device may do
+
+Each device's tier is measured when the share starts and re-checked during it:
+- **Sharer at 4K60:** needs a hardware AV1 encoder that sustains 3840×2160 at 60 fps (encode time p95 well under 16.7 ms) and capture that delivers it (natively: PipeWire DMA-BUF into VA-API without a CPU copy).
+  - **New evidence (S0e attempt-002, 2026-11-13):** VA-API AV1 encoding on an RX 7900 XTX (RDNA3, radeonsi, Mesa 26.3.0) worked inside a bubblewrap sandbox with an empty `/sys` stub. Three synthetic 720p frames, valid AV1, rav1d output byte-identical to libdav1d. The driver advertises up to 8192×4352, CBR/VBR, a max frame size, rolling intra refresh and up to 4 temporal layers.
+  - **Not shown yet:** realtime, 4K, sustained rate control, temporal layers, the production 1 GiB address-space limit (it ran with 4 GiB), production confinement.
+- **Software encoders:** at most 1080p30, lower if the measured budget says so (encode p95 ≤60 % of the frame interval). Apple sharers are software-only, since Apple has no AV1 hardware encoder.
+- **Viewer at 4K60:** needs hardware AV1 decoding, or a strong native software decoder that measures it. Pure-Rust rav1d without assembly ran 92–156 fps at 1080p on one thread, roughly 25–40 fps at 4K. 4K60 therefore needs threads, rav1d's assembly (to review) or hardware decoding (S0f measures).
+- **WASM rav1d (WebKit/Safari path):** at most 1080p30, 1080p15 by default. On this host it decoded 1080p at 58–157 fps and ran the full pipeline at ≥37.8 fps, single-threaded. 4K costs about four times as much, so it is not offered.
+- **Browsers with AV1 in WebRTC:** `mediaCapabilities` (`smooth`, `powerEfficient`) is only a hint. S0b saw Firefox claim hardware support without a GPU. The page then goes by `getStats`: encode and decode time, dropped frames, `qualityLimitationReason`.
+- **Never downgraded:** encryption, key agreement, labels and relay-only. A device below the floor (720p15) gets a clear refusal.
+
+## 5. Critical path
 
 Phase 1 order: S0 → K1 → K2 → W1 → B1 → T1, with E1 (the long pole) in parallel and D1 and I1 alongside. Rough estimate for Phase 1 with 5–6 lanes: about 2.5–3 weeks (uncertain).
 
@@ -161,7 +214,7 @@ Phase 1 order: S0 → K1 → K2 → W1 → B1 → T1, with E1 (the long pole) in
 | W1 | Watch page: strict fragment, `replaceState`, `/sfu`, encoded-transform decrypt, fail closed without support, roster, accessibility | #139 F (new issue) | K2, E1, S0b | `web/stream/{watch.html, watch.js, stream-worker.js}`, `packages.stream-site` | none (plain JS) | browser | `tests/web_stream.mjs`; CSP; no fragment in logs | M, 5–7 d | C |
 | B1 | Share page: getDisplayMedia video only, `selfBrowserSurface:'exclude'`, `systemAudio:'exclude'`, AV1 via `setCodecPreferences` (refuse with a clear message where the browser cannot encode AV1), maxBitrate, L1T3, SFrame encrypt, grants and rekeys, viewer roster, Stop, warning when a whole monitor is shared | new (#139 J, **needs owner approval**) | W1, E1 | `web/stream/share.*` | — | browser (its own encoder and sandbox) | headless Chromium with fake capture; rekey on leave | M, 3–4 d | C |
 | D1 | Desktop handoff: consent dialog, S/P from OS RNG held in memory, open share page, post the HTML or text line as `transfer.rs` does, "ended" line, rotate | #145 UI / #139 G | K1 link format | `crates/core/src/stream.rs` (new), `apps/desktop/src/stream.rs` (new), one menu hunk | — | desktop shell | units; private GNOME screenshots; AT-SPI | S–M, 2–4 d | E |
-| I1 | Infrastructure (§5) | #143 + new infra issue | owner hosts and DNS | `nix/stream-module.nix`, coturn config | coturn (C; infrastructure exception, D7) | servers | TURN relays only to the SFU; relay-only browser run | S–M | F |
+| I1 | Infrastructure (§6) | #143 + new infra issue | owner hosts and DNS | `nix/stream-module.nix`, coturn config | coturn (C; infrastructure exception, D7) | servers | TURN relays only to the SFU; relay-only browser run | S–M | F |
 | T1 | End-to-end evidence and documentation | #147 (partial) | Phase 1 | `tests/stream_vm.nix`; docs (Root merges) | — | VM | owned Murmur 1.4/1.5 plus a real stock Mumble client showing the line; two browsers; passive and MITM; rotate/kick; secret-free logs | M | F + all |
 | V1 | `nuschl-video-worker --screen-encode` (Linux): only the inherited portal PipeWire FD; SHM buffers; AV1 hardware encoding through VA-API (render node only; PipeWire DMA-BUF imported without a CPU copy where possible), software AV1 fallback with BGRx→I420 and downscaling; realtime screen-content mode (palette, intra block copy where the encoder has them), L1T3; at most 2 queued frames | #145 + #140 (single layer) | host.rs hunk via Root | `apps/video-worker`, `crates/ipc/src/video.rs` (new), `crates/ipc/src/host.rs` (`video_sandbox_command`) | pipewire 0.10.1 (existing FFI row); **VA-API** bindings (e.g. cros-libva, BSD-3; a new scoped FFI row) plus the system's libva and vendor driver; a **software AV1 encoder** chosen by spike: rav1e (Rust, already in the lockfile via ravif; preferred if realtime screen content is good enough), libaom or SVT-AV1 (C, new SECURITY row and deny wrapper). Encoders have had exploited bugs (libvpx VP8 encoder, CVE-2023-5217, from memory), so encoding is isolated too | new worker: no audio sockets, D-Bus, network or home; fails closed | private PipeWire with a synthetic producer node in a VM; round-trip decode; sandbox denials; kill and reap | M–L, 6–8 d | D |
 | R1 | Driver RTC: UDP owned by the network process, `PeerPolicy` before gathering, WSS to the SFU, SFrame between V1 and rtc, BWE → bitrate, PLI → keyframe, results bound to generation | #143 + #145 | K1, E1, V1 | `crates/client/src/native/rtc.rs` (new), `native.rs` hunk, `crates/rtc` (send-only screen mode, ICE-TCP) | — | SDK driver | loopback SFU; packet capture shows no host/srflx candidates in relay-only mode | L, 8–10 d | **wait for Codex** |
@@ -169,7 +222,7 @@ Phase 1 order: S0 → K1 → K2 → W1 → B1 → T1, with E1 (the long pole) in
 | N1 | Native viewer: `--decode` role (strict profile, pixel caps), GPUI surface, `CallBinding`, plugin announce | #35, #145, #139 B/C, #93 | V1, R1, #93 merged | video worker, desktop, `crates/identity/src/call.rs`, `apps/crypto-worker/src/call.rs` | AV1 decoder: **rav1d** (owner, 2026-11-13: "we can use rav1d for software decoding"; Rust port of dav1d; review enabled features, asm and unsafe); hardware decoding only as a later opt-in | decode worker (separate role from encode: no capture FD, no GPU encode access); crypto worker | malformed AV1 corpus; pixel caps; identity mismatch | L | later |
 | M1 | End-to-end servers: MLS ephemeral `Signal` with S over MLS (or exporter keys), native viewers only | #139 I0/I, #135 | N1 | e2ee envelope, crypto-worker `mls.rs`, server `mls.rs` | — | crypto worker | e2ee flow tests | M–L | later |
 
-## 5. Infrastructure the owner must provide or approve
+## 6. Infrastructure the owner must provide or approve
 
 **Hosts and DNS:**
 - `stream.nuschl.eu` (A/AAAA): nginx serves `/watch` and `/share` (static, access logs off, no other content) and the `/sfu` WebSocket (same origin, so CSP stays `'self'`).
@@ -206,7 +259,7 @@ Phase 1 order: S0 → K1 → K2 → W1 → B1 → T1, with E1 (the long pole) in
 
 **What it doesn't learn:** S or K (from an honest page), media content, sealed titles, the Mumble server, channels or names. A malicious or compromised stream host can serve JavaScript that steals S and K from browser users; native viewers never run its code.
 
-## 6. Security and privacy invariants
+## 7. Security and privacy invariants
 
 - **Consent:**
   - Capture needs a fresh picker every time (browser picker, or portal with no restore token) and a visible indicator (the browser's or the portal's, plus Nuschl's banner, voice bar and window title).
@@ -237,12 +290,12 @@ Phase 1 order: S0 → K1 → K2 → W1 → B1 → T1, with E1 (the long pole) in
   - **Browser (owner, 2026-11-13: "A makes sense for relay-only people"):** with relay-only on, the page uses `iceTransportPolicy: 'relay'` through turn.nuschl.eu, so local addresses are never gathered and a VPN user's non-VPN interface is never tried. Without relay-only, the browser connects straight to the SFU. The page signals no local candidates, and the SFU never forwards anyone's address. Sharers and viewers never connect to each other in either case.
   - **No fallback:** if the permitted path fails, the call ends.
 - **Bounds:**
-  - Video: at most 1920×1080 and 15 fps by default (30 opt-in), 2.5 Mbit/s, frames ≤256 KiB (a large keyframe may need an intra-bitrate cap or 512 KiB; to verify), ≤2 queued frames.
+  - Video: tiers up to 3840×2160, 60 fps and 40 Mbit/s, each gated by measurement (§4.3). Key frames ≤1 MiB from 1440p up, ≤512 KiB below; deltas ≤ half that; oversized frames are dropped (§4.2). ≤2 queued frames at the encoder; SFU leg queues ≤2 MiB; RTX caches ≈1 s.
   - Key messages ≤16 KiB, ≤32 pending key requests, at least 1 s between epochs, bounded replay windows.
-  - Viewer and SFU caps as in §5.
+  - Viewer and SFU caps as in §6.
   - Decoder pixel, memory and CPU caps.
 
-## 7. Owner decisions, with recommended defaults
+## 8. Owner decisions, with recommended defaults
 
 1. **Phase 1 sharer:** browser capture launched from Nuschl, with native Linux in parallel. Approves #139 J. The alternative, native Linux first, adds about 1–2 weeks.
 2. **Topology:** companion SFU at stream.nuschl.eu, not mesh. **16 viewers** on the project instance; configurable when self-hosted.
@@ -258,7 +311,7 @@ Phase 1 order: S0 → K1 → K2 → W1 → B1 → T1, with E1 (the long pole) in
 
 The coordinator should file new issues for K1, W1, B1, V1 and the infrastructure, with `source:user-request` quoting today's requests. #140–#147 are approved migrated scope.
 
-## 8. Lanes for the next 1–2 days (no conflicts with current work)
+## 9. Lanes for the next 1–2 days (no conflicts with current work)
 
 - **L1, stream crypto:** S0a, then K1, in new `crates/stream`.
 - **L2, SFU:** S0c, then the E1 skeleton, in new `crates/sfu` and `apps/sfu`.
