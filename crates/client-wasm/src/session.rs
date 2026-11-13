@@ -2980,13 +2980,41 @@ mod tests {
         s.set_self(true, false);
         assert!(s.self_state_settling());
         assert!(!observe(&s).joined);
-        for tick in 1..=7 {
-            s.tick(tick as f64 * SELF_RETRY_MS);
+        // Five retries, each SELF_RETRY_MS after the previous send; the
+        // budget ends exactly 6.6 s after Join's request (docs/web.md).
+        for retry in 1..=SELF_RETRIES {
+            s.tick(f64::from(retry) * SELF_RETRY_MS);
+            assert!(s.self_state_settling());
+            assert!(!observe(&s).joined);
         }
+        s.tick(6_599.0);
+        assert!(s.self_state_settling());
+        assert!(!observe(&s).joined);
+        s.tick(6_600.0);
         assert!(!s.self_state_settling());
+        let notices = s
+            .take_events()
+            .iter()
+            .filter(|event| matches!(event, Event::Server(ServerEvent::Notice(_))))
+            .count();
+        assert_eq!(notices, 1);
         // The notice asks for a manual retry, so the toggle is offered again;
         // without an acknowledgement capture and sound stay blocked.
         let view = observe(&s);
         assert!(view.joined && view.muted && view.deafened && !view.can_transmit);
+
+        // The SDK worker ticks every 250 ms (web/app/src/sdk.worker.js), so
+        // each retry can fire up to one tick late: the wait still ends within
+        // 8.1 s of the request.
+        let mut s = voice_session();
+        s.set_self(true, false);
+        let ended = (1..=40_u32)
+            .map(|tick| f64::from(tick) * 250.0)
+            .find(|&now| {
+                s.tick(now);
+                !s.self_state_settling()
+            })
+            .expect("the retry budget ends");
+        assert!((6_600.0..=8_100.0).contains(&ended));
     }
 }
