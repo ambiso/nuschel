@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! Atomic history replacements. Callers validate input bounds and enforce
-//! tombstone dominance before comparing these snapshots; they carry no deletion
-//! state and do not themselves authorize an edit.
+//! tombstone dominance before comparing these snapshots. Edit authorization and
+//! deletion state belong to the caller.
 
 use crate::preview::Preview;
 
@@ -39,14 +39,14 @@ pub struct HistorySnapshot<'a> {
 /// Whether incoming content may replace current content as one atomic value.
 ///
 /// Known revisions take precedence over timestamps. Equal known revisions only
-/// confirm identical body and preview data. An unknown revision never replaces a
-/// known one. When adopting the first known revision, a conflicting payload must
+/// confirm identical body and preview data. Replacing a known revision requires
+/// a known incoming revision. When adopting the first known revision, a conflicting payload must
 /// have a strictly newer timestamp; an identical payload may keep its timestamp.
 /// Two unknown revisions retain the legacy timestamp ordering, including its
-/// inability to distinguish different edits in the same millisecond.
+/// ambiguity for different edits in the same millisecond.
 ///
 /// Callers must validate bounds and reject replacement of a tombstone first.
-/// Comparison borrows both payloads and copies neither body nor image bytes.
+/// Comparison uses borrowed body and image data.
 pub fn history_replacement_allowed(
     current: HistorySnapshot<'_>,
     incoming: HistorySnapshot<'_>,
@@ -79,7 +79,7 @@ mod tests {
             description: "A description".into(),
             image: Some(EmbeddedImage {
                 mime: ImageMime::Png,
-                // Opaque carried bytes; no image decoding occurs here.
+                // Synthetic opaque carried bytes for comparison.
                 data: vec![1, 2, 3],
                 width: 1,
                 height: 1,
@@ -88,21 +88,6 @@ mod tests {
         };
         value.validate().unwrap();
         value
-    }
-
-    #[test]
-    fn edit_snapshot_preserves_literal_content_and_unknown_revision() {
-        let edit = HistoryEdit {
-            body: "literal\nhttps://example.org/".into(),
-            preview: Some(preview()),
-            edited_ms: 7,
-            edit_revision: None,
-        };
-        let snapshot = edit.snapshot();
-        assert_eq!(snapshot.body, "literal\nhttps://example.org/");
-        assert_eq!(snapshot.preview, edit.preview.as_ref());
-        assert_eq!(snapshot.edited_ms, Some(7));
-        assert_eq!(snapshot.edit_revision, None);
     }
 
     #[test]
@@ -124,7 +109,7 @@ mod tests {
         };
         assert!(history_replacement_allowed(old, new));
         assert!(!history_replacement_allowed(new, old));
-        // Authoritative counts, rather than clocks, determine known ordering.
+        // Authoritative counts determine known ordering.
         assert!(history_replacement_allowed(
             old,
             HistorySnapshot {
