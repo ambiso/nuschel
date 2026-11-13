@@ -38,10 +38,6 @@ pub struct Link {
     pub voice_allowed: bool,
     pub muted: bool,
     pub deafened: bool,
-    /// The server stops us from speaking here: it suppressed us (no Speak
-    /// permission in the channel), muted or deafened us. The microphone
-    /// stays closed for it, and nothing counts as our speech.
-    pub restricted: bool,
     pub bitrate: u32,
     pub loss_percent: u8,
 }
@@ -219,14 +215,12 @@ fn plan<'a>(links: impl Iterator<Item = &'a Link>) -> Plan {
     plan
 }
 
-/// The microphone goes to this server. The connection admits its frames by
-/// the same rule.
-pub(super) fn speaking_to(link: &Link) -> bool {
+/// The microphone goes to this server.
+fn speaking_to(link: &Link) -> bool {
     link.voice_allowed
         && link.bitrate >= nuschl_core::audio::MIN_VOICE_BITRATE
         && !link.muted
         && !link.deafened
-        && !link.restricted
 }
 
 /// A destination started/stopped receiving the microphone, or changed its
@@ -563,7 +557,6 @@ mod tests {
             voice_allowed: true,
             muted,
             deafened,
-            restricted: false,
             bitrate,
             loss_percent,
         }
@@ -872,61 +865,6 @@ mod tests {
         assert!(capture_route_changed(&talk.link, &talk.served(&reopened)));
         talk.update(&reopened);
         assert!(speaking_to(&talk.link));
-    }
-
-    /// #199: unmuted where the server stops us from speaking (suppressed,
-    /// server muted or deafened), the real supervisor keeps the microphone
-    /// closed.
-    #[tokio::test]
-    async fn a_restricted_server_gets_no_microphone() {
-        let (control, input) = mpsc::unbounded_channel();
-        let (_playback, playback) = mpsc::channel(4);
-        let (events, _events) = mpsc::channel(64);
-        let (_settings, settings) = watch::channel(ClientSettings::default());
-        let (_keys, keys) = watch::channel(VoiceKeys::default());
-        let task = tokio::spawn(run_with_start(
-            (input, playback),
-            events,
-            (settings, keys),
-            || Err(nuschl_session::Error::Worker("synthetic worker".into())),
-        ));
-        let capture = async || {
-            let (reply, inspected) = tokio::sync::oneshot::channel();
-            control.send(Control::Inspect(reply)).unwrap();
-            inspected.await.unwrap().1
-        };
-        let restricted = Link {
-            restricted: true,
-            ..link(false, false, 40_000, 1)
-        };
-        let (voice, _voice) = mpsc::channel(4);
-        control
-            .send(Control::Attach {
-                server: "one".into(),
-                generation: 1,
-                link: restricted,
-                voice,
-            })
-            .unwrap();
-        assert!(
-            !capture().await,
-            "a restricted server opened the microphone"
-        );
-        control
-            .send(Control::Update {
-                server: "one".into(),
-                generation: 1,
-                link: Link {
-                    revision: 1,
-                    restricted: false,
-                    ..restricted
-                },
-                cue: None,
-            })
-            .unwrap();
-        assert!(capture().await, "the restriction alone kept it closed");
-        task.abort();
-        let _ = task.await;
     }
 
     #[test]

@@ -1879,9 +1879,8 @@ async fn connect_once(
     let mut voice_revision = 0_u64;
     let mut voice_allowed = true;
     // The server stops us from speaking (it suppressed us, no Speak
-    // permission, or muted or deafened us): the microphone stays closed for
-    // it (media::Link::restricted). It mutes us, and we stay muted after it
-    // lifts (#199). Sessions it restricts, known before our own is.
+    // permission, or muted or deafened us): see `restrict`. Sessions it
+    // restricts, known before our own is.
     let mut restricted = false;
     let mut restricted_users = std::collections::BTreeSet::<u32>::new();
     let mut sequence = 0;
@@ -1945,7 +1944,7 @@ async fn connect_once(
                         bitrate = next;
                         if voice.is_some() {
                             hub.send(media::Control::Update { server: id.clone(), generation,
-                                link: media::Link { revision: voice_revision, voice_allowed, muted, deafened, restricted, bitrate, loss_percent }, cue: None });
+                                link: media::Link { revision: voice_revision, voice_allowed, muted, deafened, bitrate, loss_percent }, cue: None });
                         }
                     }
                 }
@@ -1990,15 +1989,17 @@ async fn connect_once(
                 }
                 if let Command::SetSelf { muted: mute, deafened: deaf } = &command {
                     voice_revision = voice_revision.wrapping_add(1);
-                    let cue = crate::sounds::self_state((muted, deafened), (*mute || *deaf, *deaf));
-                    muted = *mute || *deaf; deafened = *deaf;
+                    // An unmute taken while the server restricts us stays muted (#199).
+                    let next = *mute || *deaf || restricted;
+                    let cue = crate::sounds::self_state((muted, deafened), (next, *deaf));
+                    muted = next; deafened = *deaf;
                     if muted && std::mem::take(&mut transmitting) {
                         let _ = session_commands.try_send(silent_terminator(&mut sequence));
                         if let Some(session) = own_session { mark_talking(events, &id, generation, &mut speaking, session, false).await; }
                     }
                     // The worker closes the microphone (a new process) once no
                     // server gets it, and stops once every server is deafened.
-                    let link = media::Link { revision: voice_revision, voice_allowed, muted, deafened, restricted, bitrate, loss_percent };
+                    let link = media::Link { revision: voice_revision, voice_allowed, muted, deafened, bitrate, loss_percent };
                     if voice.is_some() {
                         hub.send(media::Control::Update { server: id.clone(), generation, link, cue });
                     } else if let Some(sound) = cue {
@@ -2009,10 +2010,9 @@ async fn connect_once(
             },
             outgoing = async { voice.as_mut().unwrap().0.recv().await }, if voice.is_some() => {
                 let Some(media::Outgoing { revision, opus, end }) = outgoing else { voice = None; continue };
-                // By the worker supervisor's own rule, from the current
-                // routing epoch, once any waiting mute change is taken.
-                let link = media::Link { revision: voice_revision, voice_allowed, muted: holds_voice(muted, self_state), deafened, restricted, bitrate, loss_percent };
-                if revision != voice_revision || !media::speaking_to(&link) || voice_keys.borrow().mute || !voice_frame_fits(bitrate, opus.len()) { continue; }
+                // Only unmuted, as the worker's supervisor routes it; nothing
+                // captured before a mute leaves, nor while one waits.
+                if !voice_allowed || revision != voice_revision || holds_voice(muted || deafened, self_state) || voice_keys.borrow().mute || !voice_frame_fits(bitrate, opus.len()) { continue; }
                 let packet = nuschl_protocol::voice::VoicePacket { sender: 0, sequence, opus, end, volume: 1. };
                 sequence += 2;
                 transmitting = !end;
@@ -2079,7 +2079,7 @@ async fn connect_once(
                         voice_revision = voice_revision.wrapping_add(1);
                         if voice.is_some() {
                             hub.send(media::Control::Update { server: id.clone(), generation,
-                                link: media::Link { revision: voice_revision, voice_allowed, muted, deafened, restricted, bitrate, loss_percent }, cue: None });
+                                link: media::Link { revision: voice_revision, voice_allowed, muted, deafened, bitrate, loss_percent }, cue: None });
                         }
                         let _ = events.send(Event::AudioStatus { server: id.clone(), generation,
                             message: "End-to-end voice is not available yet on this server.".into() }).await;
@@ -2100,11 +2100,11 @@ async fn connect_once(
                     }
                     own_session = Some(connected_session);
                     let own_session = connected_session;
-                    restricted = restricted_users.contains(&own_session);
+                    restrict(restricted_users.contains(&own_session), &mut restricted, &mut muted, &mut voice_revision);
                     budget = max_bandwidth;
                     bitrate = VoiceBitrate::resolve(requested, budget).effective;
                     let (sender, receiver) = mpsc::channel(64);
-                    let link = media::Link { revision: voice_revision, voice_allowed, muted, deafened, restricted, bitrate, loss_percent };
+                    let link = media::Link { revision: voice_revision, voice_allowed, muted, deafened, bitrate, loss_percent };
                     hub.send(media::Control::Attach { server: id.clone(), generation, link, voice: sender });
                     voice = Some((receiver, media::Attached { hub: hub.clone(), server: id.clone(), generation }));
                     if !deafened { hub.send(media::Control::Sound(Sound::Connected)); }
@@ -2120,7 +2120,7 @@ async fn connect_once(
                         bitrate = next;
                         if voice.is_some() {
                             hub.send(media::Control::Update { server: id.clone(), generation,
-                                link: media::Link { revision: voice_revision, voice_allowed, muted, deafened, restricted, bitrate, loss_percent }, cue: None });
+                                link: media::Link { revision: voice_revision, voice_allowed, muted, deafened, bitrate, loss_percent }, cue: None });
                         }
                     }
                     let _ = events.send(Event::Protocol { server: id.clone(), generation, event: SessionEvent::Limits(limits) }).await;
@@ -2148,19 +2148,14 @@ async fn connect_once(
                             own_registration = user.user_id;
                             let _ = session_commands.send(Command::Identity(nuschl_session::identity::IdentityCommand::Refresh)).await;
                         }
-                        if restricts != restricted {
-                            // A new routing epoch, as for a mute: frames
-                            // captured under the other state are dropped.
-                            restricted = restricts;
-                            muted |= restricted;
-                            voice_revision = voice_revision.wrapping_add(1);
-                            if restricted && std::mem::take(&mut transmitting) {
+                        if restrict(restricts, &mut restricted, &mut muted, &mut voice_revision) {
+                            if std::mem::take(&mut transmitting) {
                                 let _ = session_commands.try_send(silent_terminator(&mut sequence));
                                 mark_talking(events, &id, generation, &mut speaking, user.session, false).await;
                             }
                             if voice.is_some() {
                                 hub.send(media::Control::Update { server: id.clone(), generation,
-                                    link: media::Link { revision: voice_revision, voice_allowed, muted, deafened, restricted, bitrate, loss_percent }, cue: None });
+                                    link: media::Link { revision: voice_revision, voice_allowed, muted, deafened, bitrate, loss_percent }, cue: None });
                             }
                         }
                     }
@@ -2177,7 +2172,7 @@ async fn connect_once(
                     if measured.abs_diff(loss_percent) >= 3 {
                         loss_percent = measured;
                         if voice.is_some() {
-                            let link = media::Link { revision: voice_revision, voice_allowed, muted, deafened, restricted, bitrate, loss_percent };
+                            let link = media::Link { revision: voice_revision, voice_allowed, muted, deafened, bitrate, loss_percent };
                             hub.send(media::Control::Update { server: id.clone(), generation, link, cue: None });
                         }
                     }
@@ -2272,6 +2267,19 @@ async fn connect_once(
 }
 
 const TALK_HOLD: std::time::Duration = std::time::Duration::from_millis(280);
+
+/// Our own user as the server restricts it (suppressed, server muted or
+/// deafened) or lifts that. A restriction mutes us in a new routing epoch,
+/// and we stay muted after it lifts (#199). Returns whether this muted us.
+fn restrict(restricts: bool, restricted: &mut bool, muted: &mut bool, revision: &mut u64) -> bool {
+    *restricted = restricts;
+    if !restricts || *muted {
+        return false;
+    }
+    *muted = true;
+    *revision = revision.wrapping_add(1);
+    true
+}
 
 /// Push-to-talk and push-to-mute keys, held or not.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -4236,6 +4244,18 @@ mod action_scope_tests {
             Command::SetSelf { muted, deafened } => Some((muted, deafened)),
             _ => None,
         }
+    }
+    /// #199: a restriction mutes us in a new routing epoch; its lift, or
+    /// another restriction while muted, keeps the epoch and us muted.
+    #[test]
+    fn a_restriction_mutes_us_and_its_lift_keeps_us_muted() {
+        let (mut restricted, mut muted, mut revision) = (false, false, 4);
+        assert!(restrict(true, &mut restricted, &mut muted, &mut revision));
+        assert_eq!((restricted, muted, revision), (true, true, 5));
+        assert!(!restrict(false, &mut restricted, &mut muted, &mut revision));
+        assert_eq!((restricted, muted, revision), (false, true, 5));
+        assert!(!restrict(true, &mut restricted, &mut muted, &mut revision));
+        assert_eq!((restricted, muted, revision), (true, true, 5));
     }
     #[tokio::test]
     async fn a_mute_is_neither_refused_nor_lost_while_the_connection_is_busy_or_reconnecting() {
