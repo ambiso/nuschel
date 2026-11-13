@@ -686,6 +686,9 @@ impl Client {
             channel.typing.clear();
         }
         // Offline, the timeline is local observations again.
+        // Explicit disconnection switches to the existing offline cache path;
+        // automatic reconnect retains its recovery cursor instead.
+        server.history_progress.clear();
         if server.history_source == HistorySource::ServerArchive {
             server.history_source = HistorySource::LocalObserved;
             for channel in &mut server.channels {
@@ -5626,5 +5629,18 @@ mod tests {
             shown.iter().filter_map(|row| row.seq).collect::<Vec<_>>(),
             (1..=7).collect::<Vec<_>>()
         );
+    }
+    #[test]
+    fn explicit_disconnect_during_recovery_can_still_open_local_offline_history() {
+        let (mut client, recorder, id) = recovery_client();
+        recovery_reconnect(&mut client, &id, false);
+        client.disconnect(0);
+        assert!(client.servers[0].history_progress.is_empty());
+        let before = recorder.pages.lock().unwrap().len();
+        client.open(0, 2).unwrap();
+        let pages = recorder.pages.lock().unwrap();
+        assert_eq!(pages.len(), before + 1);
+        assert_eq!(pages.last().unwrap().1.source, HistorySource::LocalObserved);
+        assert!(!pages.last().unwrap().1.catchup);
     }
 }
