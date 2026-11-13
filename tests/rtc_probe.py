@@ -22,7 +22,8 @@ def check(binaries, opus_library, probe=None):
     packet = bytes(encoded["value"])
     result = subprocess.run([
         str(probe or binaries / "nuschl-rtc-probe"), "--opus-hex", packet.hex(),
-    ], capture_output=True, text=True, timeout=15, check=True)
+    ], capture_output=True, text=True, timeout=15)
+    assert result.returncode == 0, result.stderr
     report = json.loads(result.stdout)
     assert report["audio_frames_each_way"] == 50, report
     assert all(0 < count <= 17 for count in report["video_frames_received"]), report
