@@ -13,6 +13,16 @@
 //! U+FE0F after them, nothing with U+FE0E after it. GPUI's text painting asks
 //! it for every line (vendor/gpui-pre, `EmojiImages`), so messages and the
 //! composer's text show the same images as the picker.
+//!
+//! Short codes (`:heart:`) type emoji in the composer ([`shortcodes`]), and
+//! emoji in messages name themselves on hover and show a card with their
+//! name and short code on a click ([`info`]).
+mod info;
+mod shortcodes;
+
+pub use info::{EmojiCard, HoveredEmoji, card, emoji_at, tooltip};
+pub use shortcodes::{ShortcodeKey, Shortcodes, list as shortcode_list};
+
 use crate::{state::Desktop, theme::*};
 use gpui_kit::{
     base::{
@@ -205,6 +215,9 @@ pub struct Emoji {
     pub name: &'static str,
     /// Lower-case words of its name, keywords and short codes.
     search: &'static str,
+    /// Its short codes, space-separated, the main one first: `heart
+    /// red_heart` for ❤️ (:heart: and :red_heart:).
+    shortcodes: &'static str,
     /// Its variants by skin tone, light to dark; empty where there is none.
     tones: Option<[&'static str; TONES]>,
 }
@@ -216,6 +229,19 @@ impl Emoji {
             (Some(tones), 1..=TONES) if !tones[tone - 1].is_empty() => tones[tone - 1],
             _ => self.emoji,
         }
+    }
+
+    /// The short code to type for it, without its colons (`heart`).
+    pub fn shortcode(&self) -> &'static str {
+        self.shortcodes.split(' ').next().unwrap_or_default()
+    }
+
+    /// The skin tone `text` is of this emoji in (0 for the default).
+    fn tone_of(&self, text: &str) -> usize {
+        let text = bare(text);
+        (1..=TONES)
+            .find(|&tone| self.in_tone(tone) != self.emoji && bare(self.in_tone(tone)) == text)
+            .unwrap_or(0)
     }
 
     fn matches(&self, words: &[String]) -> bool {
@@ -237,8 +263,8 @@ fn groups() -> &'static [Group] {
     GROUPS.get_or_init(|| parse(assets::TABLE))
 }
 
-/// The table nix/emoji.py writes: `@Group`, then emoji, name, search words
-/// and optionally five skin tones, separated by tabs.
+/// The table nix/emoji.py writes: `@Group`, then emoji, name, search words,
+/// short codes and optionally five skin tones, separated by tabs.
 fn parse(table: &'static str) -> Vec<Group> {
     let mut groups: Vec<Group> = Vec::new();
     for line in table.lines() {
@@ -250,7 +276,8 @@ fn parse(table: &'static str) -> Vec<Group> {
             continue;
         }
         let fields: Vec<&'static str> = line.split('\t').collect();
-        let (Some(group), [emoji, name, search, tones @ ..]) = (groups.last_mut(), &fields[..])
+        let (Some(group), [emoji, name, search, shortcodes, tones @ ..]) =
+            (groups.last_mut(), &fields[..])
         else {
             continue;
         };
@@ -258,6 +285,7 @@ fn parse(table: &'static str) -> Vec<Group> {
             emoji,
             name,
             search,
+            shortcodes,
             tones: <[&str; TONES]>::try_from(tones).ok(),
         });
     }
@@ -292,6 +320,21 @@ fn by_text() -> &'static (std::collections::HashMap<String, &'static Emoji>, usi
         let longest = map.keys().map(|key| key.chars().count()).max().unwrap_or(0);
         (map, longest)
     })
+}
+
+/// The emoji of the table that `text` is, in any skin tone, and which tone.
+pub fn named(text: &str) -> Option<(&'static Emoji, usize)> {
+    let emoji = *by_text().0.get(&bare(text))?;
+    Some((emoji, emoji.tone_of(text)))
+}
+
+/// What an emoji is called, with its skin tone: "waving hand: medium skin
+/// tone", as Unicode names the toned emoji.
+pub fn describe(emoji: &Emoji, tone: usize) -> String {
+    match tone {
+        1..=TONES => format!("{}: {}", emoji.name, TONE_NAMES[tone].to_lowercase()),
+        _ => emoji.name.to_owned(),
+    }
 }
 
 /// A search split into the emoji it contains (in order, once each) and its
@@ -572,10 +615,7 @@ impl Desktop {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.emoji_recent
-            .retain(|recent| !std::ptr::eq(*recent, emoji));
-        self.emoji_recent.insert(0, emoji);
-        self.emoji_recent.truncate(RECENT);
+        self.remember_emoji(emoji);
         let text = emoji.in_tone(self.emoji_tone);
         if keep_open {
             self.composer
@@ -586,6 +626,14 @@ impl Desktop {
             self.composer
                 .update(cx, |input, cx| input.insert(text, window, cx));
         }
+    }
+
+    /// The picker lists it first under "Recently used".
+    fn remember_emoji(&mut self, emoji: &'static Emoji) {
+        self.emoji_recent
+            .retain(|recent| !std::ptr::eq(*recent, emoji));
+        self.emoji_recent.insert(0, emoji);
+        self.emoji_recent.truncate(RECENT);
     }
 
     fn set_emoji_tab(&mut self, tab: Tab) {

@@ -8,9 +8,11 @@ Both inputs are pinned flake inputs (see nix/emoji.nix); this only reads them.
 
 Output:
   emoji.txt   The picker's table: `@Group` lines, then one emoji per line as
-              tab-separated fields: emoji, name, search words, and either no
-              more fields or five skin-tone variants (light to dark; empty
-              where Unicode has none for that tone).
+              tab-separated fields: emoji, name, search words, short codes
+              (emojibase's, space-separated, the first the main one: `heart
+              red_heart` for :heart:), and either no more fields or five
+              skin-tone variants (light to dark; empty where Unicode has none
+              for that tone).
   images.txt  Every image key, one per line; a key followed by a tab and "text"
               is a character that Unicode shows as text by default (™, ©, ❤):
               clients draw it as an image only when U+FE0F follows it, and
@@ -43,6 +45,9 @@ FORBIDDEN = re.compile(
     re.IGNORECASE,
 )
 TONES = 5
+# A short code as typed between colons; emojibase's are unique and at most 46
+# characters long.
+SHORTCODE = re.compile(r"[a-z0-9_+-]{1,64}")
 
 
 def key(hexcode):
@@ -107,6 +112,7 @@ def main():
 
     table = {}
     skipped = []
+    codes = set()
     for emoji in sorted(data, key=lambda emoji: emoji.get("order", 1 << 30)):
         group = emoji.get("group")
         # Group 2 holds the components (skin tones, hair styles); emoji without
@@ -127,13 +133,18 @@ def main():
                 tone = tone[0]
             if isinstance(tone, int) and 1 <= tone <= TONES and key(skin["hexcode"]) in images:
                 tones[tone - 1] = skin["emoji"]
-        search = words(emoji["label"], " ".join(emoji.get("tags", [])), " ".join(aliases(emoji["hexcode"])))
+        codes_of = aliases(emoji["hexcode"])
+        for code in codes_of:
+            if not SHORTCODE.fullmatch(code) or code in codes:
+                raise SystemExit(f"unexpected or repeated short code {code!r} for {emoji['hexcode']}")
+            codes.add(code)
+        search = words(emoji["label"], " ".join(emoji.get("tags", [])), " ".join(codes_of))
         for field in [emoji["emoji"], emoji["label"], *tones]:
             if "\t" in field or "\n" in field:
                 raise SystemExit(f"unexpected separator in {emoji['hexcode']}")
         name = emoji["label"]
         table.setdefault(group, []).append(
-            [emoji["emoji"], name, " ".join(search), *([] if not any(tones) else tones)]
+            [emoji["emoji"], name, " ".join(search), " ".join(codes_of), *([] if not any(tones) else tones)]
         )
 
     lines = []

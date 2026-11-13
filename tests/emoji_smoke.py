@@ -16,7 +16,13 @@ use other shades; the dark theme's text is light):
 - Ctrl+. opens the picker; typing searches; Shift+Enter inserts the first
   result and keeps the picker open, Enter inserts and closes it; the chosen
   skin tone applies; the composer shows the inserted emoji as Twemoji;
-- the sent message is exactly the inserted text.
+- the sent message is exactly the inserted text;
+- short codes in the composer: `:hea` lists emoji and Enter types the first
+  (❤️), a typed closing colon types a known code's emoji (🔥), Down and Tab
+  type another row in the chosen skin tone; Escape closes the list and keeps
+  the text; Ctrl+Z after a replacement gives the code back for good;
+- an emoji in a message names itself in a tooltip on hover, and a click
+  shows its card, larger; Escape closes the card.
 """
 import argparse
 import json
@@ -39,6 +45,8 @@ MEDIUM_SKIN = (0xD4, 0xAB, 0x88)  # Twemoji's medium skin tone (1f3fd)
 ACCENT = (0x5B, 0x7C, 0xFA)  # the dark theme's accent: the search field's border, the selected tab
 GRID = (0x1C, 0x21, 0x2B)  # the dark theme's MAIN: behind the picker's emoji
 TOOLTIP = (0x0F, 0x12, 0x18)  # the dark theme's APP: a tooltip's background
+FIRE = (0xF4, 0x90, 0x0C)  # Twemoji 1f525.svg's orange (none of the other emoji sent here have it)
+THUMB = (0xFF, 0xDB, 0x5E)  # Twemoji 1f44d.svg's yellow (default tone; likewise unique here)
 
 
 def count(path, rgb, crop=None, tolerance=4):
@@ -522,6 +530,115 @@ def main():
                 time.sleep(0.6)
 
             sent_after(category, "\U0001F3C1", "the Flags tab")
+
+            # Short codes (emoji/shortcodes.rs). The skin tone is still medium.
+            def shortcodes_typed():
+                shell.click(*at(*composer))
+                time.sleep(0.3)
+                shell.type("Hi :hea")
+                time.sleep(0.6)
+                shot("emoji-22-shortcode-list")
+                shell.key("Return")  # types :heart: instead of sending
+                time.sleep(0.3)
+                shell.type(" :fire:")  # the closing colon types it
+                time.sleep(0.4)
+                shell.type(" :thu")
+                time.sleep(0.5)
+                shell.key("Down")  # :thumbsdown:, below :thumbsup:
+                time.sleep(0.3)
+                shot("emoji-23-shortcode-down")
+                shell.key("Tab")
+                time.sleep(0.5)
+                shot("emoji-24-shortcodes-typed")
+
+            sent_after(shortcodes_typed, "Hi \u2764\ufe0f \U0001F525 \U0001F44E\U0001F3FD", "short codes")
+
+            def shortcode_escape():
+                shell.click(*at(*composer))
+                time.sleep(0.3)
+                shell.type(":smi")
+                time.sleep(0.5)
+                shell.key("Escape")
+                time.sleep(0.3)
+                shell.type("le")  # the list stays closed for this code
+                time.sleep(0.5)
+                shot("emoji-25-shortcode-closed")
+
+            sent_after(shortcode_escape, ":smile", "Escape on the short code list")
+
+            def shortcode_undo():
+                shell.click(*at(*composer))
+                time.sleep(0.3)
+                shell.type(":fire:")
+                time.sleep(0.5)
+                shell.chord("Control_L", "z")
+                time.sleep(0.5)
+                shot("emoji-26-shortcode-undone")
+
+            sent_after(shortcode_undo, ":fire:", "Ctrl+Z after a short code")
+
+            # An emoji in a message (emoji/info.rs): hover names it, a click
+            # shows its card. Ada's 🔥 is the only fire in the newest lines.
+            ada.say("Look \U0001F525 here")
+            time.sleep(1.5)
+            message = shot("emoji-27-fire-message")
+            raw = subprocess.run(["magick", str(message), "-alpha", "off", "-depth", "8", "rgb:-"],
+                                 capture_output=True, check=True, timeout=30).stdout
+            image_width = len(raw) // 3 // height
+            nx, ny, nw, nh = newest
+            orange = [(x, y) for y in range(ny, ny + nh) for x in range(nx, nx + nw)
+                      if all(abs(raw[(y * image_width + x) * 3 + i] - FIRE[i]) <= 6 for i in range(3))]
+            if len(orange) < 10:
+                failures.append(f"the 🔥 in Ada's message is not drawn ({len(orange)} orange pixels)")
+            else:
+                fire = (sum(x for x, _ in orange) // len(orange), sum(y for _, y in orange) // len(orange))
+                print(f"🔥 in the message at {fire} ({len(orange)} pixels)", flush=True)
+                shell.move(*at(fire[0] - 30, fire[1]))
+                time.sleep(0.1)
+                shell.move(*at(*fire))
+                time.sleep(0.8)
+                hovered = shot("emoji-28-fire-hover")
+                tooltip = count(hovered, TOOLTIP, (fire[0] - 4, fire[1] + 16, 100, 34), tolerance=2)
+                print(f"🔥 hover: {tooltip} tooltip pixels", flush=True)
+                if tooltip < 200:
+                    failures.append(f"hovering the 🔥 in a message shows no tooltip ({tooltip} pixels)")
+                small = count(hovered, FIRE, None, tolerance=6)
+                shell.click(*at(*fire))
+                time.sleep(0.8)
+                opened = shot("emoji-29-fire-card")
+                large = count(opened, FIRE, None, tolerance=6)
+                print(f"🔥 card: {large} orange pixels, {small} before", flush=True)
+                if large < small + 300:
+                    failures.append(f"a click on the 🔥 shows no larger 🔥 ({large} orange pixels, {small} before)")
+                shell.key("Escape")
+                time.sleep(0.6)
+                closed = count(shot("emoji-30-fire-card-closed"), FIRE, None, tolerance=6)
+                print(f"🔥 card closed: {closed} orange pixels", flush=True)
+                if closed > small + 100:
+                    failures.append(f"Escape leaves the 🔥 card open ({closed} orange pixels)")
+
+            # 👍 has three codes (:+1: :thumbsup: :yes:): its card lists each
+            # on its own row beside "Type" (look at emoji-32).
+            ada.say("Thumbs \U0001F44D up")
+            time.sleep(1.5)
+            message = shot("emoji-31-thumb-message")
+            raw = subprocess.run(["magick", str(message), "-alpha", "off", "-depth", "8", "rgb:-"],
+                                 capture_output=True, check=True, timeout=30).stdout
+            yellow = [(x, y) for y in range(ny, ny + nh) for x in range(nx, nx + nw)
+                      if all(abs(raw[(y * image_width + x) * 3 + i] - THUMB[i]) <= 6 for i in range(3))]
+            if len(yellow) < 10:
+                failures.append(f"the 👍 in Ada's message is not drawn ({len(yellow)} yellow pixels)")
+            else:
+                thumb = (sum(x for x, _ in yellow) // len(yellow), sum(y for _, y in yellow) // len(yellow))
+                before = count(message, THUMB, None, tolerance=6)
+                shell.click(*at(*thumb))
+                time.sleep(0.8)
+                card = count(shot("emoji-32-thumb-card"), THUMB, None, tolerance=6)
+                print(f"👍 card: {card} yellow pixels, {before} before", flush=True)
+                if card < before + 300:
+                    failures.append(f"a click on the 👍 shows no larger 👍 ({card} yellow pixels, {before} before)")
+                shell.key("Escape")
+                time.sleep(0.5)
             assert not failures, "\n".join(failures)
             print("emoji smoke: ok", flush=True)
         finally:

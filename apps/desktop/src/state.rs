@@ -273,6 +273,11 @@ pub struct Desktop {
     pub emoji_recent: Vec<&'static crate::emoji::Emoji>,
     pub emoji_tone: usize,
     pub emoji_focus: FocusHandle,
+    /// Short codes typed in the composer (`:heart:`), and the card of an
+    /// emoji clicked in a message with its focus (emoji/info.rs).
+    pub shortcodes: crate::emoji::Shortcodes,
+    pub emoji_card: Option<crate::emoji::EmojiCard>,
+    pub emoji_card_focus: FocusHandle,
     /// The footer's mute and deafen animations (created on first render).
     pub mute_ease: Option<crate::motion::Ease>,
     /// Focus stays inside an open dialog (see `keep_dialog_focus`).
@@ -388,7 +393,10 @@ impl Desktop {
                             input.replace_text_in_range(None, "\n", window, cx)
                         });
                     }
-                    InputEvent::Change => this.composer_changed(cx),
+                    InputEvent::Change => {
+                        this.composer_changed(cx);
+                        this.shortcodes_changed(window, cx);
+                    }
                     _ => {}
                 },
             );
@@ -553,6 +561,9 @@ impl Desktop {
             emoji_recent: Vec::new(),
             emoji_tone: 0,
             emoji_focus: cx.focus_handle(),
+            shortcodes: Default::default(),
+            emoji_card: None,
+            emoji_card_focus: cx.focus_handle(),
             mute_ease: None,
             modal_focus: cx.focus_handle(),
             deafen_ease: None,

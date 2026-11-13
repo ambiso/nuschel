@@ -116,7 +116,10 @@ The design and its measurements: [architecture.md](architecture.md#audio-configu
   button beside the composer, or Ctrl+. or Ctrl+;, opens the picker: Emoji, with
   Stickers and GIFs to come, a search (by words or by an emoji: ❤️ lists every
   heart), category tabs, and a skin tone. A click inserts at the cursor
-  and closes it; Shift+click inserts and keeps it open.
+  and closes it; Shift+click inserts and keeps it open. Short codes type emoji
+  too: `:hea` lists matching emoji above the composer (Enter or Tab types one), and
+  `:heart:` becomes ❤️ as its closing colon is typed. An emoji in a message names
+  itself on hover, and a click shows a card with it larger, its name and its code.
 
 ### Markdown
 

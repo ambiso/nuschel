@@ -73,15 +73,17 @@ test("skin tones", () => {
 });
 
 test("data that is not the expected shape is refused", () => {
-  const valid = { groups: [{ name: "G", emoji: [["😀", "grinning face", "grin"]] }], images: ["1f600"], text: [] };
+  const valid = { groups: [{ name: "G", emoji: [["😀", "grinning face", "grin", "grinning grinning_face"]] }], images: ["1f600"], text: [] };
   assert.ok(emojiIndex(valid));
   for (const broken of [
     null,
     { ...valid, images: ["../secret"] },
     { ...valid, images: ["1f600", "https://example.org/x"] },
     { ...valid, text: ["2122"] },
-    { ...valid, groups: [{ name: "G", emoji: [["😀", "a\tb", "x"]] }] },
-    { ...valid, groups: [{ name: "G", emoji: [["😀", "x"]] }] },
+    { ...valid, groups: [{ name: "G", emoji: [["😀", "a\tb", "x", "x"]] }] },
+    { ...valid, groups: [{ name: "G", emoji: [["😀", "x", "x"]] }] },
+    { ...valid, groups: [{ name: "G", emoji: [["😀", "x", "x", ":grin:"]] }] },
+    { ...valid, groups: [{ name: "G", emoji: [["😀", "x", "x", ""]] }] },
     { ...valid, groups: Array.from({ length: 100 }, () => valid.groups[0]) },
   ]) assert.throws(() => emojiIndex(broken));
   assert.equal(imageUrl("/app/", "1f600"), "/app/emoji/svg/1f600.svg");

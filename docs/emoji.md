@@ -23,7 +23,9 @@ from `flake.lock`, so every build path uses identical store paths. The output:
 
 - `emoji.txt`: the picker's table. One `@Group` line per group, then one emoji per
   line: the emoji, its name, its search words (name, keywords and emojibase short
-  codes) and, if it has them, its five skin-tone variants (light to dark). People
+  codes), its short codes (`heart red_heart` for ❤️, the main one first) and, if it
+  has them, its five skin-tone variants (light to dark). The generator refuses a
+  short code outside `[a-z0-9_+-]{1,64}` or one used twice; every emoji has one. People
   of two skin tones are offered with the same tone for both, as platform pickers
   do. The components group (skin tones, hair styles) and lone regional indicators
   are left out: 1914 emoji in 9 groups.
@@ -105,6 +107,29 @@ tone and the recent emoji last until the desktop quits: settings.json cannot gai
 keys without breaking the 0.1.0 release that reads it (`RELEASED_KEYS` in
 `crates/session/src/config.rs`).
 
+Short codes type emoji in the composer (`emoji/shortcodes.rs`), as in chat apps:
+`:heart:` becomes ❤️. A colon and two characters of a code list up to eight emoji
+above the composer, each with the code that matched and its name: the code itself
+first, then codes starting with what is typed, then codes with a later word
+starting with it (`:smile` also finds `:sweat_smile:`), shorter codes first. Up and
+Down choose, Enter or Tab types the chosen one, a click types that one, and Escape
+closes the list until another code is started. Typing the closing colon of a known
+code replaces it at once; a pasted code, or one brought back by Ctrl+Z, stays text.
+The emoji takes the picker's skin tone and joins the recently used. A code starts
+only at the start of the text, after a space, a bracket, a quote or another emoji,
+never inside a word, a time (`10:30`) or an address (`https://`). Nothing happens
+while text is selected or an input method is composing.
+
+Emoji in messages (`emoji/info.rs`): over an emoji, the pointer becomes a hand and
+a tooltip names it (with its skin tone: "waving hand: medium skin tone"), as the
+picker's tooltips do. A click, without dragging, opens a card beside it with the
+emoji at 64 pixels, its name and, beside "Type", every short code that types it,
+one per row, the main one first; a click outside or Escape closes it. The emoji under the pointer is found
+with the same rule that draws it, in the line under the pointer, so what is named
+is what is shown; links keep their own hover and click, and selecting text shows
+no tooltip. Only emoji of the table are named: a lone skin tone or regional
+indicator is drawn but has no name.
+
 ## Web
 
 The web build copies the assets to `/app/emoji/` (`nix/web-client.nix`). The page
@@ -124,13 +149,16 @@ cannot be loaded, emoji stay text and the picker says so.
 - The picker matches the desktop's: the same tabs, search, skin tone, click,
   Shift+click and Enter, with Ctrl+. or Ctrl+; from the composer, and Escape or a
   click outside to close it. The skin tone is kept in `localStorage`; the recent
-  emoji last as long as the page. Not yet on the web: the category tabs and
-  searching by an emoji, which so far only the desktop has.
+  emoji last as long as the page. Not yet on the web: the category tabs,
+  searching by an emoji, short codes in the composer and the emoji card, which so
+  far only the desktop has. The web client validates the short-code field.
 
 ## Tests
 
 - `cargo test -p nuschl` (`emoji::tests`, crate2nix: `checks.<system>.desktop-unit`):
-  the table and its tones, search (also by an emoji), the category tabs, the presentation rule (`™` and `™️`, ©, ®, ❤, ☝,
+  the table and its tones, search (also by an emoji), the category tabs, short codes
+  (where a code may start, closing colons, ranking, typed versus pasted colons),
+  naming the emoji at an offset in a message, the presentation rule (`™` and `™️`, ©, ®, ❤, ☝,
   U+FE0E, sequences, flags, keycaps, plain text), the images' shape, and that an
   image renders at the requested size.
 - `node --test src/emoji.test.js` in `web/app`, run by the web build: the same
@@ -149,7 +177,11 @@ cannot be loaded, emoji stay text and the picker says so.
   that it shows a cursor, that a click on a result inserts it (also in the last
   column), that Ctrl+V pastes and Ctrl+Backspace deletes a word; that the grid has
   a scrollbar; and that the Flags tab jumps to 🏁 and is underlined. `--no-category-row` runs these
-  against a build from before the category tabs, to see them fail there.
+  against a build from before the category tabs, to see them fail there. Then short
+  codes: `:hea` and Enter, a typed `:fire:`, `:thu`, Down and Tab (in the chosen
+  skin tone), Escape keeping `:smile` as text, and Ctrl+Z after `:fire:` keeping the
+  code, each checked by what is sent; and Ada's 🔥 in a message: hovering it shows a
+  tooltip, a click shows its larger card, and Escape closes it.
 
 The GPUI patch itself has no test in its crate, whose test target does not build
 here (`vendor/gpui-pre/NUSCHEL-PATCH.md`); the smoke test checks what it paints.

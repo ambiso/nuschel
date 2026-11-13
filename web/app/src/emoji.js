@@ -16,6 +16,8 @@ const TEXT_STYLE = 0xfe0e, EMOJI_STYLE = 0xfe0f;
 // 4009 images, keys of at most nine code points.
 const LIMITS = { bytes: 2 * 1024 * 1024, groups: 32, emoji: 8192, images: 16384, parts: 10, field: 512 };
 const KEY = /^[0-9a-f]{1,6}(?:-[0-9a-f]{1,6}){0,9}$/;
+// emojibase's short codes (:heart:), space-separated, the main one first.
+const SHORTCODES = /^[a-z0-9_+-]{1,64}(?: [a-z0-9_+-]{1,64})*$/;
 
 function text(value, limit = LIMITS.field) {
   if (typeof value !== "string" || value.length > limit || /[\t\n\r]/.test(value)) throw new Error("invalid emoji data");
@@ -46,9 +48,10 @@ export function emojiIndex(data) {
     return {
       name: text(group.name, 64),
       emoji: group.emoji.map((row) => {
-        if (!Array.isArray(row) || (row.length !== 3 && row.length !== 3 + TONES)) throw new Error("invalid emoji");
-        const [emoji, name, search, ...tones] = row.map((field) => text(field));
-        return { emoji, name, search: search.split(" "), tones: tones.length ? tones : null };
+        if (!Array.isArray(row) || (row.length !== 4 && row.length !== 4 + TONES)) throw new Error("invalid emoji");
+        const [emoji, name, search, shortcodes, ...tones] = row.map((field) => text(field));
+        if (!SHORTCODES.test(shortcodes)) throw new Error("invalid emoji short code");
+        return { emoji, name, search: search.split(" "), shortcodes: shortcodes.split(" "), tones: tones.length ? tones : null };
       }),
     };
   });
