@@ -49,7 +49,7 @@
       nixosModules.witness = import ./nix/witness-module.nix { inherit self; };
       # The Mumble music bot for Subsonic servers (docs/musicbot.md).
       nixosModules.musicbot = import ./nix/musicbot-module.nix { inherit self; };
-      # Screen sharing: the TURN relay and the stream host (screen-share plan §5, #143).
+      # Screen sharing: the TURN relay and the stream host (#143).
       nixosModules.turn = ./nix/turn-module.nix;
       nixosModules.stream = ./nix/stream-module.nix;
       homeModules.default = import ./nix/home-manager.nix { inherit self; };
