@@ -547,11 +547,11 @@ def check_room_echo(binary, pipewire, output):
         levels[mode] = (sum(loud) / max(1, len(loud)), sum(e["transmitting"] for e in window) / max(1, len(window)))
     print(f"Room on one clock: Nuschl's canceller removed its own playback ({', '.join(removed)} dB; 30 dB or "
           f"more in every run).", flush=True)
-    with quarantine.step("vm-smoke/pipewire-other-app-removed"):
-        assert levels["off"][0] - levels["on"][0] >= 20 and levels["on"][1] <= 0.05, \
-            f"another application's sound was not removed: {levels}"
-        print(f"Room on one clock: the canceller removed another application's stereo sound "
-              f"({levels['off'][0] - levels['on'][0]:.0f} dB).", flush=True)
+    assert levels["off"][0] - levels["on"][0] >= 20, f"another application's sound was not removed: {levels}"
+    print(f"Room on one clock: the canceller removed another application's stereo sound "
+          f"({levels['off'][0] - levels['on'][0]:.0f} dB).", flush=True)
+    with quarantine.step("vm-smoke/pipewire-other-app-gate"):
+        assert levels["on"][1] <= 0.05, f"the gate opened for another application's sound: {levels}"
 
 
 def main():
