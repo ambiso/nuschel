@@ -39,6 +39,10 @@ let
       path = "${native.${name}}/${name}/${file}";
     }) files;
   };
+  # Twemoji graphics (CC-BY 4.0) and emojibase-data (MIT), compiled into the
+  # desktop and served by the web client (nix/emoji.nix).
+  emojiAssets = import ./emoji.nix { inherit pkgs; };
+  emojiLock = (builtins.fromJSON (builtins.readFile ../flake.lock)).nodes;
   newcm = projectRoot + "/release/licenses/newcm";
   syntect = projectRoot + "/release/licenses/syntect-assets";
   syntax =
@@ -108,6 +112,24 @@ in
               sha256 = customSyntax.sha256;
             }
           ];
+      }
+    ]
+    ++ [
+      {
+        name = "emoji-assets";
+        version = "twemoji-${emojiLock.twemoji.original.ref}+emojibase-data-17.0.0";
+        source = "https://github.com/jdecked/twemoji/tree/${emojiLock.twemoji.locked.rev} (${emojiLock.twemoji.locked.narHash}); ${emojiLock.emojibase-data.locked.url} (${emojiLock.emojibase-data.locked.narHash})";
+        files =
+          map
+            (file: {
+              name = file;
+              path = "${emojiAssets}/${file}";
+            })
+            [
+              "ATTRIBUTION.txt"
+              "LICENSE-GRAPHICS"
+              "LICENSE-emojibase"
+            ];
       }
     ]
     ++ pkgs.lib.optional (webRuntimeNotices != null) {

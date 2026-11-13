@@ -16,12 +16,17 @@ for an existing flake export, with no new ARM runtime or CI proof.
 
 | Scope | Target coverage | External runtime/asset terms |
 | --- | --- | --- |
-| `linux-nix` | x86_64 Linux native/server/relay | Rust standard library, NewCM math, syntect data |
+| `linux-nix` | x86_64 Linux native/server/relay | Rust standard library, NewCM math, syntect data, emoji assets |
 | `linux-aarch64-nix` | ARM Linux native/server/relay | Same families, independently selected normal target graph |
-| `windows-x86_64` | Windows x86_64 desktop/helpers | Rust, GCC runtime exception, MinGW runtime/winpthreads, NewCM, syntect |
-| `macos-universal` | x86_64 and ARM Darwin desktop/helpers | Rust, NewCM, syntect |
-| `web` | Client/audio/content WASM build roots | Rust, syntect, actual emitted npm/helpers and retained Temml ancestry |
+| `windows-x86_64` | Windows x86_64 desktop/helpers | Rust, GCC runtime exception, MinGW runtime/winpthreads, NewCM, syntect, emoji assets |
+| `macos-universal` | x86_64 and ARM Darwin desktop/helpers | Rust, NewCM, syntect, emoji assets |
+| `web` | Client/audio/content WASM build roots | Rust, syntect, actual emitted npm/helpers and retained Temml ancestry, emoji assets |
 | `all` | Complete target union | Complete inspectable source audit, retained with CI diagnostic artifacts |
+
+The emoji assets are Twemoji's graphics (CC-BY 4.0, with the attribution it asks
+for) and emojibase-data (MIT), from the pinned flake inputs ([emoji.md](emoji.md)).
+The license check requires them wherever the desktop (`nuschl`) or the web client
+(`nuschl-client-wasm`) is a root. The pickers also credit Twemoji.
 
 Native and cross notice derivations do not depend on the web App/WASM output
 builds. The Linux CI job separately checks native-package and static-web notices.

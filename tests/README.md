@@ -104,7 +104,11 @@ mentions and text-only jumps over AT-SPI, with screenshots. Against a loopback `
 (edits, deletions and their authorisation, typing, direct conversations, with
 `nuschl-cli`) and `conversation_screenshots.py` (the desktop with edits, tombstones,
 the typing line, a direct conversation from server history, keyboard links, and the
-local cache it leaves, in a private headless GNOME Shell). The client SDK without a
+local cache it leaves, in a private headless GNOME Shell) and `emoji_smoke.py
+<binaries> --output DIR` (Twemoji in messages and the composer, checked by pixel
+colours: `™` stays text and `™️` is an image; the picker's search, skin tone,
+Shift+Enter, Shift+click and click insert the expected text, and it is what is sent;
+docs/emoji.md). The client SDK without a
 UI: `with_local_nuschld.py <binaries> sdk_headless.py <binaries> --port PORT` runs
 `crates/client/examples/headless.rs` (three people connect, register, meet in a
 channel, send, receive, edit, and load the server's history through the SDK alone).
