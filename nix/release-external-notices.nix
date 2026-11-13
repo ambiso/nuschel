@@ -5,6 +5,7 @@
   toolchain,
   projectRoot,
   webRuntimeNotices ? null,
+  musicbotRuntimeNotices ? null,
 }:
 let
   cross = pkgs.pkgsCross.mingwW64;
@@ -112,6 +113,23 @@ in
             "BUNDLED-NPM.json"
             "WASM-PROVENANCE.json"
             "PACKAGE-LOCK.json"
+          ];
+    }
+    ++ pkgs.lib.optional (musicbotRuntimeNotices != null) {
+      name = "musicbot-web-runtime-assets";
+      version = "locked-rendered-musicbot";
+      source = "Actual musicbot Vite emitted npm owners and exact pinned npm source lock; no WASM or math worker";
+      files =
+        map
+          (file: {
+            name = file;
+            path = "${musicbotRuntimeNotices}/${file}";
+          })
+          [
+            "NOTICES.txt"
+            "BUNDLED-NPM.json"
+            "PACKAGE-LOCK.json"
+            "EUPL-1.2"
           ];
     };
 }

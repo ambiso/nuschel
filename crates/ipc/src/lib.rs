@@ -6,6 +6,8 @@ pub mod crypto;
 pub mod host;
 pub mod math;
 pub mod murmur;
+#[cfg(not(target_family = "wasm"))]
+pub mod musicbot;
 pub mod server;
 pub mod windows_sandbox;
 
@@ -38,6 +40,11 @@ impl<T> Envelope<T> {
     }
 }
 
+/// Thumbnail admission shared by the isolated worker and trusted adapters.
+pub const MAX_THUMBNAIL_EDGE: u32 = 400;
+pub const MAX_THUMBNAIL_INPUT_BYTES: usize = 8 * 1024 * 1024;
+pub const MAX_THUMBNAIL_RGBA_BYTES: usize = 400 * 400 * 4;
+
 /// One untrusted input for the content worker, and what to make of it.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -48,6 +55,12 @@ pub enum ContentRequest {
     LegacyHtml { html: String },
     /// A base64-encoded avatar image; answered with a small `Rendered` thumbnail.
     Avatar { image: String },
+    /// Bounded encoded artwork; replied with exactly one source-free Image.
+    Thumbnail {
+        image: String,
+        max_width: u32,
+        max_height: u32,
+    },
     /// A base64-encoded website icon (favicon, also ICO/BMP); answered like `Avatar`.
     Icon { image: String },
     /// An inline `data:` image; answered with a `Rendered` image at the viewer's size.

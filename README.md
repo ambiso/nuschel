@@ -156,6 +156,20 @@ mode until encrypted media is implemented; use compatible mode for voice.
 Configuration, administration, importing a Mumble server, and running it without
 Nix: [docs/server.md](docs/server.md).
 
+## A music bot
+
+`nuschl-musicbot` plays music from Subsonic and OpenSubsonic servers (Navidrome,
+Gonic, Ampache, …) in one or more Mumble channels, on stock servers too. Write `!web`
+to it and it sends you a private link to a web page where you browse the libraries
+(albums with covers, artists, playlists, search) and manage the queue. Its Svelte
+player has live updates, scrubbing and drag-and-drop ordering. Queues, playback
+positions and the latest 1,000 history entries per queue survive deployment
+restarts. Its Mumble comment gives the instance address and link instructions.
+Each channel has its own queue or shares another channel's. VAD-based ducking and
+playback settings are adjustable on the page.
+On NixOS: `imports = [ inputs.nuschl.nixosModules.musicbot ];` and
+`services.nuschl-musicbot`; details in [docs/musicbot.md](docs/musicbot.md).
+
 ## Security and privacy
 
 - **Sandboxes.** Message text and images, formulas, voice, file transfers, your local

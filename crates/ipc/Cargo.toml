@@ -13,7 +13,7 @@ nuschl-core.workspace = true
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 thiserror = "2.0.21"
-tokio = { version = "1.54.1", features = ["io-util", "macros", "process", "time", "rt"] }
+tokio = { version = "1.54.1", features = ["io-util", "macros", "process", "time", "rt", "sync"] }
 
 # Its own binary is the fake worker, so it brings its own main.
 [[test]]
