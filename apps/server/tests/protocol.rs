@@ -1356,6 +1356,28 @@ async fn import_murmur(
     report
 }
 
+/// A PBKDF2 row without its salt column is imported without a password.
+#[tokio::test]
+async fn a_murmur_pbkdf2_password_without_a_salt_is_not_imported() {
+    let dump = nuschl_ipc::murmur::MurmurDump {
+        channels: vec![Default::default()],
+        users: vec![nuschl_ipc::murmur::MurmurUser {
+            id: 1,
+            name: "alice".into(),
+            password: Some("ab".repeat(48)),
+            kdf_iterations: Some(1000),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let directory = tempfile::tempdir().unwrap();
+    let report = import_murmur(directory.path(), &MemoryStore::shared(), dump, false)
+        .await
+        .unwrap();
+    assert_eq!(report.pbkdf2_hashes, 0);
+    assert!(report.skipped[0].starts_with("user 1: malformed PBKDF2 password"));
+}
+
 #[tokio::test]
 async fn a_murmur_database_imports_with_its_passwords_and_acls() {
     let carol = identity();
@@ -1378,14 +1400,6 @@ async fn a_murmur_database_imports_with_its_passwords_and_acls() {
             ..Default::default()
         });
     }
-    // A PBKDF2 row without its salt column is imported without a password.
-    dump.users.push(nuschl_ipc::murmur::MurmurUser {
-        id: 8,
-        name: "frank".into(),
-        password: Some("ab".repeat(48)),
-        kdf_iterations: Some(1000),
-        ..Default::default()
-    });
     let directory = tempfile::tempdir().unwrap();
     let store = MemoryStore::shared();
     let report = import_murmur(directory.path(), &store, dump.clone(), false)
@@ -1393,7 +1407,7 @@ async fn a_murmur_database_imports_with_its_passwords_and_acls() {
         .unwrap();
     let rendered = report.render();
     for (what, count) in [
-        ("registered users", 6),
+        ("registered users", 5),
         ("channels", 3),
         ("ACL entries", 6),
         ("groups", 2),
@@ -1415,7 +1429,6 @@ async fn a_murmur_database_imports_with_its_passwords_and_acls() {
         "user 4: the name does not match",
         "user 5: another account has the same name",
         "user 6: malformed PBKDF2 password",
-        "user 8: malformed PBKDF2 password",
         "user 6: malformed certificate hash",
         "channel 4 and its subchannels",
         "channel 5: its parent 99",
@@ -1445,12 +1458,12 @@ async fn a_murmur_database_imports_with_its_passwords_and_acls() {
     let report = import_murmur(directory.path(), &store, dump, true)
         .await
         .unwrap();
-    assert_eq!(report.imported.get("registered users"), Some(&6));
+    assert_eq!(report.imported.get("registered users"), Some(&5));
     assert!(
         report
             .advice
             .iter()
-            .any(|line| line.contains("replaced 3 channels, 6 registered users"))
+            .any(|line| line.contains("replaced 3 channels, 5 registered users"))
     );
 
     let fixture = start_plain(directory, store, "").await;
