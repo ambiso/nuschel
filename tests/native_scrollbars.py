@@ -153,6 +153,9 @@ def actions(args, root, shell, application, bot, _murmur):
         # do for text with no accessible counterpart. Never use the clipboard.
         # Remove the blinking caret before OCR; its vertical stroke can merge
         # with the last glyph. Dialog focus leaves the revealed viewport still.
+        # Virtual keyboard injection returning does not mean the Wayland client
+        # has consumed its final character. Settle before changing focus.
+        time.sleep(.25)
         assert dialog.call("Component", "GrabFocus")[0]
         park_pointer()
         time.sleep(.2)
