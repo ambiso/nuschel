@@ -6,10 +6,17 @@
 //!
 //! The crate is portable protocol and key state only. Callers pass the time (Unix
 //! milliseconds) and a cryptographic RNG, and carry the messages over the SFU; the crate
-//! does no I/O and keeps no global state. Key authority stays with the process that runs
-//! it: natively the crypto worker, which hands epoch keys to the SDK driver for SFrame,
-//! and in the browser the dedicated stream worker. Keys stay out of codec and content
-//! workers.
+//! does no I/O and keeps no global state.
+//!
+//! Key authority stays with the designated crypto worker, the one caller cargo-deny
+//! allows. It holds the link secret, the exchange state and the identity bindings, and
+//! hands out only what a later, reviewed caller needs. That integration is future work
+//! and held until its SECURITY.md row is approved:
+//! - the SDK driver encrypting media with SFrame (R1), given epoch keys only;
+//! - the desktop handoff creating links (D1);
+//! - the browser's dedicated stream worker (K2), a WASM realm that is no OS sandbox.
+//!
+//! Codec and content workers receive no key material.
 //!
 //! ```text
 //! S          = 32 random bytes from the link
