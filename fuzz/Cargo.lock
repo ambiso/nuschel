@@ -3248,6 +3248,7 @@ version = "0.1.0"
 dependencies = [
  "nuschl-core",
  "nuschl-ipc",
+ "nuschl-legacy-html",
  "nuschl-protocol",
  "nuschl-session",
  "serde",
