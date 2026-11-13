@@ -409,8 +409,8 @@ mod tests {
         let first = writes.choose(choice(Mode::Direct)).unwrap().unwrap();
         // This first write is physically blocked. No subsequent choice may
         // start another writer, even after many pointer/key actions.
-        for index in 0..1000 {
-            let mode = if index % 2 == 0 {
+        for index in 0_u64..1000 {
+            let mode = if index.is_multiple_of(2) {
                 Mode::Off
             } else {
                 Mode::ProxyRequired

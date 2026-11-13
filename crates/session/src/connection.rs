@@ -35,6 +35,8 @@ use tokio::{
 pub use crate::model::{Channel, ServerLimits, TextTarget, User};
 pub use nuschl_legacy_html::{escape_html, legacy_body, text_html};
 
+mod preview;
+
 fn next_user_instance() -> u64 {
     static NEXT: AtomicU64 = AtomicU64::new(1);
     NEXT.fetch_add(1, Ordering::Relaxed)
@@ -137,6 +139,11 @@ const MAX_SEND_ATTEMPTS: u32 = 5;
 
 #[derive(Clone, Debug)]
 pub enum SessionEvent {
+    /// A particular preview submission reached the wire queue or was refused.
+    LinkPreviewSendResult {
+        id: u64,
+        result: Result<(), String>,
+    },
     /// Actual CodecVersion knowledge, independent of the private routing default.
     OpusAvailable(bool),
     PeerCertificate(String),
@@ -262,6 +269,15 @@ pub enum Command {
     SendHtml {
         target: TextTarget,
         html: Vec<String>,
+        expected_peer: Option<u64>,
+    },
+    /// One sender-generated preview, retaining its original authority through
+    /// the rate queue. Ordinary text/HTML do not acquire generic action scope.
+    SendPreview {
+        id: u64,
+        authority: CommandAuthority,
+        target: TextTarget,
+        html: String,
         expected_peer: Option<u64>,
     },
     SetSelf {
@@ -571,6 +587,11 @@ impl Command {
         let mut users = BTreeSet::new();
         let mut channels = BTreeSet::new();
         match self {
+            Self::SendPreview { target, .. } => match target {
+                TextTarget::Channel(id) => { channels.insert(*id); }
+                TextTarget::Direct(id) => { users.insert(*id); }
+                TextTarget::DirectConversation(_) => return None,
+            },
             Self::Join(id)
             | Self::RemoveChannel(id)
             | Self::RequestPermissions(id)
@@ -1014,6 +1035,7 @@ impl Default for MessageRate {
 /// A text message waiting for the rate limit: `wire` is what the server
 /// receives, `body` and `html` what our own timeline shows.
 struct Outgoing {
+    preview: Option<preview::Delivery>,
     target: TextTarget,
     expected_peer: Option<u64>,
     wire: String,
@@ -1327,6 +1349,7 @@ pub async fn run(
                         },
                         _ => None,
                     };
+                    let preview_id = preview::command_id(&command);
                     let admin_refusal = match &command {
                         Command::Scoped {authority,command} => {
                             let request=match command.as_ref() {Command::QueryAclDraft {request,channel}=>Some((*request,*channel,false)),Command::LookupAccount {request,channel,..}=>Some((*request,*channel,true)),_=>None};
@@ -1341,6 +1364,10 @@ pub async fn run(
                         },_=>None,
                     };
                     let Some(command) = state.authorize(command) else {
+                        if let Some(id) = preview_id {
+                            preview::refused(id, &events).await?;
+                            continue;
+                        }
                         if let Some((request,account,reason))=admin_refusal {
                             if account {emit(&events,SessionEvent::AccountReply(AccountReply {request,result:Err(reason.into())})).await?;}
                             else {emit(&events,SessionEvent::AclReply(AclReply {request,result:Err(reason.into())})).await?;}
@@ -2191,6 +2218,7 @@ impl State {
         use crate::model::permission as p;
         let may = |channel, permission| self.known_permission(channel, permission);
         match command {
+            Command::SendPreview { target, .. } => preview::may_send(self, target),
             Command::Join(id) => may(*id, p::ENTER),
             Command::CreateChannel {
                 parent, temporary, ..
@@ -2399,9 +2427,19 @@ impl State {
     fn authorize(&mut self, command: Command) -> Option<Command> {
         let (mut command, mut authority) = match command {
             Command::Scoped { authority, command } => (*command, Some(authority)),
+            command @ Command::SendPreview { .. } => {
+                let Command::SendPreview { authority, .. } = &command else { return None; };
+                let authority = authority.clone();
+                (command, Some(authority))
+            }
             command => (command, None),
         };
         if matches!(command, Command::Scoped { .. }) {
+            return None;
+        }
+        if let Command::SendPreview { id, authority: held, .. } = &command
+            && (*id == 0 || authority.as_ref() != Some(held))
+        {
             return None;
         }
         if authority.is_some()
@@ -2527,6 +2565,9 @@ impl State {
         events: &mpsc::Sender<SessionEvent>,
     ) -> Result<(), Error> {
         if !self.logged_in() {
+            if let Some(id) = preview::command_id(&command) {
+                return preview::refused(id, events).await;
+            }
             return emit(
                 events,
                 SessionEvent::Notice("Still connecting; try again in a moment.".into()),
@@ -2534,8 +2575,11 @@ impl State {
             .await;
         }
         if self.encrypted_server()
-            && matches!(command, Command::SendText { .. } | Command::SendHtml { .. })
+            && matches!(command, Command::SendText { .. } | Command::SendHtml { .. } | Command::SendPreview { .. })
         {
+            if let Some(id) = preview::command_id(&command) {
+                return preview::refused(id, events).await;
+            }
             return emit(events, SessionEvent::Notice("Plaintext chat and attachments are disabled on an encrypted server; send text through MLS.".into())).await;
         }
         let own = self.own_session.unwrap_or_default();
@@ -2544,6 +2588,9 @@ impl State {
             _ => None,
         };
         match command {
+            Command::SendPreview { id, authority, target, html, expected_peer } => {
+                self.queue_preview(id, authority, target, html, expected_peer, events).await?;
+            }
             Command::RelayOnly(relay_only) => {
                 if self.privacy_supported() {
                     self.queue(nuschl::kind::PRIVACY, &v1::Privacy { relay_only });
@@ -2762,6 +2809,7 @@ impl State {
                 }
                 for html in html {
                     self.outbox.push(Outgoing {
+                        preview: None,
                         target: target.clone(),
                         expected_peer,
                         wire: html.clone(),
@@ -3110,6 +3158,7 @@ impl State {
                         )
                     });
                 self.outbox.push(Outgoing {
+                    preview: None,
                     target,
                     expected_peer,
                     wire: wire_body,
@@ -3248,6 +3297,7 @@ impl State {
                         .insert(error.request_id, (pending.clone(), attempts));
                     self.outbox.charge(Instant::now());
                     self.outbox.push(Outgoing {
+                        preview: None,
                         target: pending.target.clone(),
                         expected_peer: None,
                         wire: String::new(),
@@ -3466,6 +3516,16 @@ impl State {
     /// Send the text the rate limit has room for, and report on what waits.
     async fn flush_outbox(&mut self, events: &mpsc::Sender<SessionEvent>) -> Result<(), Error> {
         while let Some(mut message) = self.outbox.pop(Instant::now()) {
+            if let Some(delivery) = message.preview.as_ref() {
+                let id = delivery.id;
+                if !self.preview_valid(&message) {
+                    preview::refused(id, events).await?;
+                    continue;
+                }
+                self.send_text(message, events).await?;
+                emit(events, SessionEvent::LinkPreviewSendResult { id, result: Ok(()) }).await?;
+                continue;
+            }
             match message.chat.take() {
                 Some(chat) => self.send_chat(chat, events).await?,
                 None => self.send_text(message, events).await?,
@@ -3481,6 +3541,7 @@ impl State {
     async fn send_text(
         &mut self,
         Outgoing {
+            preview: _,
             target,
             expected_peer,
             wire,
@@ -3723,6 +3784,7 @@ impl State {
                                 });
                             }
                             self.outbox.push(Outgoing {
+                                preview: None,
                                 target: pending.target.clone(),
                                 expected_peer: None,
                                 wire: String::new(),
@@ -5977,6 +6039,7 @@ mod tests {
             content: "restored secret".into(),
         };
         state.outbox.push(Outgoing {
+            preview: None,
             target: TextTarget::Channel(0),
             expected_peer: None,
             wire: "restored secret".into(),
@@ -6218,6 +6281,7 @@ mod tests {
         first
             .send_text(
                 Outgoing {
+                    preview: None,
                     target: TextTarget::Direct(4),
                     expected_peer: Some(before),
                     wire: "private".into(),
