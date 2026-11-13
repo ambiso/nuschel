@@ -14,11 +14,11 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   ci:
-    runs-on: self-hosted
+    # Fork pull requests fail on a hosted runner (a skipped job would pass the required check).
+    # A fork can edit this file, so approving runs of all external contributors protects ours.
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-24.04' || 'self-hosted' }}
     timeout-minutes: 240
     steps:
-      # Fail fork pull requests before checkout; a skipped job would pass the required check.
-      # A fork can edit this file, so the runner's real protection is approval of fork runs.
       - if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
         run: echo "CI runs on branches in this repository; ask a maintainer to push the fork branch here." && exit 1
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
