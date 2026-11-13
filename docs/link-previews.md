@@ -87,11 +87,21 @@ Proposed initial limits:
 |---|---|
 | Candidate URL | 2 KiB, HTTP(S), no userinfo/control characters |
 | Metadata document | 256 KiB, HTML only, no content decompression initially |
+| Extraction | 4096 tags/comments/doctypes, 256 metadata tags, 4 KiB per attribute value |
 | Redirects | At most three across the preview fetch |
 | Source image | 2 MiB encoded; existing worker pixel/dimension/CPU limits |
 | Carried image | At most 32 KiB, canonical PNG/JPEG, at most 640×360 |
 | Title / description | 512 / 2048 UTF-8 bytes, plain text |
 | Message previews | One |
+| Retained drafts | 64, at most 1 MiB of draft text in total |
+| Cached results | 16, at most 1 MiB; success expires after 10 minutes, failure after 2 |
+| Policy file | 4 KiB; explicit user saves are atomic and owner-only |
+
+The legacy projection may shorten the displayed title and description to 200 and
+300 UTF-16 units. It preserves the entire original message text, obeys the server's
+text/image limits and never exceeds the 256 KiB content limit. Attribute-name work
+is bounded by the document cap and the worker's CPU/wall limits; it is not a claim
+that html5ever's handling of many distinct attributes is linear.
 
 The carried image budget must also fit the actual message/encryption envelope.
 Existing MLS bodies are bounded near 64 KiB: preview preparation must adapt the image
