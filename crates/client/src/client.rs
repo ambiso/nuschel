@@ -285,6 +285,7 @@ pub struct SecondServer {
 }
 
 struct PendingSend {
+    preview_id: Option<crate::preview::SendId>,
     notice_lease: Option<u64>,
     conversation: Conversation,
     target: TextTarget,
@@ -1109,6 +1110,24 @@ impl Client {
         self.sending.is_some()
     }
 
+    fn finish_pending_send(&mut self, pending: PendingSend, generation: u64) {
+        if let Some(index) = self.current(&pending.conversation.server, generation) {
+            self.servers[index].clear_sent_refusal(pending.notice_lease);
+        }
+        let unchanged = match pending.preview {
+            Some((context, token)) => self.acknowledge_link_preview(&context, token, self.now_ms),
+            None => true,
+        };
+        // An actual send always settles its own pending slot. Only unchanged
+        // intent may clear the composer or its saved conversation draft.
+        if unchanged {
+            self.updates.push(Update::Sent {
+                conversation: pending.conversation,
+                body: pending.body,
+            });
+        }
+    }
+
     /// Send `body` to the open conversation. One message at a time: the
     /// next waits until the session took this one ([`Update::Sent`]).
     pub fn send_text(&mut self, body: String) -> Result<(), SendError> {
@@ -1148,8 +1167,19 @@ impl Client {
                 ));
             }
         }
+        let preview_id = if preview_wire.is_some() {
+            Some(crate::preview::SendId::next().ok_or_else(|| {
+                SendError::Refused(server.refuse_send(
+                    "Link preview sends cannot be queued in this session.".into(),
+                    self.now_ms,
+                ))
+            })?)
+        } else {
+            None
+        };
         let channel = &server.channels[channel];
         let pending = PendingSend {
+            preview_id,
             notice_lease: server.send_refusal_lease(),
             conversation: Conversation {
                 server: server.id.clone(),
@@ -1161,13 +1191,18 @@ impl Client {
             preview,
         };
         let scoped_preview =
-            preview_wire.map(|(context, connection, html)| crate::preview::PreviewSend {
-                context,
-                connection,
-                html,
-                target: target.clone(),
-                expected_peer,
-            });
+            preview_wire
+                .zip(preview_id)
+                .map(
+                    |((context, connection, html), id)| crate::preview::PreviewSend {
+                        id,
+                        context,
+                        connection,
+                        html,
+                        target: target.clone(),
+                        expected_peer,
+                    },
+                );
         let request = if server.mls {
             let Some(conversation) = channel.conversation else {
                 return Err(SendError::Refused(server.refuse_send(
@@ -1448,6 +1483,28 @@ impl Client {
     /// Apply what the platform reported; call [`Client::settle`] after a batch.
     pub fn handle(&mut self, input: Input) {
         match input {
+            Input::LinkPreviewSendResult {
+                server,
+                generation,
+                id,
+                result,
+            } => {
+                if self.current(&server, generation).is_some()
+                    && self.sending.as_ref().is_some_and(|pending| {
+                        pending.conversation.server == server && pending.preview_id == Some(id)
+                    })
+                    && let Some(pending) = self.sending.take()
+                {
+                    match result {
+                        Ok(()) => self.finish_pending_send(pending, generation),
+                        Err(reason) => {
+                            if let Some(index) = self.current(&server, generation) {
+                                self.servers[index].refuse_send(reason, self.now_ms);
+                            }
+                        }
+                    }
+                }
+            }
             Input::LinkPreview { id, result } => {
                 self.receive_link_preview(id, result, self.now_ms);
             }
@@ -1463,21 +1520,13 @@ impl Client {
                     .any(|entry| entry.id == server && entry.generation == generation)
                     && self.sending.as_ref().is_some_and(|pending| {
                         pending.conversation.server == server
+                            && pending.preview_id.is_none()
                             && pending.target == target
                             && pending.wire.as_ref().unwrap_or(&pending.body) == &body
                     })
                     && let Some(pending) = self.sending.take()
                 {
-                    if let Some(index) = self.current(&server, generation) {
-                        self.servers[index].clear_sent_refusal(pending.notice_lease);
-                    }
-                    if let Some((context, token)) = pending.preview {
-                        self.acknowledge_link_preview(&context, token, self.now_ms);
-                    }
-                    self.updates.push(Update::Sent {
-                        conversation: pending.conversation,
-                        body: pending.body,
-                    });
+                    self.finish_pending_send(pending, generation);
                 }
             }
             Input::SendFailed {
@@ -1486,7 +1535,11 @@ impl Client {
                 reason,
             } => {
                 if let Some(index) = self.current(&server, generation) {
-                    self.sending = None;
+                    if self.sending.as_ref().is_some_and(|pending| {
+                        pending.conversation.server == server && pending.preview_id.is_none()
+                    }) {
+                        self.sending = None;
+                    }
                     self.servers[index].refuse_send(reason, self.now_ms);
                 }
             }
@@ -3470,10 +3523,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn preview_sends_one_html_entry_and_acknowledges_exact_original_logical_text() {
-        let (mut client, recorder, id) = connected();
-        let ticket = prepare_link(&mut client, &recorder);
+    fn ready_link(client: &mut Client, recorder: &Recorder) {
+        let ticket = prepare_link(client, recorder);
         let card = crate::preview::Card::new(
             &ticket.target,
             &nuschl_link_preview::metadata::ExtractedMetadata {
@@ -3489,6 +3540,12 @@ mod tests {
             id: ticket.id,
             result: Ok(card),
         });
+    }
+
+    #[test]
+    fn preview_sends_one_html_entry_and_acknowledges_exact_original_logical_text() {
+        let (mut client, recorder, id) = connected();
+        ready_link(&mut client, &recorder);
         recorder.requests.lock().unwrap().clear();
         let original = "https://example.org/ ";
         recorder
@@ -3515,6 +3572,7 @@ mod tests {
         client.send_text(original.into()).unwrap();
         let scoped = recorder.preview_sends.lock().unwrap();
         let frozen = scoped.last().unwrap();
+        let send_id = frozen.id;
         let own = client.servers[0].users.get(&1).unwrap();
         assert_eq!(frozen.context.own, (own.session, own.instance));
         assert_eq!(frozen.connection, 1);
@@ -3549,10 +3607,20 @@ mod tests {
             "logical text cannot fake the actual wire ACK"
         );
         client.handle(Input::Sent {
-            server: id,
+            server: id.clone(),
             generation: 1,
             target,
             body: wire,
+        });
+        assert!(
+            client.sending(),
+            "even matching generic HTML text cannot fake a correlated receipt"
+        );
+        client.handle(Input::LinkPreviewSendResult {
+            server: id,
+            generation: 1,
+            id: send_id,
+            result: Ok(()),
         });
         assert!(!client.sending());
         assert!(
@@ -3561,6 +3629,123 @@ mod tests {
                 .iter()
                 .any(|update| matches!(update, Update::Sent { body, .. } if body == original))
         );
+    }
+
+    #[test]
+    fn preview_failure_settles_only_matching_submission_and_never_retries_text() {
+        let (mut client, recorder, server) = connected();
+        ready_link(&mut client, &recorder);
+        recorder.requests.lock().unwrap().clear();
+        client.take_updates();
+        client.send_text("https://example.org/ ".into()).unwrap();
+        let first = recorder.preview_sends.lock().unwrap().last().unwrap().id;
+        let unrelated = crate::preview::SendId::next().unwrap();
+        for (id, origin, generation) in [
+            (unrelated, server.clone(), 1),
+            (first, "other-server".into(), 1),
+            (first, server.clone(), 2),
+        ] {
+            client.handle(Input::LinkPreviewSendResult {
+                server: origin,
+                generation,
+                id,
+                result: Err("fixture refusal".into()),
+            });
+            assert!(client.sending());
+        }
+        client.handle(Input::SendFailed {
+            server: server.clone(),
+            generation: 1,
+            reason: "unrelated encrypted failure".into(),
+        });
+        assert!(client.sending());
+        client.handle(Input::LinkPreviewSendResult {
+            server: server.clone(),
+            generation: 1,
+            id: first,
+            result: Err("The original destination changed.".into()),
+        });
+        assert!(!client.sending());
+        assert!(matches!(
+            client.link_preview_status(),
+            crate::preview::Status::Ready(_)
+        ));
+        assert_eq!(
+            recorder.requests.lock().unwrap().len(),
+            1,
+            "failure never causes a fallback or resend"
+        );
+        assert!(
+            !client
+                .take_updates()
+                .iter()
+                .any(|update| matches!(update, Update::Sent { .. }))
+        );
+        client.send_text("https://example.org/ ".into()).unwrap();
+        let second = recorder.preview_sends.lock().unwrap().last().unwrap().id;
+        assert_ne!(first, second);
+        for result in [Ok(()), Err("late old refusal".into())] {
+            client.handle(Input::LinkPreviewSendResult {
+                server: server.clone(),
+                generation: 1,
+                id: first,
+                result,
+            });
+            assert!(
+                client.sending(),
+                "an old same-body receipt cannot settle the retry"
+            );
+        }
+        client.handle(Input::LinkPreviewSendResult {
+            server,
+            generation: 1,
+            id: second,
+            result: Ok(()),
+        });
+        assert!(!client.sending());
+    }
+
+    #[test]
+    fn preview_success_settles_without_clearing_new_same_body_draft_or_removal() {
+        for remove in [false, true] {
+            let (mut client, recorder, server) = connected();
+            ready_link(&mut client, &recorder);
+            client.take_updates();
+            client.send_text("https://example.org/ ".into()).unwrap();
+            let id = recorder.preview_sends.lock().unwrap().last().unwrap().id;
+            if remove {
+                client.remove_link_preview(1000);
+            } else {
+                client.composing_link_preview(
+                    "new text https://example.org/ ",
+                    false,
+                    false,
+                    false,
+                    1000,
+                );
+                client.composing_link_preview("https://example.org/ ", false, false, false, 1001);
+            }
+            client.handle(Input::LinkPreviewSendResult {
+                server,
+                generation: 1,
+                id,
+                result: Ok(()),
+            });
+            assert!(!client.sending());
+            assert!(
+                !client
+                    .take_updates()
+                    .iter()
+                    .any(|update| matches!(update, Update::Sent { .. })),
+                "old success cannot clear newer intent even when the text is identical"
+            );
+            if remove {
+                assert_eq!(
+                    client.link_preview_status(),
+                    crate::preview::Status::Removed
+                );
+            }
+        }
     }
 
     #[test]

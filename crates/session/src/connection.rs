@@ -276,6 +276,7 @@ pub enum Command {
     SendPreview {
         id: u64,
         authority: CommandAuthority,
+        limits: ServerLimits,
         target: TextTarget,
         html: String,
         expected_peer: Option<u64>,
@@ -588,8 +589,12 @@ impl Command {
         let mut channels = BTreeSet::new();
         match self {
             Self::SendPreview { target, .. } => match target {
-                TextTarget::Channel(id) => { channels.insert(*id); }
-                TextTarget::Direct(id) => { users.insert(*id); }
+                TextTarget::Channel(id) => {
+                    channels.insert(*id);
+                }
+                TextTarget::Direct(id) => {
+                    users.insert(*id);
+                }
                 TextTarget::DirectConversation(_) => return None,
             },
             Self::Join(id)
@@ -2428,7 +2433,9 @@ impl State {
         let (mut command, mut authority) = match command {
             Command::Scoped { authority, command } => (*command, Some(authority)),
             command @ Command::SendPreview { .. } => {
-                let Command::SendPreview { authority, .. } = &command else { return None; };
+                let Command::SendPreview { authority, .. } = &command else {
+                    return None;
+                };
                 let authority = authority.clone();
                 (command, Some(authority))
             }
@@ -2437,7 +2444,11 @@ impl State {
         if matches!(command, Command::Scoped { .. }) {
             return None;
         }
-        if let Command::SendPreview { id, authority: held, .. } = &command
+        if let Command::SendPreview {
+            id,
+            authority: held,
+            ..
+        } = &command
             && (*id == 0 || authority.as_ref() != Some(held))
         {
             return None;
@@ -2575,7 +2586,10 @@ impl State {
             .await;
         }
         if self.encrypted_server()
-            && matches!(command, Command::SendText { .. } | Command::SendHtml { .. } | Command::SendPreview { .. })
+            && matches!(
+                command,
+                Command::SendText { .. } | Command::SendHtml { .. } | Command::SendPreview { .. }
+            )
         {
             if let Some(id) = preview::command_id(&command) {
                 return preview::refused(id, events).await;
@@ -2588,8 +2602,22 @@ impl State {
             _ => None,
         };
         match command {
-            Command::SendPreview { id, authority, target, html, expected_peer } => {
-                self.queue_preview(id, authority, target, html, expected_peer, events).await?;
+            Command::SendPreview {
+                id,
+                authority,
+                limits,
+                target,
+                html,
+                expected_peer,
+            } => {
+                self.queue_preview(
+                    preview::Delivery::new(id, authority, limits),
+                    target,
+                    html,
+                    expected_peer,
+                    events,
+                )
+                .await?;
             }
             Command::RelayOnly(relay_only) => {
                 if self.privacy_supported() {
@@ -3515,6 +3543,7 @@ impl State {
 
     /// Send the text the rate limit has room for, and report on what waits.
     async fn flush_outbox(&mut self, events: &mpsc::Sender<SessionEvent>) -> Result<(), Error> {
+        self.purge_previews(events).await?;
         while let Some(mut message) = self.outbox.pop(Instant::now()) {
             if let Some(delivery) = message.preview.as_ref() {
                 let id = delivery.id;
@@ -3523,7 +3552,6 @@ impl State {
                     continue;
                 }
                 self.send_text(message, events).await?;
-                emit(events, SessionEvent::LinkPreviewSendResult { id, result: Ok(()) }).await?;
                 continue;
             }
             match message.chat.take() {
@@ -3541,7 +3569,7 @@ impl State {
     async fn send_text(
         &mut self,
         Outgoing {
-            preview: _,
+            preview,
             target,
             expected_peer,
             wire,
@@ -3609,6 +3637,16 @@ impl State {
             },
         }
         self.queue(kind::TEXT_MESSAGE, &message);
+        if let Some(delivery) = preview {
+            emit(
+                events,
+                SessionEvent::LinkPreviewSendResult {
+                    id: delivery.id,
+                    result: Ok(()),
+                },
+            )
+            .await?;
+        }
         let author = self
             .users
             .get(&own)

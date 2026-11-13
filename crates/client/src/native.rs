@@ -530,7 +530,10 @@ fn enqueue_scoped(
         .get(server)
         .filter(|connection| connection.generation == generation)
         .ok_or("This action belongs to an older connection.")?;
-    if !matches!(command, Command::Scoped { .. }) {
+    if !matches!(
+        command,
+        Command::Scoped { .. } | Command::SendPreview { .. }
+    ) {
         return Err("Missing action authority.".into());
     }
     if matches!(&command,Command::Scoped { command,.. } if matches!(command.as_ref(),
@@ -1530,6 +1533,13 @@ async fn connect_once(
                 if let Some(session) = own_session { mark_talking(events, &id, generation, &mut speaking, session, !end).await; }
             },
             Some(event) = incoming.recv() => match event {
+                SessionEvent::LinkPreviewSendResult { id: send, result } => {
+                    if let Some(send) = crate::preview::SendId::from_raw(send) {
+                        let _ = events.send(Event::Input(Input::LinkPreviewSendResult {
+                            server: id.clone(), generation, id: send, result,
+                        })).await;
+                    }
+                },
                 SessionEvent::ChatPending(pending) => {
                     if restore.unacked.len() < 256 { restore.unacked.push(pending); }
                 },
@@ -2461,7 +2471,20 @@ fn pinned_host(audio_host: &(Option<String>, tokio::time::Instant)) -> Option<St
 impl Platform for Driver {
     fn send_link_preview(&self, request: crate::preview::PreviewSend) -> Result<(), String> {
         let (server, generation, command) = link_preview::scoped_send(request)?;
-        self.command_scoped(&server, generation, command)
+        let mut command = Some(command);
+        if let Some((expected, scoped)) =
+            scoped_command(self as *const Self as usize, &server, &mut command)?
+        {
+            if expected != generation {
+                return Err("The preview action belongs to an older connection.".into());
+            }
+            return self.command_scoped(&server, generation, scoped);
+        }
+        self.command_scoped(
+            &server,
+            generation,
+            command.ok_or("Missing preview send authority.")?,
+        )
     }
 
     fn link_preview(
@@ -2914,6 +2937,7 @@ fn server_event(event: SessionEvent) -> Result<ServerEvent, Option<Unmodelled>> 
         SessionEvent::Identity(event) => return Err(Some(Unmodelled::Identity(Box::new(event)))),
         SessionEvent::Mls(event) => return Err(Some(Unmodelled::Mls(Box::new(event)))),
         SessionEvent::Nuschl(_)
+        | SessionEvent::LinkPreviewSendResult { .. }
         | SessionEvent::ChatPending(_)
         | SessionEvent::Text(_)
         | SessionEvent::Audio(_) => return Err(None),

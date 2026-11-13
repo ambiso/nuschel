@@ -55,20 +55,22 @@ pub(super) fn scoped_send(
         }
         _ => return Err(refuse()),
     }
-    let command = Command::SendHtml {
+    let mut command = Command::SendPreview {
+        id: request.id.get(),
+        authority: authority.clone(),
+        limits: request.limits,
         target: request.target,
-        html: vec![request.html],
+        html: request.html,
         expected_peer: request.expected_peer,
     };
     let authority = authority.for_command(&command).ok_or_else(refuse)?;
-    Ok((
-        context.server,
-        request.connection,
-        Command::Scoped {
-            authority,
-            command: Box::new(command),
-        },
-    ))
+    if let Command::SendPreview {
+        authority: held, ..
+    } = &mut command
+    {
+        *held = authority;
+    }
+    Ok((context.server, request.connection, command))
 }
 
 #[derive(Clone)]
@@ -191,6 +193,7 @@ mod tests {
 
     fn request() -> PreviewSend {
         PreviewSend {
+            id: crate::preview::SendId::from_raw(1).unwrap(),
             context: Context {
                 server: "fixture".into(),
                 channel: 2,
@@ -203,13 +206,24 @@ mod tests {
             target: TextTarget::Channel(2),
             html: "one logical message".into(),
             expected_peer: None,
+            limits: nuschl_core::model::ServerLimits::default(),
         }
     }
 
     #[test]
     fn one_message_retains_exact_channel_and_own_presence_authority() {
-        let (server, generation, Command::Scoped { authority, command }) =
-            scoped_send(request()).unwrap()
+        let (
+            server,
+            generation,
+            Command::SendPreview {
+                id,
+                authority,
+                target,
+                html,
+                expected_peer,
+                ..
+            },
+        ) = scoped_send(request()).unwrap()
         else {
             panic!("missing scoped send");
         };
@@ -218,9 +232,10 @@ mod tests {
         assert_eq!(authority.subject, Some(ActionSubject::Channel(2, 22)));
         assert_eq!(authority.channels, [(2, 22)]);
         assert!(authority.users.is_empty());
-        assert!(
-            matches!(*command,Command::SendHtml{target:TextTarget::Channel(2),html,expected_peer:None} if html == ["one logical message"])
-        );
+        assert_eq!(id, 1);
+        assert_eq!(target, TextTarget::Channel(2));
+        assert_eq!(html, "one logical message");
+        assert_eq!(expected_peer, None);
         for changed in [
             PreviewSend {
                 target: TextTarget::Channel(3),
@@ -259,20 +274,22 @@ mod tests {
         send.target = TextTarget::Direct(9);
         send.context.peer = Some((9, 99));
         send.expected_peer = Some(99);
-        let (_, _, Command::Scoped { authority, command }) = scoped_send(send.clone()).unwrap()
+        let (
+            _,
+            _,
+            Command::SendPreview {
+                authority,
+                expected_peer,
+                ..
+            },
+        ) = scoped_send(send.clone()).unwrap()
         else {
             panic!("missing scoped send");
         };
         assert_eq!(authority.own, (1, 11));
         assert_eq!(authority.users, [(9, 99)]);
         assert!(authority.channels.is_empty());
-        assert!(matches!(
-            *command,
-            Command::SendHtml {
-                expected_peer: Some(99),
-                ..
-            }
-        ));
+        assert_eq!(expected_peer, Some(99));
         send.expected_peer = Some(100);
         assert!(scoped_send(send).is_err());
     }

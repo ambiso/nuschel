@@ -379,16 +379,21 @@ impl<K: Clone + Eq> DraftPreviews<K> {
         })
     }
 
-    /// Only an acknowledged successful send consumes the original intent.
-    /// Capturing a token or a failed submission changes nothing by itself.
-    pub fn sent_if_current(&mut self, conversation: &K, token: SubmissionToken) -> Vec<Effect<K>> {
-        if self.exhausted
-            || token.policy != self.policy
-            || !self
+    /// Whether a successful send still names this conversation's original
+    /// composer intent, including when another conversation is selected.
+    pub fn submission_is_current(&self, conversation: &K, token: SubmissionToken) -> bool {
+        !self.exhausted
+            && token.policy == self.policy
+            && self
                 .drafts
                 .iter()
                 .any(|(key, state)| key == conversation && state.revision == token.revision)
-        {
+    }
+
+    /// Only an acknowledged successful send consumes the original intent.
+    /// Capturing a token or a failed submission changes nothing by itself.
+    pub fn sent_if_current(&mut self, conversation: &K, token: SubmissionToken) -> Vec<Effect<K>> {
+        if !self.submission_is_current(conversation, token) {
             return Vec::new();
         }
         self.forget(conversation)
@@ -706,16 +711,23 @@ mod tests {
         let mut previews = enabled();
         previews.update(draft(&1, URL, Some(URL)), 0);
         let original = previews.submission_token(&1, 1, URL).unwrap();
+        assert!(previews.submission_is_current(&1, original));
+        assert!(!previews.submission_is_current(&2, original));
         previews.remove(&1);
+        assert!(!previews.submission_is_current(&1, original));
         assert!(previews.sent_if_current(&1, original).is_empty());
         assert_eq!(previews.status(&1), Status::Removed);
         let removed = previews.submission_token(&1, 1, URL).unwrap();
         assert_ne!(original, removed);
+        assert!(previews.submission_is_current(&1, removed));
         previews.update(draft(&1, "changed", None), 1);
         previews.update(draft(&1, URL, Some(URL)), 2);
         let retyped = previews.submission_token(&1, 1, URL).unwrap();
         assert_ne!(original, retyped);
         assert_ne!(removed, retyped);
+        assert!(!previews.submission_is_current(&1, original));
+        assert!(!previews.submission_is_current(&1, removed));
+        assert!(previews.submission_is_current(&1, retyped));
         assert!(previews.sent_if_current(&1, removed).is_empty());
         assert!(previews.submission_token(&1, 1, URL).is_some());
     }
@@ -729,8 +741,10 @@ mod tests {
         assert_eq!(previews.status(&1), Status::Fetching);
         assert_eq!(previews.submission_token(&1, 1, URL), Some(token));
         assert_eq!(cancelled(&previews.pause()), [pending]);
+        assert!(previews.submission_is_current(&1, token));
         assert_eq!(previews.submission_token(&1, 1, URL), Some(token));
         previews.sent_if_current(&1, token);
+        assert!(!previews.submission_is_current(&1, token));
         assert!(previews.submission_token(&1, 1, URL).is_none());
         // A text-only send can consume a pending preview without requiring Ready.
         let pending = fetched(&previews.update(draft(&1, URL, Some(URL)), 1))[0].id;
@@ -741,6 +755,7 @@ mod tests {
         previews.update(draft(&1, URL, Some(URL)), 2);
         let token = previews.submission_token(&1, 1, URL).unwrap();
         previews.set_policy(&direct());
+        assert!(!previews.submission_is_current(&1, token));
         assert!(previews.sent_if_current(&1, token).is_empty());
         assert!(previews.submission_token(&1, 1, URL).is_some());
     }
@@ -766,6 +781,7 @@ mod tests {
                 }
             }
             assert!(previews.exhausted);
+            assert!(!previews.submission_is_current(&1, token));
             assert!(previews.submission_token(&1, 1, URL).is_none());
             assert!(previews.sent_if_current(&1, token).is_empty());
             assert_eq!(

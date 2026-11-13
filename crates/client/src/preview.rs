@@ -32,10 +32,40 @@ pub struct Context {
 
 pub type FetchTicket = Ticket<Context>;
 
+/// One submission, independently of its fetch or body. Never reused, even
+/// when a Client is recreated around an existing native driver.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SendId(u64);
+
+impl SendId {
+    pub fn get(self) -> u64 {
+        self.0
+    }
+
+    pub(crate) fn from_raw(id: u64) -> Option<Self> {
+        (id != 0).then_some(Self(id))
+    }
+
+    pub(crate) fn next() -> Option<Self> {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        allocate_send_id(&NEXT)
+    }
+}
+
+fn allocate_send_id(next: &std::sync::atomic::AtomicU64) -> Option<SendId> {
+    use std::sync::atomic::Ordering;
+    next.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| {
+        if id == 0 { None } else { id.checked_add(1) }
+    })
+    .ok()
+    .and_then(SendId::from_raw)
+}
+
 /// One preview-bearing logical message. The native adapter must check this
 /// frozen authority both when enqueuing and when consuming the command.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PreviewSend {
+    pub id: SendId,
     pub context: Context,
     pub connection: u64,
     pub target: crate::model::TextTarget,
@@ -391,6 +421,9 @@ impl Client {
             return None;
         }
         let card = self.previews.drafts.for_send(source.draft())?;
+        self.previews
+            .drafts
+            .submission_token(&context, connection, body)?;
         let (server, _) = self.selected_indices()?;
         let limits = self.servers[server].limits.clone().unwrap_or_default();
         match projection::project(body, card, &limits) {
@@ -421,17 +454,33 @@ impl Client {
         context: &Context,
         token: SubmissionToken,
         now: u64,
-    ) {
+    ) -> bool {
+        if !self.previews.drafts.submission_is_current(context, token) {
+            return false;
+        }
         let effects = self.previews.drafts.sent_if_current(context, token);
         let cancel = self.previews.effects(effects, now);
         self.cancel_preview(cancel);
         self.previews.revision = self.previews.revision.saturating_add(1);
+        true
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn submission_ids_do_not_wrap_or_reuse_zero() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        let next = AtomicU64::new(u64::MAX - 1);
+        assert_eq!(allocate_send_id(&next).unwrap().get(), u64::MAX - 1);
+        assert_eq!(allocate_send_id(&next), None);
+        assert_eq!(allocate_send_id(&next), None);
+        assert_eq!(next.load(Ordering::Relaxed), u64::MAX);
+        assert_eq!(allocate_send_id(&AtomicU64::new(0)), None);
+        assert_eq!(SendId::from_raw(0), None);
+    }
 
     fn source(text: &str) -> Snapshot {
         Snapshot {
