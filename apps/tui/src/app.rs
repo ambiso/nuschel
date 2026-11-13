@@ -708,15 +708,10 @@ impl App {
             ));
         }
         let server = &self.client.servers[index];
-        // Suppressed (no Speak permission), or muted or deafened by the
-        // server: nobody hears you, whatever your own mute says (#199).
-        let blocked = server
-            .own_session
-            .and_then(|session| server.users.get(&session))
-            .is_some_and(|own| own.suppressed || own.muted || own.deafened);
         let line = match (server.muted, server.deafened) {
             (_, true) => "Deafened (and muted).",
-            _ if blocked && unmuting => "You can't speak here.",
+            // The client refused it: the server stops you from speaking (#199).
+            _ if unmuting && server.speech_blocked() => "You can't speak here.",
             (true, false) => "Muted.",
             (false, false) => "Unmuted: others hear you.",
         };
