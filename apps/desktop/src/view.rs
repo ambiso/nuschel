@@ -3322,6 +3322,15 @@ fn composer(
                         .child(Textarea::new(&this.composer)),
                 )
                 .child(icon_button(
+                    "emoji-picker-button",
+                    "smile",
+                    "Emoji, stickers and GIFs (Ctrl+.)",
+                    TEXT_MUTED,
+                    this.emoji.is_some().then_some(ACCENT),
+                    |this, window, cx| this.toggle_emoji(window, cx),
+                    cx,
+                ))
+                .child(icon_button(
                     "send-message",
                     "send",
                     if this.sending() { "Sending…" } else { "Send" },

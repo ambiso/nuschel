@@ -111,7 +111,11 @@ The design and its measurements: [architecture.md](architecture.md#audio-configu
   Tab/Shift+Tab and Enter, and screen-reader activation. They use the same URL
   policy as message links; rendering a document does not fetch its links.
 - Long messages collapse by measured height behind **Show more**.
-- Ctrl+. or Ctrl+; opens an emoji picker.
+- Emoji are drawn with Twemoji's images, in messages, the composer and everywhere
+  else; `™` stays text and `™️` is the emoji ([emoji.md](emoji.md)). The smiley
+  button beside the composer, or Ctrl+. or Ctrl+;, opens the picker: Emoji, with
+  Stickers and GIFs to come, a search, and a skin tone. A click inserts at the cursor
+  and closes it; Shift+click inserts and keeps it open.
 
 ### Markdown
 

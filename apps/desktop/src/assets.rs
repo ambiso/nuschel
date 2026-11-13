@@ -48,6 +48,7 @@ const ICONS: &[(&str, &[u8])] = icons!(
     "settings",
     "shield",
     "signal",
+    "smile",
     "star",
     "trash",
     "unlock",

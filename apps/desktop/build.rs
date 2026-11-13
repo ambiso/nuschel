@@ -1,6 +1,14 @@
 // SPDX-License-Identifier: EUPL-1.2
-//! Compiles the application icon into nuschl.exe; other targets do nothing.
+//! Embeds the emoji images and picker table, and compiles the application
+//! icon into nuschl.exe.
 //!
+//! Emoji: `NUSCHL_EMOJI_ASSETS` names the output of nix/emoji.nix (every Nix
+//! build sets it); without it, `emoji-assets` in the workspace root is used
+//! (`just emoji-assets`, and the Debian source package ships it). The build
+//! fails without either: a desktop without its emoji would be a silent
+//! downgrade.
+//!
+//! Icon:
 //! Explorer shows an executable's first icon group, and GPUI loads icon group 1
 //! for the window class (title bar, taskbar, Alt+Tab). No resource compiler is
 //! needed: this writes the COFF object that windres produces for
@@ -12,6 +20,7 @@ const ICON: &str = "assets/nuschl.ico";
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo:rerun-if-changed=build.rs");
+    emoji()?;
     let cfg = |key: &str| env::var(format!("CARGO_CFG_TARGET_{key}")).unwrap_or_default();
     if cfg("OS") != "windows" {
         return Ok(());
@@ -41,6 +50,67 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let path = PathBuf::from(env::var("OUT_DIR")?).join("nuschl-icon.o");
     fs::write(&path, object)?;
     println!("cargo:rustc-link-arg-bins={}", path.display());
+    Ok(())
+}
+
+/// Writes `emoji_assets.rs` into OUT_DIR: the picker table and every image,
+/// sorted by key, each with whether it is a text-default character.
+fn emoji() -> Result<(), Box<dyn std::error::Error>> {
+    println!("cargo:rerun-if-env-changed=NUSCHL_EMOJI_ASSETS");
+    let root = match env::var_os("NUSCHL_EMOJI_ASSETS") {
+        Some(path) => PathBuf::from(path),
+        None => PathBuf::from(env::var("CARGO_MANIFEST_DIR")?).join("../../emoji-assets"),
+    };
+    let root = fs::canonicalize(&root).map_err(|error| {
+        format!(
+            "emoji assets not found at {} ({error}): run `just emoji-assets`, \
+             or set NUSCHL_EMOJI_ASSETS to the output of `nix build .#emojiAssets`",
+            root.display()
+        )
+    })?;
+    let (table, images) = (root.join("emoji.txt"), root.join("images.txt"));
+    println!("cargo:rerun-if-changed={}", table.display());
+    println!("cargo:rerun-if-changed={}", images.display());
+    let mut entries = Vec::new();
+    for line in fs::read_to_string(&images)?.lines() {
+        let (key, text) = match line.split_once('\t') {
+            Some((key, "text")) => (key, true),
+            None => (line, false),
+            Some(_) => return Err(format!("unexpected line in images.txt: {line}").into()),
+        };
+        let valid = !key.is_empty()
+            && key.split('-').all(|part| {
+                !part.is_empty() && part.len() <= 6 && part.bytes().all(|b| b.is_ascii_hexdigit())
+            });
+        if !valid {
+            return Err(format!("unexpected image key {key:?}").into());
+        }
+        let svg = root.join("svg").join(format!("{key}.svg"));
+        if !svg.is_file() {
+            return Err(format!("{} is missing", svg.display()).into());
+        }
+        entries.push((key.to_string(), text, svg));
+    }
+    entries.sort();
+    entries.dedup_by(|a, b| a.0 == b.0);
+    let mut out = String::from(
+        "/// The picker's table (nix/emoji.py).\n\
+         pub const TABLE: &str = include_str!(",
+    );
+    out += &format!("{:?});\n", table.display().to_string());
+    out += "/// Every Twemoji image by key, sorted: (key, shown as text by default, SVG).\n";
+    out += "pub static IMAGES: &[(&str, bool, &[u8])] = &[\n";
+    for (key, text, svg) in &entries {
+        out += &format!(
+            "    ({key:?}, {text}, include_bytes!({:?})),\n",
+            svg.display().to_string()
+        );
+    }
+    out += "];\n";
+    fs::write(
+        PathBuf::from(env::var("OUT_DIR")?).join("emoji_assets.rs"),
+        out,
+    )?;
     Ok(())
 }
 

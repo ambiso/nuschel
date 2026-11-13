@@ -197,6 +197,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_assets(assets::Assets)
         .run(move |cx| {
             gpui_kit::init(cx);
+            emoji::install();
             appearance::bind_keys(cx);
             shortcuts::bind_text_editing(cx);
             #[cfg(feature = "frame-timing")]
