@@ -272,6 +272,19 @@ fn field(id: &'static str, label: &'static str, state: &Entity<InputState>) -> A
         .into_any_element()
 }
 
+impl Desktop {
+    /// The focus scope of the dialog `id`, tracked by that dialog alone.
+    /// Stacked dialogs (a prompt over Settings) each have their own: one
+    /// handle tracked by both would make both the focused node.
+    pub fn dialog_focus(&self, id: &'static str, cx: &mut App) -> FocusHandle {
+        self.modal_focus
+            .borrow_mut()
+            .entry(id)
+            .or_insert_with(|| cx.focus_handle())
+            .clone()
+    }
+}
+
 pub fn modal(
     this: &Desktop,
     id: &'static str,
@@ -311,7 +324,7 @@ pub fn modal(
                         this.cancel_modal_scroll();
                     }
                 }))
-                .track_focus(&this.modal_focus)
+                .track_focus(&this.dialog_focus(id, cx))
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .role(Role::Dialog)
                 .aria_label(label)

@@ -411,6 +411,9 @@ fn row(
         .into_any_element()
 }
 
+/// The switcher's dialog id (see `dialogs::modal`).
+const FINDER: &str = "finder";
+
 /// The open switcher over the window; a click outside closes it. Lists
 /// what matches now (people come and go while it is open), keeps keyboard
 /// focus in its field, and names the result count and highlighted result to
@@ -450,7 +453,7 @@ pub fn overlay(
         input.update(cx, |input, cx| input.focus(window, cx));
     }
     // Focus returns to the composer once it closes (see keep_dialog_focus).
-    this.modal_shown.set(Some("finder"));
+    this.modal_shown.set(Some(FINDER));
     let empty = if query.trim().is_empty() {
         "Type to find a channel, person or conversation on any server."
     } else {
@@ -508,7 +511,7 @@ pub fn overlay(
                     .id("finder")
                     .role(Role::Dialog)
                     .aria_label("Quick switcher")
-                    .track_focus(&this.modal_focus)
+                    .track_focus(&this.dialog_focus(FINDER, cx))
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     // Ahead of the field, which would move its cursor.
                     .capture_action(cx.listener(|this, _: &MoveUp, _, cx| {
