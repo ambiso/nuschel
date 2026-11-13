@@ -114,10 +114,15 @@ budget or omit the preview rather than increasing that limit or truncating text.
    received-message code can initiate a fetch implicitly.
 2. **Portable model:** `crates/core/src/preview.rs` holds the versioned preview value
    with provider, actual URL, title, description and embedded image.
-3. **Atomic compatible-server contract (remaining):** negotiated `preview/1`; optional typed
-   preview fields on send/message/edit; SQLite/Postgres and local-history migrations.
-   Idempotency comparison includes the preview. Delete erases text and preview;
-   editing without a preview removes the old one. Existing text remains literal text.
+3. **Atomic compatible-server contract (remaining):** the optional preview fields on
+   send/message/edit and bounded conversions in `nuschl_protocol::nuschl::preview`
+   are implemented. They retain literal text and the existing combined 64 KiB body
+   limit. No endpoint advertises `preview/1` yet: SQLite/Postgres and local-history
+   persistence, idempotency, live delivery and SDK handling must land together.
+   Delete erases text and preview; editing without a preview removes the old one.
+   `ChatAck.edits` is an optional committed revision; absence means unknown, not
+   revision zero. Storage and timeline ordering must use authoritative edit counts
+   when available, since timestamps cannot order edits in the same millisecond.
 4. **MLS (remaining):** protect the entire structured body and archive record. A new authenticated
    application-body kind/version must not cause older clients to display raw JSON.
    Until group capability is authenticated, send text only. No cleartext preview
