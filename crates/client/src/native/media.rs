@@ -1013,7 +1013,7 @@ mod tests {
         .expect("the supervisor takes it");
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn a_voice_flood_neither_loses_nor_outlasts_a_push_to_talk_release() {
         let mut rig = push_to_talk();
         let (mut outgoing, mut requests, replies, epoch) = talk_server(&mut rig).await;
@@ -1041,10 +1041,12 @@ mod tests {
         })
         .await;
         // A worker that has not applied it yet keeps sending: its voice
-        // leaves within the tail, then one silent terminator, then nothing.
-        assert_eq!(leaves(1).await.opus, 1_u16.to_be_bytes(), "within the tail");
-        let tail = std::time::Duration::from_millis(TAIL_MS.into()) + RELEASE_MARGIN;
-        tokio::time::sleep_until(released + tail + std::time::Duration::from_millis(1)).await;
+        // leaves until the tail and margin end, then one silent terminator,
+        // then nothing.
+        let cutoff = released + std::time::Duration::from_millis(TAIL_MS.into()) + RELEASE_MARGIN;
+        tokio::time::advance(cutoff - Instant::now()).await;
+        assert_eq!(leaves(1).await.opus, 1_u16.to_be_bytes(), "at the cutoff");
+        tokio::time::advance(std::time::Duration::from_nanos(1)).await;
         let ended = leaves(2).await;
         assert!(ended.end && ended.opus == nuschl_core::audio::SILENT_OPUS);
         replies.send(packet(epoch, 3)).await.unwrap();
@@ -1057,7 +1059,7 @@ mod tests {
         let _ = rig.task.await;
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn a_control_request_that_cannot_be_queued_replaces_the_worker() {
         let mut rig = push_to_talk();
         let (_outgoing, mut requests, _replies, epoch) = talk_server(&mut rig).await;
