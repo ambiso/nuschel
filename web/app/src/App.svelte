@@ -4,6 +4,8 @@
   import {actionProof,serverReference} from "./action-context.js";
   import { ContentBridge } from "./content-bridge.js";
   import { flip } from "svelte/animate";
+  import { cubicOut } from "svelte/easing";
+  import { startSwipe, moveSwipe, swipeTravel, endSwipe, swipeExempt } from "./swipe.js";
   import { serverIndices, moveServer, sameOrder, edgeSpeed } from "./server-order.js";
   import { inviteFragment } from "./invite.js";
   import { channelRows, initials, avatarColor, conversationKey, filterMessages, appearance } from "./presentation.js";
@@ -90,7 +92,7 @@
   const labels = { connected:"Connected", connecting:"Connecting…", disconnected:"Disconnected", unavailable:"Unavailable" };
   const icons = {
     menu:"M4 6h16M4 12h16M4 18h16", close:"m6 6 12 12M6 18 18 6", plus:"M12 5v14M5 12h14", hash:"M10 3 8 21M17 3l-2 18M4 9h17M3 15h17",
-    voice:"M11 5 6 9H3v6h3l5 4V5Zm4 3a6 6 0 0 1 0 8m3-11a10 10 0 0 1 0 14", mic:"M12 15a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v7a3 3 0 0 0 3 3Zm-6-4v1a6 6 0 0 0 12 0v-1M12 18v4M8 22h8", muted:"m3 3 18 18M9 9v3a3 3 0 0 0 5 2M9 5a3 3 0 0 1 6 0v5M6 11v1a6 6 0 0 0 10 4M18 11v1M12 18v4M8 22h8",
+    voice:"M11 5 6 9H3v6h3l5 4V5Zm4 3a6 6 0 0 1 0 8m3-11a10 10 0 0 1 0 14", mic:"M12 15a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v7a3 3 0 0 0 3 3Zm-6-4v1a6 6 0 0 0 12 0v-1M12 18v4M8 22h8",
     headphones:"M4 14v-3a8 8 0 0 1 16 0v3M4 13h4v8H4v-8Zm12 0h4v8h-4v-8", search:"m21 21-5-5M10 18a8 8 0 1 0 0-16 8 8 0 0 0 0 16", people:"M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M16 3a4 4 0 0 1 0 8m6 10v-2a4 4 0 0 0-3-3.87M13 7a4 4 0 1 1-8 0 4 4 0 0 1 8 0",
     settings:"m9 3-.7 3-2.8 1-2.5-1.5-2 3.5 2.3 2V14L1 16l2 3.5L5.5 18l2.8 1L9 22h4l.7-3 2.8-1 2.5 1.5 2-3.5-2.3-2v-3L21 9l-2-3.5L16.5 7l-2.8-1L13 3H9ZM15 12a4 4 0 1 1-8 0 4 4 0 0 1 8 0", send:"m22 2-7 20-4-9-9-4 20-7ZM11 13 22 2", leave:"M10 17l5-5-5-5M15 12H3M15 3h5v18h-5", lock:"M5 10h14v11H5V10Zm3 0V6a4 4 0 0 1 8 0", unlock:"M5 10h14v11H5V10Zm3 0V6a4 4 0 0 1 7-3", chevron:"m9 5 7 7-7 7",
   };
@@ -304,7 +306,81 @@
     await act("older");
   }
   function modal(node) { node.showModal(); return { destroy() { node.close(); } }; }
-  function closeDrawer() { drawer = false; tick().then(() => navigationButton?.focus()); }
+  // The mobile drawer slides in and out (instantly with reduced motion). A right
+  // swipe on the chat opens it; a left swipe on it closes it, following the finger.
+  let drawerFocusReturn = false, drawerFrom = 0, swipe = null, swipeId = null;
+  function closeDrawer() { if (!drawer) return; drawerFocusReturn = true; drawer = false; }
+  // Closed only after the slide-out; focus returns once the page is no longer inert.
+  function drawerModal(node) {
+    node.showModal();
+    return { destroy() { node.close(); if (drawerFocusReturn) { drawerFocusReturn = false; navigationButton?.focus(); } } };
+  }
+  function drawerSlide() {
+    // A drag-close continues from where the finger left the drawer.
+    const from = drawer ? 0 : drawerFrom; drawerFrom = 0;
+    const shown = t => t * (1 - from);
+    return { duration: reducedOrderMotion ? 0 : Math.round(220 * (1 - from)), easing: cubicOut,
+      css: t => `transform:translateX(${(shown(t) - 1) * 100}%);--drawer-shown:${shown(t)}` };
+  }
+  const swipePoint = event => ({ x:event.clientX, y:event.clientY, t:event.timeStamp });
+  function beginSwipe(event, direction) {
+    const allowed = mobile && event.isPrimary && (event.pointerType === "touch" || event.pointerType === "pen")
+      && document.getSelection()?.isCollapsed !== false && !swipeExempt(event.target, event.currentTarget, getComputedStyle);
+    swipe = allowed ? startSwipe(swipePoint(event), direction) : null;
+    swipeId = allowed ? event.pointerId : null;
+  }
+  function followSwipe(event) {
+    if (!swipe || event.pointerId !== swipeId) return null;
+    swipe = moveSwipe(swipe, swipePoint(event));
+    // Scrolling, a long press or a text selection keeps the gesture.
+    if (swipe.axis === "rejected" || document.getSelection()?.isCollapsed === false) { swipe = swipeId = null; return null; }
+    return swipe;
+  }
+  function finishSwipe(event) {
+    if (!swipe || event.pointerId !== swipeId) return null;
+    const ended = moveSwipe(swipe, swipePoint(event)), commit = endSwipe(ended);
+    swipe = swipeId = null;
+    if (commit) {
+      // A touch that moved does not click, but never let a lifted finger press what slid under it.
+      const until = performance.now() + 400, swallow = click => { if (performance.now() < until) { click.preventDefault(); click.stopPropagation(); } };
+      window.addEventListener("click", swallow, { capture:true, once:true });
+      setTimeout(() => window.removeEventListener("click", swallow, { capture:true }), 450);
+    }
+    return { commit, travel:swipeTravel(ended) };
+  }
+  function chatSwipeEnd(event) { if (finishSwipe(event)?.commit && mobile && !drawer) drawer = true; }
+  function drawerPointerDown(event) {
+    if (event.target === event.currentTarget) closeDrawer(); else beginSwipe(event, -1);
+  }
+  function drawerSwipeMove(event) {
+    const current = followSwipe(event), node = event.currentTarget;
+    if (!swipe && node.style.transform) settleDrawer(node);
+    if (current?.axis !== "horizontal" || reducedOrderMotion) return;
+    const width = node.offsetWidth || 1, travel = Math.min(swipeTravel(current), width);
+    node.style.transform = `translateX(${-travel}px)`;
+    node.style.setProperty("--drawer-shown", String(1 - travel / width));
+  }
+  function drawerSwipeEnd(event) {
+    const node = event.currentTarget, result = finishSwipe(event);
+    if (!result) return;
+    const width = node.offsetWidth || 1;
+    if (result.commit) { drawerFrom = reducedOrderMotion ? 0 : Math.min(1, result.travel / width); closeDrawer(); }
+    else settleDrawer(node);
+  }
+  function cancelSwipe(event) {
+    if (!swipe || event.pointerId !== swipeId) return false;
+    swipe = swipeId = null; return true;
+  }
+  function drawerSwipeCancel(event) { if (cancelSwipe(event)) settleDrawer(event.currentTarget); }
+  // A drag that did not close the drawer springs back.
+  function settleDrawer(node) {
+    const transform = node.style.transform, shown = node.style.getPropertyValue("--drawer-shown");
+    node.style.transform = ""; node.style.removeProperty("--drawer-shown");
+    if (!transform || reducedOrderMotion) return;
+    const fraction = Math.max(0, Math.min(1, 1 - Number(shown || 1)));
+    node.animate([{ transform, "--drawer-shown":shown || "1" }, { transform:"translateX(0)", "--drawer-shown":"1" }],
+      { duration:Math.round(220 * fraction), easing:"cubic-bezier(.33,1,.68,1)" });
+  }
   function unreadCount(item) { return Number(item?.unread_count || item?.unread || 0); }
   function unreadPosition(node) {
     if (!node) return { above:false, below:false };
@@ -408,7 +484,8 @@
   async function searchMessages() { showSearch = !showSearch; if (!showSearch) search = ""; else { await tick(); searchElement?.focus(); } }
 </script>
 
-{#snippet icon(name)}<svg class="icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d={icons[name] || icons.hash}/></svg>{/snippet}
+<!-- With `struck` (true or false) the icon carries a strike line that draws in and out. -->
+{#snippet icon(name, struck = null)}<svg class="icon" class:struck width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d={icons[name] || icons.hash}/>{#if struck !== null}<line class="strike" x1="3" y1="3" x2="21" y2="21" pathLength="1"/>{/if}</svg>{/snippet}
 {#snippet navigation()}
   {#if pointerGhost && draggingId}<div class="server-order-ghost" aria-hidden="true" style:left={`${pointerGhost.x - 23}px`} style:top={`${pointerGhost.y - 23}px`}>{initials(servers.find(server=>server.id===draggingId)?.name || "")}</div>{/if}
   <nav class="servers" class:server-order-enabled={capabilities.includes("server_order")} aria-label="Servers">
@@ -444,7 +521,7 @@
             {#if row.hasChildren}<button class="expand" aria-label={`${row.open ? "Collapse" : "Expand"} ${row.name}`} aria-expanded={row.open} onclick={() => toggle(row)}>{row.open ? "▾" : "▸"}</button>{:else}<span class="spacer"></span>{/if}
             <button class:current={timeline?.channel === row.id} class:voice-current={ownUser?.channel === row.id && selected.status === "connected"} class="channel" onpointerdown={(event) => lastChannelPointer = event.pointerType} data-unread={unreadCount(row) > 0} title={`${row.name || "Root"} — click for chat, double-click to join voice`} aria-label={row.name || "Root"} aria-current={timeline?.channel === row.id ? "page" : undefined} onclick={() => openChannel(row.id)} ondblclick={() => lastChannelPointer === "mouse" && !row.direct && joinVoice(row.id)}><span class="channel-symbol" aria-hidden="true">{row.direct ? "@" : "#"}</span><span class="channel-name">{row.name || "Root"}</span>{#if ownUser?.channel === row.id && !row.direct && selected.status === "connected"}<span class="voice-marker" title="Your voice channel">{@render icon("voice")}</span>{/if}{#if unreadCount(row)}<span class="badge">{Math.min(99,unreadCount(row))}</span>{/if}</button>
           </div>
-          {#each usersByChannel.get(row.id) || [] as user (user.session)}<button class:talking={user.talking} class:own-user={user.session === selected.own_session} class="user" title={user.name} aria-label={user.session === selected.own_session ? `${user.name} (you)` : `Private message ${user.name}`} style:--depth={Math.min(row.depth,8)} disabled={user.session === selected.own_session} onclick={async () => { rememberDraft(); await act("open_direct",selectedIndex,user.session); if (mobile) drawer = false; }}><span class={`mini-avatar ${avatarColor(user.name)}`}>{initials(user.name)}</span><span class="user-name">{user.name}</span>{#if user.self_deaf || user.deafened}<span title="Deafened">{@render icon("headphones")}</span>{:else if user.self_mute || user.muted}<span title="Muted">{@render icon("muted")}</span>{/if}</button>{/each}
+          {#each usersByChannel.get(row.id) || [] as user (user.session)}<button class:talking={user.talking} class:own-user={user.session === selected.own_session} class="user" title={user.name} aria-label={user.session === selected.own_session ? `${user.name} (you)` : `Private message ${user.name}`} style:--depth={Math.min(row.depth,8)} disabled={user.session === selected.own_session} onclick={async () => { rememberDraft(); await act("open_direct",selectedIndex,user.session); if (mobile) drawer = false; }}><span class={`mini-avatar ${avatarColor(user.name)}`}>{initials(user.name)}</span><span class="user-name">{user.name}</span>{#if user.self_deaf || user.deafened}<span title="Deafened">{@render icon("headphones", true)}</span>{:else if user.self_mute || user.muted}<span title="Muted">{@render icon("mic", true)}</span>{/if}</button>{/each}
         {/each}
       </nav>
       {#if channelUnread.below}<button class="unread-jump" onclick={() => scrollUnread(channelScroll,"below")}>↓ Unread channels below</button>{/if}
@@ -464,7 +541,7 @@
 
 <main>
   {#if !mobile}<div class="navigation" class:server-order-layout={capabilities.includes("server_order")}>{@render navigation()}</div>{/if}
-  <section class="chat" aria-label="Chat">
+  <section class="chat" aria-label="Chat" onpointerdown={event => { if (!drawer) beginSwipe(event, 1); }} onpointermove={followSwipe} onpointerup={chatSwipeEnd} onpointercancel={cancelSwipe}>
     <header class="chat-header">
       {#if mobile}<button class="icon-button menu-button" bind:this={navigationButton} aria-label="Open navigation" aria-expanded={drawer} onclick={() => drawer = true}>{@render icon("menu")}</button>{/if}
       <span class="header-hash" aria-hidden="true">{currentChannel?.direct ? "@" : "#"}</span><div class="channel-title"><h2>{timeline?.name || "Welcome to Nuschl"}</h2><span>{currentChannel?.direct ? "Private conversation" : selected?.name || "Your voice. Your space."}</span></div>
@@ -496,8 +573,8 @@
       <section class="voice-bar" aria-label="Voice controls">
         <div class="voice-description"><strong>{voiceChannel?.name || "Voice channel"}</strong><small>{voiceServer?.name} · {voiceStatus}</small>{#if voiceBitrateLine}<small class="voice-bitrate" title={voiceBitrateWhy}>{voiceBitrateLine}</small>{/if}</div>
         <div class="voice-actions">
-          <button class:pressed={microphoneMuted} class="icon-button" disabled={!voice.joined || !!audioActionPending} aria-label={microphoneMuted ? "Unmute microphone" : "Mute microphone"} aria-pressed={microphoneMuted} title={microphoneMuted ? "Unmute microphone" : "Mute microphone"} onclick={toggleMicrophone}>{@render icon(microphoneMuted ? "muted" : "mic")}</button>
-          <button class:pressed={playbackDeafened} class="icon-button" disabled={!voice.joined || !!audioActionPending} aria-label={playbackDeafened ? "Enable sound" : "Deafen"} aria-pressed={playbackDeafened} title={playbackDeafened ? "Enable sound" : "Deafen (also mutes microphone)"} onclick={togglePlayback}>{@render icon("headphones")}</button>
+          <button class="icon-button voice-toggle" disabled={!voice.joined || !!audioActionPending} aria-label={microphoneMuted ? "Unmute microphone" : "Mute microphone"} aria-pressed={microphoneMuted} title={microphoneMuted ? "Unmute microphone" : "Mute microphone"} onclick={toggleMicrophone}>{@render icon("mic", microphoneMuted)}</button>
+          <button class="icon-button voice-toggle" disabled={!voice.joined || !!audioActionPending} aria-label={playbackDeafened ? "Enable sound" : "Deafen"} aria-pressed={playbackDeafened} title={playbackDeafened ? "Enable sound" : "Deafen (also mutes microphone)"} onclick={togglePlayback}>{@render icon("headphones", playbackDeafened)}</button>
           {#if !voice.deafened && (audioState?.contextState !== "running" || audioState?.phase === "deafened")}<button class="control-button" onclick={() => activateAudio({microphone:false})}>Enable audio</button>{/if}
           <button class="icon-button" aria-label="Stop audio" title="Stop audio; stay connected for chat" onclick={stopAudio}>{@render icon("leave")}</button>
         </div>
@@ -511,6 +588,6 @@
   </section>
 </main>
 
-{#if mobile && drawer}<dialog class="navigation-drawer" use:modal onclose={closeDrawer} oncancel={closeDrawer} aria-label="Server navigation" onpointerdown={(event) => { if (event.target === event.currentTarget) closeDrawer(); }}><div class="navigation" class:server-order-layout={capabilities.includes("server_order")}>{@render navigation()}</div></dialog>{/if}
+{#if mobile && drawer}<dialog class="navigation-drawer" use:drawerModal transition:drawerSlide onclose={(event) => { if (event.currentTarget.isConnected) closeDrawer(); }} oncancel={(event) => { event.preventDefault(); closeDrawer(); }} aria-label="Server navigation" onpointerdown={drawerPointerDown} onpointermove={drawerSwipeMove} onpointerup={drawerSwipeEnd} onpointercancel={drawerSwipeCancel}><div class="navigation" class:server-order-layout={capabilities.includes("server_order")}>{@render navigation()}</div></dialog>{/if}
 {#if showAdd}<dialog class="modal server-modal" use:modal onclose={() => showAdd = false} oncancel={() => showAdd = false} aria-labelledby="server-form-title"><header class="modal-header"><div><p class="eyebrow">MAKE YOURSELF AT HOME</p><h2 id="server-form-title">{editingIndex === null ? "Add a server" : "Edit server"}</h2></div><button class="icon-button" aria-label="Close server form" onclick={() => showAdd = false}>{@render icon("close")}</button></header><form class="connection" onsubmit={connect}><p class="muted">Connect to your Mumble server. Your bookmarks and observed chat history are saved in this browser.</p><label>Display name <input bind:value={serverName} maxlength="128" autocomplete="off" placeholder="Friday night"></label><div class="form-row"><label>Server <input bind:value={host} required autocomplete="off" placeholder="voice.example.org"></label><label class="port-field">Port <input bind:value={port} type="number" min="1" max="65535" required></label></div><label>Your name <input bind:value={username} required maxlength="128" autocomplete="nickname" placeholder="How your friends know you"></label><label for="server-password">Server password (optional)</label><input id="server-password" type="password" bind:value={password} maxlength="1024" autocomplete="current-password"><details><summary>Certificate and connection</summary><label>Certificate SHA-256 (optional)<input bind:value={pin} autocomplete="off" spellcheck="false" placeholder="64 hexadecimal characters"></label><small class="relay">Relay: {relay}. TLS runs in this browser.</small></details><div class="modal-actions"><button type="button" onclick={() => showAdd = false}>Cancel</button><button class="primary" type="submit" disabled={!loaded || !!link.error}>Connect</button></div></form></dialog>{/if}
 {#if showSettings}<dialog class="modal settings-modal" use:modal onclose={() => showSettings = false} oncancel={() => showSettings = false} aria-labelledby="settings-title"><header class="modal-header"><div><p class="eyebrow">MAKE IT YOURS</p><h2 id="settings-title">Settings</h2></div><button class="icon-button" aria-label="Close settings" onclick={() => showSettings = false}>{@render icon("close")}</button></header><section class="settings-section"><h3>Appearance</h3><label for="theme-choice">Theme</label><select id="theme-choice" bind:value={settings.theme} onchange={persistSettings}><option value="system">Match device</option><option value="dark">Dark</option><option value="light">Light</option></select><label for="density-choice">Message spacing</label><select id="density-choice" bind:value={settings.density} onchange={persistSettings}><option value="comfortable">Comfortable</option><option value="compact">Compact</option></select><label for="size-choice">Text size</label><select id="size-choice" bind:value={settings.fontSize} onchange={persistSettings}><option value={14}>Small · 14px</option><option value={16}>Default · 16px</option><option value={18}>Large · 18px</option><option value={20}>Larger · 20px</option></select></section><section class="settings-section voice-quality"><h3>Voice quality</h3><label for="voice-bitrate-choice">Voice bitrate</label><select id="voice-bitrate-choice" bind:value={voiceBitrate} onchange={chooseVoiceBitrate}>{#each VOICE_BITRATES as choice (choice)}<option value={choice}>{kbps(choice)}{choice === 128000 ? " · default" : ""}</option>{/each}</select><p>Mono Opus, 64 to 256 kb/s. A server's bandwidth limit can lower it, never raise it.</p>{#if voice}<p class="voice-bitrate" role="status">{voiceServer?.name}: {voiceBitrateWhy}</p>{/if}</section><section class="settings-section"><h3>Privacy & storage</h3><p>Bookmarks, trusted certificates and observed chat history are stored locally in this browser. Legacy servers can read chat; the relay only forwards encrypted traffic.</p><p>Links and received images never cause automatic requests to another site.</p></section>{@render voiceProcessingSettings()}{#if selected}<section class="settings-section"><h3>{selected.name}</h3><p class="muted">{selected.host}:{selected.port} · {selected.username}</p><button onclick={() => { showSettings = false; editServer(); }}>Edit server bookmark</button>{#if capabilities.includes("server_order")}<div class="server-order-actions"><button disabled={orderPending || servers[0]?.id === selected.id} onclick={()=>moveOrderKey(selected.id,-1)}>Move server earlier</button><button disabled={orderPending || servers.at(-1)?.id === selected.id} onclick={()=>moveOrderKey(selected.id,1)}>Move server later</button></div>{/if}{#if capabilities.includes("remove_server")}<button class="danger" onclick={async () => { await act("remove_server",selectedIndex); showSettings = false; }}>Remove server</button>{/if}</section>{/if}<footer class="settings-footer"><span class="brand-word">nuschl<span>web</span></span><small>Built for conversations.</small></footer></dialog>{/if}
