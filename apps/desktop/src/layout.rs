@@ -285,13 +285,33 @@ pub fn scroll_frame<H: ScrollbarHandle + Clone>(
 /// native bubble listener otherwise runs before its parent's, moving both it
 /// and the containing dialog. The hitbox retains normal occlusion semantics.
 pub fn capture_scroll(
+    handle: ScrollHandle,
+    listener: impl Fn(&ScrollEvent, &mut Window, &mut App) + 'static,
+) -> impl IntoElement {
+    scroll_events(handle, DispatchPhase::Capture, listener)
+}
+
+/// The outer viewport handles remaining wheel events before its own native
+/// scrolling. Nested capture listeners have already had the first chance.
+pub fn scroll_before_parent(
+    handle: ScrollHandle,
+    listener: impl Fn(&ScrollEvent, &mut Window, &mut App) + 'static,
+) -> impl IntoElement {
+    scroll_events(handle, DispatchPhase::Bubble, listener)
+}
+
+fn scroll_events(
+    handle: ScrollHandle,
+    dispatch: DispatchPhase,
     listener: impl Fn(&ScrollEvent, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
     canvas(
-        |bounds, window, _| window.insert_hitbox(bounds, HitboxBehavior::Normal),
+        // An absolute child's layout origin moves with its scroll parent.
+        // Resolve from the retained viewport so its gutter remains interactive.
+        move |_, window, _| window.insert_hitbox(handle.bounds(), HitboxBehavior::Normal),
         move |_, hitbox, window, _| {
             window.on_mouse_event(move |event: &ScrollEvent, phase, window, cx| {
-                if phase.capture() && hitbox.should_handle_scroll(window) {
+                if phase == dispatch && hitbox.should_handle_scroll(window) {
                     listener(event, window, cx);
                 }
             });
