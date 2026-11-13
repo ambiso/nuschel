@@ -753,13 +753,20 @@ pub fn card(
         "{kind} {}, {size}, from {}. {}",
         offer.name, message.author, shown.status
     );
+    // In a card too narrow for the badge beside the name, the name and its
+    // actions wrap below the badge, and the badge is at most the card's width.
     let header = div()
+        .w_full()
+        .min_w_0()
         .flex()
+        .flex_wrap()
         .items_center()
         .gap_3()
         .child(
             div()
-                .size(px(40.))
+                .w(px(40.))
+                .max_w_full()
+                .h(px(40.))
                 .flex_shrink_0()
                 .rounded(px(6.))
                 .bg(tint(tone, 0x33))
@@ -771,24 +778,40 @@ pub fn card(
                 .text_color(color(tone))
                 .child(extension),
         )
+        // The name beside its actions while both fit. Buttons never shrink,
+        // so in a narrow card they wrap below the name instead of
+        // overflowing it.
         .child(
-            div()
-                .flex_1()
-                .min_w_0()
+            crate::layout::flexible()
+                .flex_basis(px(120.))
                 .flex()
-                .flex_col()
+                .flex_wrap()
+                .items_center()
+                .gap_x_3()
+                .gap_y_2()
                 .child(
                     div()
-                        .truncate()
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(color(TEXT))
-                        .child(text!(offer.name.clone()).with_id(("offer-name", position))),
+                        .flex_grow(1.)
+                        .flex_basis(px(120.))
+                        .min_w_0()
+                        .flex()
+                        .flex_col()
+                        .child(
+                            div()
+                                .truncate()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(color(TEXT))
+                                .child(text!(offer.name.clone()).with_id(("offer-name", position))),
+                        )
+                        .child(
+                            div().text_xs().text_color(color(TEXT_MUTED)).child(
+                                text!(format!("{size} · {}", message.author))
+                                    .with_id(("offer-meta", position)),
+                            ),
+                        ),
                 )
-                .child(div().text_xs().text_color(color(TEXT_MUTED)).child(
-                    text!(format!("{size} · {}", message.author)).with_id(("offer-meta", position)),
-                )),
-        )
-        .children(shown.buttons);
+                .children(shown.buttons),
+        );
     let progress = shown.progress.map(|fraction| {
         div()
             .id(("offer-progress", position))
@@ -820,6 +843,8 @@ pub fn card(
             .id(("offer", position))
             .role(Role::Group)
             .aria_label(label)
+            .w_full()
+            .min_w_0()
             .max_w(px(480.))
             .p_3()
             .rounded(px(8.))
