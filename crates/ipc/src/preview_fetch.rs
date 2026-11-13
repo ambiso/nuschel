@@ -68,7 +68,8 @@ pub struct Response {
     pub schema: u16,
     pub status: u16,
     pub location: Option<String>,
-    pub content_type: Option<String>,
+    pub media_type: Option<String>,
+    pub charset: crate::preview::Charset,
     /// Base64; check the encoded bound before decoding or allocating its body.
     pub body: String,
 }
@@ -81,9 +82,9 @@ impl Response {
                 .as_ref()
                 .is_some_and(|s| s.len() > 2048 || s.chars().any(char::is_control))
             || self
-                .content_type
+                .media_type
                 .as_ref()
-                .is_some_and(|s| s.len() > 256 || !s.is_ascii() || s.chars().any(char::is_control))
+                .is_some_and(|s| s.len() > 128 || !s.is_ascii() || s.chars().any(char::is_control))
             || self.body.len() > purpose.body_limit().div_ceil(3) * 4
         {
             return Err(Failure::Malformed);
@@ -96,6 +97,12 @@ impl Response {
         }
         Ok(bytes)
     }
+}
+
+/// Base64 for already-bounded document, image or stream bytes. Keeping this
+/// framing conversion here avoids a second codec dependency in the supervisor.
+pub fn encode_data(bytes: &[u8]) -> String {
+    base64::engine::general_purpose::STANDARD.encode(bytes)
 }
 
 pub fn decode_chunk(data: &str) -> Result<Vec<u8>, Failure> {
@@ -206,7 +213,8 @@ mod tests {
             schema: SCHEMA,
             status: 200,
             location: None,
-            content_type: Some("text/html; charset=utf-8".into()),
+            media_type: Some("text/html".into()),
+            charset: crate::preview::Charset::Utf8,
             body: encode(b"page"),
         };
         assert_eq!(reply.decode_body(Purpose::Document).unwrap(), b"page");

@@ -205,11 +205,14 @@ impl Parser {
                     {
                         return Err(Failure::Malformed);
                     }
+                    let (media_type, charset) =
+                        content_type(field("content-type", 256)?.as_deref())?;
                     self.response = Some(Response {
                         schema: wire::SCHEMA,
                         status,
                         location: field("location", 2048)?,
-                        content_type: field("content-type", 256)?,
+                        media_type,
+                        charset,
                         body: String::new(),
                     });
                     if matches!(status, 301 | 302 | 303 | 307 | 308) {
@@ -285,6 +288,57 @@ impl Parser {
         response.decode_body(self.purpose)?; // Validate the exact reply before emitting it.
         Ok(Some(response))
     }
+}
+
+/// Strict bounded header parameter classification stays in the isolated parser.
+/// Unsupported encodings are reported as Other for offline extraction to refuse.
+fn content_type(
+    value: Option<&str>,
+) -> Result<(Option<String>, nuschl_ipc::preview::Charset), Failure> {
+    use nuschl_ipc::preview::Charset;
+    let Some(value) = value else {
+        return Ok((None, Charset::Unspecified));
+    };
+    let mut parts = value.split(';');
+    let media = parts
+        .next()
+        .ok_or(Failure::Malformed)?
+        .trim()
+        .to_ascii_lowercase();
+    if media.is_empty()
+        || media.len() > 128
+        || media.bytes().filter(|b| *b == b'/').count() != 1
+        || !media
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"/!#$&^_.+-".contains(&b))
+    {
+        return Err(Failure::Malformed);
+    }
+    let mut charset = None;
+    let mut count = 0;
+    for part in parts {
+        count += 1;
+        if count > 8 {
+            return Err(Failure::TooLarge);
+        }
+        let (name, value) = part.trim().split_once('=').ok_or(Failure::Malformed)?;
+        if name.trim().eq_ignore_ascii_case("charset") {
+            if charset.is_some() {
+                return Err(Failure::Malformed);
+            }
+            let value = value.trim();
+            let value = if value.starts_with('"') && value.ends_with('"') && value.len() >= 2 {
+                &value[1..value.len() - 1]
+            } else {
+                value
+            };
+            if value.contains(['"', '\\']) || value.is_empty() {
+                return Err(Failure::Malformed);
+            }
+            charset = Some(value);
+        }
+    }
+    Ok((Some(media), Charset::from_label(charset)))
 }
 
 #[cfg(test)]
