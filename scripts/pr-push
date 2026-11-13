@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: EUPL-1.2
+# Push jj bookmarks only after scripts/pre-pr passes on every commit the push
+# would publish:
+#
+#   scripts/pr-push [--full] [jj git push arguments...]
+#   scripts/pr-push --bookmark my-branch
+#
+# It asks `jj git push --dry-run` which commits the push would publish, checks
+# each one, confirms that the push still publishes exactly those commits
+# without snapshotting the working copy again, and only then pushes them with
+# --ignore-working-copy. Deleting a bookmark needs no check. jj runs no git
+# hooks, so this wrapper (or a manual scripts/pre-pr) is the local gate; the
+# required "CI result" check on GitHub is the enforced one.
+set -euo pipefail
+
+here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+pre_pr_args=()
+if [[ ${1:-} == --full ]]; then pre_pr_args+=(--full); shift; fi
+for arg in "$@"; do
+  [[ $arg == --dry-run ]] && exec jj git push "$@"
+done
+
+# Commit ids a push would publish, from jj's dry-run report lines such as
+# "  bookmark: name [add to 1234abcd5678]" or "[move forward from … to …]".
+# A failing dry run stops here instead of pushing unchecked commits.
+targets() {
+  local report
+  report=$(jj "$@" git push --dry-run "${push_args[@]}" 2>&1) || {
+    printf '%s\n' "$report" >&2
+    echo 'pr-push: jj git push --dry-run failed; nothing was pushed.' >&2
+    return 1
+  }
+  printf '%s\n' "$report" >&2
+  sed -n 's/^ *[A-Za-z]*: .* \[.* to \([0-9a-f]\{8,\}\)\]$/\1/p' <<<"$report" | sort -u
+}
+
+push_args=("$@")
+first=$(targets)
+if [[ -z $first ]]; then
+  echo 'pr-push: the push publishes no new commits; nothing to check.' >&2
+else
+  read -r -a commits <<<"$(tr '\n' ' ' <<<"$first")"
+  "$here/pre-pr" "${pre_pr_args[@]}" "${commits[@]}"
+  second=$(targets --ignore-working-copy)
+  if [[ $first != "$second" ]]; then
+    echo 'pr-push: the bookmarks changed while checking; run pr-push again.' >&2
+    exit 1
+  fi
+fi
+exec jj --ignore-working-copy git push "${push_args[@]}"

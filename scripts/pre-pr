@@ -1,0 +1,93 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: EUPL-1.2
+# Run the per-pull-request checks of .github/workflows/check.yml locally on a
+# committed revision, before pushing it.
+#
+#   scripts/pre-pr [--full] [--list] [--cores N] [--max-jobs N] [REV...]
+#
+# REV is a git revision or, in a jj workspace, a jj revision. Without one it
+# checks jj's @ (or @- when @ is empty), or git's HEAD. Only committed content
+# is checked: Nix reads the commit, never untracked or unstaged files.
+#
+# By default: rustfmt, workspace Clippy (--all-targets --deny warnings) and
+# every per-PR unit-test, worker-boundary and policy check (scripts/ci-tiers
+# lint + unit). --full adds the Linux package builds, i.e. CI's whole fast tier.
+# --list prints the installables instead of building them.
+#
+# Only what changed is rebuilt: each unit-test leaf is a cached per-crate
+# crate2nix derivation, so crates whose inputs did not change are Nix cache
+# hits. Clippy is one workspace derivation and reruns after any Rust change.
+# Defaults follow the repository's build policy: --cores 2 --max-jobs 2
+# (or NUSCHL_CORES / NUSCHL_MAX_JOBS).
+set -euo pipefail
+
+cores=${NUSCHL_CORES:-2}
+max_jobs=${NUSCHL_MAX_JOBS:-2}
+tiers=(lint unit)
+list_only=false
+revs=()
+while (( $# > 0 )); do
+  case $1 in
+    --full) tiers=(build lint unit); shift ;;
+    --list) list_only=true; shift ;;
+    --cores) cores=$2; shift 2 ;;
+    --max-jobs) max_jobs=$2; shift 2 ;;
+    -h | --help) sed -n '3,22p' "$0"; exit 0 ;;
+    --) shift; revs+=("$@"); break ;;
+    -*) echo "pre-pr: unknown option $1" >&2; exit 2 ;;
+    *) revs+=("$1"); shift ;;
+  esac
+done
+[[ $cores =~ ^[1-9][0-9]*$ && $max_jobs =~ ^[1-9][0-9]*$ ]] ||
+  { echo 'pre-pr: --cores and --max-jobs take positive integers' >&2; exit 2; }
+
+top=$(git rev-parse --show-toplevel)
+here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+export NIX_CONFIG="${NIX_CONFIG:+$NIX_CONFIG
+}extra-experimental-features = nix-command flakes"
+
+in_jj() { command -v jj >/dev/null 2>&1 && jj root >/dev/null 2>&1; }
+
+# Resolve a revision to one full commit id.
+resolve() {
+  local rev=$1 ids
+  if in_jj && ids=$(jj log --no-graph -r "$rev" -T 'commit_id ++ "\n"' 2>/dev/null) && [[ -n $ids ]]; then
+    [[ $(wc -l <<<"$ids") -eq 1 ]] || { echo "pre-pr: $rev names more than one commit" >&2; return 1; }
+    printf '%s\n' "$ids"
+  else
+    git rev-parse --verify --quiet "$rev^{commit}" || { echo "pre-pr: unknown revision $rev" >&2; return 1; }
+  fi
+}
+
+if (( ${#revs[@]} == 0 )); then
+  if in_jj; then
+    if [[ $(jj log --no-graph -r @ -T 'if(empty, "empty", "")') == empty ]]; then revs=(@-); else revs=(@); fi
+  else
+    revs=(HEAD)
+    if [[ -n $(git status --porcelain --untracked-files=no) ]]; then
+      echo 'pre-pr: note: uncommitted changes are not checked; only HEAD is.' >&2
+    fi
+  fi
+fi
+
+status=0
+for rev in "${revs[@]}"; do
+  sha=$(resolve "$rev")
+  flake="git+file://$top?rev=$sha"
+  installables=()
+  for tier in "${tiers[@]}"; do
+    list=$("$here/ci-tiers" --flake "$flake" "$tier")
+    mapfile -t -O "${#installables[@]}" installables <<<"$list"
+  done
+  if [[ $list_only == true ]]; then printf '%s\n' "${installables[@]}"; continue; fi
+  printf 'pre-pr: %s (%s): %d checks, --cores %s --max-jobs %s\n' \
+    "$rev" "${sha:0:12}" "${#installables[@]}" "$cores" "$max_jobs" >&2
+  start=$SECONDS
+  if nix build --no-link -L --keep-going --cores "$cores" --max-jobs "$max_jobs" "${installables[@]}"; then
+    printf 'pre-pr: %s passed in %d s\n' "${sha:0:12}" $(( SECONDS - start )) >&2
+  else
+    printf 'pre-pr: %s FAILED\n' "${sha:0:12}" >&2
+    status=1
+  fi
+done
+exit "$status"
