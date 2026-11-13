@@ -48,8 +48,8 @@ The installed license directory must contain the actual scoped dependency
 inventory and all referenced original notices, including fonts and the two
 verification engines. Root `LICENSE` alone is insufficient. Stage identity must
 bind the source revision, lockfile and nine executables to the tested artifact.
-The common staging/notice contract is still being coordinated; recipes must not
-invent a separate weaker attribution policy.
+The canonical source binding compares the staged notices and desktop assets with
+the source helpers; recipes must not invent a separate weaker attribution policy.
 
 ## Source builds and compiler availability
 
