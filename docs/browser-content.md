@@ -100,12 +100,15 @@ released once consumed; there is no strong registry of idle/disposed facades.
 Only active/queued jobs retain client references. Each source image is copied
 only after admission, without detaching the caller's buffer.
 
-Only one job is posted to the worker at a time. Jobs retain the original
-absolute eight-second deadline, including queue time; worker startup has one
+Only one job is posted to the worker at a time. A job's eight-second execution
+deadline starts when it is dispatched to the worker and, if missed, retires the
+owner; time spent queued (including during worker startup) has a separate
+reject-only eight-second deadline from admission. Worker startup has one
 original fifteen-second ceiling. A late result or ready signal cannot win
 because its timer callback was delayed: both paths check the monotonic absolute
-deadline again. Shorter consumer deadlines can expire while a loader continues
-to its own bound; new arrivals never extend either original deadline.
+deadline again, and an overdue active job wins any timer race. Shorter consumer
+deadlines can expire while a loader continues to its own bound; new arrivals
+never extend an active job's or the loader's deadline.
 
 Queued cancellation releases never-posted work immediately. Active cancellation
 rejects the consumer immediately but leaves a tombstone: its job/byte reservation
@@ -314,9 +317,12 @@ see `~/.cache/nuschl-math-retirement/content-browser/proof.json`.
 
 ## Broker integration evidence
 
-The focused client-WASM suite covers source/revision/receipt admission, raw-mode
-history, canceled/stalled SDK transport credit, typed reply rejection, image
+The focused client-WASM suite covers source/revision/receipt admission, retained
+raw source modes of resident (including unsaved) rows during recovery without
+history I/O, canceled/stalled SDK transport credit, typed reply rejection, image
 leases/caps, partial/no-progress TLS output and transport-pressure admission.
+No unit test covers stored modes in IndexedDB history pages; that path is only
+exercised by the actual browser stress fixture's seeded legacy-mode rows.
 Its owned TLS-relay fixture sends a 200,000-character text and a valid synthetic
 PNG data-image above 200,000 characters in one pending batch, then checks exact,
 separate received messages. It exercises TLS and framing rather than an image
@@ -362,13 +368,22 @@ and stronger Sent/draft revision correlation remain separate follow-up work.
 
 The SDK keeps each posted job's source credit until its exact completion ACK.
 Four of the shared 128 SDK RPC slots are reserved for these ACKs (ordinary
-commands use at most 124), rehydration keeps at most eight content requests in
-flight, and an invalid codec reply is acknowledged as a terminal failure. If an
-ACK still cannot be delivered, the bridge keeps that credit charged and starts no
-further codec work. If a cancelled posted job is not acknowledged within 15
-seconds, the SDK retires the preview lane for the page: credit stays held,
-waiting and new rows show a reload message, and no replacement capacity is
-created. These content deadlines use the SDK worker's `performance.now()`, which
+commands use at most 124), and rehydration keeps at most eight content requests
+in flight. When this page's own RPC layer refuses a request because its
+ordinary slots are full (a typed local refusal, not matched by message text),
+the row keeps an explicit Retry; an SDK refusal or a closed SDK is permanent.
+An invalid codec reply is acknowledged as a terminal failure, and only a
+normal, well-formed completion result counts as the ACK. If an ACK cannot be
+delivered, a content work batch violates the protocol (for example more than
+one Cancel per posted job plus one Render per free slot), or the content
+worker owner retires, the bridge keeps outstanding credit charged, starts no
+further codec work and sends one bounded `content_retire` notice. A job that
+actually settled before a worker retirement is acknowledged first. The notice
+shares the four ACK slots and is refused, not queued, when they are full. Once
+the SDK receives it, waiting and new rows show a reload message. If a cancelled
+posted job is not acknowledged within 15 seconds, for example because that
+notice was refused, the SDK retires the preview lane itself: credit stays held,
+the same reload message appears, and no replacement capacity is created. These content deadlines use the SDK worker's `performance.now()`, which
 includes time a frozen or suspended tab could not run. After a resume they can
 therefore already have elapsed: posted rows fail with an explicit retry, and an
 unacknowledged cancelled job can retire the lane before its pending ACK is

@@ -300,11 +300,15 @@ DOM, so a Web Worker can host it.
 
 The Svelte frontend uses the shared Rust `Client` for selected conversations,
 private-recipient presence checks, channel navigation and local history paging.
-TLS, legacy HTML-to-text parsing, syntax runs and IndexedDB requests run in
-`sdk.worker.js`; the UI receives inert documents. Newlines are preserved and long
-messages can be expanded. The text-only content build does not decode image
-formats in the worker that holds TLS keys. Images, remote images and attachment
-sending remain unsupported in this adapter.
+TLS and IndexedDB requests run in `sdk.worker.js`, which keeps original message
+sources and accepts only validated inert derivatives. Legacy HTML and Markdown
+parsing, syntax runs and image decoding run in the separate content Worker
+(`nuschl-content-wasm`), which holds no SDK, TLS or identity state; as a
+same-origin Worker it is a browser realm, not an OS sandbox. The UI receives
+inert documents. Newlines are preserved and long messages can be expanded.
+Received data-image messages are shown as validated inert pixels. Sending images
+from the web UI is not wired yet (the SDK has the `image_begin`/`image_send`
+lease API); remote images and other attachments remain unsupported.
 
 IndexedDB saves observed messages by default, scoped to the server address and
 verified certificate, plus saved server bookmarks. Opaque Rust storage tickets

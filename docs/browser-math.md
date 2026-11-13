@@ -64,8 +64,10 @@ cannot manufacture another owner or cancel another facade's jobs. The first
 admitted request fixes the factory and startup options; unused constructors do
 not claim that lease. Diagnostics expose only detached frozen numeric snapshots.
 
-Every job retains its original two-second absolute deadline, including startup
-and queue time. The loader has a **separate original fifteen-second ceiling**;
+A formula job's two-second execution deadline starts when it is dispatched to
+the worker and retires the formula owner if missed; time waiting for startup or
+in the queue has a separate reject-only two-second deadline from admission.
+The loader has a **separate original fifteen-second ceiling**;
 new consumers and duplicate readiness cannot extend it. A queued first formula
 may time out to source while the cold module continues loading. Once that same
 worker becomes ready, an explicit Render formula retry can succeed. Absolute
