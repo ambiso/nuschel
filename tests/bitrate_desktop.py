@@ -363,12 +363,14 @@ class DesktopBitrate:
     def timeline_pass(self, label, zoom, directory, channel):
         """Walk a channel's timeline from the newest entry up to the welcome,
         one entry per Up, measuring every laid-out node and the gutter pixels."""
-        # At high zoom the channel can be outside the tree's small viewport,
-        # where activating it does nothing: scroll it into view first.
+        # At high zoom the channel can be outside the tree's small viewport.
+        # GPUI's accessible click lands at the row's centre (outside the
+        # tree's clip) and it ignores ScrollTo, so use the keyboard instead:
+        # focus the row, then Enter.
         item = self.node(channel, "tree item")
-        item.call("Component", "ScrollTo", "u", "0")
-        time.sleep(0.5)
-        assert item.call("Action", "DoAction", "i", "0")[0] is not False
+        item.call("Component", "GrabFocus")
+        eventually(lambda: item.focused, f"the {channel} row did not take focus", timeout=5)
+        self.shell.key("Return")
         time.sleep(0.4)
         welcome_name = f"Welcome to {channel}"
         timeline = self.node(f"Messages in #{channel}", "list")
