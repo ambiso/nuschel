@@ -8214,10 +8214,6 @@ mod plugin_data_tests {
     #[tokio::test]
     async fn unusable_plugin_data_is_dropped_and_counted_never_fatal() {
         let (tx, mut rx) = mpsc::channel(64);
-        let mut duplicated = incoming(Some(2), Some("id"), Some(&[0; 1000][..]));
-        let mut body = duplicated.payload.to_vec();
-        body.extend([0x1a, 0]); // a second data field
-        duplicated.payload = body.into();
         let long_id = "i".repeat(101);
         let not_utf8 = ControlFrame {
             kind: kind::PLUGIN_DATA_TRANSMISSION,
@@ -8231,7 +8227,6 @@ mod plugin_data_tests {
             incoming(Some(2), Some("id"), None),
             incoming(Some(2), Some("id"), Some(&[0; 1001][..])),
             incoming(Some(2), Some(long_id.as_str()), Some(b"x".as_slice())),
-            duplicated,
             not_utf8,
             ControlFrame {
                 kind: kind::PLUGIN_DATA_TRANSMISSION,
@@ -8240,7 +8235,7 @@ mod plugin_data_tests {
         ] {
             state.handle(frame, &tx).await.unwrap();
         }
-        assert_eq!(dropped(&state), 9);
+        assert_eq!(dropped(&state), 8);
         // The reserved namespace has no generic consumer: not surfaced, and
         // not a failure either.
         state
@@ -8250,7 +8245,7 @@ mod plugin_data_tests {
             )
             .await
             .unwrap();
-        assert_eq!(dropped(&state), 9);
+        assert_eq!(dropped(&state), 8);
         assert!(drain(&mut rx).is_empty());
     }
 

@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! `PluginDataTransmission` (type 26): opaque bytes a client sends to chosen
 //! sessions through the server. Nuschl never interprets them; they are bounded
-//! here before anything is allocated, and carried as a [`Payload`] whose
-//! `Debug` shows only lengths.
+//! here and carried as a [`Payload`] whose `Debug` shows only lengths.
 //!
 //! # What a stock server forwards
 //!
@@ -39,27 +38,16 @@
 //! refuses (including a `dataID` that is not UTF-8, which Murmur forwards),
 //! and an end-to-end server forwards nothing.
 //!
-//! # The encodings accepted here
+//! # Decoding
 //!
-//! Stricter than protobuf, so that a size limit follows from a receiver limit:
-//!
-//! - varints are minimal (no redundant trailing zero group); tags, lengths and
-//!   the `uint32` fields take at most five bytes and must fit 32 bits, other
-//!   varints at most ten;
-//! - fields 1, 3 and 4 appear at most once; `dataID` is UTF-8;
-//! - receivers may be packed, unpacked or both, in any number of fields, but
-//!   a packed field is never empty, and every value counts towards the limit
-//!   before anything is deduplicated;
-//! - unknown fields are skipped, at most [`MAX_UNKNOWN_FIELDS`] of them in
-//!   [`MAX_UNKNOWN_BYTES`] (tags included); groups and wire types 6 and 7 are
-//!   refused.
-//!
-//! The largest body with `n` receivers is therefore [`max_body`]`(n)`: 1,111
-//! bytes for the singular fields (a five-byte session, 1,000 bytes of data
-//! behind a two-byte length, 100 bytes of ID), seven bytes per receiver (each
-//! alone in a packed field; unpacked takes six) and the unknown-field budget.
-//! Stock encoders never produce what this refuses; such a message is dropped,
-//! not forwarded, which is stricter than Murmur's parser.
+//! With a limit of `n` receivers, a body larger than [`max_body`]`(n)` is
+//! refused before decoding, so what decoding allocates follows from the limit.
+//! It adds [`MAX_UNKNOWN_BYTES`] to the largest canonical encoding: 1,111 bytes
+//! for the singular fields and seven per receiver (each alone in a packed
+//! field). prost then decodes it as leniently as Murmur's parser: the last
+//! value wins, a `uint32` keeps its low 32 bits, and unknown fields are
+//! skipped. The data, ID and receiver limits are checked after decoding;
+//! every receiver counts before anything is deduplicated.
 //!
 //! # The `nuschl/` namespace
 //!
@@ -78,15 +66,14 @@ pub const MAX_DATA_BYTES: usize = 1000;
 pub const MAX_DATA_ID_BYTES: usize = 100;
 /// Murmur accepts up to this many receivers beyond the users connected.
 pub const RECEIVER_SLACK: usize = 20;
-/// Unknown fields skipped per message: bytes (tags included) and fields.
+/// Room for unknown fields (tags included) in [`max_body`].
 pub const MAX_UNKNOWN_BYTES: usize = 256;
-pub const MAX_UNKNOWN_FIELDS: usize = 16;
 /// Data IDs reserved for Nuschl's own features.
 pub const NUSCHL_DATA_ID_PREFIX: &str = "nuschl/";
 
-/// Fields 1, 3 and 4 at their largest accepted encoding.
+/// Fields 1, 3 and 4 at their largest canonical encoding.
 const SINGULAR_BYTES: usize = (1 + 5) + (1 + 2 + MAX_DATA_BYTES) + (1 + 1 + MAX_DATA_ID_BYTES);
-/// One receiver at its largest accepted encoding: alone in a packed field.
+/// One receiver at its largest canonical encoding: alone in a packed field.
 const RECEIVER_BYTES: usize = 1 + 1 + 5;
 const _: () = assert!(SINGULAR_BYTES == 1111);
 
@@ -198,14 +185,19 @@ pub struct PluginData {
 }
 
 impl PluginData {
-    /// Check `body` against the accepted encodings and at most
-    /// `max_receivers` receivers without allocating, then decode it.
+    /// Decode `body`, naming at most `max_receivers` receivers. A body larger
+    /// than [`max_body`]`(max_receivers)` is refused before decoding.
     pub fn decode(body: &[u8], max_receivers: usize) -> Result<Self, Error> {
-        scan(body, max_receivers)?;
+        if body.len() > max_body(max_receivers) {
+            return Err(Error::Malformed);
+        }
         let message = PluginDataTransmission::decode(body).map_err(|_| Error::Malformed)?;
         let (Some(data), Some(data_id)) = (message.data, message.data_id) else {
             return Err(Error::Missing);
         };
+        if message.receiver_sessions.len() > max_receivers {
+            return Err(Error::TooManyReceivers);
+        }
         Ok(Self {
             sender: message.sender_session,
             receivers: message.receiver_sessions,
@@ -223,133 +215,6 @@ impl PluginData {
             data_id: Some(data_id),
         }
     }
-}
-
-/// A minimal varint of at most `max` bytes (at most ten).
-fn varint(input: &mut &[u8], max: usize) -> Result<u64, Error> {
-    let mut value = 0_u64;
-    for index in 0..max.min(10) {
-        let (&byte, rest) = input.split_first().ok_or(Error::Malformed)?;
-        *input = rest;
-        if index == 9 && byte > 1 {
-            return Err(Error::Malformed);
-        }
-        value |= u64::from(byte & 0x7f) << (7 * index);
-        if byte & 0x80 == 0 {
-            if byte == 0 && index > 0 {
-                return Err(Error::Malformed);
-            }
-            return Ok(value);
-        }
-    }
-    Err(Error::Malformed)
-}
-
-fn uint32(input: &mut &[u8]) -> Result<u32, Error> {
-    u32::try_from(varint(input, 5)?).map_err(|_| Error::Malformed)
-}
-
-/// A length-delimited value, checked against what remains (as `u64`, so
-/// that no length is truncated on 32-bit targets) before advancing.
-fn delimited<'a>(input: &mut &'a [u8]) -> Result<&'a [u8], Error> {
-    let length = uint32(input)?;
-    if u64::from(length) > input.len() as u64 {
-        return Err(Error::Malformed);
-    }
-    let length = usize::try_from(length).map_err(|_| Error::Malformed)?;
-    let (value, rest) = input.split_at(length);
-    *input = rest;
-    Ok(value)
-}
-
-fn skip(input: &mut &[u8], bytes: usize) -> Result<(), Error> {
-    if bytes > input.len() {
-        return Err(Error::Malformed);
-    }
-    *input = &input[bytes..];
-    Ok(())
-}
-
-/// The accepted encodings (module docs), without allocating.
-fn scan(mut body: &[u8], max_receivers: usize) -> Result<(), Error> {
-    let (mut sender, mut data, mut data_id) = (false, false, false);
-    let mut receivers = 0_usize;
-    let (mut unknown_fields, mut unknown_bytes) = (0_usize, 0_usize);
-    let once = |seen: &mut bool| {
-        if std::mem::replace(seen, true) {
-            Err(Error::Malformed)
-        } else {
-            Ok(())
-        }
-    };
-    while !body.is_empty() {
-        let before = body.len();
-        let key = uint32(&mut body)?;
-        let (field, wire) = (key >> 3, key & 7);
-        match (field, wire) {
-            (0, _) => return Err(Error::Malformed),
-            (1, 0) => {
-                once(&mut sender)?;
-                uint32(&mut body)?;
-            }
-            (2, 0) => {
-                uint32(&mut body)?;
-                receivers += 1;
-            }
-            (2, 2) => {
-                let mut values = delimited(&mut body)?;
-                if values.is_empty() {
-                    return Err(Error::Malformed);
-                }
-                while !values.is_empty() {
-                    uint32(&mut values)?;
-                    receivers += 1;
-                    if receivers > max_receivers {
-                        return Err(Error::TooManyReceivers);
-                    }
-                }
-            }
-            (3, 2) => {
-                once(&mut data)?;
-                if delimited(&mut body)?.len() > MAX_DATA_BYTES {
-                    return Err(Error::DataTooLarge);
-                }
-            }
-            (4, 2) => {
-                once(&mut data_id)?;
-                let value = delimited(&mut body)?;
-                if value.len() > MAX_DATA_ID_BYTES {
-                    return Err(Error::DataIdTooLong);
-                }
-                std::str::from_utf8(value).map_err(|_| Error::Malformed)?;
-            }
-            (1..=4, _) => return Err(Error::Malformed),
-            (_, 0) => {
-                varint(&mut body, 10)?;
-            }
-            (_, 1) => skip(&mut body, 8)?,
-            (_, 2) => {
-                delimited(&mut body)?;
-            }
-            (_, 5) => skip(&mut body, 4)?,
-            // Groups (3, 4) and the reserved wire types.
-            _ => return Err(Error::Malformed),
-        }
-        if field > 4 {
-            unknown_fields += 1;
-            unknown_bytes += before - body.len();
-            if unknown_fields > MAX_UNKNOWN_FIELDS || unknown_bytes > MAX_UNKNOWN_BYTES {
-                return Err(Error::Malformed);
-            }
-        }
-        if receivers > max_receivers {
-            return Err(Error::TooManyReceivers);
-        }
-    }
-    if !data || !data_id {
-        return Err(Error::Missing);
-    }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -509,39 +374,9 @@ mod tests {
     }
 
     #[test]
-    fn singular_fields_appear_once() {
-        // Each copy is within its limit, together they are not one value.
-        let data = [0x1a, 3, 1, 2, 3];
-        let id = [0x22, 1, b'a'];
-        let sender = [0x08, 1];
-        for duplicate in [&data[..], &id[..], &sender[..]] {
-            let mut body = [data.as_slice(), id.as_slice(), sender.as_slice()].concat();
-            body.extend(duplicate);
-            assert_eq!(PluginData::decode(&body, 0), Err(Error::Malformed));
-        }
-        let mut body = vec![];
-        for _ in 0..2 {
-            body.extend([0x1a, 0xe8, 0x07]);
-            body.extend([0; MAX_DATA_BYTES]);
-        }
-        body.extend(id);
-        assert_eq!(PluginData::decode(&body, 0), Err(Error::Malformed));
-    }
-
-    #[test]
     fn malformed_encodings_are_refused() {
-        // Without data and ID: anything the scan let through would be `Missing`.
+        // Without data and ID: anything decoded would be `Missing`.
         let refused: &[&[u8]] = &[
-            // An empty packed field, once and many times.
-            &[0x12, 0],
-            &[0x12, 0, 0x12, 0, 0x12, 0],
-            // Non-minimal varints: a value, a tag, a length.
-            &[0x10, 0x81, 0x00],
-            &[0x90, 0x00, 1],
-            &[0x1a, 0x80, 0x00],
-            // A six-byte uint32, and a five-byte one above 32 bits.
-            &[0x10, 0xff, 0xff, 0xff, 0xff, 0xff, 0x01],
-            &[0x10, 0xff, 0xff, 0xff, 0xff, 0x1f],
             // Truncated: a varint, a length, packed values, fixed fields.
             &[0x10, 0xff],
             &[0x1a, 5, 1, 2],
@@ -552,9 +387,8 @@ mod tests {
             // A huge declared length is refused, never allocated.
             &[0x1a, 0xff, 0xff, 0xff, 0xff, 0x0f],
             &[0x3a, 0xff, 0xff, 0xff, 0xff, 0x0f],
-            // Field zero, groups and the reserved wire types.
+            // Field zero, a lone end of group and the reserved wire types.
             &[0x00, 1],
-            &[0x2b, 0x2c],
             &[0x2c],
             &[0x2e],
             &[0x2f],
@@ -582,22 +416,30 @@ mod tests {
     }
 
     #[test]
-    fn unknown_fields_are_skipped_within_their_budget() {
+    fn repeated_and_overlong_values_decode_as_protobuf_does() {
+        // Two data fields: the last wins. A receiver of 2^32 + 1: the low 32 bits.
+        let body = [
+            0x1a, 1, 1, 0x1a, 1, 2, 0x22, 0, 0x10, 0x81, 0x80, 0x80, 0x80, 0x10,
+        ];
+        let decoded = PluginData::decode(&body, 1).unwrap();
+        assert_eq!(decoded.payload.data(), [2]);
+        assert_eq!(decoded.receivers, [1]);
+    }
+
+    #[test]
+    fn unknown_fields_are_skipped_up_to_the_body_bound() {
         let valid = vec![0x1a, 0, 0x22, 0];
-        // Varint, fixed64, length-delimited and fixed32 fields.
-        let known: Vec<u8> = [
+        // Varint, fixed64, length-delimited and fixed32 fields, and a group.
+        let unknown: Vec<u8> = [
             &[0x28, 0x96, 0x01][..],
             &[0x31, 1, 2, 3, 4, 5, 6, 7, 8],
             &[0x3a, 2, 9, 9],
             &[0x45, 1, 2, 3, 4],
-            &[
-                0x28, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x01,
-            ],
+            &[0x2b, 0x28, 1, 0x2c],
         ]
         .concat();
-        assert!(PluginData::decode(&[valid.clone(), known].concat(), 0).is_ok());
-        // A field of 256 bytes (tag, two-byte length, 253 bytes) is within the
-        // budget, one of 257 is not.
+        assert!(PluginData::decode(&[valid, unknown].concat(), 0).is_ok());
+        // A field of `length` bytes behind a tag and a two-byte length.
         let field = |length: usize| {
             [
                 vec![0x3a, (length as u8 & 0x7f) | 0x80, (length >> 7) as u8],
@@ -605,19 +447,27 @@ mod tests {
             ]
             .concat()
         };
-        assert_eq!(field(253).len(), MAX_UNKNOWN_BYTES);
-        assert!(PluginData::decode(&[valid.clone(), field(253)].concat(), 0).is_ok());
-        assert_eq!(
-            PluginData::decode(&[valid.clone(), field(254)].concat(), 0),
-            Err(Error::Malformed)
-        );
-        // Sixteen tiny unknown fields are fine, seventeen are a flood.
-        let flood = |count: usize| [0x28, 0].repeat(count);
-        assert!(PluginData::decode(&[valid.clone(), flood(16)].concat(), 0).is_ok());
-        assert_eq!(
-            PluginData::decode(&[valid, flood(17)].concat(), 0),
-            Err(Error::Malformed)
-        );
+        // The worst case plus 256 unknown bytes is `max_body`; one more byte is
+        // refused before decoding.
+        for receivers in [0, 3] {
+            let body = with_singular(split_packed(receivers));
+            let largest = [body.clone(), field(253)].concat();
+            assert_eq!(largest.len(), max_body(receivers));
+            assert!(PluginData::decode(&largest, receivers).is_ok());
+            assert_eq!(
+                PluginData::decode(&[body, field(254)].concat(), receivers),
+                Err(Error::Malformed)
+            );
+        }
+    }
+
+    #[test]
+    fn nested_groups_at_the_server_ceiling_are_refused() {
+        // nuschld's frame ceiling; prost stops at its recursion limit, so this
+        // returns instead of overflowing the stack.
+        let receivers = 16_384 + RECEIVER_SLACK;
+        let body = vec![0x2b; max_body(receivers)];
+        assert_eq!(PluginData::decode(&body, receivers), Err(Error::Malformed));
     }
 
     #[test]
