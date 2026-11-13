@@ -712,6 +712,10 @@
           };
           content-worker-unit = crates.project.workspaceMembers."nuschl-content-worker".build.override {
             runTests = true;
+            testInputs = [
+              pkgs.bubblewrap
+              pkgs.util-linux
+            ];
           };
           content-unit = crates.project.workspaceMembers."nuschl-content".build.override {
             runTests = true;

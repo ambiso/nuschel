@@ -1123,10 +1123,13 @@ impl Outbox {
             return None;
         }
         let slot = self.slot_due();
-        Some(self.waiting.iter()
-            .filter_map(|message| message.preview.as_ref().map(|preview| preview.expires))
-            .min()
-            .map_or(slot, |expiry| slot.min(expiry)))
+        Some(
+            self.waiting
+                .iter()
+                .filter_map(|message| message.preview.as_ref().map(|preview| preview.expires))
+                .min()
+                .map_or(slot, |expiry| slot.min(expiry)),
+        )
     }
     fn ready(&mut self, now: Instant) -> bool {
         self.leak(now);

@@ -143,6 +143,8 @@ async fn offline(
     {
         return Err(Unavailable::Timeout);
     }
+    #[cfg(test)]
+    super::tests::admit(super::tests::Admission::Offline);
     let mut job = Box::pin(host::preview(executable, request));
     let response = tokio::select! {
         result=&mut job=>result.map_err(|_|Unavailable::Malformed)?,
@@ -206,6 +208,8 @@ pub(super) async fn http(
 ) -> Result<Response, Unavailable> {
     budget.check(cancel)?;
     let request = transport::get_request(url, purpose)?;
+    #[cfg(test)]
+    super::tests::admit(super::tests::Admission::HttpChild);
     let mut child = host::preview_sandbox_command(executable, &[OsString::from("--preview-fetch")])
         .map_err(|_| Unavailable::Network)?
         .stdin(Stdio::piped())

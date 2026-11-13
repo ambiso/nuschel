@@ -1187,20 +1187,21 @@ impl Client {
             },
             target: target.clone(),
             body: body.clone(),
-            wire: preview_wire.as_ref().map(|(_, _, html)| html.clone()),
+            wire: preview_wire.as_ref().map(|(_, _, html, _)| html.clone()),
             preview,
         };
         let scoped_preview =
             preview_wire
                 .zip(preview_id)
                 .map(
-                    |((context, connection, html), id)| crate::preview::PreviewSend {
+                    |((context, connection, html, limits), id)| crate::preview::PreviewSend {
                         id,
                         context,
                         connection,
                         html,
                         target: target.clone(),
                         expected_peer,
+                        limits,
                     },
                 );
         let request = if server.mls {
@@ -3576,6 +3577,10 @@ mod tests {
         let own = client.servers[0].users.get(&1).unwrap();
         assert_eq!(frozen.context.own, (own.session, own.instance));
         assert_eq!(frozen.connection, 1);
+        assert_eq!(
+            frozen.limits,
+            client.servers[0].limits.clone().unwrap_or_default()
+        );
         assert_eq!(
             frozen.context.instance,
             client.servers[0]
