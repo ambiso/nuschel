@@ -138,6 +138,7 @@ dependencies = [
  "cipher 0.5.2",
  "cpubits",
  "cpufeatures 0.3.1",
+ "zeroize",
 ]
 
 [[package]]
@@ -166,6 +167,7 @@ dependencies = [
  "ctr 0.10.1",
  "ctutils",
  "ghash 0.6.0",
+ "zeroize",
 ]
 
 [[package]]
@@ -3619,6 +3621,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2eecf2d5dc9b66b732b97707a0210906b1d30523eb773193ab777c0c84b3e8d5"
 dependencies = [
  "polyval 0.7.3",
+ "zeroize",
 ]
 
 [[package]]
@@ -7473,6 +7476,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "nuschl-stream"
+version = "0.1.0"
+dependencies = [
+ "aes-gcm 0.11.1",
+ "base64ct",
+ "hpke-rs 0.8.0",
+ "hpke-rs-libcrux 0.8.0",
+ "libcrux-chacha20poly1305 0.0.10",
+ "libcrux-hkdf 0.0.9",
+ "libcrux-hmac 0.0.9",
+ "libcrux-kem",
+ "libcrux-sha2 0.0.9",
+ "rand_core 0.10.1",
+ "subtle",
+ "thiserror 2.0.21",
+ "zeroize",
+]
+
+[[package]]
 name = "nuschl-transfer-worker"
 version = "0.1.0"
 dependencies = [
@@ -9021,6 +9043,7 @@ dependencies = [
  "cpubits",
  "cpufeatures 0.3.1",
  "universal-hash 0.6.1",
+ "zeroize",
 ]
 
 [[package]]

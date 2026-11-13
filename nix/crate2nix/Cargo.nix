@@ -343,6 +343,16 @@ rec {
       # File a bug if you depend on any for non-debug work!
       debug = internal.debugCrate { inherit packageId; };
     };
+    "nuschl-stream" = rec {
+      packageId = "nuschl-stream";
+      build = internal.buildRustCrateWithFeatures {
+        packageId = "nuschl-stream";
+      };
+
+      # Debug support which might change between releases.
+      # File a bug if you depend on any for non-debug work!
+      debug = internal.debugCrate { inherit packageId; };
+    };
     "nuschl-transfer-worker" = rec {
       packageId = "nuschl-transfer-worker";
       build = internal.buildRustCrateWithFeatures {
@@ -854,6 +864,12 @@ rec {
             packageId = "cpufeatures 0.3.1";
             target = { target, features }: (("aarch64" == target."arch" or null) || ("x86_64" == target."arch" or null) || ("x86" == target."arch" or null));
           }
+          {
+            name = "zeroize";
+            packageId = "zeroize";
+            optional = true;
+            usesDefaultFeatures = false;
+          }
         ];
         devDependencies = [
           {
@@ -865,6 +881,7 @@ rec {
         features = {
           "zeroize" = [ "dep:zeroize" ];
         };
+        resolvedDefaultFeatures = [ "zeroize" ];
       };
       "aes-gcm 0.10.3" = rec {
         crateName = "aes-gcm";
@@ -964,6 +981,12 @@ rec {
             packageId = "ghash 0.6.0";
             usesDefaultFeatures = false;
           }
+          {
+            name = "zeroize";
+            packageId = "zeroize";
+            optional = true;
+            usesDefaultFeatures = false;
+          }
         ];
         devDependencies = [
           {
@@ -983,7 +1006,7 @@ rec {
           "rand_core" = [ "aead/rand_core" ];
           "zeroize" = [ "dep:zeroize" "aes?/zeroize" "ghash/zeroize" ];
         };
-        resolvedDefaultFeatures = [ "aes" "alloc" "default" "getrandom" ];
+        resolvedDefaultFeatures = [ "aes" "alloc" "default" "getrandom" "zeroize" ];
       };
       "ahash" = rec {
         crateName = "ahash";
@@ -11691,10 +11714,17 @@ rec {
             packageId = "polyval 0.7.3";
             features = [ "hazmat" ];
           }
+          {
+            name = "zeroize";
+            packageId = "zeroize";
+            optional = true;
+            usesDefaultFeatures = false;
+          }
         ];
         features = {
           "zeroize" = [ "polyval/zeroize" "dep:zeroize" ];
         };
+        resolvedDefaultFeatures = [ "zeroize" ];
       };
       "gif" = rec {
         crateName = "gif";
@@ -24685,6 +24715,72 @@ rec {
         ];
 
       };
+      "nuschl-stream" = rec {
+        crateName = "nuschl-stream";
+        version = "0.1.0";
+        edition = "2024";
+        src = lib.cleanSourceWith { filter = sourceFilter;  src = ../../crates/stream; };
+        libName = "nuschl_stream";
+        dependencies = [
+          {
+            name = "aes-gcm";
+            packageId = "aes-gcm 0.11.1";
+            usesDefaultFeatures = false;
+            features = [ "aes" "zeroize" ];
+          }
+          {
+            name = "base64ct";
+            packageId = "base64ct";
+          }
+          {
+            name = "hpke-rs";
+            packageId = "hpke-rs 0.8.0";
+          }
+          {
+            name = "hpke-rs-libcrux";
+            packageId = "hpke-rs-libcrux 0.8.0";
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "libcrux-chacha20poly1305";
+            packageId = "libcrux-chacha20poly1305 0.0.10";
+          }
+          {
+            name = "libcrux-hkdf";
+            packageId = "libcrux-hkdf 0.0.9";
+          }
+          {
+            name = "libcrux-hmac";
+            packageId = "libcrux-hmac 0.0.9";
+          }
+          {
+            name = "libcrux-kem";
+            packageId = "libcrux-kem";
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "libcrux-sha2";
+            packageId = "libcrux-sha2 0.0.9";
+          }
+          {
+            name = "rand_core";
+            packageId = "rand_core 0.10.1";
+          }
+          {
+            name = "subtle";
+            packageId = "subtle";
+          }
+          {
+            name = "thiserror";
+            packageId = "thiserror 2.0.21";
+          }
+          {
+            name = "zeroize";
+            packageId = "zeroize";
+          }
+        ];
+
+      };
       "nuschl-transfer-worker" = rec {
         crateName = "nuschl-transfer-worker";
         version = "0.1.0";
@@ -31681,11 +31777,17 @@ rec {
             name = "universal-hash";
             packageId = "universal-hash 0.6.1";
           }
+          {
+            name = "zeroize";
+            packageId = "zeroize";
+            optional = true;
+            usesDefaultFeatures = false;
+          }
         ];
         features = {
           "zeroize" = [ "dep:zeroize" ];
         };
-        resolvedDefaultFeatures = [ "hazmat" ];
+        resolvedDefaultFeatures = [ "hazmat" "zeroize" ];
       };
       "portable-atomic" = rec {
         crateName = "portable-atomic";
