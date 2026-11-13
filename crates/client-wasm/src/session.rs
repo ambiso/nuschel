@@ -719,6 +719,7 @@ impl Session {
     }
 
     fn tls_in(&mut self, mut bytes: &[u8]) {
+        let mut ended = false;
         while !bytes.is_empty() {
             match self.tls.read_tls(&mut bytes) {
                 Ok(0) => break,
@@ -731,6 +732,16 @@ impl Session {
                 self.flush_tls();
                 return self.close(reason);
             }
+            // rustls applies receive-plaintext backpressure independently of
+            // the relay's chunk bound. Drain each processed batch before the
+            // next read_tls, but frame it only after this TLS input succeeds.
+            match self.drain_tls_plaintext() {
+                Ok(eof) => ended = eof,
+                Err(reason) => return self.close(reason.into()),
+            }
+            if ended {
+                break;
+            }
         }
         if self.phase == Phase::LoggingIn
             && !self.tls.is_handshaking()
@@ -739,22 +750,36 @@ impl Session {
             self.report_certificate();
             self.log_in();
         }
-        let mut chunk = [0_u8; 16 * 1024];
-        loop {
-            match self.tls.reader().read(&mut chunk) {
-                Ok(0) => return self.close("The server closed the connection.".into()),
-                Ok(size) => {
-                    if self.plaintext.len() + size > MAX_BUFFER {
-                        return self.close("The server sent too much at once.".into());
-                    }
-                    self.plaintext.extend_from_slice(&chunk[..size]);
-                }
-                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
-                Err(_) => return self.close("TLS failed.".into()),
+        if !ended {
+            match self.drain_tls_plaintext() {
+                Ok(eof) => ended = eof,
+                Err(reason) => return self.close(reason.into()),
             }
         }
         self.frames();
+        // close_notify can follow valid application bytes in the same input.
+        // Preserve those complete frames before reporting the clean EOF.
+        if ended {
+            self.close("The server closed the connection.".into());
+        }
         self.flush_tls();
+    }
+
+    fn drain_tls_plaintext(&mut self) -> Result<bool, &'static str> {
+        let mut chunk = [0_u8; 16 * 1024];
+        loop {
+            match self.tls.reader().read(&mut chunk) {
+                Ok(0) => return Ok(true),
+                Ok(size) => {
+                    if self.plaintext.len() + size > MAX_BUFFER {
+                        return Err("The server sent too much at once.");
+                    }
+                    self.plaintext.extend_from_slice(&chunk[..size]);
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => return Ok(false),
+                Err(_) => return Err("TLS failed."),
+            }
+        }
     }
 
     /// The certificate seen: pinned and matching, vouched for, or for the user.
@@ -2362,6 +2387,35 @@ mod tests {
         assert!(
             matches!(events.as_slice(), [Event::Text { .. }, Event::Text { body, .. }, Event::Closed { reason }] if body == "last complete message" && reason == "The server closed the connection.")
         );
+    }
+    #[test]
+    fn incoming_tls_close_notify_never_admits_a_partial_control_frame() {
+        let (mut client, mut server) = incoming_tls_peer();
+        let mut plain = incoming_text("complete");
+        let mut partial = incoming_text("unfinished");
+        partial.truncate(partial.len() - 3);
+        plain.extend(partial);
+        let encrypted = encrypt_incoming(&mut server, &plain, true);
+        deliver_incoming(&mut client, &encrypted, &[tunnel::MAX_STREAM]);
+        assert!(client.is_closed());
+        assert!(matches!(client.take_events().as_slice(),
+            [Event::Text { body, .. }, Event::Closed { reason }]
+            if body == "complete" && reason == "The server closed the connection."));
+    }
+    #[test]
+    fn incoming_tls_event_limit_still_closes_without_unbounded_admission() {
+        let (mut client, mut server) = incoming_tls_peer();
+        let mut plain = Vec::new();
+        for _ in 0..=MAX_EVENTS {
+            plain.extend(incoming_text("bounded"));
+        }
+        let encrypted = encrypt_incoming(&mut server, &plain, false);
+        deliver_incoming(&mut client, &encrypted, &[tunnel::MAX_STREAM]);
+        assert!(client.is_closed());
+        let events = client.take_events();
+        assert_eq!(events.len(), MAX_EVENTS + 1);
+        assert!(matches!(events.last(), Some(Event::Closed { reason })
+            if reason == "The server sent too much text at once."));
     }
     #[test]
     fn incoming_tls_partial_record_and_tamper_keep_existing_failure_policy() {
