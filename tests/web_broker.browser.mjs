@@ -399,13 +399,10 @@ try {
   assert.ok(result.pressure.peak_request_rpcs<=8,`rehydration RPCs in flight ${result.pressure.peak_request_rpcs}`);
   assert.equal(result.pressure.ack_errors,0);assert.ok(result.pressure.acks_sent>=peerSources.length,"codec ACKs completed during held rehydration");
   assert.ok(outstandingAtSend>0,"held rehydration RPCs were outstanding when the peer texts arrived");
-  // A verified rendered row keeps its exact derivative across a reconnect of
-  // the visible conversation, and across another while inactive.
+  // A verified rendered row keeps its exact derivative across a reconnect
+  // while inactive, and (below) across a reconnect of the visible conversation.
   const derivative=await recovery.evaluate(serial=>brokerFixture.last.timeline.messages.find(message=>message.serial===serial)?.content_token??null,original.serial);
   assert.ok(derivative,"canary has a derivative before reconnect");
-  await rpc(recovery,"disconnect",0);await rpc(recovery,"connect",0);
-  await recovery.waitForFunction(()=>brokerFixture.last?.servers[0].status==="connected",null,{timeout:20000});
-  await recovery.waitForFunction(({serial,token})=>brokerFixture.last?.timeline?.channel===0&&brokerFixture.last.timeline.messages.find(message=>message.serial===serial)?.content_token===token,{serial:original.serial,token:derivative},{timeout:10000});
   await rpc(recovery,"open",0,4);await recovery.waitForFunction(()=>brokerFixture.last?.timeline?.channel===4);
   // Inactive row survives another real connection/lifetime change; then an
   // actual user reopen rebinds its verified derivative, without IDB success.
@@ -428,12 +425,18 @@ try {
   },original.serial);
   assert.equal(after.serial,original.serial);assert.equal(after.status,original.status);assert.equal(after.count,901);assert.equal(after.workers,1);assert.equal(after.capture_calls,0);
   assert.equal(after.content_token,derivative,"the same verified derivative, no re-render or retry");assert.equal(after.content_failed,false);
-  result.reconnect={selected_reconnect_token_kept:true,inactive_reconnect_token_kept:true,token:derivative};
+  result.reconnect={inactive_reconnect_token_kept:true,token:derivative};
   // Literal tags prove retained Plain mode, rather than guessed legacy HTML.
   assert.equal(await restored.locator("em").count(),0);
   const dbCount=await recovery.evaluate(()=>new Promise((resolve,reject)=>{const request=indexedDB.open("nuschl-observed-history-v1");request.onerror=()=>reject(request.error);request.onsuccess=()=>{const db=request.result,tx=db.transaction("messages"),count=tx.objectStore("messages").count();count.onsuccess=()=>resolve(count.result);tx.oncomplete=()=>db.close();};}));
   assert.equal(dbCount,4500,"unsaved live canary was never silently saved/replaced by fixture history");
   result.recovery={seeded,serial_preserved:true,unsaved_status_preserved:true,original_plain_mode_preserved:true,second_reconnect_inactive:true,articles:after.count,workers:after.workers,db_count:dbCount};
+  // The visible conversation reconnects: its newest history page reloads, and
+  // the verified unsaved row keeps the same derivative in that same poll.
+  await rpc(recovery,"disconnect",0);await rpc(recovery,"connect",0);
+  await recovery.waitForFunction(()=>brokerFixture.last?.servers[0].status==="connected",null,{timeout:20000});
+  await recovery.waitForFunction(({serial,token})=>brokerFixture.last?.timeline?.channel===0&&brokerFixture.last.timeline.messages.find(message=>message.serial===serial)?.content_token===token,{serial:original.serial,token:derivative},{timeout:10000});
+  result.reconnect.selected_reconnect_token_kept=true;
   await recovery.screenshot({path:screenshot.replace(".png","-recovery.png")});
  }
  }
