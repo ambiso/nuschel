@@ -223,8 +223,9 @@ async fn actual_fetch_privacy() {
         PathBuf::from(std::env::var_os("NUSCHL_PREVIEW_WORKER").expect("actual content worker"));
     assert!(worker.is_absolute() && worker.is_file());
     assert!(directory.join("peers-ready.json").is_file());
-    assert!(
-        cfg!(target_os = "linux"),
+    assert_eq!(
+        std::env::consts::OS,
+        "linux",
         "owned Linux namespace fixture required"
     );
     let mut status = String::new();
