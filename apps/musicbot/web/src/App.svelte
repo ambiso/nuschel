@@ -1,31 +1,39 @@
 <!-- SPDX-License-Identifier: EUPL-1.2 -->
 <script>
-  import { onMount } from "svelte";
+  import { onMount, tick } from "svelte";
   import { store } from "./store.svelte.js";
+  import { listening } from "./listening.svelte.js";
   import { buildRoute, handlesSpace, routeForLibrary } from "./logic.js";
   import Browse from "./components/Browse.svelte";
   import Channels from "./components/Channels.svelte";
   import QueuePanel from "./components/QueuePanel.svelte";
   import HistoryPanel from "./components/HistoryPanel.svelte";
   import PlayerBar from "./components/PlayerBar.svelte";
+  import BigScreen from "./components/BigScreen.svelte";
   import Icon from "./components/Icon.svelte";
 
   let menuOpen = $state(false);
   let menuButton = $state();
   let search = $state("");
+  let bigScreen = $state(false);
+  let bigScreenOpener = null;
   const route = $derived(store.route);
   const browseRouteKey = $derived(`${store.browseEpoch}:${store.browseKey}:${buildRoute(route)}`);
   const libraries = $derived(store.snapshot?.libraries ?? []);
   const links = $derived([
     { name: "Queue", icon: "queue", route: { view: "queue" }, views: ["queue"] },
     { name: "History", icon: "queue", route: { view: "history" }, views: ["history"] },
-    { name: "Albums", icon: "album", route: { view: "albums", library: store.library, list: "newest" }, views: ["albums", "album"] },
+    { name: "Albums", icon: "album", route: { view: "albums", library: store.library, list: "newest" }, views: ["albums", "album", "song"] },
     { name: "Artists", icon: "artist", route: { view: "artists", library: store.library }, views: ["artists", "artist"] },
     { name: "Playlists", icon: "playlist", route: { view: "playlists", library: store.library }, views: ["playlists", "playlist"] },
     { name: "Channels", icon: "channel", route: { view: "channels" }, views: ["channels"] },
   ]);
 
   onMount(() => store.start());
+  listening.attach();
+  $effect(() => {
+    if (store.invalid || !store.snapshot) bigScreen = false;
+  });
   $effect(() => {
     const currentRoute = store.route;
     menuOpen = false;
@@ -45,8 +53,24 @@
     menuOpen = false;
   }
 
+  function openBigScreen(event) {
+    bigScreenOpener = event.currentTarget;
+    menuOpen = false;
+    bigScreen = true;
+  }
+
+  // After a link inside the overlay, focus goes to the new page; otherwise back to the opener.
+  async function closeBigScreen(navigated) {
+    if (!bigScreen) return;
+    bigScreen = false;
+    await tick();
+    const target = navigated || !bigScreenOpener?.isConnected ? document.getElementById("main-content") : bigScreenOpener;
+    bigScreenOpener = null;
+    target?.focus();
+  }
+
   function keydown(event) {
-    if (event.key === "Escape" && menuOpen) {
+    if (event.key === "Escape" && menuOpen && !bigScreen) {
       menuOpen = false;
       menuButton?.focus();
     }
@@ -58,7 +82,7 @@
 
 <svelte:window onkeydown={keydown} />
 
-<div class="app-shell">
+<div class="app-shell" inert={bigScreen}>
   <a class="skip-link" href="#main-content" onclick={(event) => { event.preventDefault(); document.getElementById("main-content")?.focus(); }}>Skip to content</a>
   <header class="app-header">
     {#if !store.invalid}
@@ -95,7 +119,7 @@
             <a href={buildRoute(link.route)} class:active={link.views.includes(route.view)} aria-current={link.views.includes(route.view) ? "page" : undefined} onclick={() => (menuOpen = false)}><Icon name={link.icon} />{link.name}</a>
           {/each}
         </nav>
-        <p class="sidebar-help muted">Music plays in Mumble, or use Listen to hear it in this browser. Changes here are live for everyone sharing the queue.</p>
+        <p class="sidebar-help muted">Music plays in Mumble, or use the headphones button to hear it in this browser. Changes here are live for everyone sharing the queue.</p>
         <p class="sidebar-help"><a href="licenses">Licences</a></p>
       </aside>
 
@@ -116,9 +140,11 @@
         <aside class="queue-aside" aria-label="Live queue"><QueuePanel compact /></aside>
       {/if}
     </div>
-    {#if store.snapshot}<PlayerBar />{/if}
+    {#if store.snapshot}<PlayerBar onexpand={openBigScreen} />{/if}
   {/if}
 </div>
+
+{#if bigScreen}<BigScreen onclose={closeBigScreen} />{/if}
 
 <div class="toast-list" aria-live="polite" aria-atomic="false">
   {#each store.toasts as toast (toast.id)}

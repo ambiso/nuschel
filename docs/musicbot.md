@@ -39,10 +39,15 @@ browsers. People control what plays on a web page; they get their link by writin
   People may also subscribe to listen to the bot's channel while staying in
   another channel. These subscriptions count as listeners and keep the queue
   playing; others in their current channel do not receive the music.
-- **Browser listening.** Press **Listen** in the player bar to hear the selected
-  queue in the browser. Its volume is local and independent of Mumble volume and
-  speech ducking. Browser listeners keep the queue playing even with nobody in
-  its Mumble channel. **Stop** releases the listening connection.
+- **Browser listening.** The headphones button next to play hears the selected
+  queue in the browser; while it is on, a small slider beside it sets the browser
+  volume. Its volume is local and independent of Mumble volume and speech ducking.
+  Browser listeners keep the queue playing even with nobody in its Mumble channel.
+  Pressing the button again releases the listening connection.
+- **Big screen.** The arrows button in the player bar opens the playing song over
+  the whole window: large cover, scrubber, play/pause and skip, browser listening,
+  Mumble volume, rating and the next songs. It can also switch to full screen;
+  Esc closes it.
 - **Queues.** Drag songs, albums or playlists from the library into the queue,
   then drag entries to reorder them. The move handles also accept Alt+Up/Down.
   Remove entries, clear upcoming tracks, skip, pause and set the volume. The player
@@ -408,7 +413,7 @@ against Murmur in a VM, then the same script.
 
 ## Browser listening
 
-**Listen** starts audio for the selected queue after a browser gesture. The
+The headphones button starts audio for the selected queue after a browser gesture. The
 **Browser volume** slider changes only local playback; **Mumble volume** controls
 the bot's channel output. Speech ducking applies to Mumble output. Browser audio
 uses the original decoded stereo samples (at most full scale), so every format the
@@ -423,7 +428,7 @@ audio state are temporary; the saved queue retains its ordinary playback state.
 Use HTTPS, or localhost during development. Listening requires streaming fetch,
 AudioWorklet and a 48 kHz AudioContext. Browser suspension, page closure, revoked
 links and connection/library changes stop listening and release its subscription.
-Press **Listen** again to restart after an interruption.
+Press the headphones button again to restart after an interruption.
 
 The live stream carries 48 kHz stereo float32 PCM, about **3.1 Mbit/s per listener**.
 The server admits at most 16 browser streams, with bounded shared frame storage
