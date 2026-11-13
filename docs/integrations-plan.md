@@ -29,6 +29,29 @@ The project rule from the message-interactions plan (`f2089e98`,
 Nuschl servers, legacy text only as presentation for stock users, plugin data as the
 carrier of structure on stock Mumble, and nothing parsed back out of display text.
 
+**Owner answers (2026-11-13, relayed by the coordinator), binding for this
+revision:**
+
+- Registry: "yes to both", meaning holders of Write on root and the operator CLI
+  (§3.5).
+- Who may press: "maybe anyone and it's up to the integration to decide the
+  permission model here? not all integrations would control global state like the
+  music bot - e.g. you could also have some sort of per-user stats; there we don't
+  really care about an un-registered user pressing reset for their own stats."
+  Servers pass the presser's identity and still bind, rate-limit and audit (§3.5,
+  §5).
+- Previous: "sure", meaning restart if more than 3 s in, otherwise the previous
+  track (§11).
+- "please prioritize webrtc and e2ee": integrations on `e2ee/1` are deferred, and
+  this work yields to those lanes (§8.3, §12.2).
+- Consent: "we need to think about a good UI/UX here. if you reject once it should
+  still be possible to get the integration back (maybe the same place you get it
+  back from if you dismiss it)" (§7).
+- "how do integrations work on nuschl vs mumble servers? are both bots that connect?
+  maybe we can on mumble servers at least require that the bot is registered?"
+  §2.1 answers this. Registration is a hard requirement on stock servers.
+- "what other integrations could be cool here?": Appendix A.
+
 ## 0. Short answers
 
 - **CarPlay does not run apps' SwiftUI.** Apps fill a fixed set of system templates
@@ -45,16 +68,22 @@ carrier of structure on stock Mumble, and nothing parsed back out of display tex
 - **Authority on stock Mumble: there is no permission to piggy-back on.** A client
   learns only its own permissions, and a stock server relays plugin data without any
   permission check. Nothing can stop a server, or any user, from claiming to be an
-  integration (§3.1). On stock servers an integration therefore appears only after
-  each user's own consent, at most one offer at a time, and is shown as
-  **unverified** (§3.2). Text markers, such as a line in the root channel's
+  integration (§3.1). On stock servers an integration must be a **registered bot**,
+  and it appears only after each user's own consent, at most one offer at a time.
+  It is shown as **unverified** (§3.2). Text markers, such as a line in the root channel's
   description, and certificate hashes are rejected as sources of admin authority
   (§3.3). Operators who want admins to decide run nuschld.
 - **Authority on Nuschl servers.** nuschld keeps an integration registry. Holders of
-  Write on the root manage it, as an extension policy without a new ACL bit. Entries
+  Write on the root manage it as an extension policy without a new ACL bit, and so
+  does the operator through the CLI. Entries
   bind integrations to accounts, scope them to channels, and let the server decide
-  who receives a surface and who may press its buttons. The server attests the entry
-  to clients and keeps an audit trail (§3.5).
+  who receives a surface. Anyone may press its buttons. The server passes an attested
+  identity with each press, and the integration decides. The server attests the
+  entry to clients and keeps an audit trail (§3.5).
+- **Both are bots.** On stock Mumble an integration is a bot connected as a
+  registered user, speaking plugin data. On a Nuschl server it is a registered bot
+  account bound in the registry, and the server carries and attests its cards
+  (§2.1).
 
 ## 1. What exists today (at d82473e3)
 
@@ -77,7 +106,24 @@ carrier of structure on stock Mumble, and nothing parsed back out of display tex
 
 ## 2. Model
 
-### 2.1 What an integration is
+### 2.1 How integrations connect
+
+| | Stock Mumble | Nuschl server (`integrations/1`) | Later |
+|---|---|---|---|
+| What it is | A bot that connects as an ordinary Mumble user, like the music bot today | A bot that connects as a registered account, which an admin bound to a registry entry | A server-side integration in or beside nuschld, with no voice connection or Mumble session |
+| How cards and presses travel | Plugin data between the bot and each client; the server only relays it | Typed extension messages; nuschld checks, delivers and attests them | Typed messages from the server itself |
+| Hard requirement | **Registered** (the server assigned a `user_id`) **and** has a certificate. Payloads from anyone else are ignored | The account is in a registry entry and logs in with persistent credentials | Separate design and approval |
+| Who vouches | Nobody: "Unverified" plus the user's consent | The server: "Added by …" | The server |
+
+- **Registration on stock servers** gives the integration a stable, server-assigned
+  identity and a name no other session can take. It is **not** authority:
+  registration is server-asserted, and on default servers anyone may register
+  themselves (§3.3).
+- **Voice is optional for integrations.** The music bot connects to voice because it
+  plays music. Cards and commands do not need a voice connection, which is what makes
+  server-side integrations possible later.
+
+### 2.2 What an integration is
 
 An **integration** is a principal that publishes typed **surfaces** and a typed
 **command catalog**, and receives typed **actions** (button presses) and
@@ -87,23 +133,23 @@ ordinary messages.
 
 | Part | What it is | Lifetime |
 |---|---|---|
-| Principal | Nuschl: a registry entry (§3.5) with up to 8 registered accounts, one per connection (the music bot has one per channel). Later perhaps also an in-process nuschld service. Stock: one session, remembered for consent by the certificate hash the server reports for it | Nuschl: until an admin removes the entry; ids are never reused. Stock: while the server reports that certificate |
+| Principal | Nuschl: a registry entry (§3.5) with up to 8 registered accounts, one per connection (the music bot has one per channel). Later perhaps also an in-process nuschld service. Stock: one registered session, remembered for consent by the registration number and certificate hash the server reports for it | Nuschl: until an admin removes the entry; ids are never reused. Stock: while the server reports that registration and certificate |
 | Surface | One template instance: `(principal, surface id)` with a monotonic `revision` and a `subject` (§5) | While the publishing connection or presence is online, or until removed. Never stored in history |
 | Catalog | Up to 16 command specs with a `revision` | While the publishing connection or presence is online |
 | Action / invocation | A request from one user to the principal, bound to a ticket (§5) | Until its result or a timeout (5 s for actions, 10 s for commands). Never retried automatically |
 | Local state | Hidden or shown, and consent on stock servers (§7) | On the device, bounded |
 
-### 2.2 Identity per path
+### 2.3 Identity per path
 
 | Path | Key the client stores | Display name | Not used |
 |---|---|---|---|
 | Nuschl server with `integrations/1` | `(server history identity, IntegrationId)`: 16 random bytes from nuschld | The registry's name, which an admin sets | The bot's nickname, session ids, registration numbers |
-| Stock Murmur, or a Nuschl server without `integrations/1` | `(server history identity, certificate SHA-1)` from `UserState.hash`. The server asserts it, not the sender, so it is only as trustworthy as that server. It is the key for consent memory and grants nothing | The sender's name in `UserState`, as for any user, tagged "Unverified". A short id ("3f1c 9a…") appears in About | Any name or hash inside the payload. Sessions without a certificate are ignored |
+| Stock Murmur, or a Nuschl server without `integrations/1` | `(server history identity, registration number, certificate SHA-1)` from `UserState.user_id` and `UserState.hash`. The server asserts them, not the sender, so they are only as trustworthy as that server. They are the key for consent memory and grant nothing | The sender's name in `UserState`, as for any user, tagged "Unverified". A short id ("3f1c 9a…") appears in About | Any name or hash inside the payload. Sessions without a registration or a certificate are ignored |
 | E2EE (`e2ee/1`) | None in v1 (§8.3) | — | — |
 
-A new certificate is a new integration on stock servers, so consent is asked again.
+A new certificate or registration is a new integration on stock servers, so consent is asked again.
 
-### 2.3 Provenance the client shows
+### 2.4 Provenance the client shows
 
 | Level | When | Words in About |
 |---|---|---|
@@ -145,26 +191,25 @@ unverified.
 
 The coordinator's policy requires this, and it is also the recommendation.
 
+- **Registered bots only.** Integration payloads count only from a session that the
+  server reports as registered (it assigned a `user_id`) and that has a certificate
+  (§2.1). Everything else is dropped and makes no offer. This gives a stable
+  identity, not authority.
 - **Nothing shows by default.** A stock integration's cards and commands appear only
   after **each user's own consent**, on that device.
 - **One offer at a time.** An integration that is neither allowed nor declined may
-  make one offer when all of these hold:
-  - the sender is registered and has a certificate. This only limits noise: it keeps
-    throwaway guest sessions from offering, and a registered name cannot be taken by
-    another session. It is **not** authority, because anyone can register by default;
-  - it is in, or listened to in, the user's current voice channel;
-  - no other offer is showing.
-
-  The offer is a dock row: "Show controls from Music? Unverified." with **Show** and
-  **No**. A declined integration never asks again until the user resets it in the
-  Integrations list.
+  make one offer while it is in, or listened to in, the user's current voice channel
+  and no other offer is showing. **Not now** declines: it never asks again by itself,
+  and **Allow** in Integrations brings it back. The offer card and the Integrations
+  place are designed in §7.
 - **What identifies it.** Consent is remembered under `(server history identity,
-  certificate hash)`. The hash is the one the server reports in `UserState.hash`:
-  **server-asserted, not sender-claimed**, and only as trustworthy as that stock
-  server. On an honest server it means "the same key as when you allowed it"; a new
-  certificate asks again. It identifies an integration for consent memory and grants
-  nothing. A hash inside a payload is never read. About shows a short id ("ID 3f1c
-  9a…") only to tell two integrations apart.
+  registration number, certificate hash)`. Both values come from the server's
+  `UserState`: **server-asserted, not sender-claimed**, and only as trustworthy as
+  that stock server. On an honest server they mean "the same registered bot with the
+  same key as when you allowed it", and a change of either asks again. They identify
+  an integration for consent memory and grant nothing. A hash or name inside a
+  payload is never read. About shows a short id ("ID 3f1c 9a…") only to tell two
+  integrations apart.
 - **Unverified, explicitly.** Stock cards carry an "Unverified" tag in their frame.
   About says "Unverified. You allowed this." No path on a stock server shows a check
   mark or "verified".
@@ -182,7 +227,7 @@ The coordinator's policy requires this, and it is also the recommendation.
 | **A marker in the root channel's description** (an earlier draft: a `nuschl-integrations/1` token with an `allow` or `only` mode and certificate hashes, written by holders of Write on root) | Write on root, or a malicious server | It takes authority from text written for display, which breaks the structured-data rule ("legacy text is presentation only"). Clients cannot see who holds Write on root, a malicious server can show any description, and the stock editor gives no guarantee the token survives. Stock clients and servers cannot make it trustworthy |
 | A marker in another channel's description, or in the welcome text | Write on that channel; the operator's config | Same objections |
 | A certificate hash as approval, from a payload or from `UserState.hash` | The sender, or the server's report | Key continuity at best, never approval. Used only as the key of a user's own consent (§3.2) |
-| Registration (`user_id`) | Anyone, by default | Register self is open to all. Kept only as noise control for offers |
+| Registration (`user_id`) | Anyone, by default | Register self is open to all. Kept as a hard requirement for a stable identity (§2.1), never as authority |
 | Plugin data claiming approval or a role | Anyone | The relay checks no permission |
 | An admin's Nuschl client vouching over plugin data | That client | Receivers cannot check that the sender holds any permission |
 | Presence in an Enter-restricted channel, priority speaker, server mute | ACL editors, Mute/Deafen holders | Others cannot see the restriction, Move overrides Enter, and the others change audio for everyone |
@@ -229,18 +274,18 @@ message IntegrationInfo {
   uint32 templates = 5;          // bit set of templates it may publish
   bool   commands = 6;           // may publish a catalog
   Audience audience = 7;         // VOICE (default): in or listening to the surface's channel; READERS: can_read
-  bool   guests_act = 8;         // unregistered users may press and invoke (default false)
-  string added_by = 9;           // name snapshot of the admin, ≤ 64 bytes
-  uint64 added_ms = 10;
-  uint64 catalog = 11;           // current catalog revision, 0 when none is published
-  bool   opt_out = 12;           // supports "stop sending to me"
+  string added_by = 8;           // name snapshot of the admin, ≤ 64 bytes
+  uint64 added_ms = 9;
+  uint64 catalog = 10;           // current catalog revision, 0 when none is published
+  bool   opt_out = 11;           // supports "stop sending to me"
 }
 ```
 
-**Who manages it.** A new `Action::ManageIntegrations` is granted by **Write on the
-root channel**, the existing administrator permission, as an extension policy rather
-than a new ACL bit (a stock ACL editor would erase one, `extension.md:212-221`). It is
-also available offline through `nuschld admin integrations list|add|set|remove`. In
+**Who manages it** (owner: "yes to both"). A new `Action::ManageIntegrations` is
+granted by **Write on the root channel**, the existing administrator permission, as
+an extension policy rather than a new ACL bit (a stock ACL editor would erase one,
+`extension.md:212-221`). The operator has the same powers offline through
+`nuschld admin integrations list|add|set|remove`. In
 v1, channel moderators cannot add integrations. Hiding one per channel by Write on that
 channel is a possible later step.
 
@@ -253,15 +298,34 @@ channel is a possible later step.
 - **Audience.** A surface goes only to connections with `integrations/1` that are in
   the audience, are not opted out, and pass the current `authz_epoch` check. On moves,
   ACL changes and listener changes it is re-evaluated, and anyone leaving gets a removal.
-- **Actions and invocations.** The server checks the actor:
-  - they are in the audience (for an action), or the conversation is in scope and they
-    may write there (for a command);
-  - they are registered unless `guests_act`;
-  - they are within the rate limits.
+- **Actions and invocations: binding, not policy.** Anyone may press or invoke, and
+  each integration decides its own permission model (owner). The server only:
+  - binds an action to the integration, surface, revision and subject it sent that
+    actor. The actor must currently be in that surface's audience, so a press always
+    refers to something they can see;
+  - binds an invocation to its conversation: it must be in scope and readable by the
+    actor;
+  - applies the rate limits (§5);
+  - records the request in the audit log (below).
 
-  It forwards a server-attested actor `{ account, user_id, session, name }` to the
-  connection that published the surface or catalog. The integration applies its own
-  policy on top.
+  With every request it forwards a server-attested actor to the connection that
+  published the surface or catalog:
+
+  ```proto
+  message Actor {
+    bytes  account = 1;        // 16 bytes; empty for an unregistered user
+    uint32 user_id = 2;        // registration number; 0 when unregistered
+    bool   registered = 3;
+    uint32 session = 4;
+    string name = 5;           // snapshot, ≤ 128 bytes
+    bytes  certificate = 6;    // SHA-1 of the client certificate the server verified; empty without one
+    uint32 permissions = 7;    // the actor's effective Mumble permissions in the surface's or conversation's channel
+  }
+  ```
+
+  The integration applies its own rules on top. The music bot may limit queue control
+  to registered users (§11), while a per-user stats integration lets anyone reset
+  their own numbers.
 - **Timeouts.** No reply within 5 s (actions) or 10 s (commands) gives the client
   `UNAVAILABLE`, and the late reply is dropped.
 - **Errors** follow `extension.md` §2: an unknown integration and "not allowed" are the
@@ -269,21 +333,25 @@ channel is a possible later step.
 
 **Attestation and audit.** `IntegrationList` returns the entries in scope for the
 requester over the authenticated extension channel. Clients show the registry name and
-"Added by …". Changes are pushed (`IntegrationChanged`). nuschld keeps an
-`integration_audit` table (time, admin account, change, integration id; ≤ 1,000 rows,
-oldest dropped) that managers can read through the CLI. Logs never contain command
+"Added by …". Changes are pushed (`IntegrationChanged`). nuschld keeps two bounded
+audit tables, which managers read through the CLI:
+- registry changes: time, admin account, change and integration id (≤ 1,000 rows);
+- requests: time, integration, surface and control or command name, actor account or
+  session, and outcome (≤ 10,000 rows).
+
+The oldest rows are dropped first. Neither table, nor any log, holds command
 arguments or result text.
 
 ### 3.6 Side by side
 
 | Question | Stock Mumble | Nuschl server |
 |---|---|---|
-| Who adds an integration | Anyone can run one; no admin control is possible | Holders of Write on root, or the operator CLI, through the registry |
+| Who adds an integration | Anyone with a registered bot; no admin control is possible | Holders of Write on root and the operator CLI, through the registry |
 | What stops unwanted surfaces | Only each user's consent, with one offer at a time | The server: principals outside the registry cannot publish at all |
 | Who receives surfaces | Whoever the integration lists; the client docks only senders in its voice places, by the server's report | The server's audience rule, re-evaluated on every change |
-| Who may press | The integration decides from the server's session report | The server checks the audience and registration, then the integration decides |
+| Who may press | Anyone the integration accepts. It judges from the server's report of the presser (registration, certificate) and cannot learn their permissions | Anyone in the audience. The server binds, rate-limits and audits, and passes an attested identity with permissions; the integration decides |
 | What the client shows | "Unverified", from a key the server asserts; the server can forge it | "Added by …", attested by the server, with sticky negotiation and no downgrade |
-| Audit | None | `integration_audit` |
+| Audit | None | Registry changes and requests |
 
 ## 4. The UI kit
 
@@ -405,6 +473,7 @@ message CardButton { string label = 1; Icon icon = 2; bool enabled = 3; bool con
 | Links | Phishing surface; no need in v1 | A `link` field, checked with `allowed_link`, opened only on click with the same handling as chat links |
 | Lists (`list/1`) | Queue browsing already lives on the bot's web page. Lists need paging and per-row actions, which means more look-alike surface | ≤ 20 rows, one action per row, paged |
 | Text input in surfaces | Commands cover input | — |
+| Per-user surfaces | Every v1 surface goes to the whole audience. The owner's per-user stats example needs one addressed to a single person | Nuschl: `SurfacePublish` for one actor. Stock: plugin data to one receiver (D9) |
 
 ### 4.8 Text, icons and sanitising
 
@@ -477,12 +546,14 @@ validated view models only.
 Short and human, as the owner asks:
 
 - Card: "Music · Lounge", "Previous", "Play", "Pause", "Next", "Hide", "About".
-- Offer (stock): "Show controls from Music? Unverified." with **Show** and **No**.
+- Offer card (stock): "Music · Lounge · Unverified", "Show its controls here?",
+  with **Allow** and **Not now**; then "Find it later in Integrations."
 - Card tag (stock): "Unverified".
 - About: "Added by Alice · 3 Nov" (Nuschl) or "Unverified. You allowed this."
   (stock); "Sees who presses its buttons."; "Not end-to-end encrypted."
 - Results: "Done.", "Not allowed.", "Out of date.", "Music didn't answer."
-- Integrations list: "Music · Hidden" with **Show**.
+- Integrations: groups "Active", "Hidden" and "Declined"; buttons **Hide**,
+  **Show** and **Allow**; "Offline"; "No integrations here."
 - Composer: "/skip — Skip this song · Music"; "No command /skp" with
   **Send as message**.
 
@@ -498,6 +569,11 @@ Short and human, as the owner asks:
   Otherwise it shows nothing and refreshes the button. Results carry the request id
   and are dropped if the ticket's generation, principal or surface no longer matches
   (`navigation.rs` precedent). A late result cannot change a new card.
+- **Who may press is the integration's decision** (owner). On Nuschl servers it gets
+  the attested `Actor` (§3.5): registration, verified certificate and the actor's
+  permissions in that channel. On stock servers it sees only the server's report of
+  the session (name, registration, certificate) and cannot learn anyone's
+  permissions (§3.1). A refusal shows as "Not allowed."
 - **Subject binding.** The integration refuses an action whose `subject` is no longer
   current, with `STALE` ("Out of date."). Pressing Next on song A therefore never
   skips song B. Revisions that only move the progress keep the subject, so presses
@@ -607,30 +683,77 @@ message itself.
   draw buttons from a bot's text. Bot replies are ordinary messages.
 - A Nuschl user may still type `!web` as text, and it is sent as text, unchanged.
 
-## 7. Dismiss and restore
+## 7. Consent, dismiss and restore
 
-| State per `(server history identity, integration key)` | Effect |
-|---|---|
-| `shown` (default once listed, added or allowed) | Card in the dock, commands in completion |
-| `hidden` | No card. Commands stay, because typing `/` is explicit |
-| Stock consent `allowed` / `declined` / `unasked` | Gates both card and commands. `declined` never offers again |
+The owner asked for this to be easy to undo: "if you reject once it should still be
+possible to get the integration back (maybe the same place you get it back from if
+you dismiss it)". One place, **Integrations**, holds every decision, and nothing nags.
 
-- **Hide:** the card's menu → **Hide**. **Restore:** the Integrations list (desktop:
-  the server menu → "Integrations"; TUI: `/integrations`; web: the server menu). It
-  lists every integration seen on that server with its provenance and state, plus
-  **Show**, **Hide** and, on stock servers, **Allow** and **Forget** (which resets
-  consent).
-- **No network effect.** Hiding changes local state only. If the integration supports
-  it (`opt_out`), hiding also offers "Stop sending to me". On Nuschl servers that is
-  `IntegrationOptOut`, and the server stops sending to that connection. The client
-  repeats it after reconnects while the integration stays hidden. On stock servers it
-  is a best-effort request to the integration. Showing again undoes it.
-- **Storage:** `$XDG_STATE_HOME/nuschl/integrations.json`. It is versioned, bounded to
-  256 entries and 64 KiB, with the least recently seen dropped first, and written
-  atomically like other state files. An unreadable file starts empty: consent is asked
-  again and hidden integrations reappear, which is never more permissive than before
-  the file existed. The web client uses an IndexedDB store with the same bounds, scoped
-  like local history.
+### 7.1 States
+
+| State | How it gets there | What shows | How to change it |
+|---|---|---|---|
+| Offered (stock only) | A registered bot in your voice channel that you have not decided on | One offer card in the dock | The card: **Allow** or **Not now** |
+| Active | Nuschl: added by admins (the default). Stock: **Allow** | Card in the dock, commands in completion | Card menu → **Hide**, or Integrations |
+| Hidden | **Hide** | No card. Commands stay, because typing `/` is explicit | Integrations → **Show** |
+| Declined (stock only) | **Not now** | Nothing. It never offers again by itself | Integrations → **Allow** |
+
+State is kept per `(server history identity, integration key)`, where the key is the
+IntegrationId on Nuschl servers and `(registration number, certificate hash)` on
+stock servers (§3.2).
+
+### 7.2 The offer card
+
+```text
+┌──────────────────────────────┐
+│ ♪ Music · Lounge · Unverified│
+│ Show its controls here?      │
+│        [Allow]  [Not now]    │
+└──────────────────────────────┘
+```
+
+- **One at a time** across all servers. It sits where the card would go and has the
+  height of a collapsed card, so nothing else in the dock jumps.
+- **Quiet.** It never takes focus, plays a sound or notifies. Screen readers find it
+  as the group "Offer from Music" in the dock. It is announced politely only if focus
+  is already in the dock.
+- **Not now** declines. For five seconds a line under it says "Find it later in
+  Integrations." Then nothing asks again.
+- **Ignored** offers (no click) go away when the bot leaves your voice places. They
+  return at most once per connection to that server, never in a loop.
+
+### 7.3 One place: Integrations
+
+- **Per server, three groups:** **Active**, **Hidden** and **Declined**. Each row
+  shows the name, its channel, where it comes from ("Added by Alice" or
+  "Unverified") and one button: **Hide**, **Show** or **Allow**. A row menu has
+  **About** and, on stock servers, **Forget**, which makes it undecided again so it
+  may offer once more.
+- **Absent integrations** with a remembered decision stay listed as "Offline", within
+  the storage bound, so a decision can be undone while the bot is away.
+- **Empty:** "No integrations here."
+- **Reached from:**
+  - desktop: the server menu → "Integrations", the quick switcher (Ctrl+K,
+    "Integrations"), every card's menu, and the "Find it later" line;
+  - TUI: `/integrations`, then `/show N`, `/hide N`, `/allow N`, `/forget N`;
+  - web: the server menu.
+
+### 7.4 No network effect
+
+Hiding, declining and allowing change local state only. If the integration supports
+it (`opt_out`), **Hide** also offers "Stop sending to me". On Nuschl servers that is
+`IntegrationOptOut`, and the server stops sending to that connection. The client
+repeats it after reconnects while the integration stays hidden. On stock servers it
+is a best-effort request to the integration. **Show** undoes it.
+
+### 7.5 Storage
+
+`$XDG_STATE_HOME/nuschl/integrations.json` is versioned and bounded to 256 entries
+and 64 KiB. The least recently seen are dropped first, and it is written atomically
+like other state files. An unreadable file starts empty: consent is asked again and
+hidden integrations reappear, which is never more permissive than before the file
+existed. The web client uses an IndexedDB store with the same bounds, scoped like
+local history.
 
 ## 8. Transports
 
@@ -653,9 +776,9 @@ would be one) or another. Offsets are written `INT+n` until Root allocates (D6).
 | INT+7 | `CommandCatalog { revision, repeated CommandSpec }` (≤ 16, ≤ 16 KiB) | integration → server | entry account, `commands` |
 | INT+8 | `CommandQuery { request_id, conversation }` | client → server | conversation readable |
 | INT+9 | `CommandList { request_id, repeated (integration, CommandSpec) }` | server → client | — |
-| INT+10 | `SurfaceAction { request_id, integration, surface, revision, subject, control, idempotency_key }` | client → server | audience and registration |
-| INT+11 | `CommandInvoke { request_id, integration, Invoke }` | client → server | scope, write and registration; text bucket |
-| INT+12 | `IntegrationRequest { ticket, actor, oneof { action, invoke } }` | server → integration | — |
+| INT+10 | `SurfaceAction { request_id, integration, surface, revision, subject, control, idempotency_key }` | client → server | audience (binding only; the integration decides) |
+| INT+11 | `CommandInvoke { request_id, integration, Invoke }` | client → server | scope, conversation readable; text bucket |
+| INT+12 | `IntegrationRequest { ticket, Actor, oneof { action, invoke } }` | server → integration | the attested `Actor` (§3.5) |
 | INT+13 | `IntegrationReply { ticket, outcome, text }` | integration → server | must answer its own ticket |
 | INT+14 | `IntegrationResult { request_id, outcome, text }` | server → client | the requester only |
 | INT+15 | `IntegrationOptOut { integration, receive }` | client → server | — |
@@ -723,8 +846,8 @@ partial catalog is discarded, so there is no reassembly of split bytes.
 
 1. **Decode** strictly: ≤ 1,000 bytes, version 1, every field bound, unknown versions
    dropped.
-2. **Accept** only from a present session with a certificate hash, tied to its
-   presence instance. When the presence ends, its surfaces and catalog go.
+2. **Accept** only from a present session that the server reports as registered
+   and with a certificate hash (§2.1), tied to its presence instance. When the presence ends, its surfaces and catalog go.
 3. **Apply consent** (§3.2), keyed by the certificate hash the server asserts in
    `UserState`, never by anything in the payload: allowed → show, tagged
    "Unverified"; declined → drop; otherwise at most one offer.
@@ -744,6 +867,9 @@ same key, but do not make the sender verified. The server sees everything. Stock
 clients' plugin frameworks receive these ids and, as far as is known, ignore them.
 
 ### 8.3 End-to-end encrypted servers: not in v1
+
+The owner asked to "prioritize webrtc and e2ee" (2026-11-13). Integrations on
+`e2ee/1` wait until that work has settled, and nothing here may delay it.
 
 - nuschld does not offer `integrations/1` together with `e2ee/1`, and already forwards
   no plugin data there. Clients show no integration surfaces or commands on an `e2ee/1`
@@ -798,7 +924,7 @@ Anything on the stock carrier is consent-only and unverified, as on Murmur.
 
 | Threat | Mitigation |
 |---|---|
-| Any user adds an integration | Nuschl: only registry accounts can publish. Stock: **cannot be prevented**; nothing shows without the user's consent, at most one offer at a time, always tagged "Unverified" |
+| Any user adds an integration | Nuschl: only registry accounts can publish. Stock: **cannot be prevented**. Only registered bots count, nothing shows without the user's consent, there is at most one offer at a time, and stock integrations are always tagged "Unverified" |
 | An impersonator with the same name | Keys are the IntegrationId or the server-asserted certificate hash, never names. Consent is per certificate, so another certificate is another integration and must be allowed separately. About shows the short id. Stock names and hashes come from the server's `UserState`, never the payload. Against a malicious stock server none of this holds, hence "Unverified" |
 | A look-alike of Nuschl UI | A fixed frame always names the integration. The dock is its only place: no notices, dialogs, timeline rows, sounds, notifications, focus or window raising. No security or microphone icons, and no custom colours |
 | Phishing through buttons | Transport labels are fixed. Card labels are ≤ 24 bytes in a named frame. No links or inputs in v1. An action carries only ids, never user data |
@@ -847,7 +973,7 @@ Anything on the stock carrier is consent-only and unverified, as on Murmur.
 | Stock catalog assembly | One revision per sender at a time, complete within 10 s, ≤ 16 items | SDK | Discarded |
 | Integrations per server per client | ≤ 32 tracked (Nuschl list ≤ 64 entries, of which only those in scope arrive) | SDK | Least recently seen dropped |
 | Local state | ≤ 256 entries, ≤ 64 KiB | SDK, each platform store | Least recently seen dropped |
-| Audit | ≤ 1,000 rows | nuschld storage | Oldest dropped |
+| Audit | Registry changes ≤ 1,000 rows; requests ≤ 10,000 rows | nuschld storage | Oldest dropped |
 
 ## 11. The music bot as first provider
 
@@ -871,8 +997,9 @@ Anything on the stock carrier is consent-only and unverified, as on Murmur.
 - **Actions** use the existing player functions:
   - play/pause → `set_paused(!paused)`;
   - next → `skip()`;
-  - previous → seek to 0 if more than 5 s in; otherwise the current song goes back to
-    the front of the queue and the last history entry plays again (D5).
+  - previous → seek to 0 if more than 3 s in; otherwise the current song goes back to
+    the front of the queue and the last history entry plays again (owner: "sure",
+    D5).
 
   A stale subject gives `STALE`. The actor's name is logged as for web commands, never
   the arguments.
@@ -887,9 +1014,19 @@ Anything on the stock carrier is consent-only and unverified, as on Murmur.
 
   Search-and-add (`/play <query>`) and stock text forms such as `!skip` are new
   features outside this issue.
-- **Who may press:** anyone in the bot's audience (in its channel or listening), and
-  registered users only on Nuschl servers by default (D4). This matches today's model,
-  where anyone who can write to the bot gets a link that controls everything.
+- **Who may press is the bot's own policy** (owner). The bot gets the presser's
+  identity: the attested `Actor` on Nuschl servers, the server's session report on
+  stock servers. Proposed default: registered users in its audience may use the
+  transport controls and `/pause`, `/play`, `/skip`, `/previous`, and anyone may use
+  `/web` as today. A per-channel `controls = "registered" | "everyone"` setting
+  changes it (D10). The default is stricter than today's web link, which anyone who
+  can write to the bot receives and which controls everything. That link is
+  unchanged.
+- **Registration on stock servers is required** (§2.1). The operator registers each
+  bot connection, either as an admin with Register or, where Register self is
+  allowed, through a new `register = true` option that asks the server to register
+  the bot's certificate. Unregistered, the bot publishes nothing, and its web page
+  says "Register this bot to show its controls."
 - **Transport choice:** with `integrations/1` and a registry entry for its account, the
   bot uses typed messages. On stock servers, or Nuschl servers without the capability,
   it uses plugin data (after PD). With `integrations/1` but no entry it publishes
@@ -927,15 +1064,17 @@ Effort is focused agent-days including tests, excluding review queues and VM wai
 | **S1** SDK | `crates/client/src/integrations.rs`: per-server integrations, surfaces, provenance, local state sidecar, tickets, completion candidates, results; native plumbing | F1 | M: 4–5 |
 | **N1** nuschld | Registry storage and CLI, `IntegrationSet`/`Remove` under `ManageIntegrations`, audit, publish enforcement, audience fan-out with epoch re-evaluation, action and command routing with attested actors, timeouts and budgets, dropping `nuschl/int` plugin data | F1 | L: 6–8 |
 | **P1** Stock path | The integrations layer on PD's reserved-id hook (transport only, §3.4), receive rules, consent and offers, the "Unverified" tag, catalog sync, actions | F1; PD on main | M: 4–5 |
-| **B1** Music bot | §11 on both transports | F0; N1 and/or P1 | M: 4–5 |
-| **U1** Desktop | Dock and card, menu and About, Integrations list, completion popup and chips (shared with MI), result line, AccessKit | S1 | M: 5–6 |
+| **B1** Music bot | §11 on both transports, including the `controls` policy and the `register` option | F0; N1 and/or P1 | M: 4–5 |
+| **U1** Desktop | Dock and card, offer card, menu and About, the Integrations place (Active, Hidden, Declined), completion popup and chips (shared with MI), result line, AccessKit | S1 | M: 5–6 |
 | **U2** TUI | Bar, `/integrations`, Tab completion, plain lines | S1 | S–M: 2–3 |
 | **U3** Web | Dock and combobox through BROKER fences; stock path first | S1; PD wasm; BROKER | M: 3–4 |
 | **C1** `card/1` | Rendering in three clients | U1–U3; a second provider approved | S–M: 2–3 |
 | **A1** Artwork | Nuschl only, through the content worker | N1, U1; D3 | M: 3–4 |
 
 v1 (F0–U3 and B1) comes to about 35–45 agent-days. N1 and P1 can run in parallel
-after F1, and U1–U3 after S1.
+after F1, and U1–U3 after S1. **Owner priority:** WebRTC and E2EE come first. These
+slices are scheduled so they take no shared files, review time or build windows those
+lanes need. The E2EE path (§8.3) is deferred.
 
 ### 12.3 Tests per layer
 
@@ -946,14 +1085,14 @@ profiles.
 | Layer | Cases |
 |---|---|
 | Unit: core | Every bound at the edge and one past; sanitiser (controls, bidi overrides, invalid UTF-8, empty after cleaning); interpolation (play, pause, unknown duration, 24 h, `age_ms` limits, sub-second corrections never backwards, subject change resets); spans; argument validation; itemised catalog (missing item, mixed revisions, timeout) |
-| Unit: SDK | Tickets refused after reconnect, generation change, subject change and disabled control; late results dropped; one in flight; consent matrix (allowed, declined, unasked, unregistered, no certificate, a new certificate under the same name, sender left, sender outside voice places, a hash or name inside the payload ignored); "Unverified" on every stock view; offer limits; local state bounds and a corrupt file; sticky `integrations/1` ignores plugin-data surfaces; `e2ee/1` shows nothing |
-| Unit: server | Publishing by a non-entry account, outside scope, a disallowed template, too large, too fast; audience on move, listen, ACL change and opt-out; actions by a guest, someone outside the audience, a duplicate key, a timeout, a late reply; commands outside scope, an invalid argument, the text bucket; `ManageIntegrations` = Write on root; audit cap; `NOT_FOUND` uniformity; `nuschl/int` plugin data dropped |
+| Unit: SDK | Tickets refused after reconnect, generation change, subject change and disabled control; late results dropped; one in flight; consent matrix (allowed, declined, unasked, unregistered bot ignored, no certificate, a new certificate or registration under the same name, sender left, sender outside voice places, a hash or name inside the payload ignored); "Unverified" on every stock view; offer rules (one across servers, ignored offers at most once per connection, Not now → Declined with no re-prompt, Allow from Integrations, Forget makes it undecided); local state bounds and a corrupt file; sticky `integrations/1` ignores plugin-data surfaces; `e2ee/1` shows nothing |
+| Unit: server | Publishing by a non-entry account, outside scope, a disallowed template, too large, too fast; audience on move, listen, ACL change and opt-out; actions by a guest forwarded with an unregistered `Actor` (not refused), `Actor` fields (certificate, permissions in the right channel), someone outside the audience refused, a duplicate key, a timeout, a late reply; commands outside scope, an invalid argument, the text bucket; `ManageIntegrations` = Write on root, and the CLI; both audit caps; `NOT_FOUND` uniformity; the plugin-data relay unchanged |
 | Storage | Registry migration in SQLite and PostgreSQL; audit trimming |
 | Fuzz | `integration_messages` (the INT block into nuschld state), `integration_plugin` (both stock payloads, catalog assembly), additions to `client_messages` |
 | Integration: nuschld (`tests/integrations.py`, new) | Bot plus two Nuschl clients plus a raw extension client: surface appears for the audience only; a move withdraws it; Next by a member skips; a raw unregistered client and a non-entry account cannot publish; `IntegrationSet` by a non-admin refused; admin add and remove visible live |
-| Integration: stock Murmur (`tests/stock_integrations.py`, new) | Bot plus two Nuschl clients (TUI test build) plus a raw stock client on a private Murmur: the stock client still uses `!web`; a bot gets one offer and shows nothing until allowed; a raw client claiming integration status also gets only an offer (the documented limit: shown, not prevented); an impostor with the same unregistered name and another certificate is a separate integration; a cross-channel injection by a raw client is not docked; burst above Murmur's bucket degrades without wrong state |
+| Integration: stock Murmur (`tests/stock_integrations.py`, new) | Bot plus two Nuschl clients (TUI test build) plus a raw stock client on a private Murmur: the stock client still uses `!web`; an unregistered bot is ignored and the same bot after registration makes one offer; nothing shows until allowed; a raw client claiming integration status also gets only an offer (the documented limit: shown, not prevented); an impostor with the same unregistered name and another certificate is a separate integration; a cross-channel injection by a raw client is not docked; burst above Murmur's bucket degrades without wrong state |
 | Music bot (`tests/musicbot.py` extension) | Surface tracks play, pause, seek and skip; previous semantics; stale subject refused; `/web` still sends the private link |
-| Accessibility (`tests/accessibility.py`) | Card group name, button names and disabled states, progress value text, Hide and restore through the Integrations list, completion listbox announcements, TUI plain transcript |
+| Accessibility (`tests/accessibility.py`) | Offer card group and its two buttons; Integrations groups and row buttons; card group name, button names and disabled states, progress value text, Hide and restore through the Integrations list, completion listbox announcements, TUI plain transcript |
 | GUI | Desktop scenes at 100% and 200%, a narrow sidebar, long Unicode titles, three cards and "2 more" (`tests/screenshots.py` pattern) |
 | Browser | Dock and combobox with the synthetic SDK at 320, 390 and 1280 px, 44 px targets, focus visibility (`tests/web_controls.mjs` pattern) |
 
@@ -974,32 +1113,58 @@ another.
 | `apps/musicbot/src/{mumble,player,web}.rs` | Provider | Low |
 | `Cargo.toml`, `Cargo.lock`, `nix/crate2nix/Cargo.nix` | **None expected** | — |
 
-## 13. Open decisions
+## 13. Decisions
 
-Recommendations come first. **(owner)** marks owner-level decisions.
+### 13.1 Settled (owner answers of 2026-11-13, relayed by the coordinator)
 
-- **D1 Stock authority: consent only** (recommended, and required by the
-  coordinator's policy). Each user allows each integration on each device, with one
-  offer at a time, and stock integrations are always shown as "Unverified". Text
-  markers and certificate hashes are not authority (§3.3). This is no longer an open
-  choice. The owner may only narrow it further, to no integrations on stock servers.
-- **D2 (owner) Nuschl authority:** Write on root manages the registry as an extension
-  policy, with per-entry channel scope, the voice audience by default and an audit
-  table (recommended), versus the operator CLI only.
-- **D3 (owner) v1 kit:** `now_playing/1` only, `card/1` specified and built with a
-  second provider, and no artwork, links, lists or seeking in v1 (recommended).
-  Artwork later only on Nuschl servers through the content worker.
-- **D4 (owner) Who may press and invoke:** the integration's audience, registered
-  users only on Nuschl servers unless the entry allows guests, with the integration
-  free to narrow it (recommended).
-- **D5 (owner) "Previous" in the bot:** restart if more than 5 s in, otherwise put the
-  current song back and replay the last finished one (recommended), versus restart
-  only, versus no previous button.
+- **D1 Stock authority:** consent only, from registered bots only, always shown as
+  "Unverified" (coordinator policy; §3.2). Text markers and certificate hashes are
+  not authority (§3.3).
+- **D2 Nuschl registry:** managed by holders of Write on root **and** by the
+  operator CLI ("yes to both"; §3.5).
+- **D3 v1 kit:** `now_playing/1` only, with `card/1` built once a second provider is
+  approved. This reads answer f ("sure") as acceptance; confirm if it meant something
+  else. Appendix A lists candidate providers.
+- **D4 Who may press and invoke:** anyone. Each integration decides its own
+  permission model from the identity the server passes, and servers still bind,
+  rate-limit and audit (§3.5, §5).
+- **D5 Previous in the music bot:** restart if more than 3 s in, otherwise the
+  previous track ("sure"; §11).
+- **D7 E2EE:** deferred. The owner prioritises WebRTC and E2EE, and this work does
+  not compete with those lanes (§8.3, §12.2).
+
+### 13.2 Open
+
 - **D6 (integrator) Allocations, all proposals and nothing allocated here:** a
   16-type block after the frozen ranges (Root), the capability name
   `integrations/1`, data ids `nuschl/int/1` and `nuschl/int-req/1` (PD), and the
   migration number (Root).
-- **D7 (owner) E2EE:** no integrations on `e2ee/1` servers in v1 (recommended); an
-  MLS-member integration is a separate design.
 - **D8 Argument suggestions:** static choices only in v1 (recommended). Dynamic
   suggestions from the integration later, with their own rate budget.
+- **D9 (owner, later) Per-user surfaces:** a card addressed to one person, which the
+  per-user stats idea needs (Appendix A). Not in v1. It is a separate feature
+  needing approval.
+- **D10 (bot policy) Music bot controls:** registered users in its audience by
+  default, with a per-channel `controls = "registered" | "everyone"` setting
+  (recommended; §11). The owner left this to the integration.
+
+## Appendix A. Candidate integrations (ideas only)
+
+These are ideas the owner asked for. Each would need its own approval, and none is
+planned.
+
+| Idea | What people see | Template | Needs beyond v1 |
+|---|---|---|---|
+| Per-user stats | Your own numbers (time in voice, songs queued) and **Reset** | `card/1` | Per-user surfaces (D9). Anyone may reset their own stats, so the integration allows unregistered users here |
+| Raise hand / speaking queue | Who is next, **Raise hand**, **Lower hand**, and **Next** for moderators | `card/1`; `list/1` for the queue | `list/1`. Moderators judged from the attested permissions (Nuschl only) |
+| Shared timer | A name, time left, **Start**, **Pause**, **Reset** | `card/1` with anchored progress | — |
+| Game server status | Map, players 12/16, online or offline | `card/1` | A join link (links) |
+| CI or build status | Branch, passing or failing, **Retry** (with confirmation) | `card/1` | Links |
+| Stream live | "Live: title", viewers | `card/1` | A watch link (links) |
+| Dice and initiative | `/roll 2d6`; turn order with **Next** | Commands; `card/1`, `list/1` for the order | Posting results for everyone (the bot sends a message) |
+| Next event | "Raid night · in 2 h" | `card/1` with a countdown | — |
+| Radio or another player | Station, song, **Play**/**Pause** | `now_playing/1` | — |
+| Maintenance notice | "Restart at 22:00" | `card/1` with the warning icon | — |
+
+Polls have their own native design (#26) and are not an integration. Speaking-time
+statistics would raise privacy questions of their own.
