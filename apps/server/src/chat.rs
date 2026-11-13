@@ -103,6 +103,7 @@ impl State {
             deleted_ms: row.deleted_ms.unwrap_or(0),
             delete_reason: row.delete_reason.unwrap_or(0),
             edits: row.edits,
+            preview: None,
         }
     }
 
@@ -569,6 +570,7 @@ impl State {
                                 conversation: conversation.to_vec(),
                                 seq,
                                 server_ms: now_ms(),
+                                edits: None,
                             },
                         );
                         self.end_request(session, request_id);

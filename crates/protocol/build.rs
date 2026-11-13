@@ -16,6 +16,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ".nuschl.v1.ChatSend",
             ".nuschl.v1.ChatEdit",
             ".nuschl.v1.Message",
+            ".nuschl.v1.Preview",
+            ".nuschl.v1.PreviewImage",
             ".nuschl.v1.ShareLinkCreate",
             ".nuschl.v1.ShareLink",
         ])

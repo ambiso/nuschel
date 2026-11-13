@@ -458,6 +458,7 @@ impl Session {
             format: v1::Format::Text as i32,
             content: content.into(),
             reply_to: 0,
+            preview: None,
         }))
         .await
     }
@@ -1868,6 +1869,7 @@ impl Session {
             target,
             format: v1::Format::Text as i32,
             content: content.into(),
+            preview: None,
         }))
         .await
     }
@@ -2458,6 +2460,7 @@ async fn live_only_channels_deliver_without_storing() {
             target: seq,
             format: v1::Format::Text as i32,
             content: "changed".into(),
+            preview: None,
         }))
         .await;
     assert_eq!(error_code(&edit), Some(v1::error::Code::NotFound));

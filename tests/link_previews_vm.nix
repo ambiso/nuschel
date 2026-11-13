@@ -197,6 +197,14 @@ pkgs.testers.runNixOSTest {
         native_groups[native_units[0]] = authority["cgroup"].split("::", 1)[1].rstrip("\n")
         result = json.loads(machine.succeed(f"test $(stat -c%s {native_directory}/fetch-result.json) -le 65536 && cat {native_directory}/fetch-result.json"))
         assert result["passed"] is True and len(result["checks"]) == 13, result
+        # The test requests peer shutdown. Let its joined finalizer publish the
+        # final event oracle before finally requests forced cleanup.
+        machine.wait_until_succeeds("test \"$(systemctl show -p ActiveState --value nuschl-preview-native-peers.service)\" = inactive", timeout=timedelta(seconds=15))
+        peer_exit = {name: machine.succeed(f"systemctl show -p {name} --value nuschl-preview-native-peers.service").strip()
+            for name in ("ActiveState", "Result", "ExecMainStatus")}
+        assert peer_exit == {"ActiveState": "inactive", "Result": "success", "ExecMainStatus": "0"}, peer_exit
+        machine.succeed(f"test -f {native_directory}/peers.json")
+        machine.succeed("printf %s " + shlex.quote(json.dumps(peer_exit)) + f" > {native_directory}/peer-exit.json")
     finally:
         # Requesting stop is insufficient: admission below also requires the
         # original nondelegated kernel cgroups empty/removed and leaders gone.
@@ -207,7 +215,7 @@ pkgs.testers.runNixOSTest {
         machine.succeed("printf %s " + shlex.quote("${sourceIdentity}") + f" > {native_directory}/source-identity.txt")
         machine.succeed(f"(ip -4 route show table all; ip -6 route show table all; iptables-save; ip6tables-save) > {native_directory}/routes.txt")
         machine.succeed("install -d /tmp/preview-native-evidence")
-        for name in ("launcher.log", "stop.log", "test.log", "peers.log", "fetch-result.json", "test-process-authority.json", "peers-ready.json", "peers.json", "artifacts.sha256", "source-identity.txt", "routes.txt"):
+        for name in ("launcher.log", "stop.log", "test.log", "peers.log", "fetch-result.json", "test-process-authority.json", "peers-ready.json", "peers.json", "peer-exit.json", "artifacts.sha256", "source-identity.txt", "routes.txt"):
             machine.succeed(f"if test -f {native_directory}/{name}; then test $(stat -c%s {native_directory}/{name}) -le 1048576 && cp {native_directory}/{name} /tmp/preview-native-evidence/; fi")
         machine.copy_from_machine("/tmp/preview-native-evidence", "native")
         assert stop_status == 0, stop_log
