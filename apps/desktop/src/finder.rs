@@ -478,6 +478,12 @@ pub fn overlay(
     .track_scroll(&scroll)
     .w_full()
     .h(px(ROW * count.clamp(1, VISIBLE_ROWS) as f32));
+    let list = crate::layout::scroll_frame(
+        "finder-results",
+        &scroll,
+        list.pr(px(crate::layout::SCROLLBAR_GUTTER)),
+        ELEVATED,
+    );
     Some(
         div()
             .id("finder-backdrop")

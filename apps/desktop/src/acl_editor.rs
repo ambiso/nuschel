@@ -418,6 +418,14 @@ fn inspect_list(
     .track_scroll(&scroll)
     .h(px(ROW_HEIGHT * count.clamp(1, 5) as f32))
     .w_full();
+    let id = match kind {
+        Inspect::Rules => "acl-inspect-rules",
+        Inspect::Groups => "acl-inspect-groups",
+        Inspect::Members(0) => "acl-inspect-members",
+        Inspect::Members(1) => "acl-inspect-exclusions",
+        Inspect::Members(_) => "acl-inspect-inherited",
+    };
+    let list = crate::dialogs::nested_virtual_list(id, token, &scroll, list, cx);
     let focus_on_key = focus.clone();
     layout::focusable_with_handle(
         SharedString::from(format!("acl-inspect-focus-{token}-{key}")),
@@ -1214,6 +1222,7 @@ pub fn render(view: &ServerView, editor: &Editor, cx: &mut Context<Desktop>) -> 
     .track_scroll(&scroll)
     .h(px(ROW_HEIGHT * count.clamp(1, 6) as f32))
     .w_full();
+    let rules = crate::dialogs::nested_virtual_list("acl-rules", token, &scroll, rules, cx);
     body = body
         .child(note(
             "acl-rule-title",
@@ -1716,6 +1725,8 @@ fn groups(view: &ServerView, editor: &Editor, cx: &mut Context<Desktop>) -> AnyE
     .track_scroll(&editor.group_scroll)
     .h(px(ROW_HEIGHT * count.clamp(1, 5) as f32))
     .w_full();
+    let list =
+        crate::dialogs::nested_virtual_list("acl-groups", token, &editor.group_scroll, list, cx);
     let mut body = div()
         .min_w_0()
         .flex()
@@ -1962,6 +1973,13 @@ fn member_list(
     .track_scroll(&editor.member_scroll[kind])
     .h(px(ROW_HEIGHT * count.clamp(1, 4) as f32))
     .w_full();
+    let id = match kind {
+        0 => "acl-members",
+        1 => "acl-exclusions",
+        _ => "acl-inherited",
+    };
+    let list =
+        crate::dialogs::nested_virtual_list(id, token, &editor.member_scroll[kind], list, cx);
     let label = match kind {
         0 => "Local group members",
         1 => "Local group exclusions",

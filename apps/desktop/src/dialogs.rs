@@ -306,6 +306,11 @@ pub fn modal(
         )
         .child(
             crate::layout::scrollable(id, label, this.modal_scroll.clone())
+                .capture_any_mouse_down(cx.listener(|this, event: &MouseDownEvent, _, _| {
+                    if event.button == MouseButton::Left {
+                        this.cancel_modal_scroll();
+                    }
+                }))
                 .track_focus(&this.modal_focus)
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .role(Role::Dialog)
@@ -328,7 +333,12 @@ pub fn modal(
                             this.scroll_modal(None, event, window, cx)
                         }))
                         .child(content),
-                ),
+                )
+                .child(crate::layout::scrollbar(
+                    SharedString::from(format!("{id}-scrollbar")),
+                    &this.modal_scroll,
+                    MAIN,
+                )),
         )
         .into_any_element()
 }
@@ -347,11 +357,50 @@ pub fn nested_list(
 ) -> Stateful<Div> {
     crate::layout::scrollable(id, id, this.nested.handle(id))
         .max_h(max_height)
+        .capture_any_mouse_down(cx.listener(|this, event: &MouseDownEvent, _, _| {
+            if event.button == MouseButton::Left {
+                this.cancel_modal_scroll();
+            }
+        }))
         .child(
             content.on_scroll(cx.listener(move |this, event, window, cx| {
                 this.scroll_modal(Some(id), event, window, cx)
             })),
         )
+        .child(crate::layout::scrollbar(
+            SharedString::from(format!("{id}-scrollbar")),
+            &this.nested.handle(id),
+            MAIN,
+        ))
+}
+
+/// A virtualized list inside a modal participates in the same latched wheel
+/// transaction as ordinary nested lists, using its original retained handle.
+pub fn nested_virtual_list(
+    id: &'static str,
+    version: u64,
+    scroll: &UniformListScrollHandle,
+    list: UniformList,
+    cx: &mut Context<Desktop>,
+) -> Stateful<Div> {
+    let handle = scroll.0.borrow().base_handle.clone();
+    crate::layout::scroll_frame(
+        id,
+        scroll,
+        list.pr(px(crate::layout::SCROLLBAR_GUTTER)),
+        MAIN,
+    )
+    .capture_any_mouse_down(cx.listener(|this, event: &MouseDownEvent, _, _| {
+        if event.button == MouseButton::Left {
+            this.cancel_modal_scroll();
+        }
+    }))
+    .child(crate::layout::capture_scroll(cx.listener(
+        move |this, event, window, cx| {
+            this.nested.register(id, version, handle.clone());
+            this.scroll_modal(Some(id), event, window, cx)
+        },
+    )))
 }
 
 pub fn server_form(this: &Desktop, cx: &mut Context<Desktop>) -> AnyElement {

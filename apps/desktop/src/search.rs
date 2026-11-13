@@ -33,6 +33,7 @@ static REQUESTS: AtomicU64 = AtomicU64::new(0);
 
 pub struct SearchView {
     input: Entity<InputState>,
+    scroll: ScrollHandle,
     scope: Scope,
     /// Where it was opened, which the conversation and server scopes search.
     origin: Conversation,
@@ -112,6 +113,7 @@ impl Desktop {
                 });
                 self.search.insert(SearchView {
                     input,
+                    scroll: ScrollHandle::new(),
                     scope,
                     origin: origin.clone(),
                     searched: None,
@@ -654,18 +656,26 @@ pub fn panel(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement> {
                     .child(text!(status).with_id("search-status")),
             )
             .child(
-                div()
-                    .id("search-results")
-                    .role(Role::List)
-                    .aria_label(format!("{count} results"))
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scroll()
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .children(results)
-                    .children(more),
+                crate::layout::scrollable(
+                    "search-results",
+                    "Search results",
+                    search.scroll.clone(),
+                )
+                .role(Role::List)
+                .aria_label(format!("{count} results"))
+                .flex_1()
+                .min_h_0()
+                .overflow_y_scroll()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .children(results)
+                .children(more)
+                .child(crate::layout::scrollbar(
+                    "search-results-scrollbar",
+                    &search.scroll,
+                    MAIN,
+                )),
             )
             .into_any_element(),
     )
