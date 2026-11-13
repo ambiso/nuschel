@@ -159,6 +159,12 @@ impl Client {
         if plugin::is_reserved(data_id) {
             return Err(Refusal::Reserved);
         }
+        if data.len() > plugin::MAX_DATA_BYTES {
+            return Err(Refusal::Payload(plugin::Error::DataTooLarge));
+        }
+        if data_id.len() > plugin::MAX_DATA_ID_BYTES {
+            return Err(Refusal::Payload(plugin::Error::DataIdTooLong));
+        }
         let payload = Payload::new(data_id.to_owned(), data.to_vec()).map_err(Refusal::Payload)?;
         if receivers.is_empty() || receivers.len() > MAX_PLUGIN_RECEIVERS {
             return Err(Refusal::Receivers(MAX_PLUGIN_RECEIVERS));
@@ -203,7 +209,9 @@ impl Client {
     }
 
     /// What arrived since the last call, oldest first: only items of
-    /// connections that are still current.
+    /// connections that are still current. Received data also requires a
+    /// connected server with our current presence; admissions remain visible
+    /// for the current generation, including a refusal while connecting.
     pub fn take_plugin_data(&mut self) -> Vec<PluginDataEvent> {
         let items = std::mem::take(&mut self.plugin_data.items);
         self.plugin_data.bytes = 0;
@@ -211,7 +219,15 @@ impl Client {
             .into_iter()
             .filter(|item| {
                 let (server, generation) = item.origin();
-                self.current(server, generation).is_some()
+                self.current(server, generation).is_some_and(|index| {
+                    let server = &self.servers[index];
+                    !matches!(item, PluginDataEvent::Received { .. })
+                        || (server.status == Status::Connected
+                            && server
+                                .own_session
+                                .and_then(|session| server.users.get(&session))
+                                .is_some_and(|own| own.instance != 0))
+                })
             })
             .collect()
     }
@@ -225,9 +241,14 @@ impl Client {
     pub(super) fn plugin_event(&mut self, index: usize, event: ServerEvent) {
         let server = &self.servers[index];
         let (id, generation) = (server.id.clone(), server.generation);
+        let connected = server.status == Status::Connected
+            && server
+                .own_session
+                .and_then(|session| server.users.get(&session))
+                .is_some_and(|own| own.instance != 0);
         match event {
             ServerEvent::PluginData(data)
-                if self.plugin_data.accept && !data.payload.is_reserved() =>
+                if connected && self.plugin_data.accept && !data.payload.is_reserved() =>
             {
                 self.plugin_data.push(PluginDataEvent::Received {
                     server: id,
@@ -441,6 +462,132 @@ mod tests {
             Err(Refusal::NotConnected)
         );
         assert_eq!(recorder.sent.lock().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn payload_byte_limits_refuse_without_sending_or_changing_the_queue() {
+        let (mut client, recorder) = connected();
+        let exact_id = "é".repeat(50);
+        let long_ascii_id = "i".repeat(101);
+        let long_utf8_id = "é".repeat(51);
+        let before = (
+            client.servers[0].status,
+            client.servers[0].generation,
+            client.servers[0].own_session,
+            client.servers[0].users.len(),
+            client.updates.len(),
+        );
+        for (id, bytes, error) in [
+            ("game", &[0; 1001][..], plugin::Error::DataTooLarge),
+            (
+                long_ascii_id.as_str(),
+                &b""[..],
+                plugin::Error::DataIdTooLong,
+            ),
+            (
+                long_utf8_id.as_str(),
+                &b""[..],
+                plugin::Error::DataIdTooLong,
+            ),
+        ] {
+            assert_eq!(
+                client.send_plugin_data(0, &[(2, 22)], id, bytes),
+                Err(Refusal::Payload(error))
+            );
+            assert!(recorder.sent.lock().unwrap().is_empty());
+            assert!(client.plugin_data.items.is_empty());
+            assert_eq!(client.plugin_data.bytes, 0);
+            assert_eq!(client.plugin_data.dropped, 0);
+            assert_eq!(
+                (
+                    client.servers[0].status,
+                    client.servers[0].generation,
+                    client.servers[0].own_session,
+                    client.servers[0].users.len(),
+                    client.updates.len(),
+                ),
+                before
+            );
+        }
+        client
+            .send_plugin_data(0, &[(2, 22)], &exact_id, &[0; 1000])
+            .unwrap();
+        let sent = recorder.sent.lock().unwrap();
+        let [(_, _, Request::PluginData { payload, .. })] = sent.as_slice() else {
+            panic!("one send at the exact byte limits");
+        };
+        assert_eq!(payload.data_id(), exact_id);
+        assert_eq!(payload.data().len(), 1000);
+    }
+
+    #[test]
+    fn late_data_is_refused_after_disconnect_and_while_reconnecting() {
+        let (mut client, _) = connected();
+        client.accept_plugin_data(true);
+        let generation = client.servers[0].generation;
+        let late = input(&client, 0, data(2, 22, b"late"));
+        client.handle(input(&client, 0, data(2, 22, b"queued")));
+        client.disconnect(0);
+        assert_eq!(client.servers[0].generation, generation);
+        client.handle(late);
+        assert!(client.take_plugin_data().is_empty());
+
+        let generation = client.servers[1].generation;
+        let late = input(&client, 1, data(2, 122, b"late"));
+        client.handle(input(&client, 1, data(2, 122, b"queued")));
+        client.handle(Input::Reconnecting {
+            server: client.servers[1].id.clone(),
+            generation,
+            attempt: 1,
+            delay_secs: 1,
+            reason: "test connection loss".into(),
+        });
+        assert_eq!(client.servers[1].generation, generation);
+        client.handle(late);
+        assert!(client.take_plugin_data().is_empty());
+        // A connected status without our own known presence cannot accept
+        // data, either before it is queued or when it is taken.
+        client.servers[1].status = Status::Connected;
+        client.handle(input(&client, 1, data(2, 122, b"no own session")));
+        assert!(client.take_plugin_data().is_empty());
+    }
+
+    #[test]
+    fn queued_data_requires_our_presence_when_taken() {
+        let (mut client, _) = connected();
+        client.accept_plugin_data(true);
+        for unavailable in 0..4 {
+            client.handle(input(&client, 0, data(2, 22, b"queued")));
+            let own = client.servers[0].users.get(&1).unwrap().clone();
+            match unavailable {
+                0 => client.servers[0].status = Status::Disconnected,
+                1 => client.servers[0].own_session = None,
+                2 => {
+                    client.servers[0].users.remove(&1);
+                }
+                _ => client.servers[0].users.get_mut(&1).unwrap().instance = 0,
+            }
+            assert!(client.take_plugin_data().is_empty());
+            client.handle(input(&client, 0, data(2, 22, b"late")));
+            assert!(client.take_plugin_data().is_empty());
+            client.servers[0].status = Status::Connected;
+            client.servers[0].own_session = Some(1);
+            client.servers[0].users.insert(1, own);
+        }
+        // Admissions are connection-generation results, not incoming data.
+        client.disconnect(0);
+        client.handle(input(
+            &client,
+            0,
+            ServerEvent::PluginDataAdmission {
+                request: 8,
+                result: Err(Refusal::NotConnected),
+            },
+        ));
+        assert!(matches!(
+            client.take_plugin_data().as_slice(),
+            [PluginDataEvent::Admission { request: 8, .. }]
+        ));
     }
 
     #[test]
