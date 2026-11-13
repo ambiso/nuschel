@@ -71,19 +71,7 @@ pub enum Ineligible {
     Attachments,
 }
 
-/// A failed preview, without free text from the page or the worker.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Unavailable {
-    NoMetadata,
-    Encoding,
-    MediaType,
-    TooLarge,
-    Network,
-    Proxy,
-    Address,
-    Timeout,
-    Malformed,
-}
+pub use crate::metadata::Unavailable;
 
 /// The composer as it is now.
 #[derive(Debug)]
@@ -272,7 +260,6 @@ impl<K: Clone + Eq> DraftPreviews<K> {
             return Delivery::Stale;
         }
         self.in_flight = None;
-        let policy = self.policy;
         let Some((_, state)) = self
             .drafts
             .iter_mut()
@@ -296,9 +283,9 @@ impl<K: Clone + Eq> DraftPreviews<K> {
             Ok(card) => Phase::Ready(card.clone()),
             Err(reason) => Phase::Unavailable(*reason),
         };
-        if self.enabled && policy == self.policy {
-            self.remember(target.as_str(), outcome, now);
-        }
+        // `set_policy` cancels the request in flight, so an accepted result
+        // always belongs to the current, enabled policy.
+        self.remember(target.as_str(), outcome, now);
         Delivery::Accepted
     }
 
@@ -877,6 +864,8 @@ mod tests {
             previews.deliver(pending.id, Ok(card.clone()), 0),
             Delivery::Stale
         );
+        // Nothing from the earlier policy is remembered.
+        assert!(previews.cache.is_empty());
         assert_eq!(previews.for_send(draft(&1, &text, Some(URL))), None);
         assert_eq!(
             fetched(&previews.update(draft(&1, &text, Some(URL)), 0)).len(),

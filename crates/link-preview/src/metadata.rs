@@ -50,27 +50,24 @@ impl ExtractedMetadata {
     }
 }
 
+/// Why a preview is unavailable, without free text from the page or the
+/// worker. Extraction returns the first three.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ExtractError {
-    /// The document exceeds [`MAX_DOCUMENT_BYTES`].
-    TooLarge,
-    /// A byte-order mark, the transport or the document declares an encoding
-    /// other than UTF-8.
-    Encoding,
+pub enum Unavailable {
     /// Neither a title, a description nor an image was found.
     NoMetadata,
+    /// A byte-order mark, the transport or the document declares an
+    /// encoding other than UTF-8.
+    Encoding,
+    /// The document exceeds [`MAX_DOCUMENT_BYTES`].
+    TooLarge,
+    MediaType,
+    Network,
+    Proxy,
+    Address,
+    Timeout,
+    Malformed,
 }
-
-impl std::fmt::Display for ExtractError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(match self {
-            Self::TooLarge => "the page is too large for a preview",
-            Self::Encoding => "the page does not use UTF-8",
-            Self::NoMetadata => "the page has no preview metadata",
-        })
-    }
-}
-impl std::error::Error for ExtractError {}
 
 #[cfg(test)]
 mod tests {

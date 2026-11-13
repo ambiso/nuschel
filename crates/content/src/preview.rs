@@ -22,20 +22,18 @@ use html5ever::tokenizer::{
 /// The bounded result types, so the content worker needs no link-preview
 /// dependency of its own.
 pub use nuschl_link_preview::metadata::{
-    ExtractError, ExtractedMetadata, MAX_DOCUMENT_BYTES, TransportCharset,
+    ExtractedMetadata, MAX_DOCUMENT_BYTES, TransportCharset, Unavailable,
 };
 use nuschl_link_preview::model::{MAX_ALT_BYTES, MAX_DESCRIPTION_BYTES, MAX_TITLE_BYTES};
 use nuschl_link_preview::text::{normalize, refused};
 use std::cell::RefCell;
 
 /// Scanning stops after this many tags, comments and doctypes.
-pub const MAX_TAGS: usize = 4096;
+pub(crate) const MAX_TAGS: usize = 4096;
 /// Scanning stops after this many `<meta>` start tags.
-pub const MAX_META_TAGS: usize = 256;
-/// Attributes after this many on one `<meta>` are ignored.
-pub const MAX_ATTRIBUTES: usize = 64;
+pub(crate) const MAX_META_TAGS: usize = 256;
 /// At most this many bytes of an attribute value or of the title are read.
-pub const MAX_VALUE_BYTES: usize = 4096;
+pub(crate) const MAX_VALUE_BYTES: usize = 4096;
 /// The tokenizer is fed this much at a time, so it stops soon after the
 /// sink has seen enough.
 const CHUNK_BYTES: usize = 4096;
@@ -49,32 +47,38 @@ pub fn transport_charset(label: Option<&str>) -> TransportCharset {
     }
 }
 
-/// Open Graph v1: the first `og:title`, `og:description`, `og:image` (or
-/// `og:image:url`) and `og:image:alt` win; the `<title>` text and
-/// `meta[name=description]` are fallbacks. `og:url`, `og:site_name`,
+/// Open Graph v1: the first usable `og:title`, `og:description` and
+/// `og:image` (or `og:image:url`) win, with the `og:image:alt` that follows
+/// the chosen image; the `<title>` text and `meta[name=description]` are
+/// fallbacks. `og:url`, `og:site_name`,
 /// `twitter:*`, canonical links and `<base>` are ignored: nothing can replace
 /// the sender's URL. Only UTF-8 is read: a byte-order mark, the transport's
 /// charset or the first `<meta>` declaration naming anything else means no
 /// preview.
+///
+/// Cost: linear in the document, except that html5ever compares each new
+/// attribute name with the earlier ones in the same tag, so one tag full of
+/// distinct names is quadratic up to the 256 KiB cap (about 66 000 names);
+/// the content worker's CPU and wall limits bound it.
 pub fn extract_open_graph(
     document: &[u8],
     charset: TransportCharset,
-) -> Result<ExtractedMetadata, ExtractError> {
+) -> Result<ExtractedMetadata, Unavailable> {
     if document.len() > MAX_DOCUMENT_BYTES {
-        return Err(ExtractError::TooLarge);
+        return Err(Unavailable::TooLarge);
     }
     // A byte-order mark decides the encoding over everything else.
     let (document, charset) = match document {
         [0xef, 0xbb, 0xbf, rest @ ..] => (rest, TransportCharset::Utf8),
-        [0xfe, 0xff, ..] | [0xff, 0xfe, ..] => return Err(ExtractError::Encoding),
+        [0xfe, 0xff, ..] | [0xff, 0xfe, ..] => return Err(Unavailable::Encoding),
         _ => (document, charset),
     };
     if charset == TransportCharset::Other {
-        return Err(ExtractError::Encoding);
+        return Err(Unavailable::Encoding);
     }
     let found = scan(&String::from_utf8_lossy(document));
     if charset == TransportCharset::Unspecified && found.declared_charset == Some(false) {
-        return Err(ExtractError::Encoding);
+        return Err(Unavailable::Encoding);
     }
     let field = |raw: Option<String>, limit| normalize(raw.as_deref().unwrap_or(""), limit);
     let title = field(found.og_title.or(found.title), MAX_TITLE_BYTES);
@@ -84,7 +88,7 @@ pub fn extract_open_graph(
     );
     let image = found.og_image.as_deref().and_then(image_reference);
     if title.is_empty() && description.is_empty() && image.is_none() {
-        return Err(ExtractError::NoMetadata);
+        return Err(Unavailable::NoMetadata);
     }
     // Alternative text describes the chosen image only.
     let image_alt = match image {
@@ -124,6 +128,10 @@ struct Found {
     og_description: Option<String>,
     og_image: Option<String>,
     og_image_alt: Option<String>,
+    /// The most recent `og:image` value, and whether it is the chosen one:
+    /// `og:image:alt` describes the image just before it.
+    latest_image: Option<String>,
+    latest_is_chosen: bool,
     title: Option<String>,
     description: Option<String>,
     /// The first charset declaration: whether it names UTF-8.
@@ -236,7 +244,7 @@ impl State {
         let mut charset = None;
         let mut http_equiv = None;
         // The tokenizer has already dropped duplicate attributes.
-        for attribute in tag.attrs.iter().take(MAX_ATTRIBUTES) {
+        for attribute in &tag.attrs {
             let slot = match &*attribute.name.local {
                 "property" => &mut property,
                 "name" => &mut name,
@@ -272,9 +280,20 @@ impl State {
         } else if key.eq_ignore_ascii_case("og:description") {
             Some((&mut found.og_description, text(MAX_DESCRIPTION_BYTES)))
         } else if key.eq_ignore_ascii_case("og:image") || key.eq_ignore_ascii_case("og:image:url") {
-            Some((&mut found.og_image, image_reference(content).is_some()))
+            // `og:image:url` repeating the current image describes that image.
+            let same = key.eq_ignore_ascii_case("og:image:url")
+                && found.latest_image.as_deref() == Some(content);
+            if !same {
+                let chosen = found.og_image.is_none() && image_reference(content).is_some();
+                if chosen {
+                    found.og_image = Some(content.to_owned());
+                }
+                found.latest_image = Some(content.to_owned());
+                found.latest_is_chosen = chosen;
+            }
+            None
         } else if key.eq_ignore_ascii_case("og:image:alt") {
-            Some((&mut found.og_image_alt, true))
+            Some((&mut found.og_image_alt, found.latest_is_chosen))
         } else if by_name && key.eq_ignore_ascii_case("description") {
             Some((&mut found.description, text(MAX_DESCRIPTION_BYTES)))
         } else {
@@ -406,7 +425,7 @@ mod tests {
     use nuschl_link_preview::model::MAX_URL_BYTES;
     use std::time::{Duration, Instant};
 
-    fn extract(html: &str) -> Result<ExtractedMetadata, ExtractError> {
+    fn extract(html: &str) -> Result<ExtractedMetadata, Unavailable> {
         extract_open_graph(html.as_bytes(), TransportCharset::Unspecified)
     }
 
@@ -419,8 +438,9 @@ mod tests {
             <meta property="og:title" content="First &amp; best">
             <meta property="og:title" content="Second">
             <meta property="og:image" content="/img/a.png">
-            <meta property="og:image" content="/img/b.png">
             <meta property="og:image:alt" content="An &quot;alt&quot;">
+            <meta property="og:image" content="/img/b.png">
+            <meta property="og:image:alt" content="b's alt">
             </head><body>"#,
         )
         .unwrap();
@@ -455,12 +475,12 @@ mod tests {
                    <link rel="canonical" href="https://evil.example/">
                    <base href="https://evil.example/">"#
             ),
-            Err(ExtractError::NoMetadata)
+            Err(Unavailable::NoMetadata)
         );
         // `description` only counts from the name attribute.
         assert_eq!(
             extract(r#"<meta property="description" content="x">"#),
-            Err(ExtractError::NoMetadata)
+            Err(Unavailable::NoMetadata)
         );
     }
 
@@ -483,7 +503,7 @@ mod tests {
             r#"<meta property="og:title" content="no"#,
             r#"<script><meta property="og:title" content="no">"#,
         ] {
-            assert_eq!(extract(html), Err(ExtractError::NoMetadata), "{html}");
+            assert_eq!(extract(html), Err(Unavailable::NoMetadata), "{html}");
         }
         // HTML's comment and raw-text rules decide where those end.
         for (html, title) in [
@@ -522,18 +542,11 @@ mod tests {
         let found =
             extract(r#"<meta property="og:title" property="x" content="a" content="b">"#).unwrap();
         assert_eq!(found.title, "a");
-        // Attributes past the limit are ignored.
-        let padding: String = (0..MAX_ATTRIBUTES).map(|n| format!("a{n} ")).collect();
+        // However many attributes come first.
+        let padding: String = (0..1000).map(|n| format!("a{n} ")).collect();
         assert_eq!(
             extract(&format!(
-                r#"<meta {padding}property="og:title" content="late">"#
-            )),
-            Err(ExtractError::NoMetadata)
-        );
-        let within: String = (0..MAX_ATTRIBUTES - 2).map(|n| format!("a{n} ")).collect();
-        assert_eq!(
-            extract(&format!(
-                r#"<meta {within}property="og:title" content="in">"#
+                r#"<meta {padding}property="og:title" content="in">"#
             ))
             .unwrap()
             .title,
@@ -545,6 +558,50 @@ mod tests {
         )
         .unwrap();
         assert_eq!(found.title, "b");
+    }
+
+    #[test]
+    fn alternative_text_belongs_to_the_chosen_image() {
+        let long = format!("/{}", "a".repeat(MAX_URL_BYTES));
+        for (html, image, alt) in [
+            // The first image is over-long and dropped: its alt goes with it.
+            (
+                format!(
+                    r#"<meta property="og:image" content="{long}"><meta property="og:image:alt" content="dropped"><meta property="og:image" content="/b"><meta property="og:title" content="t">"#
+                ),
+                Some("/b"),
+                "",
+            ),
+            (
+                format!(
+                    r#"<meta property="og:image" content="{long}"><meta property="og:image:alt" content="dropped"><meta property="og:image" content="/b"><meta property="og:image:alt" content="b">"#
+                ),
+                Some("/b"),
+                "b",
+            ),
+            // Before any image, alternative text describes nothing.
+            (
+                r#"<meta property="og:image:alt" content="early"><meta property="og:image" content="/a">"#.into(),
+                Some("/a"),
+                "",
+            ),
+            // og:image:url repeating the chosen image is the same image.
+            (
+                r#"<meta property="og:image" content="/a"><meta property="og:image:url" content="/a"><meta property="og:image:alt" content="a">"#.into(),
+                Some("/a"),
+                "a",
+            ),
+            // Only the first alt of the chosen image counts.
+            (
+                r#"<meta property="og:image" content="/a"><meta property="og:image:alt" content="one"><meta property="og:image:alt" content="two">"#.into(),
+                Some("/a"),
+                "one",
+            ),
+        ] {
+            let found = extract(&html).unwrap();
+            assert_eq!(found.image.as_deref(), image, "{html}");
+            assert_eq!(found.image_alt, alt, "{html}");
+        }
     }
 
     #[test]
@@ -600,12 +657,12 @@ mod tests {
     #[test]
     fn only_utf8_documents_are_read() {
         let page = r#"<meta charset="windows-1252"><meta property="og:title" content="x">"#;
-        assert_eq!(extract(page), Err(ExtractError::Encoding));
+        assert_eq!(extract(page), Err(Unavailable::Encoding));
         // The transport's charset wins over the document's.
         assert!(extract_open_graph(page.as_bytes(), TransportCharset::Utf8).is_ok());
         assert_eq!(
             extract_open_graph(b"<title>x</title>", TransportCharset::Other),
-            Err(ExtractError::Encoding)
+            Err(Unavailable::Encoding)
         );
         // A byte-order mark wins over both.
         let mut bom = b"\xef\xbb\xbf".to_vec();
@@ -613,7 +670,7 @@ mod tests {
         assert!(extract_open_graph(&bom, TransportCharset::Other).is_ok());
         assert_eq!(
             extract_open_graph(b"\xff\xfe<\0t\0", TransportCharset::Utf8),
-            Err(ExtractError::Encoding)
+            Err(Unavailable::Encoding)
         );
         // The first declaration counts; UTF-16 in a meta tag means UTF-8.
         for (page, ok) in [
@@ -646,16 +703,16 @@ mod tests {
     fn documents_over_the_cap_and_tag_floods_stop() {
         assert_eq!(
             extract_open_graph(&vec![b' '; MAX_DOCUMENT_BYTES + 1], TransportCharset::Utf8),
-            Err(ExtractError::TooLarge)
+            Err(Unavailable::TooLarge)
         );
         let late = "<meta property=\"og:title\" content=\"late\">";
         assert_eq!(
             extract(&format!("{}{late}", "<p>".repeat(MAX_TAGS))),
-            Err(ExtractError::NoMetadata)
+            Err(Unavailable::NoMetadata)
         );
         assert_eq!(
             extract(&format!("{}{late}", "<meta>".repeat(MAX_META_TAGS))),
-            Err(ExtractError::NoMetadata)
+            Err(Unavailable::NoMetadata)
         );
         // Within the limits it is still found.
         let within = format!(
@@ -669,17 +726,7 @@ mod tests {
     fn hostile_documents_take_bounded_time() {
         let size = MAX_DOCUMENT_BYTES;
         let fill = |unit: &str| unit.repeat(size / unit.len());
-        // One tag with as many distinct attributes as fit: the tokenizer
-        // compares each new attribute name with the earlier ones.
-        let mut distinct = String::from("<meta");
-        let mut n = 0;
-        while distinct.len() < size - 16 {
-            distinct.push_str(&format!(" a{n}"));
-            n += 1;
-        }
-        distinct.push('>');
         for document in [
-            distinct,
             fill("<meta "),
             fill("<"),
             fill("</"),
@@ -708,6 +755,64 @@ mod tests {
                 String::from_utf8_lossy(&document[..16])
             );
         }
+    }
+
+    /// One tag holding as many distinct attribute names as fit in `size`,
+    /// shortest first: 65 one-character names (printable ASCII without
+    /// upper case, which the tokenizer folds, and without '/', '>' and '=',
+    /// which end a name), then two and three characters.
+    fn shortest_distinct_names(size: usize) -> (String, usize) {
+        let alphabet: Vec<char> = (0x21u8..=0x7e)
+            .map(char::from)
+            .filter(|ch| !ch.is_ascii_uppercase() && !matches!(ch, '/' | '>' | '='))
+            .collect();
+        let name = |mut n: usize| {
+            let (mut len, mut block) = (1, alphabet.len());
+            while n >= block {
+                n -= block;
+                len += 1;
+                block *= alphabet.len();
+            }
+            let mut name = vec![alphabet[0]; len];
+            for slot in name.iter_mut().rev() {
+                *slot = alphabet[n % alphabet.len()];
+                n /= alphabet.len();
+            }
+            name.into_iter().collect::<String>()
+        };
+        let mut document = String::from("<meta");
+        let mut count = 0;
+        loop {
+            let next = name(count);
+            if document.len() + next.len() + 2 > size {
+                break;
+            }
+            document.push(' ');
+            document.push_str(&next);
+            count += 1;
+        }
+        document.push('>');
+        (document, count)
+    }
+
+    /// html5ever compares each new attribute name with the earlier ones in
+    /// the tag, so this is quadratic; it is bounded by the document cap and
+    /// the content worker's five-second CPU and wall limits. Timed only with
+    /// optimised dependencies (the release build the worker ships).
+    #[test]
+    #[cfg_attr(
+        debug_assertions,
+        ignore = "the dev profile builds html5ever at opt-level 0"
+    )]
+    fn one_tag_of_distinct_attribute_names_is_bounded_by_the_cap() {
+        let (document, names) = shortest_distinct_names(MAX_DOCUMENT_BYTES);
+        assert!(document.len() <= MAX_DOCUMENT_BYTES);
+        assert!(names > 66_000, "{names}");
+        let started = Instant::now();
+        assert_eq!(extract(&document), Err(Unavailable::NoMetadata));
+        let elapsed = started.elapsed();
+        eprintln!("{names} distinct attribute names in one tag: {elapsed:?}");
+        assert!(elapsed < Duration::from_secs(4), "{elapsed:?}");
     }
 
     #[test]

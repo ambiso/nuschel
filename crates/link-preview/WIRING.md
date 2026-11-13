@@ -1,6 +1,6 @@
 # Link previews, slice A: wiring into shared files
 
-Status, 2026-11-13 (correction lane C099, on main `733cc124`). The offline pieces
+Status, 2026-11-13. The offline pieces
 below are unit-tested; nothing else uses them yet. No network, DNS, TLS, socket,
 image conversion, SDK, IPC, worker or UI code exists. This note lists the remaining
 shared-file hunks for the integrator; it refines `docs/link-previews-plan.md`.
@@ -9,12 +9,12 @@ shared-file hunks for the integrator; it refines `docs/link-previews-plan.md`.
 
 | Where | Public API |
 |---|---|
-| `nuschl_content::preview` (content worker and content WASM only) | `extract_open_graph(&[u8], TransportCharset) -> Result<ExtractedMetadata, ExtractError>` on html5ever's tokenizer; `transport_charset(Option<&str>)`; re-exports `ExtractedMetadata`, `ExtractError`, `TransportCharset`, `MAX_DOCUMENT_BYTES`; limits `MAX_TAGS`, `MAX_META_TAGS`, `MAX_ATTRIBUTES`, `MAX_VALUE_BYTES` |
-| `nuschl_link_preview::metadata` | the bounded value: `ExtractedMetadata { title, description, image, image_alt }` + `is_bounded()` (check worker replies with it), `TransportCharset`, `ExtractError` |
+| `nuschl_content::preview` (content worker and content WASM only) | `extract_open_graph(&[u8], TransportCharset) -> Result<ExtractedMetadata, Unavailable>` on html5ever's tokenizer; `transport_charset(Option<&str>)`; re-exports `ExtractedMetadata`, `TransportCharset`, `Unavailable`, `MAX_DOCUMENT_BYTES` |
+| `nuschl_link_preview::metadata` | the bounded value: `ExtractedMetadata { title, description, image, image_alt }` + `is_bounded()` (check worker replies with it), `TransportCharset`, `Unavailable` (the one failure reason, also `draft::Unavailable`) |
 | `::card` | `Card::new(&Target, &ExtractedMetadata, Option<EmbeddedImage>)`, `Card::from_preview`, `to_preview`, `is_for`, accessors; `check_image`, `image_dimensions` |
 | `::projection` | `project(draft_text, &Card, &ServerLimits) -> Projection::{Card { html, description, image }, TextOnly(TextOnly)}`; calls `legacy_body(text, true)` itself; `is_xml_char` |
 | `::draft` | `DraftPreviews<K>`: `set_policy`, `update`, `deliver`, `for_send`, `sent`, `forget`, `remove`, `restore`, `status` |
-| `::settings_file` | `parse(Source) -> Loaded`, `serialize(&Settings)`, `effective(&user, &managed)`, `cap(&user, &managed)` |
+| `::settings_file` | `parse(Origin, Source) -> Loaded`, `serialize(&Settings)`, `effective(&user, &managed)`; `Problem` names the file (`Origin::User` / `Origin::Managed`) |
 
 Manifest edges in place: nuschl-content → nuschl-link-preview,
 nuschl-link-preview → nuschl-legacy-html, serde_json a normal dependency of
@@ -24,7 +24,7 @@ Apache-2.0); release notices pick it up from the graph.
 
 ## Remaining shared-file hunks (none made here)
 
-Line numbers at `733cc124`; owners as in the plan.
+Owners as in the plan.
 
 1. **`crates/ipc/src/preview.rs` (new) + `crates/ipc/src/lib.rs`**: `pub mod preview;`,
    `ContentRequest::Preview(..)`, `ContentResponse::Preview(..)` (after musicbot's
@@ -59,14 +59,16 @@ Line numbers at `733cc124`; owners as in the plan.
    that extraction runs only in the content worker (and the content WASM worker,
    which is not an OS sandbox).
 
-## Decisions taken here, for codex
+## Decisions taken here
 
-- Managed sidecar: `cap` makes the mode the narrower of user and managed
-  (Off < ProxyRequired < Direct), so it never loosens Off; a managed proxy or resolver
-  replaces the user's. An unreadable, malformed or newer managed file, or one naming an
-  invalid proxy or resolver, means Off with a `Problem`; ProxyRequired without a
-  complete configuration fetches nothing and says why. The mode rule is isolated in
-  `cap`; the caller must pass only the managed file from administrator locations.
+- Managed sidecar: the mode is the narrower of user and managed
+  (Off < ProxyRequired < Direct), so it never loosens Off. Only a managed file requiring
+  a proxy supplies proxy settings; when they replace the user's own, the notice
+  `Problem::ManagedServices` says so (previews stay on). An unreadable, oversized,
+  malformed or newer managed file, or one naming an invalid proxy or resolver, means Off
+  with a `Problem` naming `managed-link-previews.json`; ProxyRequired without a complete
+  configuration fetches nothing and says why. The rule is isolated in the private
+  `narrow`; the caller must pass only the managed file from administrator locations.
 - Strict UTF-8: other declared encodings give no preview.
 - The projection carries no `alt` attribute; alternative text stays in the typed model.
 
@@ -76,7 +78,7 @@ Line numbers at `733cc124`; owners as in the plan.
 |---|---|
 | Document | ≤ 256 KiB, else `TooLarge` |
 | Tags + comments + doctypes / `<meta>` tags | ≤ 4096 / ≤ 256, then stop |
-| Attributes per `<meta>` | first 64 |
+| Attributes per tag | not limited separately: html5ever compares each new attribute name with the earlier ones in the tag, O(n²) in one tag of distinct names, up to about 66 000 names at the 256 KiB cap; bounded by the document cap and the content worker's 5 s CPU and wall limits. Measured: 66 623 names in 0.89–0.91 s at opt-level 3 (2026-11-13, shared x86_64 host); the test asserts under 4 s. The dev profile builds html5ever at opt-level 0, so that test runs only in optimised builds |
 | Attribute value / title text read | ≤ 4 KiB |
 | Title / description / alt | ≤ 512 / 2048 / 512 B, char boundary |
 | Image reference | ≤ 2048 B, dropped beyond |

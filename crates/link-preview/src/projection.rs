@@ -26,9 +26,11 @@ use nuschl_legacy_html::{escape_html, legacy_body};
 pub const MAX_TITLE_UNITS: usize = 200;
 /// Display truncation of the description in the projection (UTF-16 units).
 pub const MAX_DESCRIPTION_UNITS: usize = 300;
-/// Murmur counts an image message's text after re-serialising it inside a
-/// `<document>` element without image sources; this margin covers what that
-/// adds (21 units for the wrapper, attribute re-escaping).
+/// Murmur counts an image message's text after re-serialising it with
+/// `QXmlStreamWriter` inside a `<document>` element, without image sources.
+/// The wrapper and the XML declaration the writer emits add about 34 units;
+/// this margin covers that with room for attribute re-escaping. The real
+/// count is checked against a private Murmur in the slice B VM test.
 pub const SERIALISATION_MARGIN: usize = 64;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -136,6 +138,9 @@ fn card_html(text_html: &str, card: &Card, description: bool, image: Option<&str
     html.push_str("<br/><blockquote><i>");
     html.push_str(&escape_html(card.host()));
     html.push_str("</i><br/><a href=\"");
+    // `escape_html` turns a line break into `<br/>`, which would break the
+    // attribute; a canonical URL never contains one (the card checks it).
+    debug_assert!(!card.url().contains(['\n', '\r']));
     html.push_str(&escape_html(card.url()));
     html.push_str("\"><b>");
     html.push_str(&escape_html(&truncate_utf16(
@@ -244,10 +249,13 @@ mod tests {
         card_with("A <b>title</b> & \"more\"", description, Some(picture))
     }
 
-    /// What an independent XML parser says about each fragment, read as
-    /// Murmur does (`<document>…</document>`): `None` when it refuses it,
-    /// else the UTF-16 length of the document re-serialised without image
-    /// sources (Murmur's text count). Python's expat, not this crate, parses.
+    /// An independent parse check: Python's expat (not this crate) parses
+    /// each fragment as Murmur reads it (`<document>…</document>`); `None`
+    /// when it refuses it, else an approximate text length: the UTF-16
+    /// length of ElementTree's re-serialisation without image sources. That
+    /// differs from Qt's writer (raw `"` instead of `&quot;`, `<br />`
+    /// instead of `<br/>`, no XML declaration); Murmur's own count is
+    /// checked in the slice B VM test.
     fn oracle(fragments: &[&str]) -> Vec<Option<usize>> {
         const SCRIPT: &str = r#"
 import sys, xml.etree.ElementTree as ET
@@ -286,8 +294,8 @@ sys.stdout.write('\n'.join(out))
         lines
     }
 
-    /// Murmur's `isTextAllowed` with HTML allowed, with the XML parse and the
-    /// text count from the independent oracle.
+    /// Murmur's `isTextAllowed` with HTML allowed, with the XML parse and an
+    /// approximate text count from the independent parser.
     fn murmur_accepts(html: &str, xml: Option<usize>, limits: &ServerLimits) -> bool {
         let length = utf16_len(html);
         if limits.message_length == 0 && limits.image_message_length == 0 {
@@ -415,6 +423,27 @@ sys.stdout.write('\n'.join(out))
                 (other, _) => panic!("{limits:?}: {other:?}"),
             }
         }
+    }
+
+    #[test]
+    fn card_urls_never_hold_a_line_break_that_would_break_the_href() {
+        let mut preview = card_with("t", "", None).to_preview();
+        for url in [
+            "https://example.org/a\nb",
+            "https://example.org/a\rb",
+            "https://example.org/\n",
+        ] {
+            preview.url = url.into();
+            assert!(Card::from_preview(&preview).is_err(), "{url:?}");
+            assert!(Target::parse(url).is_err(), "{url:?}");
+        }
+        let Projection::Card { html, .. } = project("x", &card_with("t", "", None), &limits(0, 0))
+        else {
+            panic!("fits");
+        };
+        let href = html.split("<a href=\"").nth(1).unwrap();
+        let href = &href[..href.find('"').unwrap()];
+        assert_eq!(href, "https://example.org/a?x=1&amp;y=%222%22#top");
     }
 
     #[test]
