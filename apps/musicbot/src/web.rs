@@ -7,7 +7,9 @@
 use crate::{
     Bot,
     player::{BrowserSubscription, Ducking, MAX_DUCK_HOLD},
-    subsonic::{self, Album, AlbumList, Artist, Library, Playlist, Track},
+    subsonic::{
+        self, Album, AlbumList, Artist, Library, LibraryIdentity, Playlist, SonicMatch, Track,
+    },
     tokens::Owner,
 };
 use axum::{
@@ -83,6 +85,8 @@ pub fn router(bot: Arc<Bot>) -> Router {
         .route("/u/{token}/api/playlists", get(playlists))
         .route("/u/{token}/api/playlist", get(playlist))
         .route("/u/{token}/api/search", get(search))
+        .route("/u/{token}/api/similar", get(similar))
+        .route("/u/{token}/api/path", get(sonic_path))
         .layer(axum::middleware::map_response(headers))
         .with_state(bot)
 }
@@ -422,6 +426,9 @@ async fn art(
 struct StateView {
     you: String,
     libraries: Vec<String>,
+    /// Per library, parallel to `libraries`: whether it is known to offer
+    /// sonic similarity. Read from what is already known, never asked.
+    sonic: Vec<bool>,
     players: Vec<PlayerView>,
     channels: Vec<ChannelView>,
     rating_revision: u64,
@@ -534,6 +541,11 @@ fn snapshot(bot: &Bot, you: &str) -> StateView {
             .libraries
             .iter()
             .map(|library| library.name.clone())
+            .collect(),
+        sonic: bot
+            .libraries
+            .iter()
+            .map(|library| library.supports_sonic_similarity_cached())
             .collect(),
         players,
         channels,
@@ -855,6 +867,10 @@ enum Kind {
     Song,
     Album,
     Playlist,
+    /// The songs that sound like `id`.
+    Similar,
+    /// The songs leading from `id` to `to` by sound.
+    Path,
 }
 
 #[derive(Deserialize)]
@@ -899,6 +915,8 @@ enum Command {
         kind: Kind,
         library: usize,
         id: String,
+        /// The song a `path` ends with.
+        to: Option<String>,
         index: Option<usize>,
     },
     Attach {
@@ -956,15 +974,37 @@ async fn command(
             kind,
             library,
             id,
+            to,
             index,
             ..
         } => {
+            let to = match kind {
+                Kind::Path => to.ok_or_else(|| bad("a sonic path needs the song it ends with"))?,
+                _ => String::new(),
+            };
+            let sonic = |matches: Vec<SonicMatch>| -> Vec<Track> {
+                matches.into_iter().map(|found| found.track).collect()
+            };
             let tracks = ask(&bot, library, move |library| match kind {
                 Kind::Album => library.album(&id).map(|(_, songs)| songs),
                 Kind::Playlist => library.playlist(&id).map(|(_, songs)| songs),
                 Kind::Song => library.song(&id).map(|song| vec![song]),
+                Kind::Similar => library.sonic_similar(&id).map(sonic),
+                Kind::Path => library.sonic_path(&id, &to).map(sonic),
             })
             .await?;
+            let tracks = match kind {
+                Kind::Path => {
+                    let identity = bot.libraries[library].identity();
+                    let state = player.state();
+                    let playing = state
+                        .current
+                        .as_ref()
+                        .map(|playing| (playing.source.as_ref(), playing.entry.track.id.as_str()));
+                    continue_path(tracks, playing, &identity)
+                }
+                _ => tracks,
+            };
             let added = player.enqueue(tracks, &owner.name, index);
             tracing::info!("{} added {added} song(s) to {}", owner.name, player.name);
         }
@@ -978,6 +1018,23 @@ async fn command(
         }
     }
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// A path that starts with the song the queue is playing continues it: the
+/// first song is not queued again. `playing` is the current song's library
+/// identity and id.
+fn continue_path(
+    mut path: Vec<Track>,
+    playing: Option<(Option<&LibraryIdentity>, &str)>,
+    library: &LibraryIdentity,
+) -> Vec<Track> {
+    if let (Some((Some(source), id)), Some(first)) = (playing, path.first())
+        && source == library
+        && id == first.id
+    {
+        path.remove(0);
+    }
+    path
 }
 
 #[derive(Deserialize)]
@@ -1168,6 +1225,54 @@ async fn playlist(
     })
     .await?;
     Ok(Json(PlaylistView { playlist, songs }))
+}
+
+#[derive(Serialize)]
+struct SimilarView {
+    song: Track,
+    matches: Vec<SonicMatch>,
+}
+
+/// The songs that sound like one song, and that song for the heading.
+async fn similar(
+    State(bot): State<Arc<Bot>>,
+    Path(token): Path<String>,
+    Query(query): Query<ItemQuery>,
+) -> Result<Json<SimilarView>, ApiError> {
+    owner(&bot, &token)?;
+    let (song, matches) = ask(&bot, query.library, move |library| {
+        // The extension check comes first: unsupported libraries get no other call.
+        let matches = library.sonic_similar(&query.id)?;
+        Ok((library.song(&query.id)?, matches))
+    })
+    .await?;
+    Ok(Json(SimilarView { song, matches }))
+}
+
+#[derive(Deserialize)]
+struct PathQuery {
+    #[serde(default)]
+    library: usize,
+    from: String,
+    to: String,
+}
+
+#[derive(Serialize)]
+struct SonicPathView {
+    matches: Vec<SonicMatch>,
+}
+
+async fn sonic_path(
+    State(bot): State<Arc<Bot>>,
+    Path(token): Path<String>,
+    Query(query): Query<PathQuery>,
+) -> Result<Json<SonicPathView>, ApiError> {
+    owner(&bot, &token)?;
+    let matches = ask(&bot, query.library, move |library| {
+        library.sonic_path(&query.from, &query.to)
+    })
+    .await?;
+    Ok(Json(SonicPathView { matches }))
 }
 
 #[derive(Deserialize)]
@@ -2109,6 +2214,39 @@ mod tests {
                 ..
             }
         ));
+        let similar: Command = serde_json::from_str(
+            r#"{"command":"add","player":0,"kind":"similar","library":1,"id":"s/1"}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            similar,
+            Command::Add {
+                kind: Kind::Similar,
+                library: 1,
+                to: None,
+                index: None,
+                ..
+            }
+        ));
+        let path: Command = serde_json::from_str(
+            r#"{"command":"add","player":0,"kind":"path","library":1,"id":"s1","to":"s 2","index":3}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            &path,
+            Command::Add {
+                kind: Kind::Path,
+                to: Some(to),
+                index: Some(3),
+                ..
+            } if to == "s 2"
+        ));
+        assert!(
+            serde_json::from_str::<Command>(
+                r#"{"command":"add","player":0,"kind":"sonic","library":0,"id":"s1"}"#
+            )
+            .is_err()
+        );
         let ducking: Command = serde_json::from_str(
             r#"{"command":"ducking","player":0,"enabled":true,"level":20,"hold_ms":500,"sensitivity":70}"#,
         )
@@ -2127,5 +2265,289 @@ mod tests {
         assert!(
             serde_json::from_str::<Command>(r#"{"command":"format_disk","player":0}"#).is_err()
         );
+    }
+
+    fn fixture_track(id: &str) -> Track {
+        serde_json::from_value(serde_json::json!({ "library": 0, "id": id, "title": id })).unwrap()
+    }
+
+    #[test]
+    fn a_path_from_the_playing_song_continues_it() {
+        let library = LibraryIdentity {
+            name: "Open".into(),
+            url: "https://open.example".into(),
+        };
+        let other = LibraryIdentity {
+            name: "Plain".into(),
+            url: "https://plain.example".into(),
+        };
+        let ids = |tracks: Vec<Track>| tracks.into_iter().map(|track| track.id).collect::<Vec<_>>();
+        let path = || vec![fixture_track("s1"), fixture_track("s2")];
+        assert_eq!(
+            ids(continue_path(
+                path(),
+                Some((Some(&library), "s1")),
+                &library
+            )),
+            ["s2"]
+        );
+        for playing in [
+            None,
+            Some((None, "s1")),
+            Some((Some(&other), "s1")),
+            Some((Some(&library), "s2")),
+        ] {
+            assert_eq!(ids(continue_path(path(), playing, &library)), ["s1", "s2"]);
+        }
+        assert!(continue_path(Vec::new(), Some((Some(&library), "s1")), &library).is_empty());
+    }
+
+    /// `open` offers sonic similarity; `plain` does not; `failing` offers it
+    /// but rejects every call with a message carrying the backend secret.
+    fn sonic_fixture(mode: &'static str) -> Server {
+        Server::new(move |request, socket| {
+            use std::io::Write;
+            let body = if request.starts_with("GET /rest/getOpenSubsonicExtensions") {
+                if mode == "plain" {
+                    r#"{"subsonic-response":{"status":"ok","openSubsonicExtensions":[{"name":"transcoding","versions":[1]}]}}"#
+                } else {
+                    r#"{"subsonic-response":{"status":"ok","openSubsonicExtensions":[{"name":"sonicSimilarity","versions":[1]}]}}"#
+                }
+            } else if mode == "failing" {
+                r#"{"subsonic-response":{"status":"failed","error":{"code":40,"message":"http://dj:secret@private.example/rest/findSonicPath?apiKey=private-key"}}}"#
+            } else if request.starts_with("GET /rest/ping") {
+                r#"{"subsonic-response":{"status":"ok"}}"#
+            } else if request.starts_with("GET /rest/getSong") {
+                r#"{"subsonic-response":{"status":"ok","song":{"id":"s1","title":"First"}}}"#
+            } else if request.starts_with("GET /rest/getSonicSimilarTracks") {
+                r#"{"subsonic-response":{"status":"ok","sonicMatch":[{"entry":{"id":"s2","title":"Second"},"similarity":0.8}]}}"#
+            } else if request.starts_with("GET /rest/findSonicPath") {
+                r#"{"subsonic-response":{"status":"ok","sonicMatch":[{"entry":{"id":"s1","title":"First"},"similarity":1.0},{"entry":{"id":"s2","title":"Second"},"similarity":0.5}]}}"#
+            } else {
+                r#"{"subsonic-response":{"status":"failed","error":{"code":0}}}"#
+            };
+            write!(socket, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).unwrap();
+            socket.write_all(body.as_bytes()).unwrap();
+        })
+    }
+
+    fn queue_ids(bot: &Bot) -> Vec<String> {
+        bot.players[0]
+            .state()
+            .queue
+            .iter()
+            .map(|entry| entry.track.id.clone())
+            .collect()
+    }
+
+    #[test]
+    fn snapshot_reports_only_already_known_sonic_support() {
+        let server = sonic_fixture("open");
+        let (_directory, bot, token) = test_bot(&server.url, 2);
+        let you = owner(&bot, &token).ok().unwrap().name;
+        assert_eq!(snapshot(&bot, &you).sonic, [false, false]);
+        assert!(server.requests().is_empty(), "snapshots never ask");
+        bot.libraries[1].ping().unwrap();
+        let asked = server.requests().len();
+        // Library 0 would answer the same, but nobody has asked it yet.
+        assert_eq!(snapshot(&bot, &you).sonic, [false, true]);
+        assert_eq!(server.requests().len(), asked);
+    }
+
+    #[tokio::test]
+    async fn sonic_lists_and_adds_follow_the_library_reply() {
+        let _exclusive = API_TESTS.lock().await;
+        let server = sonic_fixture("open");
+        let (_directory, mut bot, token) = test_bot(&server.url, 2);
+        let unique = Arc::get_mut(&mut bot).unwrap();
+        unique.players.push(Arc::new(crate::player::Player::new(
+            "Queue".into(),
+            50,
+            Ducking::default(),
+            unique.changes.clone(),
+        )));
+
+        let found = similar(
+            State(bot.clone()),
+            Path(token.clone()),
+            Query(ItemQuery {
+                library: 1,
+                id: "s1".into(),
+            }),
+        )
+        .await
+        .ok()
+        .unwrap()
+        .0;
+        assert_eq!((found.song.library, found.song.id.as_str()), (1, "s1"));
+        let found = serde_json::to_value(&found).unwrap();
+        assert_eq!(found["matches"][0]["track"]["id"], "s2");
+        assert_eq!(found["matches"][0]["track"]["library"], 1);
+        assert_eq!(found["matches"][0]["similarity"], 0.8);
+        assert_eq!(found["matches"].as_array().unwrap().len(), 1);
+
+        let path = sonic_path(
+            State(bot.clone()),
+            Path(token.clone()),
+            Query(PathQuery {
+                library: 1,
+                from: "s1".into(),
+                to: "s2".into(),
+            }),
+        )
+        .await
+        .ok()
+        .unwrap()
+        .0;
+        assert_eq!(
+            path.matches
+                .iter()
+                .map(|found| (found.track.id.as_str(), found.similarity))
+                .collect::<Vec<_>>(),
+            [("s1", Some(1.0)), ("s2", Some(0.5))]
+        );
+        let missing = sonic_path(
+            State(bot.clone()),
+            Path(token.clone()),
+            Query(PathQuery {
+                library: 2,
+                from: "s1".into(),
+                to: "s2".into(),
+            }),
+        )
+        .await
+        .err()
+        .unwrap();
+        assert_eq!(
+            (missing.0, missing.1.as_str()),
+            (StatusCode::BAD_GATEWAY, "no such library")
+        );
+
+        let add = |kind, to: Option<&str>| Command::Add {
+            player: 0,
+            kind,
+            library: 1,
+            id: "s1".into(),
+            to: to.map(str::to_owned),
+            index: None,
+        };
+        let asked = server.requests().len();
+        let rejected = command(
+            State(bot.clone()),
+            Path(token.clone()),
+            Json(add(Kind::Path, None)),
+        )
+        .await
+        .err()
+        .unwrap();
+        assert_eq!(rejected.0, StatusCode::BAD_REQUEST);
+        assert_eq!(
+            server.requests().len(),
+            asked,
+            "rejected before the library"
+        );
+        command(
+            State(bot.clone()),
+            Path(token.clone()),
+            Json(add(Kind::Similar, None)),
+        )
+        .await
+        .ok()
+        .unwrap();
+        assert_eq!(queue_ids(&bot), ["s2"]);
+        // Nothing plays, so the path is queued from its start.
+        command(
+            State(bot.clone()),
+            Path(token.clone()),
+            Json(add(Kind::Path, Some("s2"))),
+        )
+        .await
+        .ok()
+        .unwrap();
+        assert_eq!(queue_ids(&bot), ["s2", "s1", "s2"]);
+    }
+
+    #[tokio::test]
+    async fn sonic_endpoints_need_the_extension_redact_errors_and_reject_overload() {
+        let _exclusive = API_TESTS.lock().await;
+        async fn both(bot: &Arc<Bot>, token: &str) -> [ApiError; 2] {
+            let similar = similar(
+                State(bot.clone()),
+                Path(token.to_owned()),
+                Query(ItemQuery {
+                    library: 0,
+                    id: "s1".into(),
+                }),
+            );
+            let path = sonic_path(
+                State(bot.clone()),
+                Path(token.to_owned()),
+                Query(PathQuery {
+                    library: 0,
+                    from: "s1".into(),
+                    to: "s2".into(),
+                }),
+            );
+            let limit = Duration::from_secs(5);
+            [
+                tokio::time::timeout(limit, similar)
+                    .await
+                    .unwrap()
+                    .err()
+                    .unwrap(),
+                tokio::time::timeout(limit, path)
+                    .await
+                    .unwrap()
+                    .err()
+                    .unwrap(),
+            ]
+        }
+
+        let plain = sonic_fixture("plain");
+        let (_directory, bot, token) = test_bot(&plain.url, 1);
+        for error in both(&bot, &token).await {
+            assert_eq!(
+                (error.0, error.1.as_str()),
+                (
+                    StatusCode::BAD_GATEWAY,
+                    "this music library does not support sonic similarity"
+                )
+            );
+        }
+        let requests = plain.requests();
+        assert_eq!(requests.len(), 1);
+        assert!(requests[0].starts_with("GET /rest/getOpenSubsonicExtensions"));
+
+        let failing = sonic_fixture("failing");
+        let (_directory, bot, token) = test_bot(&failing.url, 1);
+        for error in both(&bot, &token).await {
+            assert_eq!(
+                (error.0, error.1.as_str()),
+                (
+                    StatusCode::BAD_GATEWAY,
+                    "the music library rejected the request (error 40)"
+                )
+            );
+        }
+        assert!(
+            failing
+                .requests()
+                .iter()
+                .any(|request| request.starts_with("GET /rest/findSonicPath"))
+        );
+
+        let occupied = LIBRARY_CALLS
+            .acquire_many(MAX_LIBRARY_CALLS as u32)
+            .await
+            .unwrap();
+        let asked = failing.requests().len();
+        for error in both(&bot, &token).await {
+            assert_eq!(
+                (error.0, error.1.as_str()),
+                (StatusCode::SERVICE_UNAVAILABLE, "the music library is busy")
+            );
+        }
+        assert_eq!(failing.requests().len(), asked);
+        drop(occupied);
     }
 }

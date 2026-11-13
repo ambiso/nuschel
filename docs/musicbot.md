@@ -18,6 +18,11 @@ browsers. People control what plays on a web page; they get their link by writin
   playlists. A search asks all libraries at once for artists, albums and songs.
   Every song, album and playlist has *Add* and *Play next*. Choose the destination
   queue in the player bar; the browser remembers the selection for that link.
+- **Sonic similarity.** Libraries with the OpenSubsonic `sonicSimilarity` extension
+  offer **Similar songs** for library tracks and the playing song, plus **Sonic
+  path from now playing** to a chosen song. The library analyses the audio, for
+  example Navidrome or Ampache with AudioMuse-AI. Results show the library's
+  similarity score; add songs one by one, or use **Add all** / **Play all next**.
 - **Covers.** The bot fetches at most 8 MiB of encoded art, then a credential-free,
   confined content worker decodes PNG, JPEG, WebP or the first GIF frame. Source
   dimensions are capped at 4096 per edge with a 64 MiB decoder allocation budget;
@@ -355,8 +360,8 @@ encoding, shortcuts, and history pagination during live refreshes.
 `tests/musicbot.py` drives the JSON API and two SSE viewers against stock Murmur
 and a plain/OpenSubsonic fixture. It checks synchronized mutations, shared and
 separate audio, speech-only ducking, seeking, public presence comments, completed,
-skipped and failed history, pagination, and restart recovery with libraries
-reordered or removed.
+skipped and failed history, pagination, restart recovery with libraries reordered
+or removed, and sonic similarity endpoints on the OpenSubsonic library only.
 
 The backend reporting check also ran against a real Navidrome 0.64.2 instance
 with a six-second FLAC and stock Murmur. Navidrome's now-playing API identified
@@ -364,6 +369,12 @@ with a six-second FLAC and stock Murmur. Navidrome's now-playing API identified
 skips updated its history and play count; paused enqueues, short skips and a seek
 to the end did not. Shared queues submitted once, independent queues separately,
 and a deployment restart preserved the original play timestamp without backfill.
+
+Sonic similarity was checked against real Navidrome 0.64.2 with a local
+`SonicSimilarity` plugin over six fixture songs. Navidrome advertised
+`sonicSimilarity` only after the plugin was enabled. In the browser, the similar
+list showed Navidrome's order and scores, **Add all** queued it in that order, and
+**Play all next** for a sonic path from the playing song queued the rest of the path.
 
 ```sh
 cargo build -p nuschl-cli -p nuschl-musicbot -p nuschl-musicbot-codec-worker
@@ -575,3 +586,16 @@ caching. Size is clamped to 32–400. There are exactly these three fields, no
 encoded-file or source-URL authority. Invalid images return 404, unavailable or
 busy workers return 503. Library failures preserve the existing redacted errors.
 API errors carry an HTTP error status and `{"error":"message"}`.
+
+`GET similar?library=N&id=ID` asks the library's `getSonicSimilarTracks` for up to
+25 songs and returns `{"song":Track,"matches":[{"track":Track,"similarity":N}]}`.
+`GET path?library=N&from=A&to=B` asks `findSonicPath` for up to 25 songs and
+returns `{"matches":[…]}` from the start to the target. `similarity` is null when
+the library reports no usable score (OpenSubsonic uses -1 for that). State/SSE
+includes `sonic`, one boolean per library, from the extensions learned at startup;
+the web page offers these actions only where it is true. Libraries without the
+extension answer these endpoints with an error instead of being queried.
+
+`add` also accepts `kind: "similar"` with the song in `id`, and `kind: "path"` with
+the start in `id` and the target in `to`. The bot asks the library again when
+adding. A path skips its first song when that song is already playing in the queue.

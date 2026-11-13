@@ -96,6 +96,9 @@
             {#if track.artist}<div class="muted secondary">{#if track.artist_id}<a href={buildRoute({ view: "artist", library: track.library, id: track.artist_id, namespace: store.browseKey })}>{track.artist}</a>{:else}{track.artist}{/if}</div>{/if}
             {#if track.album}<div class="muted secondary">{#if track.album_id}<a href={buildRoute({ view: "album", library: track.library, id: track.album_id, namespace: store.browseKey })}>{track.album}</a>{:else}{track.album}{/if}</div>{/if}
             <div class="muted added">Added by {current.entry.added_by}</div>
+            {#if store.supportsSonic(track.library) && store.browseItemCurrent({ library: track.library, namespace: store.browseKey })}
+              <a class="similar-link" href={buildRoute({ view: "similar", library: track.library, id: track.id, namespace: store.browseKey })} aria-label="Songs similar to {track.title}" title="Similar songs"><Icon name="similar" size={16} /> Similar songs</a>
+            {/if}
           </div>
         </div>
       {:else}<p class="muted">Nothing is playing. Add music from the library.</p>{/if}
@@ -141,6 +144,7 @@
   .title { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .secondary { font-size: 0.8rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .added { font-size: 0.7rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .similar-link { display: inline-flex; align-items: center; gap: 0.3rem; font-size: 0.8rem; margin-top: 0.2rem; }
   .upcoming-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; }
   .queue-list { list-style: none; margin: 0; padding: 0; }
   li { position: relative; display: flex; align-items: center; gap: 0.5rem; padding: 0.55rem 0; border-bottom: 1px solid var(--border); cursor: grab; }

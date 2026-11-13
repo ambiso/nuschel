@@ -113,7 +113,8 @@ function libraryIndex(text) {
  * Parses a location hash into a route object:
  * `{ view: "queue" | "channels" | "history" }`, `{ view: "albums", library, list }`,
  * `{ view: "artists" | "playlists", library }`,
- * `{ view: "album" | "artist" | "playlist", library, id, namespace? }`, `{ view: "search", q }`.
+ * `{ view: "album" | "artist" | "playlist" | "similar", library, id, namespace? }`,
+ * `{ view: "path", library, from, to, namespace? }`, `{ view: "search", q }`.
  * Unknown hashes give the queue view.
  */
 export function parseRoute(hash) {
@@ -122,13 +123,16 @@ export function parseRoute(hash) {
   const path = question < 0 ? text : text.slice(0, question);
   const params = new URLSearchParams(question < 0 ? "" : text.slice(question + 1));
   const parts = path.split("/").filter((part) => part !== "");
-  const [view, library, id] = parts;
+  const [view, library, id, to] = parts;
   let decoded;
+  let decodedTo;
   try {
     decoded = id === undefined ? undefined : decodeURIComponent(id);
+    decodedTo = to === undefined ? undefined : decodeURIComponent(to);
   } catch {
     return { view: "queue" };
   }
+  const namespace = params.has("namespace") ? { namespace: params.get("namespace") } : {};
   switch (view) {
     case "channels":
     case "history":
@@ -143,8 +147,12 @@ export function parseRoute(hash) {
     case "album":
     case "artist":
     case "playlist":
+    case "similar":
       if (decoded === undefined || parts.length !== 3) return { view: "queue" };
-      return { view, library: libraryIndex(library), id: decoded, ...(params.has("namespace") ? { namespace: params.get("namespace") } : {}) };
+      return { view, library: libraryIndex(library), id: decoded, ...namespace };
+    case "path":
+      if (decodedTo === undefined || parts.length !== 4) return { view: "queue" };
+      return { view, library: libraryIndex(library), from: decoded, to: decodedTo, ...namespace };
     case "search":
       return { view, q: params.get("q") ?? "" };
     default:
@@ -167,12 +175,19 @@ export function buildRoute(route) {
     case "album":
     case "artist":
     case "playlist":
-      return `#/${route.view}/${route.library ?? 0}/${encodeURIComponent(route.id)}${route.namespace == null ? "" : `?${new URLSearchParams({ namespace: route.namespace })}`}`;
+    case "similar":
+      return `#/${route.view}/${route.library ?? 0}/${encodeURIComponent(route.id)}${namespaceQuery(route)}`;
+    case "path":
+      return `#/path/${route.library ?? 0}/${encodeURIComponent(route.from)}/${encodeURIComponent(route.to)}${namespaceQuery(route)}`;
     case "search":
       return `#/search?${new URLSearchParams({ q: route.q ?? "" })}`;
     default:
       return "#/queue";
   }
+}
+
+function namespaceQuery(route) {
+  return route.namespace == null ? "" : `?${new URLSearchParams({ namespace: route.namespace })}`;
 }
 
 /** The browse view to show for `route` in another library. */
@@ -188,6 +203,9 @@ export function routeForLibrary(route, library) {
       return { view: "playlists", library };
     case "album":
       return { view: "albums", library, list: "newest" };
+    case "similar":
+    case "path":
+      return { view: "queue" };
     default:
       return route;
   }
@@ -201,9 +219,11 @@ export function libraryForNamespace(previous, current, index) {
   return next >= 0 && next === current.lastIndexOf(name) ? next : 0;
 }
 
+const DETAIL_VIEWS = new Set(["album", "artist", "playlist", "similar", "path"]);
+
 /** Detail IDs in an unproved or expired namespace must return to their safe list. */
 export function routeForNamespace(route, library, namespace) {
-  if (["album", "artist", "playlist"].includes(route.view) && (route.library !== library || !namespace || route.namespace !== namespace)) {
+  if (DETAIL_VIEWS.has(route.view) && (route.library !== library || !namespace || route.namespace !== namespace)) {
     return routeForLibrary(route, library);
   }
   return typeof route.library === "number" && route.library !== library ? { ...route, library } : route;
@@ -213,6 +233,16 @@ export function routeForNamespace(route, library, namespace) {
 export function browseItemIsCurrent(item, namespace, libraryCount) {
   return typeof namespace === "string" && namespace !== "" && item?.namespace === namespace
     && Number.isInteger(item.library) && item.library >= 0 && item.library < libraryCount;
+}
+
+/** An OpenSubsonic similarity (0..1) as an integer percent, or null when the server gave none. */
+export function similarityPercent(value) {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 1 ? Math.round(value * 100) : null;
+}
+
+/** The now-playing track id a sonic path to `song` can start from, or null when there is no such path. */
+export function sonicPathStart(playing, song) {
+  return playing && song && playing.library === song.library && typeof playing.id === "string" && playing.id !== "" && playing.id !== song.id ? playing.id : null;
 }
 
 /**
