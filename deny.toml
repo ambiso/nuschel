@@ -170,6 +170,9 @@ deny = [
     "nuschl-transfer-worker",
     "nuschl-update-worker",
   ], reason = "The one first-party crate with unsafe code (Win32 AppContainer launch) runs only as the workers' own launch stage" },
+  { name = "nuschl-stream", wrappers = [
+    "nuschl-crypto-worker",
+  ], reason = "Screen-share key agreement belongs to the crypto worker; driver, desktop and browser callers are held until their SECURITY rows are reviewed (docs/screen-share-plan.md §3)" },
   { name = "nuschl-identity", wrappers = [
     "nuschl-kt",
     "nuschl-e2ee",
