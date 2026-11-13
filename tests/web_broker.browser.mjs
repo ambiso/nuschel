@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: EUPL-1.2
 // Disposable Chromium UI/worker integration against a PRIVATE local relay/server.
-// node tests/web_broker.browser.mjs SITE RELAY_URL HOST PORT SCREENSHOT [stress|authority]
+// node tests/web_broker.browser.mjs SITE RELAY_URL HOST PORT SCREENSHOT [stress|authority|missing-ack-control]
 import { createServer } from "node:http";
 import { createConnection } from "node:net";
 import { readFile } from "node:fs/promises";
@@ -69,7 +69,8 @@ async function open(username,fault="",width=1280,trust=true) {
  const page=await context.newPage();
  await page.addInitScript(()=>{
   globalThis.captureCalls=0;navigator.mediaDevices.getUserMedia=()=>{captureCalls++;return Promise.reject(new Error("No capture in broker fixture"));};
-  const fixture=globalThis.brokerFixture={sdk:null,last:null,work:[],replies:[],pending:new Map(),workers:[],completions:[],codec:[],snapshots:0,snapshot_bytes:0,holdAck:false,heldAck:null,invalidateState:false,ackCount:0,appliedPublication:null,commands:new Map(),errors:[],fatals:[],requestIds:new Set(),requestResults:new WeakSet(),requestsOutstanding:0,requestsPeak:0,delayRequestResults:0,dropAck:false,droppedAck:null,dropRetire:false,retires:[],retireReplies:[],ackPosts:0,watch:new Map()};
+  const fixture=globalThis.brokerFixture={sdk:null,last:null,work:[],replies:[],pending:new Map(),workers:[],completions:[],codec:[],snapshots:0,snapshot_bytes:0,holdAck:false,heldAck:null,invalidateState:false,ackCount:0,appliedPublication:null,commands:new Map(),errors:[],fatals:[],requestIds:new Set(),requestResults:new WeakSet(),requestsOutstanding:0,requestsPeak:0,delayRequestResults:0,dropAck:false,droppedAck:null,dropRetire:false,retires:[],retireReplies:[],ackPosts:0,contentProtocol:[],watch:new Map()};
+  const contentEvent=entry=>{fixture.contentProtocol.push(entry);if(fixture.contentProtocol.length>128)fixture.contentProtocol.shift();};
   const NativeWorker=globalThis.Worker;
   globalThis.Worker=class extends NativeWorker {
    constructor(...args) {
@@ -86,6 +87,7 @@ async function open(username,fault="",width=1280,trust=true) {
      if(data?.kind==="result"&&fixture.commands.has(data.id)){if(data.error)fixture.errors.push({method:fixture.commands.get(data.id),error:data.error});fixture.commands.delete(data.id);}
      if(data?.kind==="result"&&fixture.pending.has(data.id))for(const entry of fixture.watch.values())if(entry.request===fixture.pending.get(data.id)){entry.value=data.value??null;entry.error=data.error??null;}
      if(data?.kind==="result"&&fixture.pending.has(data.id)) {
+      contentEvent({kind:"complete-result",id:data.id,request:fixture.pending.get(data.id),trusted:event.isTrusted===true,error:data.error??null});
       fixture.replies.push({request:fixture.pending.get(data.id),value:data.value,error:data.error});fixture.pending.delete(data.id);
       if(fixture.replies.length>128)fixture.replies.shift();
      }
@@ -107,7 +109,7 @@ async function open(username,fault="",width=1280,trust=true) {
     if(data?.method==="state_applied"&&fixture.holdAck){fixture.heldAck=data.args[0];return;}
     if(data?.method==="state_applied")fixture.appliedPublication=data.args[0];
     if(this.fixtureSdk&&data?.id!==undefined){fixture.commands.set(data.id,data.method);if(fixture.commands.size>256)throw Error("fixture command bound");}
-    if(data?.method==="content_complete"){fixture.ackPosts++;fixture.pending.set(data.id,data.args[0]);fixture.completions.push({request:data.args[0],bytes:data.args[1]?.length});if(fixture.completions.length>128)fixture.completions.shift();}
+    if(data?.method==="content_complete"){contentEvent({kind:"complete-post",id:data.id,request:data.args[0]});fixture.ackPosts++;fixture.pending.set(data.id,data.args[0]);fixture.completions.push({request:data.args[0],bytes:data.args[1]?.length});if(fixture.completions.length>128)fixture.completions.shift();}
     if(this.fixtureSdk&&data?.method==="content_request"&&data.id!==undefined){fixture.requestIds.add(data.id);fixture.requestsPeak=Math.max(fixture.requestsPeak,++fixture.requestsOutstanding);}
     if(this.fixtureSdk&&data?.method==="content_complete"&&fixture.dropAck) {
      // A lost ACK: the SDK never receives it, and the App sees a failed RPC.
@@ -116,6 +118,7 @@ async function open(username,fault="",width=1280,trust=true) {
      return;
     }
     if(this.fixtureSdk&&data?.method==="content_retire") {
+     contentEvent({kind:"retire-post",id:data.id,reason:data.args?.[0]});
      fixture.retires.push(data.args?.[0]);
      if(fixture.dropRetire) {
       // The lane retirement notice is also lost: only SDK deadlines remain.
@@ -299,9 +302,13 @@ try {
 
  const stopped="[Message previews stopped because a preview job was not acknowledged. Reload this page to prepare previews again.]";
  // A stalled worker misses its execution deadline and the service retires. The
- // job that actually settled is ACKed and shows reload guidance; the lane then
- // retires once through the bounded notice, so waiting rows turn terminal.
+ // job that actually settled is ACKed before the lane retires once. This may
+ // be the server welcome, which was admitted before chat. Its waiting chat
+ // rows then show terminal guidance without a failed timeline derivative.
  const failed=await open("broker-retired","stall");
+ // Negative control: drop the first real completion BEFORE SDK delivery. The
+ // existing injection returns an untrusted local error, never an SDK success.
+ if(process.argv[7]==="missing-ack-control")await failed.evaluate(()=>{brokerFixture.dropAck=true;});
  await send(failed,"retired-source-first");await send(failed,"retired-source-second");
  await failed.waitForFunction(text=>[...document.querySelectorAll("article")].filter(node=>[...node.querySelectorAll("small")].some(small=>small.textContent==="Preview unavailable. Reload to try again.")||node.textContent.includes(text)).length>=2,stopped,{timeout:20000});
  assert.equal(await failed.getByRole("button",{name:"Retry message preview",exact:true}).count(),0);
@@ -311,7 +318,31 @@ try {
  await failed.waitForFunction(text=>[...document.querySelectorAll("article")].filter(node=>[...node.querySelectorAll("small")].some(small=>small.textContent==="Preview unavailable. Reload to try again.")||node.textContent.includes(text)).length>=3,stopped,{timeout:20000});
  result.retired=await failed.evaluate(text=>({content_workers:brokerFixture.workers.filter(url=>url.includes("content-worker-")).length,capture_calls:captureCalls,articles:document.querySelectorAll("article").length,unavailable_rows:[...document.querySelectorAll("small")].filter(node=>node.textContent==="Preview unavailable. Reload to try again.").length,terminal_rows:[...document.querySelectorAll("article")].filter(node=>node.textContent.includes(text)).length,retires:brokerFixture.retires,third_render_work:brokerFixture.work.filter(operation=>operation.kind==="render"&&operation.source==="retired-source-third").length}),stopped);
  assert.equal(before,1);assert.equal(result.retired.content_workers,1);assert.equal(result.retired.capture_calls,0);
- assert.ok(result.retired.unavailable_rows>=1,"the settled job shows reload guidance");
+ const settled=await failed.evaluate(()=>{
+  const first=brokerFixture.work.find(operation=>operation.kind==="render");
+  const reply=brokerFixture.replies.find(reply=>reply.request===first?.request);
+  let value=null;try{value=JSON.parse(reply?.value);}catch{}
+  return {first,reply:reply?{request:reply.request,error:reply.error??null,token:value?.token??null,failed:value?.failed??null}:null,
+   completion:brokerFixture.completions.find(completion=>completion.request===first?.request)??null,
+   protocol:brokerFixture.contentProtocol.slice(),retireReplies:brokerFixture.retireReplies.slice()};
+ });
+ result.retired.settled=settled;
+ const welcome="Welcome to the <b>Nuschl</b> screenshot server.";
+ assert.ok(settled.first&&typeof settled.first.request==="string","a real SDK-issued content job was admitted");
+ const origin=settled.first.source===welcome?"welcome":"message";
+ assert.ok(origin==="welcome"||["retired-source-first","retired-source-second"].includes(settled.first.source),"settled source belongs to this fixture's welcome or chat");
+ assert.equal(settled.first.mode,origin==="welcome"?"legacy":"plain");
+ assert.equal(settled.completion?.request,settled.first.request,"the actual settled job was ACKed");
+ assert.equal(settled.reply?.error,null,"the actual SDK accepted the settled job ACK");
+ assert.equal(settled.reply?.token,settled.first.request,"the ACK returned the exact SDK-issued ticket");
+ assert.equal(settled.reply?.failed,true,"the ACK installed the expected bounded failed derivative");
+ const acknowledged=settled.protocol.findIndex(event=>event.kind==="complete-result"&&event.request===settled.first.request);
+ const retired=settled.protocol.findIndex(event=>event.kind==="retire-post");
+ assert.ok(acknowledged>=0&&settled.protocol[acknowledged].trusted,"only a real Worker result can prove the SDK ACK");
+ assert.ok(retired>acknowledged,"the SDK ACK arrived before the once-only lane retirement");
+ assert.deepEqual(settled.retireReplies,[{value:true,error:null}],"the SDK acknowledged exactly one lane retirement");
+ if(origin==="welcome")assert.equal(result.retired.terminal_rows,3,"all waiting chat rows show terminal guidance when the welcome settled");
+ else assert.ok(result.retired.unavailable_rows>=1,"the settled chat job shows reload guidance");
  assert.deepEqual(result.retired.retires,["undelivered"],"the service retirement reaches the SDK once");
  assert.equal(result.retired.third_render_work,0,"a retired lane posts no further codec work");
  assert.equal(await failed.locator("article").filter({hasText:"retired-source-third"}).count(),0,"retired codec never triggers privileged rendering fallback");
