@@ -7,6 +7,7 @@ import {createConnection} from "node:net";
 import {readFile,mkdir,writeFile} from "node:fs/promises";
 import {resolve,extname,sep} from "node:path";
 import {pathToFileURL} from "node:url";
+const RPC_LIMIT=128, RPC_ACK_RESERVE=4, RPC_ORDINARY_LIMIT=RPC_LIMIT-RPC_ACK_RESERVE;
 const [site,relayUrl,port,wrapper,output] = process.argv.slice(2);
 assert.ok(site&&relayUrl&&port&&wrapper&&output);
 const relay=new URL(relayUrl);
@@ -59,7 +60,7 @@ async function open(username,width=1200,height=800) {
   page.on("pageerror",e=>errors.push(e.message));
   page.on("request",r=>{if(!r.url().startsWith(origin+"/"))remote.push(r.url());});
   await page.addInitScript(()=>{
-    const proof=window.__voiceProof={terminations:0,pendingRpc:new Map(),peakRpc:0,messagesAfterRetirement:0,tracks:[],voice:null,packets:0,states:0,commands:[],microphoneCalls:0,violations:[],contexts:[],gains:[]};
+    const proof=window.__voiceProof={terminations:0,pendingRpc:new Map(),peakRpc:0,peakOrdinaryRpc:0,messagesAfterRetirement:0,tracks:[],voice:null,packets:0,states:0,commands:[],microphoneCalls:0,violations:[],contexts:[],gains:[]};
     document.addEventListener("securitypolicyviolation",e=>proof.violations.push(e.violatedDirective));
     const Context=window.AudioContext;
     window.AudioContext=class extends Context {
@@ -80,7 +81,7 @@ async function open(username,width=1200,height=800) {
         });
       }}
       terminate(){if(this.__ownedSdk){proof.terminations++;proof.terminatedAt=performance.now();proof.terminatedWall=Date.now();proof.pendingAtRetirement=proof.pendingRpc.size;}return super.terminate();}
-      postMessage(message,...rest){if(message?.method){proof.commands.push(message.method);if(this.__ownedSdk&&Number.isSafeInteger(message.id)){proof.pendingRpc.set(message.id,message.method);proof.peakRpc=Math.max(proof.peakRpc,proof.pendingRpc.size);}(proof.commandTimes??=[]).push({method:message.method,wall:Date.now()});}if(message?.method==="send_text")proof.lastSentText=message.args[0];return super.postMessage(message,...rest);}
+      postMessage(message,...rest){if(message?.method){proof.commands.push(message.method);if(this.__ownedSdk&&Number.isSafeInteger(message.id)){proof.pendingRpc.set(message.id,message.method);proof.peakRpc=Math.max(proof.peakRpc,proof.pendingRpc.size);proof.peakOrdinaryRpc=Math.max(proof.peakOrdinaryRpc,[...proof.pendingRpc.values()].filter(method=>method!=="content_complete").length);}(proof.commandTimes??=[]).push({method:message.method,wall:Date.now()});}if(message?.method==="send_text")proof.lastSentText=message.args[0];return super.postMessage(message,...rest);}
     };
     proof.measure=()=>{
       const context=proof.contexts.at(-1),gain=proof.gains.at(-1);
@@ -132,14 +133,17 @@ try {
  await started;const start=performance.now();
  // First allow the real codec's two sends to fill, then issue140 actual DOM
  // click events while SDK processing is blocked. External post/ACK observation
- // measures the total inbox; the production adapter is not mocked or shortened.
+ // measures the ordinary inbox; four of the 128 total slots stay reserved for
+ // content completion ACKs. The production adapter is not mocked or shortened.
  await new Promise(resolve=>setTimeout(resolve,120));
  const audioInbox=await page.evaluate(()=>[...__voiceProof.pendingRpc.values()].filter(method=>method==="voice_packet").length);
  assert.equal(audioInbox,2);
  const serverName=await page.evaluate(()=>__voiceProof.servers[0].name);
  await page.getByRole("button",{name:`Browse ${serverName}`,exact:true}).evaluate(button=>{for(let index=0;index<140;index++)button.click();});
- const fullInbox=await page.evaluate(()=>({current:__voiceProof.pendingRpc.size,peak:__voiceProof.peakRpc}));
- assert.equal(fullInbox.current,128);assert.equal(fullInbox.peak,128);
+ const fullInbox=await page.evaluate(()=>({current:__voiceProof.pendingRpc.size,peak:__voiceProof.peakRpc,ordinary:[...__voiceProof.pendingRpc.values()].filter(method=>method!=="content_complete").length,acks:[...__voiceProof.pendingRpc.values()].filter(method=>method==="content_complete").length,peakOrdinary:__voiceProof.peakOrdinaryRpc}));
+ assert.equal(fullInbox.ordinary,RPC_ORDINARY_LIMIT);assert.equal(fullInbox.peakOrdinary,RPC_ORDINARY_LIMIT);
+ assert.ok(fullInbox.acks<=RPC_ACK_RESERVE);assert.equal(fullInbox.current,fullInbox.ordinary+fullInbox.acks);
+ assert.ok(fullInbox.current<=RPC_LIMIT&&fullInbox.peak<=RPC_LIMIT);
  await page.getByRole("button",{name:"Reload client",exact:true}).waitFor({timeout:22000});
  const elapsed=performance.now()-start;
  assert.ok(elapsed>=14500&&elapsed<17000,`actual15s retirement elapsed ${elapsed}`);
@@ -157,9 +161,11 @@ try {
  // Retain the observed tail/close timing; permanent logical retirement still
  // prevents new requests and application acceptance during that grace period.
  await closedPromise;
- const afterTail=await page.evaluate(()=>({commands:__voiceProof.commands.length,messagesAfterRetirement:__voiceProof.messagesAfterRetirement,inbox:__voiceProof.pendingRpc.size}));
+ const afterTail=await page.evaluate(()=>({commands:__voiceProof.commands.length,messagesAfterRetirement:__voiceProof.messagesAfterRetirement,inbox:__voiceProof.pendingRpc.size,ordinary:[...__voiceProof.pendingRpc.values()].filter(method=>method!=="content_complete").length,acks:[...__voiceProof.pendingRpc.values()].filter(method=>method==="content_complete").length}));
  assert.equal(afterTail.commands,terminal.commands);assert.equal(afterTail.messagesAfterRetirement,0);
- assert.equal(afterTail.inbox,128,"an old tail cannot return results to the retired owner");
+ assert.equal(afterTail.ordinary,RPC_ORDINARY_LIMIT,"an old tail cannot return ordinary results to the retired owner");
+ assert.ok(afterTail.acks<=RPC_ACK_RESERVE);assert.ok(afterTail.inbox<=RPC_LIMIT);
+ assert.equal(afterTail.inbox,terminal.pendingAtRetirement,"an old tail cannot return results to the retired owner");
  // Also deliver already-queued stale callbacks explicitly: browser disposal
  // dropping messages alone does not prove App's owned-worker identity guard.
  await page.evaluate(()=>{
@@ -173,7 +179,7 @@ try {
  assert.equal(await page.evaluate(()=>__voiceProof.commands.length),terminal.commands);
  assert.deepEqual(errors,[]);assert.deepEqual(remote,[]);assert.deepEqual(terminal.violations,[]);
  await page.screenshot({path:resolve(out,"unavailable-draft.png")});
- const report={passed:true,site,csp,actual_stall_ms:17000,rpc_deadline_ms:15000,observed_retirement_ms:elapsed,observed_native_close_ms:nativeClosedAt-start,audio_rpc_inbox:audioInbox,sdk_rpc_inbox:fullInbox,
+ const report={passed:true,site,csp,actual_stall_ms:17000,rpc_deadline_ms:15000,observed_retirement_ms:elapsed,observed_native_close_ms:nativeClosedAt-start,audio_rpc_inbox:audioInbox,sdk_rpc_inbox:fullInbox,sdk_rpc_budget:{total:RPC_LIMIT,ordinary:RPC_ORDINARY_LIMIT,content_ack_reserve:RPC_ACK_RESERVE},
   messages_after_retirement:afterTail.messagesAfterRetirement,three_explicit_stale_callbacks_ignored:true,worker_closed:closed,worker_stall_completed:finished,worker_events:workerEvents,terminations:terminal.terminations,microphone_tracks:terminal.tracks,
   draft_retained_and_selectable:true,cache_unchanged:true,new_send_denied:true,
   checks:["actual packaged App and owned SDK worker","fixture-appended ordinary-message17s block; original packaged SDK prefix unmodified","15s logical retirement/termination request before synthetic rejection","physical shutdown timing recorded separately","no auto restart/consent","tracks stopped","Unavailable status/no voice controls","read-only selectable draft","bookmarks/certificate/history unchanged","new command denied","stale ready/state/result callbacks cannot revive old owner","production CSP/no foreign requests"]};
