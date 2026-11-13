@@ -120,8 +120,8 @@ budget or omit the preview rather than increasing that limit or truncating text.
    limit. No endpoint advertises `preview/1` yet: SQLite/Postgres and local-history
    persistence, idempotency, live delivery and SDK handling must land together.
    Delete erases text and preview; editing without a preview removes the old one.
-   `ChatAck.edits` is an optional committed revision; absence means unknown, not
-   revision zero. Storage and timeline ordering must use authoritative edit counts
+   `ChatAck.edits` carries a committed revision when present. Absence represents
+   an unknown revision. Storage and timeline ordering must use authoritative edit counts
    when available, since timestamps cannot order edits in the same millisecond.
 4. **MLS (remaining):** protect the entire structured body and archive record. A new authenticated
    application-body kind/version must not cause older clients to display raw JSON.
