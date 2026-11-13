@@ -3,7 +3,7 @@
   import { store } from "../store.svelte.js";
   import { formatDuration, interpolatePosition, pointerFraction, seekKeyTarget } from "../logic.js";
 
-  let { player, current } = $props();
+  let { player, current, large = false } = $props();
 
   const duration = $derived(current?.entry.track.duration ?? null);
   const max = $derived(typeof duration === "number" && duration > 0 ? duration * 1000 : 0);
@@ -88,7 +88,7 @@
   }
 </script>
 
-<div class="progress">
+<div class="progress" class:large>
   <span class="time">{formatDuration(position / 1000)}</span>
   <div
     class="bar"
@@ -180,4 +180,10 @@
     pointer-events: none;
     white-space: nowrap;
   }
+  .large { gap: 1rem; }
+  .large .time { font-size: 1rem; }
+  .large .bar { height: 32px; }
+  .large .track { top: 13px; height: 6px; border-radius: 3px; }
+  .large .thumb { top: 8px; width: 16px; height: 16px; margin-left: -8px; }
+  .large .tip { bottom: 34px; font-size: 0.9rem; }
 </style>

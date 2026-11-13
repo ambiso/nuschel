@@ -2,7 +2,9 @@
 //! A Mumble music bot: plays songs from Subsonic servers in one or more
 //! channels; people control the queues on a web page they get a link to.
 mod config;
+mod covers;
 mod decode;
+mod library_keys;
 mod mumble;
 mod persist;
 mod player;
@@ -62,6 +64,8 @@ pub struct Bot {
     pub rating_revision: AtomicU64,
     /// Serializes checkpoints with the final shutdown save.
     pub persistence: Mutex<()>,
+    /// Decoded covers in `covers/` below the state directory.
+    pub covers: covers::CoverCache,
 }
 
 fn main() -> ExitCode {
@@ -119,11 +123,21 @@ async fn run(arguments: Arguments) -> Result<(), String> {
         .ok_or("cannot locate the music codec worker")?;
     prepare_state_directory(&state_directory)
         .map_err(|error| format!("{}: {error}", state_directory.display()))?;
+    let identities: Vec<_> = config
+        .libraries
+        .iter()
+        .map(subsonic::LibraryIdentity::new)
+        .collect();
+    let keys = library_keys::load(&state_directory, &identities)
+        .map_err(|error| format!("library_keys.json: {error}"))?;
     let libraries = config
         .libraries
         .iter()
+        .zip(keys)
         .enumerate()
-        .map(|(index, library)| Ok(Library::new(index, library, library.credentials()?)))
+        .map(|(index, (library, key))| {
+            Ok(Library::new(index, library, library.credentials()?, key))
+        })
         .collect::<Result<Vec<_>, String>>()?;
     let tokens = Tokens::load(state_directory.join("tokens.json"))
         .map_err(|error| format!("tokens.json: {error}"))?;
@@ -152,6 +166,19 @@ async fn run(arguments: Arguments) -> Result<(), String> {
             )
         })
         .collect();
+    // Covers only save work: a broken cache directory turns the cache off.
+    let cover_directory = state_directory.join("covers");
+    let covers = covers::CoverCache::open(
+        cover_directory.clone(),
+        config.web.cover_cache_mib * 1024 * 1024,
+    )
+    .unwrap_or_else(|error| {
+        tracing::warn!(
+            "{}: {error}; covers are not cached",
+            cover_directory.display()
+        );
+        covers::CoverCache::disabled()
+    });
     let bot = Arc::new(Bot {
         state_directory,
         web_assets: arguments.web_assets,
@@ -163,6 +190,7 @@ async fn run(arguments: Arguments) -> Result<(), String> {
         changes,
         rating_revision: AtomicU64::new(0),
         persistence: Mutex::new(()),
+        covers,
         config,
     });
     // The queues of the last run come back before anything plays.

@@ -16,14 +16,27 @@ browsers. People control what plays on a web page; they get their link by writin
   lists (recently added, recently played, most played, random, by name, starred)
   with covers, the artist index, an artist's albums, an album's songs, and
   playlists. A search asks all libraries at once for artists, albums and songs.
-  Every song, album and playlist has *Add* and *Play next*. Choose the destination
-  queue in the player bar; the browser remembers the selection for that link.
+  Every song, album and playlist has *Add* and *Play next*. Song titles open the
+  song's page: its details (track, disc, length, year, genre, format, play count),
+  rating, the albums it appears on and, with sonic similarity, similar songs.
+  Choose the destination queue in the player bar; the browser remembers the
+  selection for the page (per public address and path).
+- **Sonic similarity.** Libraries with the OpenSubsonic `sonicSimilarity` extension
+  offer **Similar songs** for library tracks and the playing song, plus **Blend
+  into this song**: songs that lead from the playing song to a chosen one by how
+  they sound (the library's sonic path). The library analyses the audio, for
+  example Navidrome or Ampache with AudioMuse-AI. Results show the library's
+  similarity score; add songs one by one, or use **Add all** / **Play all next**.
 - **Covers.** The bot fetches at most 8 MiB of encoded art, then a credential-free,
   confined content worker decodes PNG, JPEG, WebP or the first GIF frame. Source
   dimensions are capped at 4096 per edge with a 64 MiB decoder allocation budget;
   the returned thumbnail is at most 400×400 RGBA pixels (300×300 by default).
   The browser validates these pixels and paints Canvas; encoded image bytes never
   reach its image decoder. Unsupported formats and failed helpers show a placeholder.
+  Finished covers are kept on disk in the state directory (`web.cover_cache_mib`,
+  64 MiB by default, each for at most a day), so the library and the worker see
+  each cover and size once a day at most, also across restarts. The browser keeps
+  them for a day as well.
 - **Channels.** One Mumble connection per configured channel, each with its own
   client certificate. Every channel starts with its own queue. On the web page a
   channel can play another channel's queue instead: then both hear the same song,
@@ -31,10 +44,15 @@ browsers. People control what plays on a web page; they get their link by writin
   People may also subscribe to listen to the bot's channel while staying in
   another channel. These subscriptions count as listeners and keep the queue
   playing; others in their current channel do not receive the music.
-- **Browser listening.** Press **Listen** in the player bar to hear the selected
-  queue in the browser. Its volume is local and independent of Mumble volume and
-  speech ducking. Browser listeners keep the queue playing even with nobody in
-  its Mumble channel. **Stop** releases the listening connection.
+- **Browser listening.** The headphones button next to play hears the selected
+  queue in the browser; while it is on, a small slider beside it sets the browser
+  volume. Its volume is local and independent of Mumble volume and speech ducking.
+  Browser listeners keep the queue playing even with nobody in its Mumble channel.
+  Pressing the button again releases the listening connection.
+- **Big screen.** The arrows button in the player bar opens the playing song over
+  the whole window: large cover, scrubber, play/pause and skip, browser listening,
+  Mumble volume, rating and the next songs. It can also switch to full screen;
+  Esc closes it.
 - **Queues.** Drag songs, albums or playlists from the library into the queue,
   then drag entries to reorder them. The move handles also accept Alt+Up/Down.
   Remove entries, clear upcoming tracks, skip, pause and set the volume. The player
@@ -85,11 +103,35 @@ address and instructions for requesting a personal link. The public comment
 contains no authenticated URL and is republished after reconnecting.
 
 Write `!web` to the bot, in its channel or privately. It answers privately with a
-link like `https://music.example.org/u/5f0c…/`. The link is the only key to the page,
-so do not share it. A person with a Mumble certificate keeps the same link; `!web new`
-replaces it, and the old one stops working. Without a certificate anybody could use
-the same name later, so every `!web` gives a new link. Links are kept in
-`tokens.json` in the state directory.
+link like `https://music.example.org/u/5f0c…/`. That link is your key, so keep it to
+yourself. Opening it stores the key in an HttpOnly cookie for 90 days and moves
+the browser to the public address, so the key never stays in the address bar.
+The cookie is `SameSite=Lax` and scoped to the public address's path. Over HTTPS
+it is `Secure` and named `__Host-musicbot_link` (at `/`) or
+`__Secure-musicbot_link` (below a path); over plain HTTP it is `musicbot_link`.
+**Forget this browser** in the sidebar deletes it; the link itself stays valid.
+A person with a Mumble certificate keeps the same link; `!web new` replaces
+it, and the old one stops working. Without a certificate anybody could use the
+same name later, so every `!web` gives a new link. Links are kept in `tokens.json`
+in the state directory.
+
+Requests that use the cookie must come from the page itself. The bot refuses them
+with 403 when the browser's `Sec-Fetch-Site` is anything but `same-origin` or
+`none`, or when an `Origin` header names another origin than the public address.
+Open the page at the public address you configured; another host name for the
+same server is a different origin. Requests with the link in the path
+(`/u/<token>/…`, for scripts) do not use the cookie and are not checked this way.
+
+The address bar can be copied and pasted anywhere: it contains only the public
+address and the open view, such as `https://music.example.org/#/album/0/a1?library_key=0b6f3c1e9d2a4f5b8c7e6d5a4b3c2d1e`.
+**Copy link** on library pages copies the same URL. Somebody who has opened their
+own link in that browser sees the view as themselves. `library_key` is the
+library's key from the state: a random value the bot keeps for each library in
+`library_keys.json` in its state directory and replaces when the library's name
+or URL changes. So the view finds the same library even when the configuration
+lists it at another position.
+Without a remembered link the page explains how to get one. A replaced or
+revoked link is forgotten the next time the page loads.
 
 A link grants everything the page does: controlling every queue, reading playback
 history, and streaming any queue's audio in a browser (only the server-wide cap of
@@ -108,7 +150,9 @@ controls all queues of the bot.
 
 Library detail links and drag actions belong to the current browser connection.
 A reconnect or library change clears old browse data and returns detail pages to
-a safe list. Expired detail URLs cannot send old IDs to a replacement backend.
+a safe list. Expired detail URLs cannot send old IDs to a replacement backend:
+a shared view names its library by key, and a key no current library has (its
+name or URL changed) opens the album list instead of the item.
 
 ## Running it
 
@@ -135,7 +179,8 @@ services.nuschl-musicbot = {
 `credentials` are passed with systemd's `LoadCredential`; a relative `*_file` in the
 settings names one of them. The service runs as a dynamic user with its state in
 `/var/lib/nuschl-musicbot` (certificates in `identities/<channel>/`, links in
-`tokens.json`, playback state in `queues.json`). The package includes the Svelte
+`tokens.json`, playback state in `queues.json`, library keys in `library_keys.json`,
+decoded covers in `covers/`). The package includes the Svelte
 frontend. nginx keeps no access log for the page, since the links are secrets.
 
 The NixOS module validates the generated TOML during the build with the selected
@@ -169,9 +214,12 @@ prefix/bin/nuschl-musicbot \
 `apps/musicbot/nuschl-musicbot.example.toml` explains every setting. Relative secret
 file names resolve beside the configuration, or in systemd's credentials directory.
 The page speaks HTTP; put a TLS proxy in front of it. Assets and API URLs are
-relative to the authenticated link, including when a proxy serves it under a path.
+relative to the public address, including when a proxy serves it under a path.
 For frontend development, run `npm run dev` in `apps/musicbot/web` through direnv,
-and open its `/u/<token>/` path. Vite proxies API and art requests to a bot on :8474.
+and set the bot's `public_url` to the Vite address (`http://localhost:5173`), so
+the links point there and the page's origin passes the bot's same-origin check.
+Open the `/u/<token>/` link once. Vite proxies it and the API, art and licence
+requests to a bot on :8474, so the bot's cookie works for the dev page.
 
 Servers with a self-signed certificate need `certificate_sha256`, the SHA-256 of
 the server certificate. `channel` is the path from the root channel, so a
@@ -355,8 +403,8 @@ encoding, shortcuts, and history pagination during live refreshes.
 `tests/musicbot.py` drives the JSON API and two SSE viewers against stock Murmur
 and a plain/OpenSubsonic fixture. It checks synchronized mutations, shared and
 separate audio, speech-only ducking, seeking, public presence comments, completed,
-skipped and failed history, pagination, and restart recovery with libraries
-reordered or removed.
+skipped and failed history, pagination, restart recovery with libraries reordered
+or removed, and sonic similarity endpoints on the OpenSubsonic library only.
 
 The backend reporting check also ran against a real Navidrome 0.64.2 instance
 with a six-second FLAC and stock Murmur. Navidrome's now-playing API identified
@@ -364,6 +412,12 @@ with a six-second FLAC and stock Murmur. Navidrome's now-playing API identified
 skips updated its history and play count; paused enqueues, short skips and a seek
 to the end did not. Shared queues submitted once, independent queues separately,
 and a deployment restart preserved the original play timestamp without backfill.
+
+Sonic similarity was checked against real Navidrome 0.64.2 with a local
+`SonicSimilarity` plugin over six fixture songs. Navidrome advertised
+`sonicSimilarity` only after the plugin was enabled. In the browser, the similar
+list showed Navidrome's order and scores, **Add all** queued it in that order, and
+**Play all next** for a blend from the playing song queued the rest of the path.
 
 ```sh
 cargo build -p nuschl-cli -p nuschl-musicbot -p nuschl-musicbot-codec-worker
@@ -382,7 +436,7 @@ against Murmur in a VM, then the same script.
 
 ## Browser listening
 
-**Listen** starts audio for the selected queue after a browser gesture. The
+The headphones button starts audio for the selected queue after a browser gesture. The
 **Browser volume** slider changes only local playback; **Mumble volume** controls
 the bot's channel output. Speech ducking applies to Mumble output. Browser audio
 uses the original decoded stereo samples (at most full scale), so every format the
@@ -397,7 +451,7 @@ audio state are temporary; the saved queue retains its ordinary playback state.
 Use HTTPS, or localhost during development. Listening requires streaming fetch,
 AudioWorklet and a 48 kHz AudioContext. Browser suspension, page closure, revoked
 links and connection/library changes stop listening and release its subscription.
-Press **Listen** again to restart after an interruption.
+Press the headphones button again to restart after an interruption.
 
 The live stream carries 48 kHz stereo float32 PCM, about **3.1 Mbit/s per listener**.
 The server admits at most 16 browser streams, with bounded shared frame storage
@@ -507,7 +561,12 @@ long track, seeking can take time; the player shows buffering while preparing it
 
 ## Web API
 
-The Svelte app uses endpoints below `/u/<token>/api/`. `GET state` returns a
+The page uses the endpoints below `api/` next to the public address and
+authenticates with the remembered link's cookie. Scripts can use the same
+endpoints below `/u/<token>/api/` instead; a token in the path never falls back to
+the cookie. Cookie requests from another origin or site get 403 (see Links).
+POST bodies must be JSON, which cross-site forms cannot send. `POST forget` with
+`{}` answers 204 and deletes this browser's cookie. `GET state` returns a
 snapshot; `GET events` sends `event: state` SSE frames immediately, after changes,
 and roughly every two seconds for progress correction. Slow viewers receive the
 latest state when they can read again. Revoked links lose access to the stream.
@@ -531,7 +590,7 @@ open. The stream remains open while the queue waits; disconnecting releases its
 subscription. Revoked links are
 checked during playback and at least once per second while idle or backpressured.
 
-The authenticated `GET /u/<token>/licenses` route serves the installed, bounded
+The authenticated `GET licenses` route serves the installed, bounded
 licence text. Nix packages are gated by the scoped Rust/npm notice inventory;
 the frontend retains actual emitted-owner licence files and its source lock.
 The musicbot scope is separate from the main web client's WASM build.
@@ -569,9 +628,53 @@ or null for the end. Successful commands return 204 and broadcast the new state.
 Browsing uses `albums`, `album`, `artists`, `artist`, `playlists`, `playlist`, and
 `search` JSON endpoints. Library identity in requests is its current config index.
 Album lists accept `library`, `list`, and `page`; detail endpoints accept `library`
-and `id`. The authenticated `art/<library>/<id>?size=…` route returns
-`{"width":N,"height":N,"rgba":"<canonical base64 RGBA>"}` with private/no-store
-caching. Size is clamped to 32–400. There are exactly these three fields, no
-encoded-file or source-URL authority. Invalid images return 404, unavailable or
-busy workers return 503. Library failures preserve the existing redacted errors.
+and `id`. The authenticated `art/<library>/<id>?size=…&v=…` route returns
+`{"width":N,"height":N,"rgba":"<canonical base64 RGBA>"}`. Covers are made in
+edge lengths of 32, 64, 96, 128, 200, 300 and 400 pixels; a request gets the
+largest of these that is no larger than its `size`, so the page's few sizes share
+cache entries and worker jobs. There are exactly these three fields, no
+encoded-file or source-URL authority. Invalid images return 404, busy workers
+(two jobs) or a missing worker return 503. Library failures preserve the existing
+redacted errors.
+
+Successful answers are kept on disk in `covers/` below the state directory, up to
+`web.cover_cache_mib` MiB (64 by default, at most 4096; 0 turns the cache off and
+deletes the files) and at most 4,096 covers. Entries are keyed by library, cover
+ID and size and are kept for at most 24 hours; the least recently used leave
+first, and no single cover may take more than an eighth of the space. Every file
+holds its key and is checked again when read; nothing past its indexed size is
+read. A damaged file is deleted and fetched anew, and only well-formed pixels are
+served. A restart keeps the files and drops expired, unfinished or excess ones. If
+the folder cannot be used the bot logs a warning and runs without the cache. A
+cached cover needs no library call and no worker job. State/SSE includes
+`library_keys`, the random key of each
+library (see Links). With `v` set to that key the answer is
+`private, max-age=86400`, so the browser keeps it for a day. Without `v` it stays
+`private, no-store`. A `v` for another library (the configuration changed) gets
+404, so a browser never keeps one server's cover under another's URL.
 API errors carry an HTTP error status and `{"error":"message"}`.
+
+`GET song?library=N&id=ID` returns `{"song":Track,"details":{…},"appearances":[Track],
+"appearances_error":null}` for a song's page. `details` holds `year`, `genre`,
+`bit_rate` (kbit/s), `disc_number` and `play_count`, each null when the library
+does not say. `appearances` has one track per album with a song of the same title
+and artist (compared without case or surrounding spaces), the song's own album
+first. The bot finds them with `search3` on the title, which every server
+supports, and looks at its first 40 songs. When that search fails the song still
+shows, `appearances` is empty and `appearances_error` gives the redacted reason.
+
+`GET similar?library=N&id=ID` asks the library's `getSonicSimilarTracks` for up to
+25 songs and returns `{"song":Track,"matches":[{"track":Track,"similarity":N}]}`.
+`GET path?library=N&from=A&to=B` asks `findSonicPath` for up to 25 songs and
+returns `{"matches":[…]}` from the start to the target. `similarity` is null when
+the library reports no usable score (OpenSubsonic uses -1 for that). State/SSE
+includes `sonic`, one boolean per library, from the extensions learned at startup;
+the web page offers these actions only where it is true. Libraries without the
+extension answer these endpoints with an error instead of being queried.
+
+`add` also accepts `kind: "similar"` with the song in `id`, and `kind: "path"` with
+the start in `id` and the target in `to`. The bot asks the library again when
+adding. A path skips its first song when that song is already playing in the queue.
+Adding similar songs leaves out the song itself and every match with a similarity
+of 100%, which are other copies of the same recording, so the same song is not
+queued again and again.

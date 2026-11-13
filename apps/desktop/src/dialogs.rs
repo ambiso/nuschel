@@ -23,6 +23,22 @@ fn activation(event: &KeyDownEvent) -> bool {
     event.keystroke.key == "enter" || event.keystroke.key == "space"
 }
 
+/// Assistive technology activates a button by running its action. The
+/// built-in fallback clicks the node's centre instead, which misses (or hits
+/// another control) while a scroll region clips the button.
+fn accessible_click<F>(
+    action: Rc<F>,
+    cx: &mut Context<Desktop>,
+) -> impl FnMut(Option<&accesskit::ActionData>, &mut Window, &mut App) + 'static
+where
+    F: Fn(&mut Desktop, &mut Window, &mut Context<Desktop>) + 'static,
+{
+    let entity = cx.entity().downgrade();
+    move |_, window, cx| {
+        entity.update(cx, |this, cx| action(this, window, cx)).ok();
+    }
+}
+
 /// A labelled, keyboard-activatable button.
 pub fn styled_button(
     id: impl Into<ElementId>,
@@ -74,6 +90,7 @@ pub fn named_button(
         .font_weight(FontWeight::MEDIUM)
         .text_color(color(foreground))
         .on_click(cx.listener(move |this, _, window, cx| click(this, window, cx)))
+        .on_a11y_action(AccessibleAction::Click, accessible_click(action.clone(), cx))
         .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
             if activation(event) {
                 action(this, window, cx);
@@ -124,6 +141,7 @@ pub fn icon_button(
         .hover(|style| style.bg(color(SELECTED)))
         .tooltip(move |_, cx| cx.new(|_| Tooltip(tooltip.clone())).into())
         .on_click(cx.listener(move |this, _, window, cx| click(this, window, cx)))
+        .on_a11y_action(AccessibleAction::Click, accessible_click(action.clone(), cx))
         .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
             if activation(event) {
                 action(this, window, cx);
