@@ -331,9 +331,12 @@ def check_double_talk(binary, pulse, root):
             together = peaks([e for e in worker.events[start:] if e["kind"] == "level"][28:66])
             worker.stop()
             return alone[0] - together[0], together[1]
-        # Convergence still varies from run to run (see check_echo_test).
-        ducking, gate = min((run() for _ in range(2)), key=lambda result: result[0])
-        assert ducking <= 3 and gate >= 0.9, f"the user was ducked by {ducking:.1f} dB, gate open {gate:.0%}"
+        # Convergence still varies from run to run (see check_echo_test). Prefer an attempt
+        # meeting both limits: the least ducking alone can come with a gate that cut the user.
+        attempts = [run() for _ in range(2)]
+        ducking, gate = min(attempts, key=lambda result: (not (result[0] <= 3 and result[1] >= 0.9), result[0]))
+        assert ducking <= 3 and gate >= 0.9, \
+            f"the user was ducked by {ducking:.1f} dB, gate open {gate:.0%}; (ducking, gate) attempts: {attempts}"
         print(f"Double talk: the user's speech kept its level ({ducking:.1f} dB) with the gate open {gate:.0%}.",
               flush=True)
     finally:
