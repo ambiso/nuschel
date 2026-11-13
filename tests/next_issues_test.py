@@ -24,11 +24,11 @@ MAP = ("# source_revision=%s\n# source_sha256=%s\n" % (REVISION, hashlib.sha256(
 T0 = 1_800_000_000
 
 
-def issue(number, labels=(), blocked=(), thumbs=0, body="", assignees=()):
+def issue(number, labels=(), blocked=(), thumbs=0, body="", assignees=(), author="ambiso"):
     """`blocked` holds open blocker numbers, or (number, state) pairs."""
     blocked = [(b, "OPEN") if isinstance(b, int) else b for b in blocked]
     return {"number": number, "title": "Issue %d" % number, "url": "u", "createdAt": "2026-01-01T00:%02d:00Z" % number,
-            "body": body, "labels": {"nodes": [{"name": n} for n in labels]},
+            "body": body, "author": {"login": author}, "labels": {"nodes": [{"name": n} for n in labels]},
             "assignees": {"nodes": [{"login": a} for a in assignees]}, "reactions": {"totalCount": thumbs},
             "blockedBy": {"totalCount": len(blocked), "nodes": [
                 {"number": n, "state": s, "repository": {"nameWithOwner": REPO}} for n, s in blocked]},
@@ -65,6 +65,8 @@ class Ranking(unittest.TestCase):
         self.assertEqual(by[12]["approval"], ["todo-import"])
         self.assertEqual([by[13]["todo_marker"], by[14]["todo_marker"]], ["unverified", "unverified"])
         self.assertEqual(eligible(result), [12])
+        result, by = rank([issue(12, body=source(), author="someone-else")])
+        self.assertEqual((by[12]["todo_marker"], eligible(result)), ("unverified", []))
         result, by = rank(issues, todo=TODO.replace("alpha", "ALPHA"))
         self.assertEqual(eligible(result), [])
         self.assertTrue(result["todo_map_problem"])

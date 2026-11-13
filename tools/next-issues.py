@@ -12,7 +12,8 @@ Ranking is read-only: one paginated `gh api graphql` query with your gh login.
 
 Eligible: an approval basis (status:approved, source:user-request, or a
 nuschl-todo-import marker whose TODO.md source link matches a row of
-docs/todo-issue-map.tsv for this issue, with the snapshot matching the map),
+docs/todo-issue-map.tsv for this issue, with the snapshot matching the map,
+on an issue opened by the repository owner),
 no open blocker, no hold, not in progress, not assigned and not claimed.
 
 Order: effective priority (urgent > high > medium > low; unset = medium; the
@@ -66,7 +67,7 @@ query($owner: String!, $name: String!, $cursor: String, $withFiles: Boolean!,
     issues(states: OPEN, first: 100, after: $cursor, orderBy: {field: CREATED_AT, direction: ASC}) {
       pageInfo { hasNextPage endCursor }
       nodes {
-        number title url createdAt body
+        number title url createdAt body author { login }
         assignees(first: 10) { nodes { login } }
         labels(first: 50) { nodes { name } }
         reactions(content: THUMBS_UP) { totalCount }
@@ -146,10 +147,13 @@ def load_todo_map(map_text, snapshot_text):
     return {"revision": meta.get("source_revision"), "ranges": ranges}, None
 
 
-def todo_marker(number, body, todo, repo):
-    """None without a marker; "verified" when a source link names a map row for this issue."""
+def todo_marker(number, body, author, todo, repo):
+    """None without a marker; "verified" when the repository owner opened the issue
+    and a source link names a map row for this issue."""
     if not MARKER_RE.search(body):
         return None
+    if author != repo.split("/", 1)[0]:
+        return "unverified"
     links = [(int(start), int(end or start)) for revision, start, end in re.findall(TODO_LINK % re.escape(repo), body)
              if todo and revision == todo["revision"]]
     return "verified" if any(number in todo["ranges"].get(link, ()) for link in links) else "unverified"
@@ -161,7 +165,7 @@ def evaluate(issue, repo, todo):
     labels = sorted(label["name"] for label in issue["labels"]["nodes"])
     priorities = [label[9:] for label in labels if label.startswith("priority:") and label[9:] in PRIORITIES]
     priority = min(priorities, key=PRIORITIES.index, default="medium")
-    marker = todo_marker(issue["number"], issue["body"] or "", todo, repo)
+    marker = todo_marker(issue["number"], issue["body"] or "", (issue.get("author") or {}).get("login"), todo, repo)
     approval = [label for label in ("status:approved", "source:user-request") if label in labels]
     approval += ["todo-import"] if marker == "verified" else []
     holds = [HOLD_LABELS[label] for label in labels if label in HOLD_LABELS]
