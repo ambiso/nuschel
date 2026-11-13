@@ -65,9 +65,12 @@ def actions(args, root, shell, application, bot, _murmur):
         return (ox + x + (width // 2 if right is None else width - right),
                 oy + y + round(height * fraction))
 
-    def focus(node):
+    def focus(node, within=None):
         assert node.call("Component", "GrabFocus")[0]
-        time.sleep(.25)
+        if within:
+            eventually(lambda: node.focused and inside(node.extents(), within.extents()),
+                       f"focused {node.name} was not revealed")
+        time.sleep(.15)
 
     def bar(node, zoom, name):
         # Independently locate the painted thumb in its reserved gutter. Read
@@ -119,7 +122,7 @@ def actions(args, root, shell, application, bot, _murmur):
         wait("Rules · 128", prefix=True)
         dialog = wait("Details", "dialog")
         owner = wait("ACL rules", "list box")
-        focus(owner)
+        focus(owner, dialog)
         shell.key("Home")
         initial = wait(first_rule, "push button")
         record = {"zoom": zoom, "window": [width, height], "rules": bar(owner, zoom, "rules-top")}
@@ -144,15 +147,19 @@ def actions(args, root, shell, application, bot, _murmur):
         time.sleep(.3)
         assert named(first_rule, "push button"), "wheel easing resumed after a thumb grab"
         # The capture canvas must not block ordinary row actions.
-        initial = wait(first_rule, "push button")
-        shell.click(*point(initial))
+        target = wait("@scroll-rule-005", "push button")
+        shell.click(*point(target))
+        target_field = eventually(lambda: next((node for node, role, name, _ in items(application)
+            if name.startswith("Mumble group expression") and role == "entry"), None), "rule input absent")
+        eventually(lambda: target_field.call("Text", "GetText", "ii", "0", "-1")[0] == "scroll-rule-005",
+                   "canvas intercepted a rule pointer selection")
         wait("Remove rule", "push button")
-        focus(owner)
+        focus(owner, dialog)
         shell.key("End")
         final = wait(last_rule, "push button")
         assert inside(final.extents(), dialog.extents())
         groups_owner = wait("ACL groups", "list box")
-        focus(groups_owner)
+        focus(groups_owner, dialog)
         shell.key("Home")
         record["groups"] = bar(groups_owner, zoom, "groups-top")
         shell.key("End")
@@ -161,17 +168,23 @@ def actions(args, root, shell, application, bot, _murmur):
         # containing viewport. No clipboard operations are used.
         field = eventually(lambda: next((node for node, role, name, _ in items(application)
             if name == "New group name" and role in ("entry", "text")), None), "group input absent")
-        focus(field)
+        focus(field, dialog)
+        # Keep the revealed viewport but move focus away: the subsequent real
+        # pointer click, not GrabFocus, must put the caret in the input.
+        focus(dialog)
         shell.click(*point(field))
+        eventually(lambda: field.focused, "canvas intercepted input pointer focus")
         shell.type("scroll-input")
         shell.key("Home")
         shell.key("End")
         assert field.focused
-        shell.chord("Control_L", "a")
-        shell.type("scroll-input")
+        shell.drag(point(field, right=field.extents()[2] - 4 * zoom / 100),
+                   point(field, right=4 * zoom / 100))
+        shell.type("selected-by-pointer")
+        eventually(lambda: field.call("Text", "GetText", "ii", "0", "-1")[0] == "selected-by-pointer",
+                   "canvas intercepted input text selection")
         done = wait("Done", "push button")
-        focus(done)
-        assert inside(done.extents(), dialog.extents())
+        focus(done, dialog)
         # The outer bar remains painted after its content has moved.
         record["dialog"] = bar(dialog, zoom, "modal-end")
         done.press()
