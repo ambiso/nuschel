@@ -338,6 +338,8 @@ def desktop(args):
                 observation["requested_radio_focused_before_space"] = node.focused
             except (RuntimeError, ValueError, TypeError, KeyError, IndexError) as error:
                 observation["requested_radio_focus_error"] = type(error).__name__
+            eventually(lambda: node.focused, f"{mode} radio did not acquire keyboard focus")
+            observation["requested_radio_focused_before_space"] = node.focused
             shell.key("space")
             eventually(lambda: not any("Saving preference" in label for label in labels())
                 and any(label.startswith(f"Active policy: {mode}.") for label in labels()),
@@ -540,19 +542,36 @@ def desktop(args):
                 requested_height=520, requested_zoom=300)
             saved_pane = json.loads((root / "profile/config/settings.json").read_text()).get("sidebar_width", 248)
             compact_body = f"compact-{uuid.uuid4().hex[:8]} http://93.184.215.14/page " + "retained draft text " * 12
-            field = type_message(compact_body)
+            type_message(compact_body)
             eventually(ready_card, "compact draft card did not reach Ready")
-            def input_text():
+            def copied_input(select_all=False):
+                # The dedicated guest GNOME clipboard observes real editor copy.
+                # A fresh sentinel binds each observation to its own Ctrl+C.
+                focus_window(sender_pid)
                 field = wait("Message")
-                count = field.bus("get-property", field.destination, field.path,
-                    "org.a11y.atspi.Text", "CharacterCount")
-                assert type(count) is int and 0 <= count <= 4096
-                return field.call("Text", "GetText", "ii", "0", str(count))[0]
-            assert input_text() == compact_body
+                assert field.call("Component", "GrabFocus")[0]
+                eventually(lambda: field.focused, "message editor did not acquire keyboard focus")
+                if select_all:
+                    shell.chord("Control_L", "a")
+                sentinel = f"owned-preview-copy-{uuid.uuid4().hex}"
+                St = "imports.gi.St"
+                shell.eval(f"{St}.Clipboard.get_default().set_text({St}.ClipboardType.CLIPBOARD, {json.dumps(sentinel)}); 'ok'")
+                shell.chord("Control_L", "c")
+                def observed():
+                    shell.eval(f"global._previewCopy = undefined; {St}.Clipboard.get_default().get_text("
+                        f"{St}.ClipboardType.CLIPBOARD, (c,t)=>{{global._previewCopy=t;}}); 'ok'")
+                    value = eventually(lambda: (value if (value := json.loads(shell.eval(
+                        "JSON.stringify({done:global._previewCopy!==undefined,text:global._previewCopy??null})")))["done"] else None),
+                        "guest clipboard observation did not finish", timeout=10)
+                    text = value["text"]
+                    assert isinstance(text, str) and len(text) <= 4096
+                    return None if text == sentinel else text
+                return eventually(observed, "editor copy did not replace the guest clipboard sentinel", timeout=10)
+            assert copied_input(select_all=True) == compact_body
             shell.chord("Control_L", "Home")
             shell.press("Control_L", "Shift_L", "Right")
-            selection = eventually(lambda: (value if (value := field.call("Text", "GetSelection", "i", "0"))[1] > value[0] else None),
-                "draft selection did not reach the accessibility text interface")
+            selection = copied_input()
+            assert 0 < len(selection) < len(compact_body) and compact_body.startswith(selection)
             shell.eval("(()=>{const w=global.get_window_actors().map(a=>a.meta_window)"
                 f".find(w=>w.get_pid()==={sender_pid});if(w.is_maximized())w.unmaximize();"
                 "w.move_resize_frame(true,40,40,860,520);return true;})()")
@@ -563,8 +582,8 @@ def desktop(args):
                 time.sleep(.1)
             wait_zoom(300)
             assert window_rect(sender_pid, frame=True)[2:] == [860, 520]
-            eventually(lambda: input_text() == compact_body, "minimum-window layout changed the draft")
-            assert wait("Message").call("Text", "GetSelection", "i", "0") == selection
+            assert copied_input() == selection, "minimum-window layout changed the selected text"
+            assert copied_input(select_all=True) == compact_body, "minimum-window layout changed the draft"
             compact_rect = window_rect(sender_pid)
             def inside(node, region):
                 x, y, width, height = node.extents()
@@ -615,7 +634,8 @@ def desktop(args):
             root_channel.press()
             wait("Messages in #Root", "list")
             activate("Close channels")
-            eventually(lambda: input_text() == compact_body, "returning to Root changed the retained draft")
+            eventually(lambda: named("Channels and servers", "dialog") is None, "returning to Root kept the sheet open")
+            assert copied_input(select_all=True) == compact_body, "returning to Root changed the retained draft"
             eventually(ready_card, "returning to Root did not restore the ready preview")
             timeline = wait("Messages in #Root", "list")
             assert timeline.call("Component", "GrabFocus")[0]
@@ -644,7 +664,7 @@ def desktop(args):
             shell.screenshot(args.output / "sender-minimum-300.png")
             activate("Remove link preview")
             wait("Link preview removed")
-            assert input_text() == compact_body
+            assert copied_input(select_all=True) == compact_body
             send_and_receive(compact_body, False)
             shell.chord("Control_L", "0")
             wait_zoom(100)
