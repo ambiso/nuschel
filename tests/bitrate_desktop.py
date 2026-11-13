@@ -68,6 +68,7 @@ from accessibility import FOCUSED, INTERACTIVE, ROLES, Node, snapshot, start_reg
 from bitrate_matrix import Bus, allowance, received  # noqa: E402
 from desktop_mumble import media_workers  # noqa: E402
 from gnome_session import GnomeSession  # noqa: E402
+from layout_regression import inside  # noqa: E402
 from local_murmur import Murmur, eventually, free_port  # noqa: E402
 from mumble_client import Client, certificate_pin  # noqa: E402
 
@@ -109,12 +110,6 @@ def make_png(width, height):
         return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
     return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
             + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b""))
-
-
-def inside(box, outer):
-    x, y, w, h = box
-    ox, oy, ow, oh = outer
-    return w > 0 and h > 0 and x >= ox - 1 and y >= oy - 1 and x + w <= ox + ow + 1 and y + h <= oy + oh + 1
 
 
 class DesktopBitrate:

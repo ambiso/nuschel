@@ -26,6 +26,7 @@ import uuid
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from accessibility import items, snapshot, start_registry  # noqa: E402
 from gnome_session import GnomeSession  # noqa: E402
+from layout_regression import inside  # noqa: E402
 from local_murmur import Murmur, eventually, free_port  # noqa: E402
 from mumble_client import Client, certificate_pin  # noqa: E402
 from transfer import Wormhole, Worker  # noqa: E402
@@ -187,11 +188,6 @@ def notice_zoom(args, root, shell, registry, bots, profile, port, pin, shot):
         return next((node for node, r, n, _ in items(application)
                      if (r == role if role else True)
                      and (n.startswith(name) if prefix else n == name)), None)
-
-    def inside(inner, outer):
-        x, y, w, h = inner
-        ox, oy, ow, oh = outer
-        return w > 0 and h > 0 and x >= ox - 1 and y >= oy - 1 and x + w <= ox + ow + 1 and y + h <= oy + oh + 1
 
     password = root / "moderator-password"
     password.write_text(Murmur.SUPERUSER_PASSWORD)
