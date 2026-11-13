@@ -15,7 +15,7 @@ pub(super) struct Delivery {
     pub id: u64,
     pub authority: CommandAuthority,
     limits: ServerLimits,
-    expires: Instant,
+    pub(super) expires: Instant,
 }
 
 impl Delivery {

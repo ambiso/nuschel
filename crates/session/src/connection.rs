@@ -36,6 +36,8 @@ pub use crate::model::{Channel, ServerLimits, TextTarget, User};
 pub use nuschl_legacy_html::{escape_html, legacy_body, text_html};
 
 mod preview;
+#[cfg(test)]
+mod preview_tests;
 
 fn next_user_instance() -> u64 {
     static NEXT: AtomicU64 = AtomicU64::new(1);
@@ -1117,7 +1119,14 @@ impl Outbox {
         self.at + Duration::from_secs_f64(excess / self.leak_rate()) + Duration::from_millis(1)
     }
     fn due(&self) -> Option<Instant> {
-        (!self.waiting.is_empty()).then(|| self.slot_due())
+        if self.waiting.is_empty() {
+            return None;
+        }
+        let slot = self.slot_due();
+        Some(self.waiting.iter()
+            .filter_map(|message| message.preview.as_ref().map(|preview| preview.expires))
+            .min()
+            .map_or(slot, |expiry| slot.min(expiry)))
     }
     fn ready(&mut self, now: Instant) -> bool {
         self.leak(now);
