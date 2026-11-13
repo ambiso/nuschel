@@ -357,15 +357,15 @@ nix build --no-link --print-out-paths --cores 2 --max-jobs 2 --impure \
   --argstr packagePath /nix/store/REPLACE-with-built-nuschld-package driver
 ```
 
-Run the returned driver's `bin/nixos-test-driver -o "$scratch/out"` with a fresh,
-owned mode-0700 **disk-backed** `$scratch`, `TMPDIR="$scratch/tmp"`,
-`XDG_RUNTIME_DIR="$scratch/run"`, and `NUSCHL_VM_SCRATCH_ROOT="$scratch"`.
-Create `tmp`, `run` and `out` as mode 0700 too. The test asserts the actual driver's
-state paths and filesystem **before booting**. Do not reuse an earlier run's
-state: Pebble generates a new ephemeral issuer each time. Limit the driver to ten
-minutes and monitor free scratch space; the completed run took about a minute.
-Keep the scratch path short (preferably under 50 bytes): QEMU/virtiofs add nested
-names to Unix sockets, whose complete paths must fit the platform limit.
+Run the returned driver with `just vm-driver --root ~/.cache/nuschl-vm-<fresh-name>
+--timeout 600 DRIVER` (docs/development.md). It creates the fresh, owned mode-0700
+**disk-backed** root with `tmp`, `run` and `out`, sets `TMPDIR`, `XDG_RUNTIME_DIR`
+and `NUSCHL_VM_SCRATCH_ROOT`, and checks the actual driver's state paths, sockets
+and filesystem **before booting**. Do not reuse an earlier run's
+state: Pebble generates a new ephemeral issuer each time. The runner stops at the
+time limit or below 8 GiB free scratch space; the completed run took about a minute.
+Keep the root short (about 50 bytes): QEMU/virtiofs add nested names to Unix
+sockets, whose complete paths must fit the platform limit; the runner refuses longer ones.
 Client `TMPDIR` does not relocate Nix daemon build scratch.
 
 The completed 2026-11-12 run passed real issuance and renewal with three distinct

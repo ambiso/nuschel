@@ -146,12 +146,11 @@ nix build --offline --impure --file tests/web_dns_vm.nix driver \
   --cores 2 --max-jobs 2 --no-link --print-out-paths
 ```
 
-Run that driver's `bin/nixos-test-driver --no-interactive -o "$scratch/out"`
-with a **fresh owned directory on disk**, mode 0700. Create its `tmp`, `run` and
-`out` subdirectories with the same permissions, and set
-`NUSCHL_VM_SCRATCH_ROOT="$scratch"`, `TMPDIR="$scratch/tmp"` and
-`XDG_RUNTIME_DIR="$scratch/run"`. Setting only TMPDIR does not select the
-driver's machine-state paths. The shared pre-boot guard checks the actual paths
+Run that driver with `just vm-driver --root ~/.cache/nuschl-vm-<fresh-name> DRIVER`
+(docs/development.md). It creates a **fresh owned directory on disk**, mode 0700,
+with `tmp`, `run` and `out`, and sets `NUSCHL_VM_SCRATCH_ROOT`, `TMPDIR` and
+`XDG_RUNTIME_DIR` inside it. Setting only TMPDIR does not select the driver's
+machine-state paths. The shared pre-boot guard checks the actual paths
 and rejects tmpfs/ramfs before either guest starts. This runs owned test VMs;
 it deploys no host service and contacts no public DNS or Mumble server.
 
