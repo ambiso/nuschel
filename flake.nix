@@ -689,6 +689,14 @@
               pkgs.util-linux
             ];
           };
+          # The launch commands each role gets; their builder needs the helpers on PATH.
+          sandbox-unit = crates.project.workspaceMembers."nuschl-sandbox".build.override {
+            runTests = true;
+            testInputs = [
+              pkgs.bubblewrap
+              pkgs.util-linux
+            ];
+          };
           # exchange.rs has its own main (harness=false); the unit-test leaf
           # alone compiles it under libtest and reports zero tests.
           ipc-exchange = import ./nix/ipc-exchange-check.nix {

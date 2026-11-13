@@ -29,7 +29,7 @@ passed, including simultaneous four-track traffic, loss, fairness, tampering
 and replay. There is still only one initial offer/answer: screen capture,
 production authenticated signaling, calling/SFU routing, renegotiation and
 SFrame are not integrated. The [sandbox policy](../SECURITY.md)
-and [media launchers](../crates/ipc/src/host.rs) already separate device/codec
+and [media launchers](../crates/sandbox/src/lib.rs) already separate device/codec
 processing from session credentials. None of those boundaries should be weakened
 for this feature.
 
