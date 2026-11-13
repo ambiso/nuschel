@@ -105,8 +105,12 @@ class RecoveryTest(DesktopTest):
                                  evidence=lambda: self.capture("quarantined-reconnect")):
                 back = self.peer.wait(lambda e: e["kind"] == "user" and e["user"]["name"] == "RecoveryDesktop"
                                       and e["user"]["channel"] == 1, timeout=60)["user"]
-            if back is not None:
-                assert back["self_muted"], "reconnect lost the mute state"
+            # Mute must survive the reconnect, also when the event above was missed.
+            back = back or next((user for user in list(self.peer.users.values())
+                                 if user["name"] == "RecoveryDesktop" and user["channel"] == 1), None)
+            assert back, "the desktop did not rejoin Lobby after the server restart"
+            assert back["self_muted"] and back["self_deafened"] == desktop["self_deafened"], \
+                "reconnect lost the mute state"
             self.wait_for("list item", "Disconnected from", partial=True)
             self.capture("reconnected")
             print("Server restart: reconnected, rejoined Lobby muted and marked the history gap.", flush=True)
