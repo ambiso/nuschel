@@ -1812,6 +1812,67 @@ mod spec {
         );
     }
 
+    /// Nuschl's quote variant (issue #190): a `>` run quotes only when a
+    /// space, a tab or the line's end follows it, so chat emoticons such as
+    /// `>w<` and `>:3` stay as typed. Everything else is CommonMark's.
+    #[test]
+    fn quotes_need_a_space_after_the_marker() {
+        check(
+            &[
+                // Bare: as typed. Spaced: a quote.
+                (">test1", &["p:>test1"]),
+                ("> test2", &["quote:test2"]),
+                (">test1\n> test2", &["p:>test1", "quote:test2"]),
+                (">w<", &["p:>w<"]),
+                (">:3", &["p:>:3"]),
+                ("hi >w< >:3", &["p:hi >w< >:3"]),
+                (">a\n>b", &["p:>a\n>b"]),
+                (">---", &["p:>---"]),
+                ("># h", &["p:># h"]),
+                ("   >x", &["p:   >x"]),
+                ("  > q", &["quote:q"]),
+                (">\tq", &["quote:q"]),
+                // Escaped: as typed, the backslash hidden.
+                ("\\>test1", &["p:>test1"]),
+                ("\\> test2", &["p:> test2"]),
+                // A `>` alone is an empty quote line (shown empty), as in
+                // CommonMark: a blank line inside a quote stays in it.
+                (">", &["p:"]),
+                ("> q\n>\n> r", &["quote:q\n\nr"]),
+                // Nested: the whole run decides; each nested quote by its own.
+                (">>x", &["p:>>x"]),
+                (">> x", &["quote:x"]),
+                ("> >x", &["quote:>x"]),
+                // A literal line after a quote line continues it lazily.
+                ("> q\n>w<", &["quote:q\n>w<"]),
+                // In list items.
+                ("- >w<", &["item1 •:>w<"]),
+                ("1. >:3", &["item1 1.:>:3"]),
+                ("> - >x", &["item1 •:>x"]),
+                // Code is untouched.
+                ("`>x`", &["p:{c|>x}"]),
+                ("> `>x`", &["quote:{c|>x}"]),
+                ("```\n>w<\n> q\n```", &["code():>w<\n> q\n"]),
+                ("> ```\n> >x\n> ```", &["code():>x\n"]),
+                ("    >x", &["code():>x"]),
+                // A formula keeps a literal `>` that starts its second line.
+                ("$a\n>b$", &["p:{m|$a\n>b$}"]),
+            ],
+            false,
+        );
+        check(
+            &[
+                // Explicit HTML quotes stay quotes; stock Mumble's escaped
+                // `>` follows the Markdown rule.
+                ("<blockquote>said</blockquote>", &["quote:said"]),
+                ("&gt;w&lt;", &["p:>w<"]),
+                ("&gt; q", &["quote:q"]),
+                ("&gt;test1<br/>&gt; test2", &["p:>test1", "quote:test2"]),
+            ],
+            true,
+        );
+    }
+
     /// The line rows: blocks and the breaks that must appear (none means one
     /// line break between blocks).
     #[test]
@@ -1934,6 +1995,7 @@ mod spec {
             "    ",
             "\n- \n",
             ">\n",
+            ">w<\n",
             "- a\n  ",
             "#",
             "# a\n",
