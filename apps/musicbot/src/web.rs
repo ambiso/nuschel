@@ -1869,6 +1869,8 @@ mod tests {
                 ("api/state", None),
                 ("api/events", None),
                 ("api/listen?player=0", None),
+                ("api/rating", Some(r#"{"library":0,"id":"s","rating":5}"#)),
+                ("art/0/cover?size=32", None),
                 ("api/forget", Some("{}")),
             ] {
                 assert_eq!(
