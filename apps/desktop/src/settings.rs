@@ -563,7 +563,7 @@ fn audio_check(this: &Desktop, cx: &mut Context<Desktop>) -> Vec<AnyElement> {
         EchoTestState::Idle => None,
         EchoTestState::Running => Some((
             TEXT_MUTED,
-            "Playing a test sound through your speakers for about four seconds…".to_string(),
+            "Playing the test sound through your speakers…".to_string(),
         )),
         EchoTestState::Failed(message) => Some((WARNING, message.clone())),
         EchoTestState::Done(report) => {
@@ -617,6 +617,30 @@ fn audio_check(this: &Desktop, cx: &mut Context<Desktop>) -> Vec<AnyElement> {
                 },
                 cx,
             ))
+            .into_any_element(),
+    );
+    // Shown before anything plays, and kept in place while it does.
+    rows.push(
+        div()
+            .flex()
+            .items_start()
+            .gap_2()
+            .text_xs()
+            .text_color(color(TEXT_MUTED))
+            .child(
+                div()
+                    .w(px(18.))
+                    .flex_shrink_0()
+                    .flex()
+                    .justify_center()
+                    .child(icon("alert", 14., color(WARNING))),
+            )
+            .child(
+                div().flex_1().min_w_0().child(
+                    text!("Turn your volume down first: the test plays a speech-like sound. Use your speakers to find out whether the microphone picks them up; with headphones it can only confirm that no sound leaks back.")
+                        .with_id("echo-test-warning"),
+                ),
+            )
             .into_any_element(),
     );
     if let Some((tone, text)) = verdict {
