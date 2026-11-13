@@ -233,12 +233,15 @@ impl Geometry {
     }
 }
 
+/// The link a left-button press began on, and where, until the release.
+type Pressed = Rc<Cell<Option<(usize, Point<Pixels>)>>>;
+
 struct State {
     focus: Vec<FocusHandle>,
     labels: Vec<SharedString>,
     reveal: Rc<Cell<Option<usize>>>,
     hover: Rc<Cell<Option<usize>>>,
-    pressed: Rc<Cell<Option<(usize, Point<Pixels>)>>>,
+    pressed: Pressed,
     geometry: Rc<RefCell<Geometry>>,
     _subscriptions: Vec<Subscription>,
 }
@@ -401,7 +404,7 @@ pub struct Frame {
     text: Rc<[TextBox]>,
     focus: Vec<FocusHandle>,
     hover: Rc<Cell<Option<usize>>>,
-    pressed: Rc<Cell<Option<(usize, Point<Pixels>)>>>,
+    pressed: Pressed,
     rectangles: Vec<Vec<Bounds<Pixels>>>,
     elements: Vec<AnyElement>,
     hitbox: Hitbox,

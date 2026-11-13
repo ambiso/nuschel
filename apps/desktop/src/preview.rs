@@ -420,8 +420,10 @@ mod tests {
 
     #[test]
     fn readings_from_an_earlier_test_or_settings_never_come_back() {
-        let mut view = PreviewView::default();
-        view.capture = true;
+        let mut view = PreviewView {
+            capture: true,
+            ..Default::default()
+        };
         let first = level(&view, -20.);
         // Stop, then start again before the first test's readings arrive.
         view.close_capture();
@@ -432,8 +434,10 @@ mod tests {
         assert_eq!(view.reading.map(|reading| reading.level_db), Some(-25.));
         // Settings closed and opened again: a new view, a new generation.
         let queued = level(&view, -15.);
-        let mut reopened = PreviewView::default();
-        reopened.capture = true;
+        let mut reopened = PreviewView {
+            capture: true,
+            ..Default::default()
+        };
         assert_ne!(reopened.generation, view.generation);
         reopened.apply(queued);
         assert_eq!(reopened.reading, None, "a reading of the closed Settings");
