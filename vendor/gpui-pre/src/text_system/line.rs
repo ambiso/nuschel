@@ -853,15 +853,17 @@ fn emoji_ranges(text: Option<&str>, layout: &LineLayout) -> Vec<EmojiRange> {
                 .map(|glyph| (glyph.index, glyph.position.x))
         })
         .collect();
+    // The glyphs are in text order, as the paint loop assumes, so each
+    // range's glyphs are found by binary search.
     found
         .into_iter()
         .filter_map(|(range, image)| {
-            let first = glyphs.iter().position(|(index, _)| range.contains(index))?;
-            let (first_glyph, start) = glyphs[first];
-            let end = glyphs[first..]
-                .iter()
-                .find(|(index, _)| *index >= range.end)
-                .map_or(layout.width, |(_, x)| *x);
+            let first = glyphs.partition_point(|(index, _)| *index < range.start);
+            let after = glyphs.partition_point(|(index, _)| *index < range.end);
+            let &(first_glyph, start) = glyphs
+                .get(first)
+                .filter(|(index, _)| range.contains(index))?;
+            let end = glyphs.get(after).map_or(layout.width, |(_, x)| *x);
             Some(EmojiRange {
                 range,
                 image,
