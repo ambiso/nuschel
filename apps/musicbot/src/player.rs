@@ -653,7 +653,6 @@ impl Player {
                         self.wait_for_retirement().await;
                         continue;
                     }
-                    decoding = None;
                 }
                 // A seek or skip may have arrived while the old read was stopping.
                 let request = {
