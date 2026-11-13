@@ -109,8 +109,7 @@ async fn one(executable: &Path, post_quantum: bool, request: Request) -> Result<
     } = match nuschl_sandbox::spawn(command) {
         Ok(worker) => worker,
         Err(nuschl_sandbox::Error::Uncontained { mut child, .. }) => {
-            let _ = child.kill().await;
-            let _ = child.wait().await;
+            nuschl_sandbox::reap(&mut child).await;
             return Err(Error::Verifier);
         }
         Err(_) => return Err(Error::Verifier),
@@ -143,8 +142,7 @@ async fn one(executable: &Path, post_quantum: bool, request: Request) -> Result<
         Err(_) => Err(Error::Verifier),
     };
     if result.is_err() {
-        let _ = child.kill().await;
-        let _ = child.wait().await;
+        nuschl_sandbox::reap(&mut child).await;
     }
     result
 }

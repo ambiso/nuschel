@@ -8,7 +8,6 @@ use nuschl_sandbox::{Role, Worker};
 use thiserror::Error;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
-    process::Child,
     time::timeout,
 };
 
@@ -197,7 +196,7 @@ pub async fn thumbnail(
     }
     // A failed wait/kill must not release a caller's process credit. Never
     // replace this owner; a supervising HTTP task can time out independently.
-    reap(&mut child).await;
+    nuschl_sandbox::reap(&mut child).await;
     validated_thumbnail(reply?, max_width, max_height)
 }
 
@@ -216,22 +215,6 @@ async fn read_thumbnail_reply(
         return Err(Error::InvalidResponse);
     }
     Ok(response)
-}
-
-async fn reap(child: &mut Child) {
-    loop {
-        if matches!(child.try_wait(), Ok(Some(_))) {
-            return;
-        }
-        // Unlike start_kill, kill().await waits for the actual process exit.
-        if child.kill().await.is_ok() {
-            return;
-        }
-        if child.wait().await.is_ok() {
-            return;
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
 }
 
 fn validated_thumbnail(
@@ -549,7 +532,7 @@ async fn spawn(executable: &Path, budgets: &[u64]) -> Result<Worker, Error> {
     };
     match nuschl_sandbox::spawn(nuschl_sandbox::command(executable, role, &[])?) {
         Err(nuschl_sandbox::Error::Uncontained { error, mut child }) => {
-            reap(&mut child).await;
+            nuschl_sandbox::reap(&mut child).await;
             Err(error.into())
         }
         result => Ok(result?),

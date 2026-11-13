@@ -188,3 +188,19 @@ pub fn spawn(mut command: Command) -> Result<Worker, Error> {
         }
     }
 }
+
+/// Kill `child` if it still runs and return only once its exit is confirmed,
+/// retrying for as long as that takes: a kill request is not an exit, and
+/// whatever counts the process must not be released before it.
+pub async fn reap(child: &mut Child) {
+    loop {
+        if matches!(child.try_wait(), Ok(Some(_))) {
+            return;
+        }
+        // Unlike start_kill, kill().await waits for the actual process exit.
+        if child.kill().await.is_ok() || child.wait().await.is_ok() {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+}

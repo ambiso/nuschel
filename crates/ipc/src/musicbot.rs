@@ -395,10 +395,7 @@ pub async fn spawn(executable: &Path, role: Role) -> Result<Process, String> {
     match nuschl_sandbox::spawn(command) {
         Ok(worker) => Ok(Process::new(worker)),
         Err(nuschl_sandbox::Error::Uncontained { mut child, .. }) => {
-            child
-                .kill()
-                .await
-                .map_err(|_| "cannot stop uncontained codec worker")?;
+            nuschl_sandbox::reap(&mut child).await;
             Err("cannot contain music codec worker".into())
         }
         Err(_) => Err("cannot start isolated music codec worker".into()),
