@@ -36,6 +36,8 @@ bot in Mumble. It works with any Mumble server, stock Murmur as well as `nuschld
   Remove entries, clear upcoming tracks, skip, pause and set the volume. The player
   bar has a live progress display: click or drag to seek, or use Left/Right for
   five-second steps and Home/End. Space toggles playback outside controls.
+  Playback status has a reserved row below the progress bar, so speech activity,
+  pauses and buffering keep the surrounding controls in place.
   A queue waits when no channel with listeners is receiving it. Deafened people
   do not count as listeners. Changes appear for every viewer through a live stream.
 - **History.** The History view keeps the latest 1,000 finished plays or failed

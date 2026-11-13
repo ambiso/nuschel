@@ -93,9 +93,9 @@
       <button class="icon-button" disabled={!current} aria-label="Skip" title="Skip" onclick={() => store.skip(index)}>
         <Icon name="skip" />
       </button>
-      {#if status}<span class="status" role="status">{status}</span>{/if}
     </div>
     <Progress player={index} {current} />
+    <span class="status" role="status" title={status ?? ""}>{status ?? ""}</span>
   </div>
 
   <div class="side">
@@ -153,7 +153,7 @@
     flex: none;
   }
   .play:disabled { opacity: 0.4; cursor: default; }
-  .status { min-width: 0; overflow-wrap: anywhere; font-size: 0.8rem; color: var(--muted); }
+  .status { width: 100%; height: 1.25rem; line-height: 1.25rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: center; font-size: 0.8rem; color: var(--muted); }
   .side { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 0.5rem; min-width: 0; }
   .queue-select select { max-width: 10rem; }
   .volume { display: flex; align-items: center; gap: 0.35rem; color: var(--muted); }
@@ -169,7 +169,6 @@
     .song { grid-area: song; }
     .center { grid-area: center; }
     .side { grid-area: side; }
-    .status { white-space: normal; }
     .volume input { width: 5rem; }
     .queue-select select { max-width: 8rem; }
   }
