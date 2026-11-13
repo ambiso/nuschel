@@ -36,7 +36,9 @@ from mumble_client import certificate_pin  # noqa: E402
 TRADE_MARK_IMAGE = (0x31, 0x37, 0x3D)  # Twemoji 2122.svg
 GRINNING_FACE = (0xFF, 0xCC, 0x4D)  # Twemoji 1f600.svg
 MEDIUM_SKIN = (0xD4, 0xAB, 0x88)  # Twemoji's medium skin tone (1f3fd)
-SELECTED_TAB = (0x2C, 0x34, 0x43)  # the dark theme's SELECTED
+ACCENT = (0x5B, 0x7C, 0xFA)  # the dark theme's accent: the search field's border, the selected tab
+GRID = (0x1C, 0x21, 0x2B)  # the dark theme's MAIN: behind the picker's emoji
+TOOLTIP = (0x0F, 0x12, 0x18)  # the dark theme's APP: a tooltip's background
 
 
 def count(path, rgb, crop=None, tolerance=4):
@@ -53,15 +55,16 @@ def count(path, rgb, crop=None, tolerance=4):
     return found
 
 
-def tallest_mark(path, crop, threshold=60):
+def tallest_mark(path, crop, threshold=60, background=None):
     """The longest vertical run of pixels in `crop` (x/y/width/height) of
     `path` that differ by more than `threshold` (summed over R, G and B)
-    from the crop's most common colour, its background."""
+    from `background`, by default the crop's most common colour."""
     x, y, width, height = crop
     raw = subprocess.run(["magick", str(path), "-crop", f"{width}x{height}+{x}+{y}", "+repage",
                           "-depth", "8", "rgb:-"], capture_output=True, check=True, timeout=30).stdout
     pixels = [raw[at:at + 3] for at in range(0, width * height * 3, 3)]
-    background = max(set(pixels), key=pixels.count)
+    if background is None:
+        background = max(set(pixels), key=pixels.count)
 
     def differs(pixel):
         return sum(abs(pixel[i] - background[i]) for i in range(3)) > threshold
@@ -75,12 +78,30 @@ def tallest_mark(path, crop, threshold=60):
     return tallest
 
 
+def load_first_group(table):
+    """The emoji of the first group of the picker's table (nix/emoji.py's
+    emoji.txt), in order, as the picker inserts them."""
+    group = None
+    for line in table.read_text(encoding="utf-8").splitlines():
+        if line.startswith("@"):
+            if group is not None:
+                break
+            group = []
+        elif group is not None and line:
+            group.append(line.split("\t")[0])
+    assert group, f"no group in {table}"
+    return group
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("binaries", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--gnome-shell", type=Path)
     parser.add_argument("--size", default="1280x800")
+    parser.add_argument("--emoji-table", type=Path,
+                        default=Path(__file__).resolve().parent.parent / "emoji-assets/emoji.txt",
+                        help="the picker's table: emoji.txt of `nix build .#emojiAssets` (default: `just emoji-assets`)")
     parser.add_argument("--no-category-row", action="store_true",
                         help="the picker has no row of category tabs (builds before it), to see these checks fail there")
     args = parser.parse_args()
@@ -141,6 +162,41 @@ def main():
                 window = shell.window("Nuschl")
                 return window["x"] + x, window["y"] + y
 
+            smiley = (width - 92, height - 73)  # the picker button beside the composer
+
+
+            def find_field(path):
+                """The search field's border box (x, y, width, height), from its
+                accent: in the right half (the channel list's selection is
+                accent too), above the composer (so is its send button). Only
+                lines where the accent is wider than 200 px are its top and
+                bottom border (the selected tab's underline is shorter)."""
+                raw = subprocess.run(["magick", str(path), "-alpha", "off", "-depth", "8", "rgb:-"],
+                                     capture_output=True, check=True, timeout=30).stdout
+                image_width = len(raw) // 3 // height
+                by_line = {}
+                for y in range(height - 100):
+                    for x in range(image_width // 2, image_width):
+                        at = (y * image_width + x) * 3
+                        if all(abs(raw[at + i] - ACCENT[i]) < 12 for i in range(3)):
+                            by_line.setdefault(y, []).append(x)
+                edges = [y for y, xs in by_line.items() if len(xs) > 200]
+                assert edges, f"no search field found in {path}"
+                top, bottom = min(edges), max(edges)
+                xs = [x for y in range(top, bottom + 1) for x in by_line.get(y, [])]
+                field = min(xs), top, max(xs) - min(xs) + 1, bottom - top + 1
+                assert 200 < field[2] < 400 and 25 < field[3] < 60, f"no search field found in {path}: {field}"
+                return field
+
+            def shift_click(x, y):
+                keyboard = ("const k = global._nuschlKeyboard, C = imports.gi.Clutter;"
+                            " k.notify_keyval(imports.gi.GLib.get_monotonic_time(), C.KEY_Shift_L, C.KeyState.{}); 'ok'")
+                shell.eval(keyboard.format("PRESSED"))
+                time.sleep(0.15)
+                shell.click(*at(x, y))
+                time.sleep(0.15)
+                shell.eval(keyboard.format("RELEASED"))
+
             composer = (width // 2 + 100, height - 62)
             # The newest two lines of the timeline, just above the composer
             # (absolute counts: other parts of the window scroll away).
@@ -169,6 +225,98 @@ def main():
             yellow = count(faces, GRINNING_FACE, newest)
             print(f"😀: {yellow} Twemoji yellow pixels", flush=True)
             assert yellow >= 30, f"😀 painted only {yellow} pixels of Twemoji's yellow"
+
+            # Every emoji the picker shows when it opens, Shift+clicked one
+            # after another, ends up in the composer in that order. Nothing has
+            # been picked yet, so there is no "Recently used": the first group
+            # starts at the top, in the default skin tone. A line counts as
+            # shown when its first emoji is drawn whole (the footer cuts the
+            # last one).
+            first_group = load_first_group(args.emoji_table)
+            shell.click(*at(*composer))
+            time.sleep(0.3)
+            shell.click(*at(*smiley))
+            time.sleep(0.8)
+            opened = shot("emoji-03a-opened")
+            field = find_field(opened)
+            lines_top = field[1] + field[3] + 8 + categories + 36  # below the group's heading
+            lines = 0
+            def drawn_whole(line):
+                cell = (field[0] + 15, lines_top + 36 * line, 6, 36)
+                return tallest_mark(opened, cell, background=GRID) >= 22
+
+            while lines < 20 and drawn_whole(lines):
+                lines += 1
+            print(f"picker: {lines} whole lines of emoji shown", flush=True)
+            assert lines >= 3, f"the picker shows only {lines} whole lines of emoji"
+            cells = [(field[0] + 18 + 36 * column, lines_top + 36 * line + 18)
+                     for line in range(lines) for column in range(9)]
+            for cell in cells:
+                shift_click(*cell)
+                time.sleep(0.05)
+            shot("emoji-03b-every-shown-emoji")
+            shell.key("Escape")
+            time.sleep(0.5)
+            shot("emoji-03c-composer")
+            shell.key("Return")
+            expected = "".join(first_group[:len(cells)])
+            try:
+                ada.client.wait(lambda e: e["kind"] == "text" and e["body"] == expected, timeout=15)
+            except AssertionError:
+                bodies = [e["body"] for e in ada.client.events if e.get("kind") == "text"]
+                raise AssertionError(f"expected the {len(cells)} shown emoji {expected!r}, "
+                                     f"the last message was {bodies[-1:]!r}") from None
+            print(f"picker: all {len(cells)} shown emoji arrived in order", flush=True)
+            time.sleep(1.0)
+
+            # An emoji shown twice, under "Recently used" and in its group,
+            # still shows its tooltip and takes a click in both places
+            # (reported: 😘, used before, did neither; 💤 did both). Recently
+            # used now has 18 emoji in two lines, none of them 😀; Shift+click
+            # adds 😀, and reopened, the picker shows it in both places.
+            recent_lines = 2
+            group_first = (field[0] + 18, lines_top - 36 + 36 * (1 + recent_lines + 1) + 18)
+            for name in ("emoji-03d-reopened", "emoji-03e-recent-and-group"):
+                shell.click(*at(*composer))
+                time.sleep(0.3)
+                shell.click(*at(*smiley))
+                time.sleep(0.8)
+                if name.endswith("reopened"):
+                    shot(name)
+                    shift_click(*group_first)
+                    time.sleep(0.3)
+                    shell.key("Escape")
+                    time.sleep(0.5)
+            shell.move(*at(group_first[0] + 6, group_first[1] + 4))
+            time.sleep(0.1)
+            shell.move(*at(*group_first))
+            time.sleep(1.2)
+            hovered = shot("emoji-03e-recent-and-group")
+            # The tooltip is drawn on the window's background colour, below
+            # and right of the pointer.
+            tooltip = count(hovered, TOOLTIP, (group_first[0] + 4, group_first[1] + 4, 120, 30), tolerance=2)
+            print(f"emoji in two places: {tooltip} tooltip pixels", flush=True)
+            shell.eval("global._nuschlPointer.notify_button(imports.gi.GLib.get_monotonic_time(), 1,"
+                       " imports.gi.Clutter.ButtonState.PRESSED); 'ok'")
+            time.sleep(0.12)
+            shell.eval("global._nuschlPointer.notify_button(imports.gi.GLib.get_monotonic_time(), 1,"
+                       " imports.gi.Clutter.ButtonState.RELEASED); 'ok'")
+            time.sleep(0.6)
+            shot("emoji-03f-clicked")
+            shell.key("Escape")
+            time.sleep(0.3)
+            shell.key("Return")
+            expected = first_group[0] * 2
+            try:
+                ada.client.wait(lambda e: e["kind"] == "text" and e["body"] == expected, timeout=15)
+            except AssertionError:
+                bodies = [e["body"] for e in ada.client.events if e.get("kind") == "text"]
+                raise AssertionError(f"a click on {first_group[0]}, shown under Recently used and in its group,"
+                                     f" inserted nothing (tooltip pixels: {tooltip}); the last message was"
+                                     f" {bodies[-1:]!r}") from None
+            assert tooltip >= 200, f"{first_group[0]}, shown twice, has no tooltip ({tooltip} pixels)"
+            print("emoji in two places: tooltip and click work", flush=True)
+            time.sleep(1.0)
 
             # The picker: Ctrl+. from the composer, search, Shift+Enter keeps it open.
             shell.click(*at(*composer))
@@ -212,17 +360,8 @@ def main():
             shot("emoji-09-sent")
 
             # The mouse: Shift+click keeps the picker open, a click closes it.
-            # The first cell is now the most recent pick, 👍 in medium tone.
-            def shift_click(x, y):
-                keyboard = ("const k = global._nuschlKeyboard, C = imports.gi.Clutter;"
-                            " k.notify_keyval(imports.gi.GLib.get_monotonic_time(), C.KEY_Shift_L, C.KeyState.{}); 'ok'")
-                shell.eval(keyboard.format("PRESSED"))
-                time.sleep(0.15)
-                shell.click(*at(x, y))
-                time.sleep(0.15)
-                shell.eval(keyboard.format("RELEASED"))
-
-            # Below the search bar and the row of category tabs.
+            # The first cell is now the most recent pick, 👍 in medium tone,
+            # below the search bar and the row of category tabs.
             first_cell = (picker_right - (36 * 9 + 26) + 8 + 6 + 18,
                           picker_top + 8 + 28 + 2 + 38 + 8 + categories + 36 + 18)
             shell.click(*at(*composer))
@@ -248,28 +387,6 @@ def main():
             # channel list does, and a tab per category. Failures are collected, so one run reports
             # all of them.
             failures = []
-            ACCENT = (0x5B, 0x7C, 0xFA)  # the dark theme's accent: the search field's border
-            smiley = (width - 92, height - 73)  # the picker button beside the composer
-
-            def find_field(path):
-                """The search field's border box (x, y, width, height), from its
-                accent: in the right half (the channel list's selection is
-                accent too), above the composer (so is its send button)."""
-                raw = subprocess.run(["magick", str(path), "-alpha", "off", "-depth", "8", "rgb:-"],
-                                     capture_output=True, check=True, timeout=30).stdout
-                image_width = len(raw) // 3 // height
-                xs, ys = [], []
-                for y in range(height - 100):
-                    for x in range(image_width // 2, image_width):
-                        at = (y * image_width + x) * 3
-                        if all(abs(raw[at + i] - ACCENT[i]) < 12 for i in range(3)):
-                            xs.append(x)
-                            ys.append(y)
-                assert xs, f"no search field found in {path}"
-                field = min(xs), min(ys), max(xs) - min(xs) + 1, max(ys) - min(ys) + 1
-                assert 200 < field[2] < 400 and 25 < field[3] < 60, f"no search field found in {path}: {field}"
-                return field
-
             def open_search(name):
                 """Open the picker with its button, click into the search field;
                 returns the field's box."""
@@ -303,7 +420,7 @@ def main():
                 field = open_search("emoji-12-scrollbar")
                 print(f"search field at {field}", flush=True)
                 # Right of the last column of emoji, inside the picker's border.
-                strip = (field[0] + field[2] + 30, field[1] + field[3] + 10, 11, 200)
+                strip = (field[0] + field[2] + 30, field[1] + field[3] + 8 + categories + 4, 11, 200)
                 thumb = tallest_mark(shot("emoji-12-scrollbar-focused"), strip, threshold=30)
                 print(f"emoji grid: scrollbar thumb {thumb} px", flush=True)
                 if thumb < 20:
@@ -396,10 +513,10 @@ def main():
                 shell.move(*at(field[0] + 4 * 36, field[1] - 60))
                 time.sleep(0.6)
                 flags = shot("emoji-21-flags")
-                tab_corner = (field[0] + 8 * 36 + 3, tabs_middle - 15, 3, 3)
-                selected = count(flags, SELECTED_TAB, tab_corner, tolerance=3)
-                print(f"Flags tab: {selected}/9 pixels of the selected colour", flush=True)
-                if selected < 5:
+                underline = (field[0] + 8 * 36 + 4, tabs_middle + 18 - 3, 28, 3)
+                selected = count(flags, ACCENT, underline, tolerance=8)
+                print(f"Flags tab: {selected}/84 underline pixels", flush=True)
+                if selected < 40:
                     failures.append("the Flags tab is not shown as selected after jumping to it")
                 shell.click(*at(field[0] + 18, tabs_middle + 18 + 4 + 36 + 18))
                 time.sleep(0.6)

@@ -641,11 +641,15 @@ impl Desktop {
     }
 }
 
-fn cell(emoji: &'static Emoji, tone: usize, cx: &mut Context<Desktop>) -> AnyElement {
+/// One emoji of the grid. Its id is its place (line and column), not the
+/// emoji: an emoji can be shown twice (recently used and in its group), and
+/// two elements with one id share hover, tooltip and click state, so neither
+/// would show its tooltip or take a click.
+fn cell(emoji: &'static Emoji, tone: usize, place: usize, cx: &mut Context<Desktop>) -> AnyElement {
     let shown = emoji.in_tone(tone);
     let name = emoji.name;
     div()
-        .id(SharedString::from(shown))
+        .id(("emoji-cell", place))
         .role(Role::Button)
         .aria_label(name)
         .size(px(CELL))
@@ -672,7 +676,7 @@ fn cell(emoji: &'static Emoji, tone: usize, cx: &mut Context<Desktop>) -> AnyEle
         .into_any_element()
 }
 
-fn row(row: &Row, tone: usize, cx: &mut Context<Desktop>) -> AnyElement {
+fn row(line: usize, row: &Row, tone: usize, cx: &mut Context<Desktop>) -> AnyElement {
     match row {
         Row::Heading(name) => div()
             .h(px(CELL))
@@ -687,7 +691,12 @@ fn row(row: &Row, tone: usize, cx: &mut Context<Desktop>) -> AnyElement {
             .into_any_element(),
         Row::Emoji(emoji) => div()
             .flex()
-            .children(emoji.iter().map(|emoji| cell(emoji, tone, cx)))
+            .children(
+                emoji
+                    .iter()
+                    .enumerate()
+                    .map(|(column, emoji)| cell(emoji, tone, line * COLUMNS + column, cx)),
+            )
             .into_any_element(),
         Row::Nothing => div()
             .h(px(CELL))
@@ -859,15 +868,18 @@ fn grid(picker: &Picker, cx: &mut Context<Desktop>) -> AnyElement {
             };
             let tone = this.emoji_tone;
             let rows = &picker.rows;
-            rows[range.start.min(rows.len())..range.end.min(rows.len())]
+            let start = range.start.min(rows.len());
+            rows[start..range.end.min(rows.len())]
                 .iter()
-                .map(|line| row(line, tone, cx))
+                .enumerate()
+                .map(|(offset, line)| row(start + offset, line, tone, cx))
                 .collect()
         }),
     )
     .track_scroll(&picker.scroll)
     .size_full()
     .px_2()
+    .pt(px(3.))
     .pb_2()
     .into_any_element()
 }
@@ -891,7 +903,6 @@ fn category_tabs(picker: &Picker, cx: &mut Context<Desktop>) -> AnyElement {
         .role(Role::TabList)
         .aria_label("Categories")
         .mx_2()
-        .mb_1()
         .flex()
         .children(categories().map(|(name, icon)| {
             let selected = current == Some(name);
@@ -905,9 +916,16 @@ fn category_tabs(picker: &Picker, cx: &mut Context<Desktop>) -> AnyElement {
                 .flex()
                 .items_center()
                 .justify_center()
-                .rounded(px(6.))
+                .rounded_t(px(6.))
+                // A tab: the selected one is underlined, on the line that
+                // separates the tabs from the emoji.
+                .border_b_2()
+                .border_color(if selected {
+                    Hsla::from(color(ACCENT))
+                } else {
+                    transparent_black()
+                })
                 .cursor_pointer()
-                .when(selected, |tab| tab.bg(color(SELECTED)))
                 .hover(|style| style.bg(color(HOVER)))
                 .tooltip(move |_, cx| cx.new(|_| crate::dialogs::Tooltip(name.into())).into())
                 .on_click(cx.listener(move |this, _, window, cx| {
@@ -951,10 +969,15 @@ pub fn overlay(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement> 
             .child(search_bar(picker, tone, cx))
             .child(category_tabs(picker, cx))
             .child(
+                // The emoji to click, on the message area's colour (white in
+                // the light theme), apart from the tabs above them.
                 div()
                     .flex_1()
                     .min_h_0()
                     .relative()
+                    .bg(color(MAIN))
+                    .border_t_1()
+                    .border_color(color(BORDER_STRONG))
                     // The current category follows the scrolling.
                     .on_scroll_wheel(cx.listener(|_, _, _, cx| cx.notify()))
                     .child(grid(picker, cx))
@@ -965,9 +988,7 @@ pub fn overlay(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement> 
                                 .mode(ScrollbarMode::Always)
                                 .styles(|styles| {
                                     styles
-                                        .track(|track| {
-                                            track.width(px(8.)).bg(color(ELEVATED).into())
-                                        })
+                                        .track(|track| track.width(px(8.)).bg(color(MAIN).into()))
                                         .thumb(|thumb| {
                                             thumb
                                                 .width(px(4.))

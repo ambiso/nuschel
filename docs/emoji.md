@@ -92,8 +92,12 @@ with or without U+FE0F or a skin tone, finds itself first, then every emoji shar
 any of its words, those sharing most first: ❤️ lists the other hearts. Other words
 beside it narrow that list. Only the first 64 characters are searched. Under the
 search, a tab per category of the table, drawn with its first emoji, jumps to that
-category (leaving the search); the tab of the category in view is selected. The grid
-has a scrollbar, like the channel list. The hand beside the search chooses the skin
+category (leaving the search); the tab of the category in view is underlined. The
+emoji to click are on the message area's colour (white in the light theme), below a
+line that separates them from the tabs, and have a scrollbar, like the channel list.
+Each cell's element id is its place in the grid, not the emoji: an emoji shown twice
+(recently used and in its group) would otherwise share hover, tooltip and click
+state, and neither would show its tooltip or take a click. The hand beside the search chooses the skin
 tone, which applies to every emoji that has tones. A click or Enter inserts at the
 composer's cursor, replacing the selection, and closes the picker; with Shift held
 it stays open for more. Escape closes it. Recently used emoji come first. The skin
@@ -136,10 +140,15 @@ cannot be loaded, emoji stay text and the picker says so.
   Shell. It checks by pixel colours that `™` paints no Twemoji and `™️` does, that
   😀 is Twemoji's yellow, that the picker's search, skin tone, Shift+Enter,
   Shift+click and click insert the expected text into the composer, which shows
-  them as Twemoji, and that the sent message is that text. Then the search field:
+  them as Twemoji, and that the sent message is that text. Before that, with nothing
+  picked yet, it Shift+clicks every emoji the picker shows whole when it opens and
+  expects exactly those, in the table's order (`--emoji-table`, the table of
+  `nix build .#emojiAssets`; by default `emoji-assets/emoji.txt`), then clicks an
+  emoji shown both under Recently used and in its group (tooltip and insert). Then
+  the search field:
   that it shows a cursor, that a click on a result inserts it (also in the last
   column), that Ctrl+V pastes and Ctrl+Backspace deletes a word; that the grid has
-  a scrollbar; and that the Flags tab jumps to 🏁. `--no-category-row` runs these
+  a scrollbar; and that the Flags tab jumps to 🏁 and is underlined. `--no-category-row` runs these
   against a build from before the category tabs, to see them fail there.
 
 The GPUI patch itself has no test in its crate, whose test target does not build
