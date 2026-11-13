@@ -294,6 +294,8 @@ pub struct Translation {
     pub masked: String,
 }
 
+type CodeBlock = (Range<usize>, Option<String>, Vec<Range<usize>>);
+
 struct Translate<'t> {
     text: &'t str,
     marked: &'t Marked<'t>,
@@ -318,7 +320,7 @@ struct Translate<'t> {
     /// The end of the open link's content so far.
     link: usize,
     /// The code block being read: its range, language and content ranges.
-    code: Option<(Range<usize>, Option<String>, Vec<Range<usize>>)>,
+    code: Option<CodeBlock>,
     links: usize,
     fences: usize,
     /// Blocks (and the text between them) so far, against [`MAX_BLOCKS`].
@@ -784,7 +786,7 @@ impl Translate<'_> {
             end -= 1;
             if let Some(last) = content.last_mut().filter(|last| last.end > end) {
                 last.end = end;
-                if last.is_empty() {
+                if Range::<usize>::is_empty(last) {
                     content.pop();
                 }
             }
@@ -1421,12 +1423,11 @@ pub fn check(source: &str, document: &nuschl_core::MessageDocument) -> Result<()
     }
     // 4 and 5.
     let mut links = 0;
-    let mut last_link: Option<(usize, &str)> = None;
     let mut formulas = Vec::new();
     for block in &document.blocks {
         match block {
             ContentBlock::Text { text, spans, .. } => {
-                last_link = None;
+                let mut last_link: Option<(usize, &str)> = None;
                 for span in spans {
                     let written = text.get(span.start..span.end).unwrap_or_default();
                     if let Some(tex) = &span.math {
