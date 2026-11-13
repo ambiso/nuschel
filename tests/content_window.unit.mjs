@@ -22,3 +22,17 @@ test("the SDK posted-job window, RPC ACK reserve and bridge admission are one va
     assert.equal(bridge.pending.size,CONTENT_WINDOW);assert.equal(contentUnavailable("1"),true,"one more than the window retires visibly");
   } finally { bridge.dispose(); }
 });
+
+test("a content work batch is bounded by the window: one Cancel per posted job plus one Render per free slot",async()=>{
+  const {ContentBridge:Fresh,contentUnavailable:unavailable}=await import("../web/app/src/content-bridge.js?batch-limit");
+  const accepted=new Fresh(async()=>"null",{service:{render:()=>new Promise(()=>{}),dispose(){}}});
+  try {
+    const cancels=Array.from({length:CONTENT_WINDOW},(_,index)=>({kind:"cancel",request:String(100+index)}));
+    const renders=Array.from({length:CONTENT_WINDOW},(_,index)=>({kind:"render",request:String(index+1),mode:"plain",source:"x"}));
+    assert.equal(accepted.handle({kind:"content_work",operations:[...cancels,...renders]}),true);
+    assert.equal(accepted.pending.size,CONTENT_WINDOW);assert.equal(unavailable("1"),false,"2 x window operations are admitted");
+    accepted.handle({kind:"content_work",operations:Array.from({length:2*CONTENT_WINDOW+1},(_,index)=>({kind:"cancel",request:String(200+index)}))});
+    assert.equal(unavailable("1"),true,"one operation beyond 2 x window retires the lane visibly");
+    assert.equal(accepted.pending.size,CONTENT_WINDOW);
+  } finally { accepted.dispose(); }
+});

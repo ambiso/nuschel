@@ -5,12 +5,15 @@
 // IndexedDB and CSP-permitted fetch: a browser realm, not an OS sandbox.
 import {ContentService} from "./content-service.js";
 import {MAX_REPLY, textBytes, validateDocument} from "./content-protocol.js";
-import {CONTENT_WINDOW} from "./sdk-rpc.js";
+import {CONTENT_WINDOW,SdkBusyError} from "./sdk-rpc.js";
 
 export const DOCUMENT_BYTES = 16 * 1024 * 1024;
 export const DOCUMENT_COUNT = 256;
 // Mounting a long conversation must not fill the shared SDK RPC table.
 const REHYDRATION_RPCS = 8, MAX_WAITING = 128;
+// Each content work batch names jobs of the SDK's posted window: at most one
+// Cancel per posted job plus one Render per free slot.
+const MAX_BATCH = 2 * CONTENT_WINDOW;
 const listeners = new Set();
 const tokenListeners = new Map();
 let version = 0, active, consumed = false;
@@ -93,7 +96,7 @@ export class ContentBridge {
     // SDK-admitted renders stay here until their exact ACK reached the SDK.
     this.pending=new Map();this.queue=[];this.running=null;
     this.missing=new Set();this.waiting=new Set();this.requesting=0;
-    this.denied=new Map();this.welcomes=new Map();this.disposed=false;this.retired=false;this.reportedRetirement=false;active=this;
+    this.denied=new Map();this.welcomes=new Map();this.disposed=false;this.retired=false;active=this;
   }
   unavailable() { return this.retired||this.service.retired===true; }
   rehydrate(token) {
@@ -108,7 +111,13 @@ export class ContentBridge {
   }
   notify(token) {
     changed(token);
-    if(this.service.retired&&!this.reportedRetirement){this.reportedRetirement=true;changed();}
+    this.observeServiceRetirement();
+  }
+  // The codec service owner retired (its worker is gone for this page). Stop
+  // the lane once through the same bounded retirement, so the SDK stops posting
+  // work that can only fail, instead of failing every later job one by one.
+  observeServiceRetirement() {
+    if(this.service.retired===true)this.retire("undelivered");
   }
   retry(token) {
     if(this.disposed||this.unavailable()||this.denied.get(token)===true)return;
@@ -121,13 +130,15 @@ export class ContentBridge {
   drainRequests() {
     while(!this.disposed&&this.requesting<REHYDRATION_RPCS&&this.waiting.size) {
       const token=this.waiting.values().next().value;this.waiting.delete(token);this.requesting++;
-      this.command("content_request",token).then(queued=>{if(queued!==true)this.deny(token);},()=>this.deny(token,true))
+      // Only this realm's own RPC capacity refusal keeps an explicit Retry; an
+      // SDK refusal or a closed SDK is permanent for this token.
+      this.command("content_request",token).then(queued=>{if(queued!==true)this.deny(token);},error=>this.deny(token,!(error instanceof SdkBusyError)))
         .finally(()=>{this.requesting--;this.drainRequests();});
     }
   }
   handle(data) {
     if(data?.kind!=="content_work")return false;
-    const operations=Array.isArray(data.operations)&&data.operations.length<=8?data.operations:null;
+    const operations=Array.isArray(data.operations)&&data.operations.length<=MAX_BATCH?data.operations:null;
     if(!operations||!this.admissible(operations)) {
       // A batch that violates the protocol admits nothing and never throws into
       // the App's handler. Admitted credit stays held, the lane retires
@@ -165,7 +176,9 @@ export class ContentBridge {
   // unacknowledged job. Hand over the next job only after the previous one has
   // actually left the worker, so queue wait never runs against a job's deadline.
   pump() {
-    if(this.running||this.disposed||this.retired||!this.queue.length)return;
+    if(this.running||this.disposed||this.retired)return;
+    this.observeServiceRetirement();
+    if(this.retired||!this.queue.length)return;
     this.run(this.queue.shift());
   }
   async run(entry) {
@@ -177,13 +190,17 @@ export class ContentBridge {
     // its real reply or owner retirement; so does its SDK ACK.
     if(released)await released;
     if(this.running===entry)this.running=null;
-    this.pump();
+    // This job actually left the worker. If the service retired meanwhile, ACK
+    // it first (its credit is really released) and only then stop the lane.
+    const stopped=this.service.retired===true;
+    if(!stopped)this.pump();
     let reply="";
     if(result!==undefined) {
       try { const json=JSON.stringify(result);textBytes(json,MAX_REPLY);reply=json; }
       catch { /* A bounded failure ACK never grants parser fallback. */ }
     }
     await this.acknowledge(entry,reply);
+    if(stopped)this.observeServiceRetirement();
   }
   // Only a normal, well-formed content_complete result is the SDK's ACK for
   // this job. A local refusal, a remote exception (possibly raised before the

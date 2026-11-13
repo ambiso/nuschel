@@ -105,3 +105,13 @@ test("the lane retirement notice shares the four ACK slots and is refused, not q
  assert.equal(worker.messages.at(-1).method,"content_retire");assert.equal(rpc.size,SDK_RPC_LIMIT);
  clock.expire();await Promise.all([...ordinary,...acks,retire]);
 });
+test("only this layer's capacity refusal is the typed local busy error",async()=>{
+ const {SdkBusyError}=await import("../web/app/src/sdk-rpc.js");
+ const {worker,clock,rpc}=fixture();const ordinary=[];
+ for(let index=0;index<ORDINARY;index++)ordinary.push(rpc.request("content_request",[String(index+1)]).catch(error=>error));
+ const refused=await rpc.request("content_request",["0"]).catch(error=>error);
+ assert.ok(refused instanceof SdkBusyError);assert.equal(refused.code,"SDK_BUSY");assert.equal(worker.messages.length,ORDINARY,"it never left this realm");
+ const first=worker.messages[0];rpc.accept({kind:"result",id:first.id,error:"The client is busy. Try again shortly."});
+ const remote=await ordinary[0];assert.equal(remote instanceof SdkBusyError,false,"an SDK reply with the same text is not local busy");
+ clock.expire();await Promise.all(ordinary);
+});

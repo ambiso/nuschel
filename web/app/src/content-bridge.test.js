@@ -208,3 +208,36 @@ test("a refused retirement notice is bounded: no retry and no extra credit",asyn
   bridge.handle({kind:"content_work",operations:[{kind:"render",request:"y"}]});await settle();
   assert.deepEqual(calls,["content_retire"]);assert.equal(m.contentUnavailable("1"),true);assert.equal(bridge.pending.size,0);bridge.dispose();
 });
+
+test("only this realm's typed RPC capacity refusal keeps an explicit preview Retry",async()=>{
+  const {SdkBusyError,SdkUnavailableError}=await import("./sdk-rpc.js");
+  const m=await fresh();const requests=[];let reply;
+  const bridge=new m.ContentBridge(async(method,token)=>{requests.push(token);return reply(token);},{service:{render:()=>new Promise(()=>{}),dispose(){}}});
+  reply=()=>{throw new SdkBusyError();};
+  m.retainDocument("11");await settle();
+  assert.equal(m.contentFailed("11"),true);assert.equal(m.contentUnavailable("11"),false,"local saturation offers Retry");
+  reply=()=>true;m.retryContent("11");await settle();
+  assert.deepEqual(requests,["11","11"],"Retry issues a new request");
+  for(const [token,error] of [["12",new Error("The client is busy. Try again shortly.")],["13",new Error("Content is no longer available.")],["14",new SdkUnavailableError()]]) {
+    reply=()=>{throw error;};m.retainDocument(token);await settle();
+    assert.equal(m.contentUnavailable(token),true,`${error.message}: an SDK refusal, matching text or closed SDK is permanent`);
+    const count=requests.length;m.retryContent(token);await settle();assert.equal(requests.length,count);
+  }
+  bridge.dispose();
+});
+
+test("a retired codec service retires the lane once, after ACKing the job that actually settled",async()=>{
+  const m=await fresh();const calls=[],started=[];
+  const service={retired:false,render(packet){started.push(packet.source);return packet.source==="s1"?Promise.reject(Object.assign(new Error("Content processing is unavailable. Reload to try again."),{code:"worker-unavailable"})).finally(()=>{}):new Promise(()=>{});},dispose(){}};
+  const original=service.render.bind(service);
+  service.render=packet=>{const promise=original(packet);if(packet.source==="s1")service.retired=true;return promise;};
+  const bridge=new m.ContentBridge(async(method,...args)=>{calls.push([method,...args]);return method==="content_complete"?"null":true;},{service});
+  bridge.handle({kind:"content_work",operations:[{kind:"render",request:"1",mode:"plain",source:"s1"},{kind:"render",request:"2",mode:"plain",source:"s2"}]});
+  await settle();await settle();
+  assert.deepEqual(calls,[["content_complete","1",""],["content_retire","undelivered"]],"the settled job is ACKed, then one notice");
+  assert.deepEqual(started,["s1"],"no later job is handed to the retired service");
+  assert.equal(bridge.pending.has("2"),true,"the queued job's credit stays held");
+  assert.equal(m.contentUnavailable("2"),true);
+  bridge.handle({kind:"content_work",operations:[{kind:"cancel",request:"2"}]});bridge.notify("2");await settle();
+  assert.equal(calls.length,2,"no further ACK or notice");bridge.dispose();
+});

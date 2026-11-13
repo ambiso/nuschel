@@ -15,6 +15,11 @@ const ACK_METHODS=new Set(["content_complete","content_retire"]);
 export class SdkUnavailableError extends Error {
   constructor(message="The client is unavailable. Reload to reconnect.") {super(message);this.name="SdkUnavailableError";this.code="SDK_UNAVAILABLE";}
 }
+// This RPC layer's own capacity refusal: the request never left this realm,
+// so the caller may offer an explicit retry. Never produced for SDK replies.
+export class SdkBusyError extends Error {
+  constructor() {super("The client is busy. Try again shortly.");this.name="SdkBusyError";this.code="SDK_BUSY";}
+}
 export class SdkRpc {
   constructor(worker,{onClose=()=>{},clock=globalThis}={}) {
     this.worker=worker;this.onClose=onClose;this.clock=clock;
@@ -52,7 +57,7 @@ export class SdkRpc {
       catch(error){return Promise.reject(error);}
     }
     const ack=ACK_METHODS.has(method);
-    if(ack?this.acks>=SDK_RPC_ACK_RESERVE:this.pending.size-this.acks>=SDK_RPC_LIMIT-SDK_RPC_ACK_RESERVE)return Promise.reject(new Error("The client is busy. Try again shortly."));
+    if(ack?this.acks>=SDK_RPC_ACK_RESERVE:this.pending.size-this.acks>=SDK_RPC_LIMIT-SDK_RPC_ACK_RESERVE)return Promise.reject(new SdkBusyError());
     if(!Number.isSafeInteger(this.next+1)) {
       this.close("The client request counter is exhausted. Reload to reconnect.");
       return Promise.reject(new SdkUnavailableError());
