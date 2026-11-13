@@ -93,6 +93,8 @@
           filter =
             path: type:
             (craneLib.filterCargoSources path type)
+            # Trusted precompiled syntax bundle; no runtime grammar files.
+            || lib.hasSuffix "/crates/content/assets/default-nix.packdump" path
             || lib.hasSuffix ".proto" path
             || lib.hasSuffix ".sql" path
             || lib.hasSuffix ".json" path

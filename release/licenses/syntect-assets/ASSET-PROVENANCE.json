@@ -323,5 +323,36 @@
       "sha256": "a3c24b41132deeff6ac505913f11b7abf8d0f875b0eb96346ef5ba0f40e5e3f7"
     }
   ],
-  "scope": "Default syntax/theme assets associated with the exact syntect package and its pinned Makefile/submodules. Actual custom permissive/individual terms retained; no generic MIT claim for all syntax data. Seven theme sources preserve their own embedded attribution. Build-only utilities, icons, samples and test input code are excluded. No claim of byte-for-byte dump regeneration."
+  "scope": "Default syntax/theme assets associated with the exact syntect package and its pinned Makefile/submodules. Actual custom permissive/individual terms retained; no generic MIT claim for all syntax data. Seven theme sources preserve their own embedded attribution. Build-only utilities, icons, samples and test input code are excluded. No claim of byte-for-byte dump regeneration.",
+  "custom_bundle": {
+    "path": "crates/content/assets/default-nix.packdump",
+    "sha256": "e9d5fe2710ee5c84bad43f21211afc6ad928c6f7ccf700157142c49329ac1ae9",
+    "version": "syntect-5.3.0+nix-9032bd6",
+    "default_input": "assets/default_newlines.packdump",
+    "default_input_sha256": "d740b20c12e40b678b9f1012401e1969aaa5cd55f1ab329ffeb94d746b06a5c0",
+    "raw_grammar": "nix/Nix.sublime-syntax",
+    "raw_grammar_sha256": "cc4eb1854a2a62e4fb3b931a2aa7e6f379cfa1d1fd3e1efaf60b3d77078e9889",
+    "grammar_origin": {
+      "two_face": {
+        "repository": "CosmicHorrorDev/two-face",
+        "revision": "4f766bcb4499f6340e8d6dd715ab64f52c6e8ca4"
+      },
+      "bat": {
+        "repository": "sharkdp/bat",
+        "revision": "25f4f96ea3afb6fe44552f3b38ed8b1540ffa1b3"
+      },
+      "nix": {
+        "repository": "wmertens/sublime-nix",
+        "revision": "9032bd613746b9c135223fd6f26a5fa555f18946",
+        "path": "assets/syntaxes/02_Extra/Nix"
+      }
+    },
+    "generator": "tools/generate-syntaxes.rs",
+    "generator_sha256": "80fd85015986c76b78754be9ea2a886908a04ca899d7bbf9dc4c584610d6dd3b",
+    "recipe": "nix/syntax-bundle.nix",
+    "recipe_sha256": "233ad46bf554d22cc742c81319bd308f6d18ae4c8ed8867888f8b152107f0178",
+    "preserved_default_definitions": 75,
+    "total_definitions": 76,
+    "unresolved_contexts": 0
+  }
 }

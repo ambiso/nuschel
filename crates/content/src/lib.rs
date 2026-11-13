@@ -29,6 +29,8 @@ pub enum Error {
     Highlight(#[from] syntect::Error),
     #[error("the bundled highlighting theme is missing")]
     MissingTheme,
+    #[error("the bundled syntax definitions are invalid")]
+    InvalidSyntaxBundle,
     #[error("unsupported or invalid image")]
     InvalidImage,
     #[error("the image cannot be made small enough for this server's {0}-byte limit")]
@@ -342,6 +344,12 @@ struct Highlighter {
     theme: Theme,
 }
 
+// Trusted generated data only. Generation parses the pinned upstream YAML;
+// normal workers load only this binary asset, never YAML or user-selected grammars.
+fn content_syntaxes(bytes: &[u8]) -> Result<SyntaxSet, Error> {
+    syntect::dumps::from_uncompressed_data(bytes).map_err(|_| Error::InvalidSyntaxBundle)
+}
+
 impl ContentRenderer {
     /// Cannot fail since the highlighter loads lazily; it keeps its signature.
     pub fn new() -> Result<Self, Error> {
@@ -356,10 +364,10 @@ impl ContentRenderer {
             .themes
             .remove("base16-ocean.dark")
             .ok_or(Error::MissingTheme)?;
-        Ok(self.highlighter.get_or_init(|| Highlighter {
-            syntaxes: SyntaxSet::load_defaults_newlines(),
-            theme,
-        }))
+        let syntaxes = content_syntaxes(include_bytes!("../assets/default-nix.packdump"))?;
+        Ok(self
+            .highlighter
+            .get_or_init(|| Highlighter { syntaxes, theme }))
     }
 
     /// Message text is Markdown (docs/markdown-rendering-plan.md), parsed
@@ -857,6 +865,73 @@ mod tests {
             runs.windows(2)
                 .any(|pair| pair[0].foreground != pair[1].foreground)
         );
+        Ok(())
+    }
+
+    #[test]
+    fn nix_grammar_styles_constructs_without_changing_code_or_plain_fallback() -> Result<(), Error>
+    {
+        let renderer = ContentRenderer::new()?;
+        let body = "# comment 🦀\n{ pkgs, ... }:\nlet greeting = \"hello ${pkgs.lib.version}\"; in rec {\n\n  enabled = true;\n  path = ./module.nix;\n  literal = \"<script>not executed</script>\";\n}\n";
+        let runs = renderer.highlight(body, Some("nix"))?;
+        assert_eq!(
+            runs.iter().map(|run| run.text.as_str()).collect::<String>(),
+            body
+        );
+        let color = |needle: &str| {
+            let offset = body.find(needle).unwrap();
+            let mut start = 0;
+            runs.iter()
+                .find_map(|run| {
+                    let range = start..start + run.text.len();
+                    start = range.end;
+                    range.contains(&offset).then_some(run.foreground)
+                })
+                .unwrap()
+        };
+        assert_ne!(color("# comment"), color("let greeting"));
+        assert_ne!(color("hello"), color("let greeting"));
+        assert_ne!(color("true"), color("enabled"));
+        for language in [Some("nix"), Some("Nix"), Some("unknown_language"), None] {
+            let rendered = renderer.highlight(body, language)?;
+            assert_eq!(
+                rendered
+                    .iter()
+                    .map(|run| run.text.as_str())
+                    .collect::<String>(),
+                body
+            );
+            if language == Some("unknown_language") || language.is_none() {
+                assert!(
+                    rendered
+                        .iter()
+                        .all(|run| run.foreground == rendered[0].foreground)
+                );
+            }
+        }
+        assert!(matches!(
+            content_syntaxes(b"not a syntax bundle"),
+            Err(Error::InvalidSyntaxBundle)
+        ));
+        let fence = "```nix\n";
+        let tail = "\n```";
+        let long = format!(
+            "{fence}#{}{tail}",
+            "x".repeat(MAX_CONTENT_BYTES - fence.len() - tail.len() - 1)
+        );
+        let bounded = renderer.render(&long)?;
+        assert!(bounded.within_limits());
+        let Some(ContentBlock::Code { runs, .. }) = bounded.blocks.first() else {
+            panic!("bounded Nix comment should remain code");
+        };
+        assert_eq!(
+            runs.iter().map(|run| run.text.as_str()).collect::<String>(),
+            &long[fence.len()..long.len() - 3]
+        );
+        assert!(matches!(
+            renderer.render(&"x".repeat(MAX_CONTENT_BYTES + 1)),
+            Err(Error::TooLarge)
+        ));
         Ok(())
     }
 
