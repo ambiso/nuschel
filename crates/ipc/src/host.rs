@@ -524,19 +524,13 @@ pub async fn exchange(
     Ok(results)
 }
 
-/// A content worker for requests with these budgets; one that cannot be
-/// contained is reaped before the error returns.
+/// A content worker for requests with these budgets.
 async fn spawn(executable: &Path, budgets: &[u64]) -> Result<Worker, Error> {
     let role = Role::Content {
         cpu_seconds: budgets.iter().sum(),
+        arguments: &[],
     };
-    match nuschl_sandbox::spawn(nuschl_sandbox::command(executable, role, &[])?) {
-        Err(nuschl_sandbox::Error::Uncontained { error, mut child }) => {
-            nuschl_sandbox::reap(&mut child).await;
-            Err(error.into())
-        }
-        result => Ok(result?),
-    }
+    Ok(nuschl_sandbox::spawn(nuschl_sandbox::command(executable, role)?).await?)
 }
 
 /// Send `frames` to one worker and collect its replies into `results`, whose
@@ -596,8 +590,7 @@ async fn converse(
         }
     };
     if outcome.is_err() {
-        // kill_on_drop is a fallback; explicitly reap while the runtime still exists.
-        child.kill().await.ok();
+        nuschl_sandbox::reap(&mut child).await;
     }
     outcome
 }
@@ -657,5 +650,22 @@ mod thumbnail_validation_tests {
         }
         assert!(validated_thumbnail(reply(vec![image(2, 1, "AQIDBAUGBwg=")]), 1, 1).is_err());
         assert!(validated_thumbnail(ContentResponse::Rejected("no".into()), 1, 1).is_err());
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod reap_tests {
+    /// `reap` returns only once the worker's exit is confirmed: waited for,
+    /// so not even a zombie remains, not just sent a kill.
+    #[tokio::test]
+    async fn reap_confirms_the_exit_of_a_spawned_worker() {
+        let mut command = tokio::process::Command::new("sleep");
+        command.arg("60");
+        let mut worker = nuschl_sandbox::spawn(command).await.unwrap();
+        let pid = worker.child.id().unwrap();
+        assert!(std::path::Path::new(&format!("/proc/{pid}")).exists());
+        nuschl_sandbox::reap(&mut worker.child).await;
+        assert!(worker.child.try_wait().unwrap().is_some());
+        assert!(!std::path::Path::new(&format!("/proc/{pid}")).exists());
     }
 }

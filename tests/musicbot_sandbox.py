@@ -12,7 +12,6 @@ import os
 from pathlib import Path
 import socket
 import subprocess
-import sys
 import tempfile
 
 
@@ -32,7 +31,7 @@ def main():
             listener.settimeout(0.1)
             port = listener.getsockname()[1]
             env = {"PATH": os.environ.get("PATH", ""), "MUSICBOT_TEST_SECRET": "public-test-value"}
-            result = subprocess.run([str(args.probe.resolve()), sys.executable, str(canary), str(port)],
+            result = subprocess.run([str(args.probe.resolve()), str(canary), str(port)],
                                     env=env, capture_output=True, text=True, timeout=10)
             (args.output / "stderr.txt").write_text(result.stderr)
             assert result.returncode == 0, result.stderr

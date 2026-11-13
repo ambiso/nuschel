@@ -91,20 +91,15 @@ pub fn verify_hybrid(
 
 async fn one(executable: &Path, post_quantum: bool, request: Request) -> Result<(), Error> {
     let role = nuschl_sandbox::Role::Update { post_quantum };
-    let command = nuschl_sandbox::command(executable, role, &[]).map_err(|_| Error::Verifier)?;
+    let command = nuschl_sandbox::command(executable, role).map_err(|_| Error::Verifier)?;
     let nuschl_sandbox::Worker {
         mut child,
         mut input,
         output,
         containment: _containment,
-    } = match nuschl_sandbox::spawn(command) {
-        Ok(worker) => worker,
-        Err(nuschl_sandbox::Error::Uncontained { mut child, .. }) => {
-            nuschl_sandbox::reap(&mut child).await;
-            return Err(Error::Verifier);
-        }
-        Err(_) => return Err(Error::Verifier),
-    };
+    } = nuschl_sandbox::spawn(command)
+        .await
+        .map_err(|_| Error::Verifier)?;
     let expected = request.expected_reply();
     let bytes = request.encode();
     let result = tokio::time::timeout(Duration::from_secs(6), async {

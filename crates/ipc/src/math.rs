@@ -169,7 +169,7 @@ mod supervisor {
 
         async fn attempt(&mut self, request: &MathRequest) -> Result<MathImage, Error> {
             if self.process.is_none() {
-                self.process = Some(self.start()?);
+                self.process = Some(self.start().await?);
             }
             self.request_id += 1;
             let id = self.request_id;
@@ -207,10 +207,10 @@ mod supervisor {
             }
         }
 
-        fn start(&self) -> Result<Process, Error> {
-            let command = nuschl_sandbox::command(&self.executable, Role::Math, &[])?;
+        async fn start(&self) -> Result<Process, Error> {
+            let command = nuschl_sandbox::command(&self.executable, Role::Math)?;
             Ok(Process {
-                worker: nuschl_sandbox::spawn(command)?,
+                worker: nuschl_sandbox::spawn(command).await?,
                 served: 0,
             })
         }

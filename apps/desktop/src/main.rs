@@ -129,8 +129,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         arguments,
     }) = arguments.command
     {
-        let role = nuschl_sandbox::Role::Content { cpu_seconds: 5 };
-        let mut command = nuschl_sandbox::command(&executable, role, &arguments)?;
+        let role = nuschl_sandbox::Role::Content {
+            cpu_seconds: 5,
+            arguments: &arguments,
+        };
+        let mut command = nuschl_sandbox::command(&executable, role)?;
         let status = runtime.block_on(async { command.status().await })?;
         return if status.success() {
             Ok(())
@@ -141,7 +144,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(target_os = "linux")]
     if let Some(Action::MediaSandbox) = arguments.command {
         let worker = nuschl_sandbox::sibling("nuschl-media-worker")?;
-        let mut command = nuschl_sandbox::command(&worker, nuschl_sandbox::Role::Media, &[])?;
+        let mut command = nuschl_sandbox::command(&worker, nuschl_sandbox::Role::Media)?;
         let status = runtime.block_on(async { command.status().await })?;
         std::process::exit(status.code().unwrap_or(1));
     }
@@ -152,7 +155,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let role = nuschl_sandbox::Role::Transfer {
             file: file.as_deref(),
         };
-        let mut command = nuschl_sandbox::command(&worker, role, &[])?;
+        let mut command = nuschl_sandbox::command(&worker, role)?;
         let status = runtime.block_on(async { command.status().await })?;
         std::process::exit(status.code().unwrap_or(1));
     }

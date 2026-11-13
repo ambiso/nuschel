@@ -2046,7 +2046,7 @@ async fn storage_loop(
     tokio::spawn(history_loop(rendering, events.clone()));
     while let Some(job) = jobs.recv().await {
         if storage.is_none() {
-            match Storage::start(&directory) {
+            match Storage::start(&directory).await {
                 Ok(worker) => storage = Some(worker),
                 Err(error) => {
                     let _ = events.send(Event::HistoryError(error.to_string())).await;
@@ -2101,7 +2101,7 @@ async fn storage_loop(
                 let mut id = None;
                 for attempt in 0..2 {
                     if storage.is_none() {
-                        storage = Storage::start(&directory).ok();
+                        storage = Storage::start(&directory).await.ok();
                     }
                     let Some(worker) = &mut storage else { break };
                     let saved = match seq {
@@ -2421,7 +2421,7 @@ async fn chime(
     host: Option<String>,
     sound: Sound,
 ) {
-    let Ok(mut worker) = Media::start() else {
+    let Ok(mut worker) = Media::start().await else {
         return;
     };
     configure(&worker, &audio, (DEFAULT_VOICE_BITRATE, 5), host);
