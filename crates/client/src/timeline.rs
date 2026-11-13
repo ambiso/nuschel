@@ -13,6 +13,13 @@ use std::collections::VecDeque;
 /// older ones are dropped and load again from history on scrolling up.
 pub const MAX_TIMELINE: usize = 1000;
 
+/// Admission may count a detached live message without inserting a row.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ReceiveReceipt {
+    pub added: bool,
+    pub serial: Option<u64>,
+}
+
 /// A message as the content worker rendered it, live or from a page.
 #[derive(Clone, Debug, PartialEq)]
 pub struct IncomingMessage {
@@ -91,6 +98,16 @@ impl MessageStatus {
     }
 }
 
+/// Original source representation retained beside the source itself. Adapters
+/// may set it only after exact row admission; it grants no rendering authority.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SourceFormat {
+    Plain,
+    Legacy,
+    Marked,
+}
+
 /// A message in a timeline.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Message {
@@ -117,6 +134,7 @@ pub struct Message {
     pub author_id: Option<u32>,
     /// What was typed (a composer edits it).
     pub source: String,
+    pub source_format: Option<SourceFormat>,
     /// Nuschl servers: when it was last edited, or that it was deleted.
     pub edited_ms: Option<i64>,
     pub deleted: Option<Deletion>,
@@ -159,6 +177,7 @@ impl From<IncomingMessage> for Message {
             seq: message.seq,
             author_id: message.author_id,
             source: message.message.body,
+            source_format: None,
             edited_ms: message.edited_ms,
             deleted: message.deleted,
         }
@@ -213,27 +232,46 @@ impl Timeline {
     /// orders it: an unsaved message still appears where it arrived.
     /// Returns whether it is new here.
     pub fn merge(&mut self, message: IncomingMessage) -> bool {
+        self.merge_with_receipt(message).is_some()
+    }
+
+    /// The exact newly allocated row, independent of its sorted position,
+    /// source text, observation time or whether storage assigned an id.
+    pub fn merge_with_receipt(&mut self, message: IncomingMessage) -> Option<u64> {
         if message
             .id
             .is_some_and(|id| self.messages.iter().any(|entry| entry.id == Some(id)))
         {
-            return false;
+            return None;
         }
-        self.messages.push(message.into());
+        let message = Message::from(message);
+        let serial = message.serial;
+        self.messages.push(message);
         self.messages
             .sort_by_key(|message| (message.observed_at_ms, message.id.unwrap_or(i64::MAX)));
-        true
+        Some(serial)
     }
 
     /// A live message. While older history is shown apart from the newest
     /// (`next_after`), a stored one arrives with the newer pages instead.
     /// Returns whether it counts as new.
     pub fn receive(&mut self, message: IncomingMessage) -> bool {
+        self.receive_with_receipt(message).added
+    }
+
+    pub fn receive_with_receipt(&mut self, message: IncomingMessage) -> ReceiveReceipt {
         if self.next_after.is_some() && message.id.is_some() {
             self.missed_live = true;
-            true
+            ReceiveReceipt {
+                added: true,
+                serial: None,
+            }
         } else {
-            self.merge(message)
+            let serial = self.merge_with_receipt(message);
+            ReceiveReceipt {
+                added: serial.is_some(),
+                serial,
+            }
         }
     }
 
@@ -393,6 +431,7 @@ impl Timeline {
                 message.offer = nuschl_core::transfer::parse_offer(&source)
                     .or_else(|| nuschl_core::transfer::offer_in(&document));
                 message.source = source;
+                message.source_format = None;
                 message.document = document;
                 message.edited_ms = Some(edited_ms);
                 message.revision = message.revision.wrapping_add(1);
@@ -402,6 +441,7 @@ impl Timeline {
                 message.deleted = Some(deletion);
                 message.document = MessageDocument { blocks: Vec::new() };
                 message.source.clear();
+                message.source_format = None;
                 message.offer = None;
                 message.status = MessageStatus::Plain;
                 message.revision = message.revision.wrapping_add(1);
@@ -501,6 +541,43 @@ mod tests {
             MessageDocument { blocks: Vec::new() },
             false,
         )
+    }
+
+    #[test]
+    fn receipts_identify_unsaved_sorted_rows_and_distinguish_detached_admission() {
+        let mut timeline = Timeline::default();
+        let later = timeline.merge_with_receipt(message(None, 100)).unwrap();
+        let earlier = timeline.merge_with_receipt(message(None, 1)).unwrap();
+        assert_ne!(earlier, later);
+        assert_eq!(timeline.messages.first().unwrap().serial, earlier);
+        let same = timeline.merge_with_receipt(message(None, 1)).unwrap();
+        assert_ne!(
+            same, earlier,
+            "even identical unsaved text/time are separate rows"
+        );
+        let saved = timeline.merge_with_receipt(message(Some(7), 1));
+        assert!(saved.is_some());
+        assert_eq!(timeline.merge_with_receipt(message(Some(7), 1)), None);
+        timeline.next_after = Some(7);
+        let detached = timeline.receive_with_receipt(message(Some(8), 2));
+        assert_eq!(
+            detached,
+            ReceiveReceipt {
+                added: true,
+                serial: None
+            }
+        );
+        assert!(timeline.missed_live);
+        assert!(
+            !timeline
+                .messages
+                .iter()
+                .any(|message| message.id == Some(8))
+        );
+        assert!(
+            timeline.receive(message(Some(9), 3)),
+            "existing bool contract stays true"
+        );
     }
 
     fn page(ids: std::ops::RangeInclusive<i64>) -> Vec<IncomingMessage> {
@@ -664,6 +741,8 @@ mod tests {
         let mut stored = message(Some(5), 5);
         stored.seq = Some(5);
         timeline.merge(stored);
+        assert_eq!(timeline.messages[0].source_format, None);
+        timeline.messages[0].source_format = Some(SourceFormat::Legacy);
         let shown = |timeline: &Timeline| {
             let message = &timeline.messages[0];
             (
@@ -674,8 +753,14 @@ mod tests {
             )
         };
         assert_eq!(timeline.apply_change(5, edit("newer", 20)), Ok(false));
+        assert_eq!(timeline.messages[0].source_format, None);
+        timeline.messages[0].source_format = Some(SourceFormat::Plain);
         // An older edit that arrives late changes nothing.
         assert_eq!(timeline.apply_change(5, edit("older", 10)), Ok(false));
+        assert_eq!(
+            timeline.messages[0].source_format,
+            Some(SourceFormat::Plain)
+        );
         assert_eq!(shown(&timeline), ("newer".into(), Some(20), false, 1));
         // One for a message not shown is handed back.
         assert_eq!(
@@ -687,6 +772,7 @@ mod tests {
             moderator: true,
         });
         assert_eq!(timeline.apply_change(5, deleted), Ok(true));
+        assert_eq!(timeline.messages[0].source_format, None);
         // A tombstone stays one.
         assert_eq!(timeline.apply_change(5, edit("again", 50)), Ok(false));
         assert_eq!(shown(&timeline), (String::new(), Some(20), true, 2));

@@ -9,7 +9,7 @@ export class SdkUnavailableError extends Error {
 export class SdkRpc {
   constructor(worker,{onClose=()=>{},clock=globalThis}={}) {
     this.worker=worker;this.onClose=onClose;this.clock=clock;
-    this.pending=new Map();this.next=0;this.closed=false;this.phase="starting";this.initialized=false;
+    this.pending=new Map();this.next=0;this.closed=false;this.phase="starting";this.initialized=false;this.lastState=0;this.statePending=null;
     this.startupTimer=this.clock.setTimeout(()=>this.close("The browser client did not finish starting. Reload to try again."),SDK_STARTUP_TIMEOUT);
   }
   get size(){return this.pending.size;}
@@ -24,9 +24,24 @@ export class SdkRpc {
     this.clock.clearTimeout(this.startupTimer);this.startupTimer=null;this.phase="ready";
     return true;
   }
-  request(method,args=[]) {
+  acceptState(id) {
+    if(this.closed||this.phase!=="ready")return false;
+    if(!Number.isSafeInteger(id)||id!==this.lastState+1||this.statePending!==null){this.close("The browser worker sent an invalid state sequence. Reload to reconnect.");return false;}
+    this.lastState=id;this.statePending=id;return true;
+  }
+  ackState(id) {
+    if(this.closed||this.statePending===null||!Number.isSafeInteger(id)||id!==this.statePending)return false;
+    try { this.worker.postMessage({method:"state_applied",args:[id]});this.statePending=null;return true; }
+    catch { this.close("The browser worker could not accept its state acknowledgment. Reload to reconnect.");return false; }
+  }
+  request(method,args=[],proof) {
     if(this.closed)return Promise.reject(new SdkUnavailableError());
     if(this.phase!=="ready")return Promise.reject(new Error("The client is still starting."));
+    let context;
+    if(proof!==undefined){
+      try{context=JSON.stringify(proof);if(typeof context!=="string"||context.length>4096||new TextEncoder().encode(context).length>4096)throw new Error("Action context exceeds the browser limit.");}
+      catch(error){return Promise.reject(error);}
+    }
     if(this.pending.size>=SDK_RPC_LIMIT)return Promise.reject(new Error("The client is busy. Try again shortly."));
     if(!Number.isSafeInteger(this.next+1)) {
       this.close("The client request counter is exhausted. Reload to reconnect.");
@@ -36,7 +51,7 @@ export class SdkRpc {
     return new Promise((resolve,reject)=>{
       const timer=this.clock.setTimeout(()=>this.close("The browser worker did not respond. Reload to reconnect."),SDK_RPC_TIMEOUT);
       this.pending.set(id,{resolve,reject,timer});
-      try {this.worker.postMessage({id,method,args});}
+      try {this.worker.postMessage(context===undefined?{id,method,args}:{id,method,args,context});}
       catch {this.close("The browser worker could not accept a command. Reload to reconnect.");}
     });
   }

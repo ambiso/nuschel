@@ -109,13 +109,23 @@ export function safeLink(value) {
 // spans instead of turning a byte offset into the wrong link on Unicode text.
 export function textRuns(block) {
   const text = block.text || "";
+  const spans = (block.spans || []).slice(0, 4096);
+  // Most timeline fallbacks have no styling. They need neither a UTF-8 index
+  // nor one allocation for every character on each unchanged snapshot.
+  if (!spans.length) return text ? [{text, style:{}}] : [];
   const boundaries = new Map([[0, 0]]);
   let bytes = 0, units = 0;
-  const encoder = new TextEncoder();
-  for (const char of text) { bytes += encoder.encode(char).length; units += char.length; boundaries.set(bytes, units); }
+  for (const char of text) {
+    const code = char.charCodeAt(0);
+    // JS iteration yields a surrogate pair together. Lone surrogates consume
+    // three UTF-8 bytes (TextEncoder's replacement scalar), as do other BMP
+    // scalars above U+07FF; combining marks remain independent boundaries.
+    bytes += char.length === 2 ? 4 : code < 0x80 ? 1 : code < 0x800 ? 2 : 3;
+    units += char.length; boundaries.set(bytes, units);
+  }
   const runs = [];
   let previous = 0;
-  for (const span of (block.spans || []).slice(0, 4096)) {
+  for (const span of spans) {
     if (!Number.isInteger(span.start) || !Number.isInteger(span.end) || span.start < previous || span.end <= span.start || !boundaries.has(span.start) || !boundaries.has(span.end)) continue;
     if (span.start > previous) runs.push({ text: text.slice(boundaries.get(previous), boundaries.get(span.start)), style: {} });
     runs.push({ text: text.slice(boundaries.get(span.start), boundaries.get(span.end)), style: span.style || {}, link: safeLink(span.link), math: typeof span.math === "string" ? span.math : undefined });

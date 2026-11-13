@@ -54,10 +54,10 @@ export async function openHistory(factory = indexedDB, name = DATABASE) {
     async execute(operation) {
       if (!operation || !/^[0-9]{1,20}$/.test(operation.ticket)) throw new Error("Invalid history ticket.");
       if (operation.kind === "append") {
-        if (!validMessage(operation.message) || typeof operation.outgoing !== "boolean") throw new Error("Invalid history message.");
+        if (!validMessage(operation.message) || typeof operation.outgoing !== "boolean" || !["plain","legacy","marked"].includes(operation.mode ?? "marked")) throw new Error("Invalid history message.");
         const transaction = db.transaction("messages", "readwrite");
         const done = transactionDone(transaction);
-        const id = await request(transaction.objectStore("messages").add({ message: operation.message, outgoing: operation.outgoing }));
+        const id = await request(transaction.objectStore("messages").add({ message: operation.message, outgoing: operation.outgoing, mode:operation.mode ?? "marked" }));
         await done; // The SDK only displays saved status after commit, never request success alone.
         return { id };
       }
@@ -89,7 +89,7 @@ export async function openHistory(factory = indexedDB, name = DATABASE) {
             const current = cursor.result;
             if (!current) { resolve({ rows: found, more: false }); return; }
             const row = current.value;
-            if (!validMessage(row.message) || !Number.isSafeInteger(row.id) || row.id <= 0 || typeof row.outgoing !== "boolean") {
+            if (!validMessage(row.message) || !Number.isSafeInteger(row.id) || row.id <= 0 || typeof row.outgoing !== "boolean" || (row.mode !== undefined && !["plain","legacy","marked"].includes(row.mode))) {
               reject(new Error("Invalid stored history record.")); return;
             }
             const rowBytes = utf8.encode(JSON.stringify(row)).length;
