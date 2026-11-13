@@ -320,9 +320,9 @@ fn validate_tokens(tokens: &[String]) -> Result<(), String> {
 fn validate_url(value: &str, setting: &str) -> Result<(), String> {
     let valid = value.parse::<ureq::http::Uri>().ok().is_some_and(|uri| {
         matches!(uri.scheme_str(), Some("http" | "https"))
-            && uri
-                .authority()
-                .is_some_and(|authority| !authority.host().is_empty())
+            && uri.authority().is_some_and(|authority| {
+                !authority.host().is_empty() && !authority.as_str().contains('@')
+            })
             && uri
                 .path_and_query()
                 .is_none_or(|path| path.query().is_none())
@@ -332,7 +332,7 @@ fn validate_url(value: &str, setting: &str) -> Result<(), String> {
         Ok(())
     } else {
         Err(format!(
-            "{setting} must be an absolute http:// or https:// URL without a query or fragment"
+            "{setting} must be an absolute http:// or https:// URL without a user name, query or fragment"
         ))
     }
 }

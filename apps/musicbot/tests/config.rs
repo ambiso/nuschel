@@ -114,6 +114,13 @@ fn invalid_schema_and_static_settings_are_rejected() {
         ),
         (
             CONFIG.replace(
+                "https://library.example.org",
+                "https://bot:secret@library.example.org",
+            ),
+            "subsonic library Home: url",
+        ),
+        (
+            CONFIG.replace(
                 "https://music.example.org",
                 "https://music.example.org/#queue",
             ),
