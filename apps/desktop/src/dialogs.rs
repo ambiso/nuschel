@@ -90,7 +90,10 @@ pub fn named_button(
         .font_weight(FontWeight::MEDIUM)
         .text_color(color(foreground))
         .on_click(cx.listener(move |this, _, window, cx| click(this, window, cx)))
-        .on_a11y_action(AccessibleAction::Click, accessible_click(action.clone(), cx))
+        .on_a11y_action(
+            AccessibleAction::Click,
+            accessible_click(action.clone(), cx),
+        )
         .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
             if activation(event) {
                 action(this, window, cx);
@@ -141,7 +144,10 @@ pub fn icon_button(
         .hover(|style| style.bg(color(SELECTED)))
         .tooltip(move |_, cx| cx.new(|_| Tooltip(tooltip.clone())).into())
         .on_click(cx.listener(move |this, _, window, cx| click(this, window, cx)))
-        .on_a11y_action(AccessibleAction::Click, accessible_click(action.clone(), cx))
+        .on_a11y_action(
+            AccessibleAction::Click,
+            accessible_click(action.clone(), cx),
+        )
         .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
             if activation(event) {
                 action(this, window, cx);

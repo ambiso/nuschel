@@ -2069,7 +2069,11 @@ impl State {
     /// authority, but the route revision, mute and deafen still apply.
     fn voice_payload(&self, target: u32, packet: VoicePacket) -> Option<Vec<u8>> {
         let loopback = target == u32::from(nuschl_protocol::relay::TARGET_LOOPBACK);
-        let target = if target == 0 { self.voice_target } else { target };
+        let target = if target == 0 {
+            self.voice_target
+        } else {
+            target
+        };
         if !loopback && !self.voice_target_valid(target) {
             return None;
         }
