@@ -2,6 +2,8 @@
 //! Markdown in messages (docs/markdown-rendering-plan.md, docs/desktop.md):
 //! CommonMark through pulldown-cmark, with GFM strikethrough and the math
 //! grammar of docs/math.md, parsed once per message in the content worker.
+//! One deliberate variant: a block quote's `>` needs a space after it
+//! ([`bare_quotes`]), so chat emoticons such as `>w<` stay as typed.
 //!
 //! One shared scan serves formulas and Markdown. Stage one parses without
 //! math and masks, byte for byte (line breaks kept), what binds tighter than
@@ -73,6 +75,8 @@ impl<'a> Marked<'a> {
 /// The shared scan of one text: what stage one masked, and its findings.
 pub struct Scan<'a> {
     text: &'a str,
+    /// The text as both stages parse it, before masking ([`bare_quotes`]).
+    quoted: Cow<'a, str>,
     masked: String,
     /// The bare URLs the linkifier links (`crate::bare_urls`).
     pub urls: Vec<(Range<usize>, String)>,
@@ -80,10 +84,74 @@ pub struct Scan<'a> {
     pub html: Vec<Range<usize>>,
 }
 
+/// Nuschl's quote variant (docs/desktop.md): a run of `>` that stands where
+/// a block quote's marker can (at a line's start, after indentation, list
+/// markers and the markers of the quotes it is in) is one only when a space,
+/// a tab or the line's end follows the run. So `>w<`, `>:3` and `>>x` stay
+/// as typed, while `> q`, `>> q` and a `>` alone quote; CommonMark has no
+/// such rule. Returns `text` with each bare run made literal: its bytes
+/// become `%`, punctuation like `>` but without meaning in Markdown (inline,
+/// `>` only closes a tag or an autolink), so every offset stays. Every line
+/// is read so, code and HTML blocks too: a `%` there is still their text,
+/// and what is shown is always taken from `text`. A tag or `<!` declaration
+/// whose closing `>` starts a line then does not close there; raw HTML is
+/// shown as typed either way.
+pub fn bare_quotes(text: &str) -> Cow<'_, str> {
+    let bytes = text.as_bytes();
+    let space = |at: usize| matches!(bytes.get(at), Some(b' ' | b'\t'));
+    let line_end = |at: usize| matches!(bytes.get(at), None | Some(b'\n' | b'\r'));
+    let mut literal: Option<Vec<u8>> = None;
+    let mut line = 0;
+    while line < bytes.len() {
+        let mut at = line;
+        loop {
+            while space(at) {
+                at += 1;
+            }
+            match bytes.get(at) {
+                Some(b'>') => {
+                    let run = bytes[at..].iter().take_while(|byte| **byte == b'>').count();
+                    if !space(at + run) && !line_end(at + run) {
+                        literal.get_or_insert_with(|| bytes.to_vec())[at..at + run].fill(b'%');
+                        break;
+                    }
+                    at += run;
+                }
+                Some(b'-' | b'+' | b'*') if space(at + 1) => at += 1,
+                Some(b'0'..=b'9') => {
+                    let digits = bytes[at..]
+                        .iter()
+                        .take_while(|byte| byte.is_ascii_digit())
+                        .count();
+                    if digits > 9
+                        || !matches!(bytes.get(at + digits), Some(b'.' | b')'))
+                        || !space(at + digits + 1)
+                    {
+                        break;
+                    }
+                    at += digits + 1;
+                }
+                _ => break,
+            }
+        }
+        // A carriage return alone ends a line too, as the parser reads it.
+        line = bytes[at..]
+            .iter()
+            .position(|byte| matches!(byte, b'\n' | b'\r'))
+            .map_or(bytes.len(), |end| at + end + 1);
+    }
+    match literal {
+        // Only ASCII bytes were replaced, by ASCII.
+        Some(literal) => String::from_utf8(literal).map_or(Cow::Borrowed(text), Cow::Owned),
+        None => Cow::Borrowed(text),
+    }
+}
+
 /// Stage one: `text` parsed without math, with what binds tighter than
 /// emphasis and formulas masked.
 pub fn scan(text: &str) -> Scan<'_> {
-    let mut masked = text.as_bytes().to_vec();
+    let quoted = bare_quotes(text);
+    let mut masked = quoted.as_bytes().to_vec();
     let mask = |masked: &mut Vec<u8>, range: Range<usize>| {
         for byte in &mut masked[range] {
             if !matches!(*byte, b'\n' | b'\r') {
@@ -94,7 +162,7 @@ pub fn scan(text: &str) -> Scan<'_> {
     let mut html = Vec::new();
     let mut schemes = Vec::new();
     let mut code_block = false;
-    for (event, range) in Parser::new(text).into_offset_iter() {
+    for (event, range) in Parser::new(&quoted).into_offset_iter() {
         match event {
             Event::Start(Tag::CodeBlock(_)) => code_block = true,
             Event::End(TagEnd::CodeBlock) => code_block = false,
@@ -144,6 +212,7 @@ pub fn scan(text: &str) -> Scan<'_> {
     let masked = String::from_utf8(masked).unwrap_or_else(|_| "x".repeat(text.len()));
     Scan {
         text,
+        quoted,
         masked,
         urls,
         html,
@@ -185,7 +254,9 @@ impl Scan<'_> {
                 Event::DisplayMath(tex) => (tex, true),
                 _ => continue,
             };
-            match Token::new(self.text, range.clone(), tex, display).filter(|_| !refused(&range)) {
+            // Against the text as parsed: a literal `>` is the formula's own.
+            let token = Token::new(&self.quoted, range.clone(), tex, display);
+            match token.filter(|_| !refused(&range)) {
                 Some(token) => tokens.push(token),
                 None => {
                     if let Some(again) = again.as_deref_mut() {
@@ -298,6 +369,8 @@ type CodeBlock = (Range<usize>, Option<String>, Vec<Range<usize>>);
 
 struct Translate<'t> {
     text: &'t str,
+    /// The text as parsed before masking ([`Scan`]).
+    quoted: &'t str,
     marked: &'t Marked<'t>,
     urls: &'t [(Range<usize>, String)],
     hidden: Vec<(Range<usize>, Syntax)>,
@@ -825,8 +898,9 @@ impl Translate<'_> {
     /// Container prefixes on the lines after a container's first: block
     /// quote markers and list item indentation, as far as a line has them
     /// (a lazy continuation line has none), outside code and math blocks.
+    /// Read in the text as parsed, where a literal `>` is no marker.
     fn prefixes(&mut self) {
-        let text = self.text.as_bytes();
+        let text = self.quoted.as_bytes();
         let mut containers = std::mem::take(&mut self.containers).into_iter().peekable();
         let mut open: Vec<(Range<usize>, Container)> = Vec::new();
         let blocks: Vec<Range<usize>> = self
@@ -913,6 +987,7 @@ pub fn translate(marked: &Marked<'_>) -> Translation {
     let tokens = scan.formulas(|range| marked.crosses(range));
     let mut walk = Translate {
         text,
+        quoted: &scan.quoted,
         marked,
         urls: &scan.urls,
         hidden: Vec::new(),
