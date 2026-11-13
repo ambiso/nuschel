@@ -57,7 +57,7 @@ ECHO_TEST_BUTTON = (862, 225)
 RECORD_SHORTCUT = [(795, 478 + 54 * row) for row in range(4)]
 CLEAR_SHORTCUT = [(872, 478 + 54 * row) for row in range(4)]
 # Settings' "Voice activity" option, and the second server in the rail (managed scene).
-VOICE_ACTIVITY = (483, 319)
+VOICE_ACTIVITY = (483, 388)
 FRIENDS_SERVER = (58, 152)
 # The cog next to the server name, Lobby's chevron, and the channel list's right edge.
 SERVER_SETTINGS_BUTTON = (279, 86)
@@ -824,7 +824,8 @@ def main():
                 click(*ECHO_TEST_BUTTON)
                 time.sleep(2.0)
                 shot("05-settings-live")
-                time.sleep(5.0)
+                # The verdict comes about 7.5 s after the click.
+                time.sleep(7.0)
                 shot("05b-echo-test")
                 shell.key("Escape")
                 time.sleep(0.4)

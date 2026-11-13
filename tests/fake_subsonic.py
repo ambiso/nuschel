@@ -4,7 +4,8 @@
 Two libraries live under one HTTP server: `/plain` is a plain Subsonic server
 (password token authentication, original files) and `/open` an OpenSubsonic
 one (API key, the transcoding extension). Both have two three-second sine
-songs on one album. Run directly, it serves on the given port.
+songs on one album. Ratings (`setRating`, `userRating`) and playback reports
+(`scrobble`) are kept per library account. Run directly, it serves on the given port.
 """
 import argparse
 import hashlib
@@ -61,6 +62,8 @@ class Library(http.server.BaseHTTPRequestHandler):
     seen = []  # (library, endpoint, authentication)
     decisions = []
     failed_streams = set()  # (library, song) whose metadata exists but audio fails
+    ratings = {}  # (library, song) -> 1..5 for the account
+    scrobbles = []  # (library, song, time in ms, submission)
 
     def log_message(self, *_):
         pass
@@ -130,7 +133,27 @@ class Library(http.server.BaseHTTPRequestHandler):
             hits = [song for song in SONGS.values() if query["query"][0].lower() in song["title"].lower()]
             self.reply({"searchResult3": {"song": hits, "album": [ALBUM], "artist": [ARTIST]}})
         elif endpoint == "getSong":
-            self.reply({"song": SONGS[query["id"][0]]})
+            song = query["id"][0]
+            rating = Library.ratings.get((library, song))
+            self.reply({"song": {**SONGS[song], **({"userRating": rating} if rating else {})}})
+        elif endpoint == "setRating":
+            song, rating = query["id"][0], int(query["rating"][0])
+            if song not in SONGS or not 0 <= rating <= 5:
+                self.failure(10, "invalid rating")
+            elif rating:
+                Library.ratings[(library, song)] = rating
+                self.reply({})
+            else:
+                Library.ratings.pop((library, song), None)
+                self.reply({})
+        elif endpoint == "scrobble":
+            song = query["id"][0]
+            if song not in SONGS or query.get("submission", ["true"])[0] not in ("true", "false"):
+                self.failure(10, "invalid scrobble")
+                return
+            Library.scrobbles.append((library, song, int(query["time"][0]),
+                                      query.get("submission", ["true"])[0] == "true"))
+            self.reply({})
         elif endpoint == "getAlbum":
             self.reply({"album": {**ALBUM, "song": list(SONGS.values())}})
         elif endpoint == "getAlbumList2":

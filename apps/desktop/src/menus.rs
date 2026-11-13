@@ -10,7 +10,7 @@ use crate::{
 };
 use gpui_kit::{
     base::{
-        FocusTrapElement, Scrollbar, ScrollbarMode,
+        FocusTrapElement,
         input::{Input, InputState},
     },
     prelude::*,
@@ -1948,31 +1948,16 @@ impl RenderOnce for MenuSurface {
                                     div()
                                         .w_full()
                                         .min_w_0()
-                                        .pr(px(12.))
                                         .flex()
                                         .flex_col()
                                         .children(self.rows),
                                 ),
                             )
-                            .child(
-                                div().absolute().inset_0().child(
-                                    Scrollbar::vertical(&state.scroll)
-                                        .id("context-menu-scrollbar")
-                                        .mode(ScrollbarMode::Always)
-                                        .styles(|styles| {
-                                            styles
-                                                .track(|track| {
-                                                    track.width(px(8.)).bg(color(APP).into())
-                                                })
-                                                .thumb(|thumb| {
-                                                    thumb
-                                                        .width(px(4.))
-                                                        .bg(color(BORDER_STRONG))
-                                                        .radius(px(2.))
-                                                })
-                                        }),
-                                ),
-                            )
+                            .child(div().absolute().inset_0().child(crate::layout::scrollbar(
+                                "context-menu-scrollbar",
+                                &state.scroll,
+                                APP,
+                            )))
                             .focus_trap("context-menu-focus", &state.focus),
                     ),
                 ),

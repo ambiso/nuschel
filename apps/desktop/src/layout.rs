@@ -6,7 +6,11 @@
 //! ellipsis remain GPUI's job (including its shaping cache and accessibility
 //! text); callers must not measure or edit strings to make them fit.
 use crate::{assets::icon, dialogs::Tooltip, theme::*};
-use gpui_kit::{prelude::*, *};
+use gpui_kit::{
+    base::{Scrollbar, ScrollbarHandle, ScrollbarMode},
+    prelude::*,
+    *,
+};
 use std::{cell::Cell, rc::Rc};
 
 /// A control's retained focus state; no text/layout cache or global registry.
@@ -219,7 +223,102 @@ pub fn scroll_region(
 ) -> Stateful<Div> {
     let state = window.use_keyed_state((id, 0_usize), cx, |_, _| ScrollHandle::new());
     let handle = state.read(cx).clone();
-    scrollable(id, label, handle).max_h(height)
+    scrollable(id, label, handle.clone())
+        .max_h(height)
+        .child(scrollbar(
+            SharedString::from(format!("{id}-scrollbar")),
+            &handle,
+            MAIN,
+        ))
+}
+
+/// Space reserved for a visible track, in zoom-aware logical pixels. Content
+/// must not occupy the track's hit area, including when its labels wrap.
+pub const SCROLLBAR_GUTTER: f32 = 12.;
+
+/// One native scrollbar style for ordinary and virtualized scroll handles.
+/// The kit positions this absolute element at the handle's actual viewport,
+/// even when appended inside moving content. Always means visible *when it
+/// overflows*: the kit omits both track and thumb for a non-scrollable axis.
+pub fn scrollbar<H: ScrollbarHandle + Clone>(
+    id: impl Into<ElementId>,
+    handle: &H,
+    background: Token,
+) -> Scrollbar {
+    Scrollbar::vertical(handle)
+        .id(id)
+        .mode(ScrollbarMode::Always)
+        .styles(|styles| {
+            styles
+                .track(|track| track.width(px(8.)).bg(color(background).into()))
+                .thumb(|thumb| thumb.width(px(4.)).bg(color(BORDER_STRONG)).radius(px(2.)))
+                .thumb_hover(|thumb| thumb.bg(color(TEXT_FAINT)))
+                .thumb_active(|thumb| thumb.bg(color(TEXT_MUTED)))
+        })
+}
+
+/// Virtual lists cannot contain a sibling overlay themselves. This finite
+/// frame shares the same viewport-based bar and gutter as `scrollable`; the
+/// caller keeps the list's height/flex budget and retained keyboard handle.
+pub fn scroll_frame<H: ScrollbarHandle + Clone>(
+    id: &'static str,
+    handle: &H,
+    viewport: impl IntoElement,
+    background: Token,
+) -> Stateful<Div> {
+    div()
+        .id(SharedString::from(format!("{id}-frame")))
+        .relative()
+        .min_w_0()
+        .min_h_0()
+        .flex()
+        .flex_col()
+        .child(viewport)
+        .child(scrollbar(
+            SharedString::from(format!("{id}-scrollbar")),
+            handle,
+            background,
+        ))
+}
+
+/// A capture-phase wheel listener for virtual viewports. A uniform list's
+/// native bubble listener otherwise runs before its parent's, moving both it
+/// and the containing dialog. The hitbox retains normal occlusion semantics.
+pub fn capture_scroll(
+    handle: ScrollHandle,
+    listener: impl Fn(&ScrollEvent, &mut Window, &mut App) + 'static,
+) -> impl IntoElement {
+    scroll_events(handle, DispatchPhase::Capture, listener)
+}
+
+/// The outer viewport handles remaining wheel events before its own native
+/// scrolling. Nested capture listeners have already had the first chance.
+pub fn scroll_before_parent(
+    handle: ScrollHandle,
+    listener: impl Fn(&ScrollEvent, &mut Window, &mut App) + 'static,
+) -> impl IntoElement {
+    scroll_events(handle, DispatchPhase::Bubble, listener)
+}
+
+fn scroll_events(
+    handle: ScrollHandle,
+    dispatch: DispatchPhase,
+    listener: impl Fn(&ScrollEvent, &mut Window, &mut App) + 'static,
+) -> impl IntoElement {
+    canvas(
+        // An absolute child's layout origin moves with its scroll parent.
+        // Resolve from the retained viewport so its gutter remains interactive.
+        move |_, window, _| window.insert_hitbox(handle.bounds(), HitboxBehavior::Normal),
+        move |_, hitbox, window, _| {
+            window.on_mouse_event(move |event: &ScrollEvent, phase, window, cx| {
+                if phase == dispatch && hitbox.should_handle_scroll(window) {
+                    listener(event, window, cx);
+                }
+            });
+        },
+    )
+    .absolute()
+    .inset_0()
 }
 
 /// The same keyboard/focus contract for a caller-owned scroll handle (dialogs
@@ -269,6 +368,7 @@ pub fn scrollable(id: &'static str, label: &'static str, handle: ScrollHandle) -
         .w_full()
         .min_w_0()
         .min_h_0()
+        .pr(px(SCROLLBAR_GUTTER))
         .overflow_y_scroll()
         .track_scroll(&handle)
         // Establish an autoscroll scope before prepainting descendants; a

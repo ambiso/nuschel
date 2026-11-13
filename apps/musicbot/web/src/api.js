@@ -27,9 +27,9 @@ export async function getJSON(path, signal) {
   return response.json();
 }
 
-/** POSTs a command body to `api/command`; throws HttpError on failure. */
-export async function postCommand(body, signal) {
-  const response = await fetch("api/command", {
+/** POSTs JSON to `path`; throws HttpError with the server's `error` text on failure. */
+export async function postJSON(path, body, signal) {
+  const response = await fetch(path, {
     method: "POST",
     signal,
     headers: { "Content-Type": "application/json" },

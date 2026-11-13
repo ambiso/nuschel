@@ -14,11 +14,7 @@ use crate::{
     theme::{self, *},
     unread::{self, Lane},
 };
-use gpui_kit::{
-    base::{Scrollbar, ScrollbarMode, input::Textarea},
-    prelude::*,
-    *,
-};
+use gpui_kit::{base::input::Textarea, prelude::*, *};
 use nuschl_client::{HistorySource, SessionSecurity, conversation::Entry};
 use nuschl_session::connection::{TextTarget, User};
 use std::{collections::HashMap, rc::Rc};
@@ -409,7 +405,8 @@ fn server_rail(this: &Desktop, selected: Option<usize>, cx: &mut Context<Desktop
         })
         .collect::<Vec<_>>();
     div()
-        .w(px(72.))
+        // Keep the existing 72px tile/decoration lane beside the track gutter.
+        .w(px(72. + layout::SCROLLBAR_GUTTER))
         .h_full()
         .flex_shrink_0()
         .py_3()
@@ -447,7 +444,19 @@ fn server_rail(this: &Desktop, selected: Option<usize>, cx: &mut Context<Desktop
                                 this.drop_server_drag(item, window, cx)
                             }),
                         )
-                        .children(servers),
+                        .capture_any_mouse_down(cx.listener(
+                            |this, event: &MouseDownEvent, _, _| {
+                                if event.button == MouseButton::Left {
+                                    this.cancel_server_scroll();
+                                }
+                            },
+                        ))
+                        .children(servers)
+                        .child(layout::scrollbar(
+                            "server-scrollbar",
+                            &this.server_scroll,
+                            RAIL,
+                        )),
                 )
                 .child(unread::overlay(
                     this,
@@ -769,20 +778,24 @@ fn sidebar(
                         }),
                 )
                 .child(
-                    div().absolute().inset_0().child(
-                        Scrollbar::vertical(&this.channel_scroll)
-                            .id("channel-scrollbar")
-                            .mode(ScrollbarMode::Always)
-                            .styles(|styles| {
-                                styles
-                                    .track(|track| track.width(px(8.)).bg(color(SIDEBAR).into()))
-                                    .thumb(|thumb| {
-                                        thumb.width(px(4.)).bg(color(BORDER_STRONG)).radius(px(2.))
-                                    })
-                                    .thumb_hover(|thumb| thumb.bg(color(TEXT_FAINT)))
-                                    .thumb_active(|thumb| thumb.bg(color(TEXT_MUTED)))
-                            }),
-                    ),
+                    div()
+                        .absolute()
+                        .top_0()
+                        .bottom_0()
+                        .right_0()
+                        .w(px(layout::SCROLLBAR_GUTTER))
+                        .capture_any_mouse_down(cx.listener(
+                            |this, event: &MouseDownEvent, _, _| {
+                                if event.button == MouseButton::Left {
+                                    this.cancel_channel_scroll();
+                                }
+                            },
+                        ))
+                        .child(layout::scrollbar(
+                            "channel-scrollbar",
+                            &this.channel_scroll,
+                            SIDEBAR,
+                        )),
                 )
                 .child(unread::overlay(
                     this,
@@ -2029,25 +2042,11 @@ fn conversation(
                                     }
                                 },
                             ))
-                            .child(
-                                Scrollbar::vertical(&this.scroll)
-                                    .id("chat-history-scrollbar")
-                                    .mode(ScrollbarMode::Always)
-                                    .styles(|styles| {
-                                        styles
-                                            .track(|track| {
-                                                track.width(px(8.)).bg(color(MAIN).into())
-                                            })
-                                            .thumb(|thumb| {
-                                                thumb
-                                                    .width(px(4.))
-                                                    .bg(color(BORDER_STRONG))
-                                                    .radius(px(2.))
-                                            })
-                                            .thumb_hover(|thumb| thumb.bg(color(TEXT_FAINT)))
-                                            .thumb_active(|thumb| thumb.bg(color(TEXT_MUTED)))
-                                    }),
-                            ),
+                            .child(layout::scrollbar(
+                                "chat-history-scrollbar",
+                                &this.scroll,
+                                MAIN,
+                            )),
                     )
                     .when_some(jump_pill(this, channel, cx), |view, pill| view.child(pill)),
             ),

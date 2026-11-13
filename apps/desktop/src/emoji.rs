@@ -94,6 +94,7 @@ enum Row {
 pub struct Picker {
     query: String,
     rows: Vec<Row>,
+    scroll: UniformListScrollHandle,
 }
 
 impl Picker {
@@ -126,7 +127,11 @@ impl Picker {
             }
             add(&mut rows, &found);
         }
-        Self { query, rows }
+        Self {
+            query,
+            rows,
+            scroll: UniformListScrollHandle::new(),
+        }
     }
 
     /// What Enter inserts: the first emoji shown.
@@ -266,10 +271,13 @@ pub fn overlay(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement> 
                 .collect()
         }),
     )
+    .track_scroll(&picker.scroll)
     .flex_1()
     .min_h_0()
-    .px_2()
+    .pl_2()
+    .pr(px(crate::layout::SCROLLBAR_GUTTER))
     .pb_2();
+    let lines = crate::layout::scroll_frame("emoji-grid", &picker.scroll, lines, ELEVATED).flex_1();
     Some(
         div()
             .id("emoji-backdrop")

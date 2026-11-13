@@ -24,6 +24,15 @@ SIGNER = None
 MACOS_APP = None
 
 
+def pinned_git_cliff():
+    """Selection substitute: the real git-cliff of the pinned development shell on PATH."""
+    found = shutil.which('git-cliff')
+    assert found, 'Run release fixtures in the pinned development shell (git-cliff required).'
+    output = Path(found).resolve(strict=True).parents[1]
+    assert str(output).startswith('/nix/store/') and output.name.split('-', 1)[1].startswith('git-cliff-')
+    return {'drv': '/nix/store/' + 'a' * 32 + '-git-cliff-fixture.drv', 'output': str(output)}
+
+
 class LocalRelease(unittest.TestCase):
     def setUp(self):
         self.addCleanup(patch.stopall)
@@ -37,7 +46,7 @@ class LocalRelease(unittest.TestCase):
         subprocess.run([SIGNER, 'keygen', '--secret-file', self.secret, '--public-file', self.public],
                        check=True, capture_output=True)
         for name in ('release/make-update.py', 'release/prepare-artifacts.py',
-                     'release/notice-roots.json', 'release/notice-scopes.json'):
+                     'release/notice-roots.json', 'release/notice-scopes.json', 'cliff.toml'):
             target = self.repo / name
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / name, target)
@@ -73,10 +82,12 @@ class LocalRelease(unittest.TestCase):
         (web / 'index.html').write_text('synthetic')
         (web / 'app/index.html').write_text('synthetic')
         self.stage = self.root / 'stage'
-        # Only notice/platform-header validation and Nix selection are substitutes.
+        # Only notice/platform-header validation and Nix selection (products and the
+        # devShell git-cliff) are substitutes.
         # All source/tag, product/tree/archive, signer and upload-boundary code is real.
         self.addCleanup(patch.stopall)
         patch.object(local, 'select_product', side_effect=lambda flake, name: self.products[name]).start()
+        patch.object(local, 'select_git_cliff', return_value=pinned_git_cliff()).start()
         patch.object(local, 'check_installs').start()
         patch.object(local, 'mac_integrity', return_value={'fixture': 'synthetic; not actual Mach-O proof'}).start()
         auth = local.module(self.repo / 'release/prepare-artifacts.py')
@@ -275,11 +286,11 @@ class LocalRelease(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'links'):
             local.tree(root)
 
-    def publish(self, bad_remote=False):
-        calls, real, created = [], local.run, False
+    def publish(self, bad_remote=False, body=None):
+        calls, real, created, notes = [], local.run, False, None
         ledger = local.load(self.stage / 'ledger.json')
         def command(args, **kwargs):
-            nonlocal created
+            nonlocal created, notes
             if str(args[0]) != 'fixture-gh':
                 return real(args, **kwargs)
             args = list(map(str, args)); calls.append(args)
@@ -292,9 +303,11 @@ class LocalRelease(unittest.TestCase):
                 if endpoint.endswith('/releases/42'):
                     assets = [{'name': p.name, 'size': p.stat().st_size, 'digest': 'sha256:' + local.sha(p), 'state': 'uploaded'}
                               for p in (self.stage / 'dist').iterdir()]
-                    return json.dumps({'id': 42, 'draft': True, 'assets': assets[:-1] if bad_remote else assets})
+                    return json.dumps({'id': 42, 'draft': True, 'assets': assets[:-1] if bad_remote else assets,
+                                       'body': notes if body is None else body})
             if args[1:3] == ['release', 'create']:
-                created = True
+                created = True  # GitHub stores the uploaded notes file as the release body.
+                notes = Path(args[args.index('--notes-file') + 1]).read_text()
             return ''
         with patch.object(local, 'run', side_effect=command):
             try:

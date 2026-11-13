@@ -36,3 +36,7 @@ Private security reports, credentials, recordings and profiles belong outside Gi
 ## Historical evidence
 
 The [2026-11-13 TODO snapshot](docs/history/2026-11-13-todo-snapshot.md) preserves the completed history and original scoped evidence. Its checkbox states are historical, not a current backlog. The [source-to-issue map](docs/todo-issue-map.tsv) accounts for all 206 original unchecked entries, including two already-resolved entries, plus the residual work found in prose. Deferred work retains its existing status.
+
+The [musicbot submission's deferred workspace checks](docs/history/2026-11-12-musicbot-deferred-checks.md)
+preserve the findings left unfixed at the user's request, with their original
+checkpoint and verification limits.

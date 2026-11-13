@@ -5,6 +5,7 @@
   import { startItemDrag } from "../dnd.js";
   import Cover from "./Cover.svelte";
   import Icon from "./Icon.svelte";
+  import SongRating from "./SongRating.svelte";
 
   let { songs, namespace, covers = false } = $props();
   const current = $derived(namespace !== null && namespace === store.browseKey && store.connection === "open" && !store.invalid);
@@ -30,6 +31,7 @@
       <div class="actions">
         <button class="icon-button" disabled={!store.player || !current} aria-label="Add {song.title} to queue" title="Add to queue" onclick={() => store.add(store.selected, { kind: "song", library: song.library, id: song.id, namespace })}><Icon name="add" /></button>
         <button class="icon-button" disabled={!store.player || !current} aria-label="Play {song.title} next" title="Play next" onclick={() => store.add(store.selected, { kind: "song", library: song.library, id: song.id, namespace }, 0)}><Icon name="next" /></button>
+        <SongRating library={song.library} songId={song.id} title={song.title} {namespace} />
       </div>
     </li>
   {/each}

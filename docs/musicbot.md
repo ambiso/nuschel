@@ -1,8 +1,8 @@
 # Music bot
 
-`nuschl-musicbot` plays music from Subsonic servers in Mumble channels. People
-control what plays on a web page; they get their link to it by writing `!web` to the
-bot in Mumble. It works with any Mumble server, stock Murmur as well as `nuschld`.
+`nuschl-musicbot` plays music from Subsonic servers in Mumble channels and web
+browsers. People control what plays on a web page; they get their link by writing
+`!web` to the bot in Mumble. It works with stock Murmur and `nuschld`.
 
 ## What it does
 
@@ -31,18 +31,31 @@ bot in Mumble. It works with any Mumble server, stock Murmur as well as `nuschld
   People may also subscribe to listen to the bot's channel while staying in
   another channel. These subscriptions count as listeners and keep the queue
   playing; others in their current channel do not receive the music.
+- **Browser listening.** Press **Listen** in the player bar to hear the selected
+  queue in the browser. Its volume is local and independent of Mumble volume and
+  speech ducking. Browser listeners keep the queue playing even with nobody in
+  its Mumble channel. **Stop** releases the listening connection.
 - **Queues.** Drag songs, albums or playlists from the library into the queue,
   then drag entries to reorder them. The move handles also accept Alt+Up/Down.
   Remove entries, clear upcoming tracks, skip, pause and set the volume. The player
   bar has a live progress display: click or drag to seek, or use Left/Right for
   five-second steps and Home/End. Space toggles playback outside controls.
-  A queue waits when no channel with listeners is receiving it. Deafened people
-  do not count as listeners. Changes appear for every viewer through a live stream.
+  Playback status has a reserved row below the progress bar, so speech activity,
+  pauses and buffering keep the surrounding controls in place.
+  A queue waits when it has neither Mumble recipients nor browser listeners.
+  Deafened Mumble users do not count as recipients. Changes appear for every
+  viewer through a live stream.
 - **History.** The History view keeps the latest 1,000 finished plays or failed
   attempts per queue, newest first. It shows track details, who queued the track,
   local start/end times, transmitted duration, and whether it completed, was
   skipped, or failed. History survives restarts and loads in pages of 50.
-- **Ducking.** While somebody in a channel speaks, the queue playing there gets
+- **Library history.** Playback also appears in the configured Subsonic account's
+  history and play counts. Shared channels count as one play; independent queues
+  count separately. The submission rules are described below.
+- **Ratings.** Click one of the five stars on the playing song, a library track
+  or a History entry to save its rating. Click the star for the current rating
+  again to clear it. Listeners share the configured library account.
+- **Ducking.** While somebody in a channel speaks, its Mumble music output gets
   quieter (by default to 30 % of its volume) and comes back 0.8 s after the last
   speech. It fades down in about 60 ms and up in about half a second, so nothing
   clicks. It reacts to speech, not to a microphone that is merely open: the bot
@@ -77,6 +90,13 @@ so do not share it. A person with a Mumble certificate keeps the same link; `!we
 replaces it, and the old one stops working. Without a certificate anybody could use
 the same name later, so every `!web` gives a new link. Links are kept in
 `tokens.json` in the state directory.
+
+A link grants everything the page does: controlling every queue, reading playback
+history, and streaming any queue's audio in a browser (only the server-wide cap of
+16 browser streams applies, about 3 Mbit/s each). The bot also writes to each
+configured library account: it scrobbles every qualifying play to that account's
+history, and any valid link can set or clear that account's song ratings. The bot
+uses one account per library, so every link holder shares those ratings.
 
 At most 4,096 links are retained. When the limit is reached, issuance fails
 without replacing another person's link. Token files are capped at 4 MiB.
@@ -328,7 +348,8 @@ Those gates are absent from release code; ordinary real-worker confinement and
 service fault checks remain separate evidence.
 
 Rust tests cover queue ordering, seek boundaries, history lifecycle and retention,
-durable state, library identity across reordering/removal, gain ramps, and VAD.
+durable state, library identity across reordering/removal, gain ramps, VAD,
+and authenticated rating reads/writes, bounds, failures and live revisions.
 Frontend tests cover progress interpolation, scrubbing, drag indices, route
 encoding, shortcuts, and history pagination during live refreshes.
 `tests/musicbot.py` drives the JSON API and two SSE viewers against stock Murmur
@@ -336,6 +357,13 @@ and a plain/OpenSubsonic fixture. It checks synchronized mutations, shared and
 separate audio, speech-only ducking, seeking, public presence comments, completed,
 skipped and failed history, pagination, and restart recovery with libraries
 reordered or removed.
+
+The backend reporting check also ran against a real Navidrome 0.64.2 instance
+with a six-second FLAC and stock Murmur. Navidrome's now-playing API identified
+`nuschl-musicbot` under the configured account. Completed plays and qualifying
+skips updated its history and play count; paused enqueues, short skips and a seek
+to the end did not. Shared queues submitted once, independent queues separately,
+and a deployment restart preserved the original play timestamp without backfill.
 
 ```sh
 cargo build -p nuschl-cli -p nuschl-musicbot -p nuschl-musicbot-codec-worker
@@ -352,6 +380,91 @@ python3 tests/with_local_murmur.py "$(nix build --inputs-from . nixpkgs#murmur -
 `nix build .#checks.x86_64-linux.vm-musicbot` runs the bot under its NixOS module
 against Murmur in a VM, then the same script.
 
+## Browser listening
+
+**Listen** starts audio for the selected queue after a browser gesture. The
+**Browser volume** slider changes only local playback; **Mumble volume** controls
+the bot's channel output. Speech ducking applies to Mumble output. Browser audio
+uses the original decoded stereo samples (at most full scale), so every format the
+confined decode worker decodes can be heard here. Selecting another queue switches the listening stream while keeping
+the browser's audio context and volume.
+
+Pause, seek and skip follow the shared queue and clear buffered browser audio.
+Browser subscriptions count as listeners. When the last receiving Mumble channel
+and browser listener leave, playback waits. Listening connections and browser
+audio state are temporary; the saved queue retains its ordinary playback state.
+
+Use HTTPS, or localhost during development. Listening requires streaming fetch,
+AudioWorklet and a 48 kHz AudioContext. Browser suspension, page closure, revoked
+links and connection/library changes stop listening and release its subscription.
+Press **Listen** again to restart after an interruption.
+
+The live stream carries 48 kHz stereo float32 PCM, about **3.1 Mbit/s per listener**.
+The server admits at most 16 browser streams, with bounded shared frame storage
+and a one-record HTTP handoff. The worklet starts after 60 ms of audio and retains
+at most 200 ms in its ring; slow readers discard old frames and resume at the live
+edge. Network and browser scheduling add their own latency.
+
+Verified in real Chromium with stock Murmur: browser-only playback with Mumble
+volume zero, independent local mute/volume, pause/seek/skip, queue switching,
+listener release and suspension cleanup. Reference-Opus Mumble output fell to
+the configured speech-ducking level while measured browser output stayed steady.
+
+## Song ratings
+
+Click a star to save one to five stars immediately. Click the star for the current
+rating again to clear it using the standard Subsonic
+[`setRating`](https://opensubsonic.netlify.app/docs/endpoints/setrating) value 0.
+Stars appear inline in the player bar, library song lists and playback History.
+
+Navidrome stores ratings per account. The bot uses the configured library account,
+including the account associated with an API key. All listeners and queues using
+that account share its rating; the latest saved choice wins. Ratings remain in
+the library server across bot restarts.
+
+Visible stars load the current backend rating and follow changes from other
+listeners. Offscreen rows wait until they are visible, and all star controls share
+two client-side read slots. Playback progress does not reload ratings. Redisplaying
+a track also picks up edits made directly in Navidrome.
+Reconnecting disables stale controls until fresh ratings arrive; tracks from a
+removed library cannot be rated. A failed write keeps the last confirmed rating
+and shows **Retry**, which reloads the backend value before another star can be saved.
+
+Verified against real Navidrome 0.64.2 with two independent browser listeners:
+all five ratings and clearing, player/library/history controls, live updates,
+unchanged request counts during playback, failed writes and explicit recovery,
+and retained backend ratings after a bot restart. Narrow-screen controls were
+also exercised in Chromium.
+
+## Backend playback history
+
+The bot uses the standard Subsonic `scrobble` endpoint. After the first successful
+audio packet it sends `submission=false` to announce now-playing. When playback
+ends, it sends `submission=true` if transmitted audio reached half the advertised
+duration or four minutes, whichever is shorter. Tracks without a positive known
+duration require four minutes. Completion, skip and decoder failure use the same
+threshold; paused time, listenerless waits and audio skipped by seeking do not
+count.
+
+Reports use the library's configured account, including the account associated
+with an API key. Mumble names identify who queued a track in the bot's own History
+view; they do not create separate Subsonic users. Navidrome updates that account's
+play count, last-played time and backend history. Any external scrobbling uses the
+integrations configured for that account on the library server.
+
+Each logical queue reports once, even when several Mumble channels hear it.
+Pause and seek retain the ongoing play. Deployment restarts retain its first-audio
+Unix timestamp in milliseconds and transmitted duration; the resumed play may
+announce now-playing again, then submit once when it ends. Finished history
+restored at startup is not backfilled.
+
+One owned reporter serializes requests across queues. Failed requests are logged
+without remote diagnostics and are not retried: Subsonic provides no idempotency
+key for a submitted play. SIGTERM, Ctrl-C and web-server failure join the current
+request and drain already-finished reports within a total 30-second grace. An
+ongoing play remains in the saved queue for deployment recovery.
+
+
 ## Playback state
 
 Deployment restarts retain the current song and position, upcoming entries and
@@ -361,10 +474,11 @@ Back up `queues.json` together with the bot's state directory. Keep the channel
 names and library names/URLs stable: queues are matched by channel name, and
 tracks by library name plus URL, rather than configuration order.
 
-History starts with the first successfully transmitted audio packet. Its
-transmitted duration counts audio sent by the bot; it excludes paused/buffering
-time, listenerless waits and skipped-over audio after a seek. Reaching EOF marks a
-play completed even if the user sought past part of it. Failed attempts that sent
+History starts with the first audio frame successfully broadcast to Mumble or a
+browser. A shared queue counts each frame once across both outputs. Transmitted
+duration excludes paused/buffering time, listenerless waits and skipped-over audio
+after a seek. Reaching EOF marks a play completed even if the user sought past part
+of it. Failed attempts that sent
 no audio show **Never started**. Removing an upcoming track or skipping before
 any audio does not enter history. Pause, seek and restart preserve one ongoing
 play; its history entry appears when it finishes or an error is processed.
@@ -384,8 +498,8 @@ as failed before decoding resumes.
 
 Server bandwidth changes apply live. A channel whose budget cannot support the
 6 kbit/s codec minimum plus transport overhead stops receiving music; other
-attached channels may continue. With no eligible channel, position and history
-duration stop advancing until the budget recovers.
+attached channels and browser listeners may continue. Position and history duration
+stop advancing only when no eligible Mumble or browser output remains.
 
 Seeking restarts decoding and discards audio before the requested position, which
 works with all supported formats and server transcodes. On a slow connection or a
@@ -400,6 +514,22 @@ latest state when they can read again. Revoked links lose access to the stream.
 At most 32 streams may remain open across all tokens; excess viewers receive 503.
 The permit belongs to the response stream, not merely its request handler.
 Proxies must pass SSE through without buffering; the bot sends `X-Accel-Buffering: no`.
+
+`GET listen?player=N` opens the authenticated live browser audio stream. Invalid
+links return 404, unknown queues return 400, and exhausted browser-stream admission
+returns 503. Responses use `application/octet-stream`, `Cache-Control: no-store`
+and `X-Accel-Buffering: no`. Format headers are `X-Audio-Format: f32le`,
+`X-Audio-Rate: 48000`, `X-Audio-Channels: 2` and `X-Audio-Frame-Samples: 960`.
+
+The first body record is byte 0, which clears buffered audio. Byte 1 is followed
+by exactly 7,680 bytes: 960 interleaved stereo frames of little-endian float32 PCM,
+each sample within -1.0..1.0 (clients reject anything else). Reset records also
+delimit pauses, seeks and song changes. Byte 2 is a keep-alive without audio: a
+stream with nothing else to send (a paused or waiting queue) sends one at least every
+15 seconds, so proxies with read timeouts (nginx defaults to 60 seconds) keep it
+open. The stream remains open while the queue waits; disconnecting releases its
+subscription. Revoked links are
+checked during playback and at least once per second while idle or backpressured.
 
 The authenticated `GET /u/<token>/licenses` route serves the installed, bounded
 licence text. Nix packages are gated by the scoped Rust/npm notice inventory;
@@ -417,6 +547,18 @@ A missing library has `entry.track.library: null`; backend URLs and credentials
 are never returned. State/SSE snapshots include only each player's
 `history_revision`, so open history views refresh when a record is added without
 receiving the entire retained history every playback tick.
+
+`GET rating?library=N&id=ID` reads the configured account's current song rating
+and returns `{"rating":N}`. `POST rating` accepts JSON
+`{"library":N,"id":"ID","rating":N}` and returns 204 after a successful backend
+write. Ratings must be integers from 0 to 5; 0 clears the rating. These endpoints
+require a valid viewer link and use the same bounded, authenticated library
+requests as browsing. They are independent of queue selection.
+
+State/SSE includes `rating_revision`, advanced only after a successful backend
+write. Visible stars use it to reload the authoritative rating. The counter is
+local to a bot run; ratings are fetched from the library rather than queue or
+history snapshots. After a failed write, **Retry** reloads the current rating.
 
 `POST command` accepts JSON tagged by `command`: `pause`, `resume`, `skip`,
 `clear`, `seek` (`position_ms`), `volume`, `ducking`, `remove`, `move`, `add`, and

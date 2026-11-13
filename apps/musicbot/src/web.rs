@@ -6,12 +6,13 @@
 //! contract is described in docs/musicbot.md ("Web API").
 use crate::{
     Bot,
-    player::{Ducking, MAX_DUCK_HOLD},
+    player::{BrowserSubscription, Ducking, MAX_DUCK_HOLD},
     subsonic::{self, Album, AlbumList, Artist, Library, Playlist, Track},
     tokens::Owner,
 };
 use axum::{
     Json, Router,
+    body::{Body, Bytes},
     extract::{Path, Query, State},
     http::{HeaderName, HeaderValue, StatusCode, header},
     response::{
@@ -22,8 +23,15 @@ use axum::{
 };
 use futures_util::{Stream, StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
-use std::{convert::Infallible, path::PathBuf, sync::Arc, time::Duration};
-use tokio::sync::Semaphore;
+use std::{
+    convert::Infallible,
+    path::PathBuf,
+    pin::Pin,
+    sync::{Arc, atomic::Ordering},
+    task::{Context, Poll},
+    time::Duration,
+};
+use tokio::sync::{Semaphore, SemaphorePermit, mpsc};
 use uuid::Uuid;
 
 /// Searches longer than this are cut.
@@ -39,6 +47,14 @@ static SSE_WATCHERS: Semaphore = Semaphore::const_new(MAX_SSE_WATCHERS);
 /// Includes fetching and the actual isolated worker exit, not HTTP lifetime.
 const MAX_COVER_JOBS: usize = 2;
 static COVER_JOBS: Semaphore = Semaphore::const_new(MAX_COVER_JOBS);
+/// Live bodies have their own admission, independent of library metadata calls.
+const MAX_LISTEN_STREAMS: usize = 16;
+static LISTEN_STREAMS: Semaphore = Semaphore::const_new(MAX_LISTEN_STREAMS);
+/// A listening stream with nothing to send (a paused or waiting queue) sends
+/// this one-byte record at least this often, so proxies with read timeouts
+/// (nginx defaults to 60 s) keep it open.
+const LISTEN_KEEPALIVE: Duration = Duration::from_secs(15);
+const KEEPALIVE_RECORD: &[u8] = &[2];
 /// Albums per page of an album list.
 const PAGE_SIZE: u32 = 48;
 /// Changes that come in a burst are sent as one state.
@@ -57,7 +73,9 @@ pub fn router(bot: Arc<Bot>) -> Router {
         .route("/u/{token}/api/state", get(state))
         .route("/u/{token}/api/history", get(history))
         .route("/u/{token}/api/events", get(events))
+        .route("/u/{token}/api/listen", get(listen))
         .route("/u/{token}/api/command", post(command))
+        .route("/u/{token}/api/rating", get(rating).post(set_rating))
         .route("/u/{token}/api/albums", get(albums))
         .route("/u/{token}/api/album", get(album))
         .route("/u/{token}/api/artists", get(artists))
@@ -406,6 +424,7 @@ struct StateView {
     libraries: Vec<String>,
     players: Vec<PlayerView>,
     channels: Vec<ChannelView>,
+    rating_revision: u64,
 }
 
 #[derive(Serialize)]
@@ -518,6 +537,7 @@ fn snapshot(bot: &Bot, you: &str) -> StateView {
             .collect(),
         players,
         channels,
+        rating_revision: bot.rating_revision.load(Ordering::SeqCst),
     }
 }
 
@@ -655,6 +675,126 @@ async fn history(
         oldest_id: state.history.back().map(|item| item.id),
         revision: state.next_history_id.saturating_sub(1),
     }))
+}
+
+#[derive(Deserialize)]
+struct ListenQuery {
+    player: usize,
+}
+
+/// An admitted body owns its producer; disconnecting cancels all listening work.
+struct ListenBody {
+    records: mpsc::Receiver<Bytes>,
+    producer: tokio::task::JoinHandle<()>,
+}
+
+impl Stream for ListenBody {
+    type Item = Result<Bytes, Infallible>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        if self.producer.is_finished() {
+            self.records.close();
+            return Poll::Ready(None);
+        }
+        self.records.poll_recv(cx).map(|record| record.map(Ok))
+    }
+}
+
+impl Drop for ListenBody {
+    fn drop(&mut self) {
+        self.producer.abort();
+    }
+}
+
+/// Keeping the subscription and permit together prevents early capacity release
+/// when a body is dropped but cancellation has not run yet.
+struct ListenLease {
+    subscription: BrowserSubscription,
+    _permit: SemaphorePermit<'static>,
+}
+
+async fn listen(
+    State(bot): State<Arc<Bot>>,
+    Path(token): Path<String>,
+    Query(query): Query<ListenQuery>,
+) -> Result<Response, ApiError> {
+    listen_response(bot, token, query.player, &LISTEN_STREAMS)
+}
+
+fn listen_response(
+    bot: Arc<Bot>,
+    token: String,
+    index: usize,
+    admission: &'static Semaphore,
+) -> Result<Response, ApiError> {
+    let token = Uuid::parse_str(&token)
+        .ok()
+        .filter(|token| bot.tokens.is_valid(token))
+        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, INVALID_LINK.to_owned()))?;
+    let player = bot.players.get(index).ok_or_else(|| bad("no such queue"))?;
+    let permit = admission.try_acquire().map_err(|_| {
+        ApiError(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "too many browser listeners".to_owned(),
+        )
+    })?;
+    let lease = ListenLease {
+        subscription: player.subscribe_browser(),
+        _permit: permit,
+    };
+    // Only one record may leave the shared live fanout before the body polls.
+    // A separate task checks revocation even while HTTP backpressure stops polls.
+    let (send, records) = mpsc::channel(1);
+    let producer = tokio::spawn(async move {
+        let mut lease = lease;
+        let mut check = tokio::time::interval(Duration::from_secs(1));
+        check.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut last_record = tokio::time::Instant::now();
+        loop {
+            if !bot.tokens.is_valid(&token) {
+                break;
+            }
+            let space = tokio::select! {
+                biased;
+                _ = check.tick() => continue,
+                result = send.reserve() => match result {
+                    Ok(space) => space,
+                    Err(_) => break,
+                },
+            };
+            let record = tokio::select! {
+                biased;
+                _ = check.tick() => continue,
+                _ = send.closed() => break,
+                record = lease.subscription.recv() => match record {
+                    Some(record) => record,
+                    None => break,
+                },
+                _ = tokio::time::sleep_until(last_record + LISTEN_KEEPALIVE) => {
+                    Bytes::from_static(KEEPALIVE_RECORD)
+                }
+            };
+            if !bot.tokens.is_valid(&token) {
+                break;
+            }
+            space.send(record);
+            last_record = tokio::time::Instant::now();
+        }
+    });
+    let body = Body::from_stream(ListenBody { records, producer });
+    Ok((
+        [
+            (header::CONTENT_TYPE, "application/octet-stream"),
+            (header::CACHE_CONTROL, "no-store"),
+            (HeaderName::from_static("x-accel-buffering"), "no"),
+            (HeaderName::from_static("x-audio-format"), "f32le"),
+            (HeaderName::from_static("x-audio-rate"), "48000"),
+            (HeaderName::from_static("x-audio-channels"), "2"),
+            (HeaderName::from_static("x-audio-frame-samples"), "960"),
+        ],
+        body,
+    )
+        .into_response())
 }
 
 /// The state now and after every change, until the link is revoked.
@@ -851,6 +991,55 @@ struct ItemQuery {
     #[serde(default)]
     library: usize,
     id: String,
+}
+
+#[derive(Serialize)]
+struct RatingView {
+    rating: u8,
+}
+
+async fn rating(
+    State(bot): State<Arc<Bot>>,
+    Path(token): Path<String>,
+    Query(query): Query<ItemQuery>,
+) -> Result<Json<RatingView>, ApiError> {
+    owner(&bot, &token)?;
+    let rating = ask(&bot, query.library, move |library| {
+        library.rating(&query.id)
+    })
+    .await?;
+    Ok(Json(RatingView { rating }))
+}
+
+#[derive(Deserialize)]
+struct RatingMutation {
+    library: usize,
+    id: String,
+    rating: i64,
+}
+
+async fn set_rating(
+    State(bot): State<Arc<Bot>>,
+    Path(token): Path<String>,
+    // JSON only, just like queue commands: cross-origin forms cannot submit it.
+    Json(mutation): Json<RatingMutation>,
+) -> Result<StatusCode, ApiError> {
+    owner(&bot, &token)?;
+    let rating = u8::try_from(mutation.rating)
+        .ok()
+        .filter(|rating| *rating <= 5)
+        .ok_or_else(|| bad("rating must be between 0 and 5"))?;
+    let changed = bot.clone();
+    ask(&bot, mutation.library, move |library| {
+        library.set_rating(&mutation.id, rating)?;
+        // The admitted worker owns this notification: a cancelled or timed-out
+        // HTTP caller cannot hide a backend write that actually succeeded.
+        changed.rating_revision.fetch_add(1, Ordering::SeqCst);
+        changed.changes.notify();
+        Ok(())
+    })
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[derive(Deserialize)]
@@ -1085,6 +1274,10 @@ mod tests {
     }
     use subsonic::tests::Server;
 
+    // These API tests share the production admission pool; the overload test
+    // deliberately occupies every permit and must not race other API consumers.
+    static API_TESTS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
     fn test_bot(url: &str, library_count: usize) -> (tempfile::TempDir, Arc<Bot>, String) {
         let directory = tempfile::tempdir().unwrap();
         let config: crate::config::Config = serde_json::from_value(serde_json::json!({
@@ -1130,8 +1323,188 @@ mod tests {
             tokens,
             changes: crate::Changes::default(),
             persistence: std::sync::Mutex::new(()),
+            rating_revision: std::sync::atomic::AtomicU64::new(0),
         });
         (directory, bot, token)
+    }
+
+    fn listening_bot() -> (tempfile::TempDir, Arc<Bot>, String) {
+        let (directory, mut bot, token) = test_bot("http://unused.invalid", 0);
+        let unique = Arc::get_mut(&mut bot).unwrap();
+        unique.players.push(Arc::new(crate::player::Player::new(
+            "Browser queue".into(),
+            50,
+            Ducking::default(),
+            unique.changes.clone(),
+        )));
+        (directory, bot, token)
+    }
+
+    async fn released(bot: &Bot, count: usize) {
+        let mut changes = bot.changes.subscribe();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while bot.players[0].listeners() != count {
+                changes.changed().await.unwrap();
+            }
+        })
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn listening_validates_links_and_queues_before_admission_and_bounds_live_bodies() {
+        static ADMISSION: Semaphore = Semaphore::const_new(MAX_LISTEN_STREAMS);
+        let (_directory, bot, token) = listening_bot();
+        assert_eq!(
+            listen_response(bot.clone(), "invalid".into(), 0, &ADMISSION)
+                .err()
+                .unwrap()
+                .0,
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            listen_response(bot.clone(), token.clone(), 1, &ADMISSION)
+                .err()
+                .unwrap()
+                .0,
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(ADMISSION.available_permits(), MAX_LISTEN_STREAMS);
+        let mut responses = Vec::new();
+        for _ in 0..MAX_LISTEN_STREAMS {
+            responses.push(
+                listen_response(bot.clone(), token.clone(), 0, &ADMISSION)
+                    .ok()
+                    .unwrap(),
+            );
+        }
+        assert_eq!(bot.players[0].listeners(), MAX_LISTEN_STREAMS);
+        assert_eq!(ADMISSION.available_permits(), 0);
+        assert_eq!(
+            listen_response(bot.clone(), token.clone(), 0, &ADMISSION)
+                .err()
+                .unwrap()
+                .0,
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        assert_eq!(
+            listen_response(bot.clone(), "invalid".into(), 0, &ADMISSION)
+                .err()
+                .unwrap()
+                .0,
+            StatusCode::NOT_FOUND,
+            "auth precedes overload"
+        );
+        assert_eq!(
+            listen_response(bot.clone(), token.clone(), 1, &ADMISSION)
+                .err()
+                .unwrap()
+                .0,
+            StatusCode::BAD_REQUEST,
+            "queue validation precedes overload"
+        );
+        drop(responses.pop());
+        released(&bot, MAX_LISTEN_STREAMS - 1).await;
+        assert_eq!(ADMISSION.available_permits(), 1);
+        responses.push(
+            listen_response(bot.clone(), token, 0, &ADMISSION)
+                .ok()
+                .unwrap(),
+        );
+        drop(responses);
+        released(&bot, 0).await;
+        assert_eq!(ADMISSION.available_permits(), MAX_LISTEN_STREAMS);
+    }
+
+    #[tokio::test]
+    async fn listening_emits_initial_reset_and_keeps_ownership_until_body_disconnects() {
+        static ADMISSION: Semaphore = Semaphore::const_new(1);
+        let (_directory, bot, token) = listening_bot();
+        let response = listen_response(bot.clone(), token, 0, &ADMISSION)
+            .ok()
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        for (name, value) in [
+            ("content-type", "application/octet-stream"),
+            ("cache-control", "no-store"),
+            ("x-accel-buffering", "no"),
+            ("x-audio-format", "f32le"),
+            ("x-audio-rate", "48000"),
+            ("x-audio-channels", "2"),
+            ("x-audio-frame-samples", "960"),
+        ] {
+            assert_eq!(response.headers()[name], value);
+        }
+        let mut stream = response.into_body().into_data_stream();
+        assert_eq!(stream.next().await.unwrap().unwrap().as_ref(), &[0]);
+        assert_eq!(
+            ADMISSION.available_permits(),
+            0,
+            "headers do not release admission"
+        );
+        assert_eq!(bot.players[0].listeners(), 1);
+        drop(stream);
+        released(&bot, 0).await;
+        assert_eq!(ADMISSION.available_permits(), 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn revoked_idle_unpolled_listening_is_reaped_within_one_second() {
+        static ADMISSION: Semaphore = Semaphore::const_new(1);
+        let (_directory, bot, token) = listening_bot();
+        bot.players[0].set_paused(true);
+        let response = listen_response(bot.clone(), token.clone(), 0, &ADMISSION)
+            .ok()
+            .unwrap();
+        tokio::task::yield_now().await;
+        let viewer = owner(&bot, &token).ok().unwrap();
+        bot.tokens.issue(viewer, true).unwrap();
+        tokio::time::advance(Duration::from_secs(1)).await;
+        released(&bot, 0).await;
+        assert_eq!(
+            ADMISSION.available_permits(),
+            1,
+            "revocation drops the real lease even with HTTP backpressure"
+        );
+        let mut stream = response.into_body().into_data_stream();
+        assert!(
+            stream.next().await.is_none(),
+            "revoked queued records are not delivered"
+        );
+        assert_eq!(
+            listen_response(bot, token, 0, &ADMISSION).err().unwrap().0,
+            StatusCode::NOT_FOUND
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn idle_listening_sends_a_keepalive_record_at_least_every_fifteen_seconds() {
+        static ADMISSION: Semaphore = Semaphore::const_new(1);
+        let (_directory, bot, token) = listening_bot();
+        bot.players[0].set_paused(true);
+        let response = listen_response(bot.clone(), token, 0, &ADMISSION)
+            .ok()
+            .unwrap();
+        let mut stream = response.into_body().into_data_stream();
+        assert_eq!(stream.next().await.unwrap().unwrap().as_ref(), &[0]);
+        for _ in 0..3 {
+            assert!(
+                tokio::time::timeout(Duration::from_secs(14), stream.next())
+                    .await
+                    .is_err(),
+                "a keep-alive came early"
+            );
+            let record = tokio::time::timeout(Duration::from_secs(2), stream.next())
+                .await
+                .expect("no keep-alive within 15 seconds")
+                .unwrap()
+                .unwrap();
+            assert_eq!(record.as_ref(), KEEPALIVE_RECORD);
+        }
+        assert_eq!(ADMISSION.available_permits(), 0);
+        drop(stream);
+        released(&bot, 0).await;
+        assert_eq!(ADMISSION.available_permits(), 1);
     }
 
     async fn response_json(response: Response) -> serde_json::Value {
@@ -1143,6 +1516,8 @@ mod tests {
 
     #[tokio::test]
     async fn real_http_sse_cap_is_retained_until_the_stream_closes() {
+        // The rating test also needs an SSE permit while this test fills the pool.
+        let _exclusive = API_TESTS.lock().await;
         use tokio::{
             io::{AsyncReadExt, AsyncWriteExt},
             net::{TcpListener, TcpStream},
@@ -1210,7 +1585,216 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn rating_api_reads_sets_clears_and_only_publishes_successful_writes() {
+        use std::{io::Write, sync::Mutex};
+
+        let _exclusive = API_TESTS.lock().await;
+        #[derive(Default)]
+        struct Account {
+            rating: Option<i64>,
+            omit_rating: bool,
+            fail: bool,
+            calls: usize,
+            writes: Vec<i64>,
+        }
+        let account = Arc::new(Mutex::new(Account {
+            omit_rating: true,
+            ..Account::default()
+        }));
+        let backend = Server::new({
+            let account = account.clone();
+            move |request, socket| {
+                let target = request.split_whitespace().nth(1).unwrap();
+                let (path, query) = target.split_once('?').unwrap();
+                let parameter = |name: &str| {
+                    query.split('&').find_map(|pair| {
+                        let (key, value) = pair.split_once('=')?;
+                        (key == name).then_some(value)
+                    })
+                };
+                assert_eq!(parameter("apiKey"), Some("private-key"));
+                assert_eq!(parameter("id"), Some("song"));
+                let mut state = account.lock().unwrap();
+                state.calls += 1;
+                let reply = match path {
+                    "/rest/getSong" => {
+                        let mut song = serde_json::json!({"id": "song"});
+                        if !state.omit_rating {
+                            song["userRating"] = serde_json::json!(state.rating);
+                        }
+                        serde_json::json!({"status": "ok", "song": song})
+                    }
+                    "/rest/setRating" if state.fail => serde_json::json!({
+                        "status": "failed", "error": {"code": 40,
+                            "message": "http://private.example/?apiKey=private-key"}
+                    }),
+                    "/rest/setRating" => {
+                        let rating = parameter("rating").unwrap().parse::<i64>().unwrap();
+                        assert!((0..=5).contains(&rating));
+                        state.writes.push(rating);
+                        state.rating = (rating != 0).then_some(rating);
+                        state.omit_rating = false;
+                        serde_json::json!({"status": "ok"})
+                    }
+                    _ => panic!("unexpected backend endpoint"),
+                };
+                let body =
+                    serde_json::to_vec(&serde_json::json!({"subsonic-response": reply})).unwrap();
+                write!(socket, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).unwrap();
+                socket.write_all(&body).unwrap();
+            }
+        });
+        let (_directory, bot, token) = test_bot(&backend.url, 1);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}/u/{token}/api", listener.local_addr().unwrap());
+        let app = router(bot.clone());
+        let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+        let serving = tokio::spawn(async move {
+            axum::serve(listener, app)
+                .with_graceful_shutdown(async {
+                    let _ = stopped.await;
+                })
+                .await
+                .unwrap();
+        });
+
+        async fn request(url: String, body: Option<serde_json::Value>) -> (u16, serde_json::Value) {
+            tokio::task::spawn_blocking(move || {
+                let agent: ureq::Agent = ureq::Agent::config_builder()
+                    .http_status_as_error(false)
+                    .timeout_global(Some(Duration::from_secs(2)))
+                    .build()
+                    .into();
+                let mut response = match body {
+                    Some(body) => agent.post(url).send_json(body).unwrap(),
+                    None => agent.get(url).call().unwrap(),
+                };
+                let status = response.status().as_u16();
+                let body = response.body_mut().read_to_vec().unwrap();
+                (
+                    status,
+                    if body.is_empty() {
+                        serde_json::Value::Null
+                    } else {
+                        serde_json::from_slice(&body).unwrap()
+                    },
+                )
+            })
+            .await
+            .unwrap()
+        }
+        let read_url = format!("{base}/rating?library=0&id=song");
+        let write_url = format!("{base}/rating");
+        let mutation = |library, rating| serde_json::json!({"library": library, "id": "song", "rating": rating});
+        let missing_token = base.replace(&token, &Uuid::nil().to_string());
+        assert_eq!(
+            request(format!("{missing_token}/rating?library=0&id=song"), None)
+                .await
+                .0,
+            404
+        );
+        assert_eq!(
+            request(format!("{missing_token}/rating"), Some(mutation(0, 4)))
+                .await
+                .0,
+            404
+        );
+        for invalid in [-1, 6] {
+            assert_eq!(
+                request(write_url.clone(), Some(mutation(0, invalid)))
+                    .await
+                    .0,
+                400
+            );
+        }
+        assert_eq!(
+            request(write_url.clone(), Some(mutation(1, 4))).await.0,
+            502
+        );
+        assert_eq!(
+            request(format!("{base}/rating?library=1&id=song"), None)
+                .await
+                .0,
+            502
+        );
+        assert_eq!(account.lock().unwrap().calls, 0);
+        assert_eq!(
+            request(read_url.clone(), None).await,
+            (200, serde_json::json!({"rating": 0}))
+        );
+        account.lock().unwrap().omit_rating = false;
+        assert_eq!(request(read_url.clone(), None).await.1["rating"], 0);
+
+        // Consume the same SSE body the endpoint sends, checking the emitted
+        // revision rather than merely an internal counter.
+        let mut stream = events(State(bot.clone()), Path(token.clone()))
+            .await
+            .ok()
+            .unwrap()
+            .into_body()
+            .into_data_stream();
+        async fn event_revision(
+            stream: &mut (impl Stream<Item = Result<axum::body::Bytes, axum::Error>> + Unpin),
+        ) -> u64 {
+            let chunk = tokio::time::timeout(Duration::from_secs(1), stream.next())
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            let text = std::str::from_utf8(&chunk).unwrap();
+            let data = text
+                .lines()
+                .find_map(|line| line.strip_prefix("data: "))
+                .or_else(|| text.lines().find_map(|line| line.strip_prefix("data:")))
+                .unwrap();
+            serde_json::from_str::<serde_json::Value>(data).unwrap()["rating_revision"]
+                .as_u64()
+                .unwrap()
+        }
+        assert_eq!(event_revision(&mut stream).await, 0);
+        for (rating, revision) in [(4, 1), (0, 2)] {
+            assert_eq!(
+                request(write_url.clone(), Some(mutation(0, rating)))
+                    .await
+                    .0,
+                204
+            );
+            assert_eq!(request(read_url.clone(), None).await.1["rating"], rating);
+            assert_eq!(
+                request(format!("{base}/state"), None).await.1["rating_revision"],
+                revision
+            );
+            assert_eq!(event_revision(&mut stream).await, revision as u64);
+        }
+        account.lock().unwrap().fail = true;
+        let failed = request(write_url, Some(mutation(0, 5))).await;
+        assert_eq!(failed.0, 502);
+        assert!(!failed.1.to_string().contains("private-key"));
+        assert_eq!(request(read_url.clone(), None).await.1["rating"], 0);
+        assert_eq!(
+            request(format!("{base}/state"), None).await.1["rating_revision"],
+            2
+        );
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), stream.next())
+                .await
+                .is_err()
+        );
+        assert_eq!(account.lock().unwrap().writes, [4, 0]);
+        for invalid in [-1, 6] {
+            account.lock().unwrap().rating = Some(invalid);
+            assert_eq!(request(read_url.clone(), None).await.0, 502);
+        }
+        account.lock().unwrap().rating = Some(3);
+        assert_eq!(request(read_url, None).await.1["rating"], 3);
+        drop(stream);
+        stop.send(()).unwrap();
+        serving.await.unwrap();
+    }
+
+    #[tokio::test]
     async fn metadata_search_and_art_redact_remote_messages_and_reject_overload() {
+        let _exclusive = API_TESTS.lock().await;
         let server = Server::reply("application/json", br#"{"subsonic-response":{"status":"failed","error":{"code":40,"message":"http://dj:secret@private.example/rest/search3?apiKey=private-key"}}}"#);
         let (_directory, bot, token) = test_bot(&server.url, 9);
         let response = albums(

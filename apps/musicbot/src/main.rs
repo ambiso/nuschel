@@ -6,6 +6,7 @@ mod decode;
 mod mumble;
 mod persist;
 mod player;
+mod scrobble;
 mod subsonic;
 mod tokens;
 mod web;
@@ -17,7 +18,7 @@ use player::{Changes, Player};
 use std::{
     path::PathBuf,
     process::ExitCode,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, atomic::AtomicU64},
 };
 use subsonic::Library;
 use tokens::Tokens;
@@ -57,6 +58,8 @@ pub struct Bot {
     pub tokens: Tokens,
     /// What the web page's viewers watch to learn of any change.
     pub changes: Changes,
+    /// Ephemeral invalidation for live, backend-owned song ratings.
+    pub rating_revision: AtomicU64,
     /// Serializes checkpoints with the final shutdown save.
     pub persistence: Mutex<()>,
 }
@@ -87,7 +90,8 @@ async fn application() -> ExitCode {
             1
         }
     };
-    // Without waiting for library requests still running on other threads.
+    // The owned playback reporter has stopped; do not wait for unrelated
+    // library requests still running on other threads.
     std::process::exit(code)
 }
 
@@ -157,11 +161,18 @@ async fn run(arguments: Arguments) -> Result<(), String> {
         connections,
         tokens,
         changes,
+        rating_revision: AtomicU64::new(0),
         persistence: Mutex::new(()),
         config,
     });
     // The queues of the last run come back before anything plays.
     persist::restore(&bot).map_err(|error| format!("cannot restore queues.json: {error}"))?;
+    let listener = tokio::net::TcpListener::bind(bot.config.web.listen)
+        .await
+        .map_err(|error| format!("web: {}: {error}", bot.config.web.listen))?;
+    tracing::info!("web page on {}", bot.config.web.listen);
+    // Capture restored-history cursors synchronously before audio tasks start.
+    let reporter = scrobble::start(&bot);
     tokio::spawn(persist::keep(bot.clone()));
     for index in 0..bot.libraries.len() {
         let libraries = bot.libraries.clone();
@@ -183,13 +194,9 @@ async fn run(arguments: Arguments) -> Result<(), String> {
     for index in 0..bot.connections.len() {
         tokio::spawn(mumble::run(bot.clone(), index));
     }
-    let listener = tokio::net::TcpListener::bind(bot.config.web.listen)
-        .await
-        .map_err(|error| format!("web: {}: {error}", bot.config.web.listen))?;
-    tracing::info!("web page on {}", bot.config.web.listen);
-    // Event streams stay open, so the server is not drained on shutdown:
-    // the queues are saved and the process ends.
-    tokio::select! {
+    // Event streams stay open, so the web server is not drained on shutdown.
+    // The owned reporter joins its actual call and drains a bounded snapshot.
+    let result = tokio::select! {
         result = axum::serve(listener, web::router(bot.clone())) => {
             result.map_err(|error| format!("web: {error}"))
         }
@@ -197,7 +204,9 @@ async fn run(arguments: Arguments) -> Result<(), String> {
             tracing::info!("{signal}: saving the queues and stopping");
             persist::save(&bot).map_err(|error| format!("cannot save the queues: {error}"))
         }
-    }
+    };
+    reporter.shutdown().await;
+    result
 }
 
 /// Ctrl-C, or SIGTERM from systemd.

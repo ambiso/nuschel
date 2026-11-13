@@ -25,6 +25,7 @@ It prints a unique private temporary directory under
 `${XDG_CACHE_HOME:-~/.cache}/nuschl-release/`. This directory **remains after the
 command exits**: test the `stage/install/windows/` and `stage/install/Nuschl.app/`
 trees, archives in `stage/dist/`, and Linux Nix references in the receipt there.
+Review the release body in `stage/notes/RELEASE-NOTES.md` (see below).
 Build logs and failed attempts remain available too. Use a disk-backed cache,
 not `/tmp` or another tmpfs.
 
@@ -39,7 +40,9 @@ and tag. Failed or cancelled preparation never replaces that record. It checks
 the remembered ledger/manifest/signature/checksum identity and reruns the backend's
 source, Nix-product, artifact and hybrid-signature verification before its one
 publication confirmation. It neither rebuilds nor signs again and needs no
-private key. After Yes, only that exact tag is pushed without force; an identical
+private key. It reuses the release notes frozen during preparation, never
+regenerates them, and shows their path, commit range and `cliff.toml` hash in the
+confirmation. After Yes, only that exact tag is pushed without force; an identical
 remote tag is unchanged and a different remote tag is refused. The backend then
 uploads a draft and verifies every uploaded digest before making it public. A changed,
 expired, missing, unrelated or already-published stage is refused; no fallback
@@ -98,12 +101,50 @@ Linux Nix references; Linux is not a portable native tarball. Windows/Mac archiv
 are canonical checked copies. Original notice bytes and the 256-file updater
 limit remain enforced. Both entry points must exist in the static site.
 
-Review `ledger.json`, `dist/release-ledger.json`, `dist/update.json`, the archives
-and any build logs. The public ledger omits the local repository path; local-only
-`local.json` holds it. The signed manifest binds the public ledger's digest.
-Keep staging exclusive to this operation: do not edit it or run two helpers on
-it concurrently. Revalidation catches changed source, products, payloads and tags;
-it is not a defense against a compromised operator account, Nix daemon or OS.
+Preparation also generates the GitHub release body once, with `git-cliff` and the
+selected tag's own `cliff.toml`. The copy in the exported source must equal that
+commit's blob; the publisher checkout's file is never used. Tags without
+`cliff.toml`, such as `v0.1.0`, cannot be prepared by this tool. The executable is
+the single `git-cliff` package of the selected tag's flake development shell:
+preparation evaluates `devShells.x86_64-linux.default` at that exact revision, runs
+`<store path>/bin/git-cliff` and never consults `PATH`. That path must already
+exist (enter that shell), or `--build` builds only that derivation with
+`--cores 2 --max-jobs 2`. The recorded version is the binary's own `--version`
+output.
+
+The range is exact and local: from the newest version tag that is an ancestor of
+the prepared commit (a final tag wins over a release candidate on the same commit)
+to that commit, or the full history for a first release. Diverged or duplicate
+previous version tags and shallow history are refused. `git-cliff` runs with a
+fixed argument list, `--offline --no-exec`, an empty environment and a private bare
+view that holds only those two tags, so working-tree files, user configuration,
+remotes and commands cannot change the result and the source repository is never
+written. Its scratch stays in `stage/notes/tmp/`, not `/tmp`. The helper refuses any
+`cliff.toml` key outside its reviewed subset, including commands, remotes, output
+paths, headers, and remote, environment or clock template data. Commit count,
+output size, memory, CPU and wall time are bounded. There is no OS network
+confinement: network freedom rests on `--offline`, the empty environment and the
+configuration check.
+
+Hand-written notes are optional. A tagged `release/notes-{version}.md`, if present,
+comes first, followed by the generated changes. `stage/notes/` keeps the copied
+configuration, raw output and log, and the final `RELEASE-NOTES.md`. The ledger
+(format 2) records them under `release_notes`: generator version and store path,
+previous tag and commit, range, commit count, and the SHA-256 of the configuration,
+any tagged notes, the raw output and the final body. The hybrid signature covers
+`update.json`, whose `ledger-sha256` binds the ledger, so the signature also binds
+the release body, and the public `release-ledger.json` records its hash. Signing,
+publication and `just release` verify these files, the tagged configuration, the
+recorded `git-cliff` path against the selected flake and the range recomputed from
+local tags, without rerunning `git-cliff`. Any change means preparing again.
+
+Review `ledger.json`, `dist/release-ledger.json`, `dist/update.json`, the archives,
+the release notes and any build logs. The public ledger omits the local repository
+path; local-only `local.json` holds it. The signed manifest binds the public
+ledger's digest. Keep staging exclusive to this operation: do not edit it or run
+two helpers on it concurrently. Revalidation catches changed source, products,
+payloads, release notes and tags; it is not a defense against a compromised
+operator account, Nix daemon or OS.
 
 ## Optional native Apple static verification
 
@@ -201,8 +242,9 @@ python3 release/local-release.py publish "$stage" \
 
 The remote tag must already exist and match the prepared commit (`--verify-tag`);
 no tag creation, movement, `latest` substitution, asset clobber or existing-release
-replacement is allowed. A draft receives only the pre-signed files. Every uploaded
-name, size and GitHub-reported SHA-256 must match before the draft becomes public.
+replacement is allowed. A draft receives only the pre-signed files and the frozen
+notes as its body. Every uploaded name, size and GitHub-reported SHA-256, and the
+draft body, must match before the draft becomes public.
 Failures leave an unpublished draft for explicit operator inspection; automatic
 retry/resume/deletion is deliberately absent. Never turn a partial draft public
 manually. Check the failure, preserve the review directory, then reconcile the
@@ -213,7 +255,14 @@ Local tests use temporary keys and synthetic disk-only products:
 ```sh
 python3 tests/local_release.py --signer "$PWD/result-update-signer/bin/nuschl-update-sign"
 python3 tests/update_release.py --signer "$PWD/result-update-signer/bin/nuschl-update-sign"
+python3 tests/release_notes.py --signer "$PWD/result-update-signer/bin/nuschl-update-sign"
 ```
+
+`tests/release_notes.py` runs the real `git-cliff` of the pinned development shell
+over owned synthetic repositories; only the flake selection is substituted (with
+its own argument test), and substitute executables check the argument list,
+environment and bounds. It includes a coherent rewrite of the notes, ledger and
+public ledger that only the hybrid signature refuses.
 
 These fixtures test orchestration and tamper/refusal behavior; an optional
 `--macos-app /path/to/existing/Nuschl.app` additionally exercises the local

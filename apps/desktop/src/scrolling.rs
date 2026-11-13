@@ -206,6 +206,7 @@ pub fn scroll_by(
 #[derive(Default)]
 pub struct Nested {
     lists: RefCell<HashMap<&'static str, ScrollHandle>>,
+    versions: RefCell<HashMap<&'static str, u64>>,
     run: WheelRun,
     motion: SmoothScroll,
     /// The list `motion` eases.
@@ -213,6 +214,29 @@ pub struct Nested {
 }
 
 impl Nested {
+    /// Share a caller-owned virtual list's existing viewport. Registering each
+    /// render replaces the same bounded key; it never creates a second scroller.
+    pub fn register(&mut self, id: &'static str, version: u64, handle: ScrollHandle) {
+        let previous = self.versions.borrow_mut().insert(id, version);
+        if previous.is_some_and(|previous| previous != version)
+            || (previous.is_none() && self.moving == Some(id))
+        {
+            self.cancel();
+        }
+        self.lists.borrow_mut().insert(id, handle);
+    }
+
+    /// Direct manipulation takes over before a thumb has moved its offset.
+    pub fn cancel(&mut self) {
+        self.cancel_motion();
+        self.run = WheelRun::default();
+    }
+
+    pub fn cancel_motion(&mut self) {
+        self.motion.cancel();
+        self.moving = None;
+    }
+
     /// The list's scroll position, the same from frame to frame.
     pub fn handle(&self, id: &'static str) -> ScrollHandle {
         self.lists.borrow_mut().entry(id).or_default().clone()
@@ -221,11 +245,13 @@ impl Nested {
     /// The list starts at the top when it shows next.
     pub fn forget(&self, id: &'static str) {
         self.lists.borrow_mut().remove(id);
+        self.versions.borrow_mut().remove(id);
     }
 
     /// Every list starts at the top (another dialog opened).
     pub fn forget_all(&self) {
         self.lists.borrow_mut().clear();
+        self.versions.borrow_mut().clear();
     }
 
     /// What a step moving `delta` moves, over the list `list` or elsewhere
@@ -817,11 +843,73 @@ impl Element for Row {
 #[cfg(test)]
 mod tests {
     use super::{
-        Focus, RUN, Scroller, Shown, WheelRun, at, can_move, follows, near_top, nearest, shown,
-        step,
+        Focus, Motion, Nested, RUN, Scroller, Shown, WheelRun, at, can_move, follows, near_top,
+        nearest, shown, step,
     };
-    use gpui_kit::px;
+    use gpui_kit::{ScrollHandle, point, px};
     use std::time::{Duration, Instant};
+
+    fn easing_list(nested: &mut Nested, id: &'static str) {
+        nested.moving = Some(id);
+        nested.motion.motion = Some(Motion {
+            from: px(0.),
+            to: px(-80.),
+            last: px(0.),
+            started: Instant::now(),
+        });
+    }
+
+    #[test]
+    fn a_thumb_grab_cancels_before_its_first_offset_change_and_releases_the_wheel_run() {
+        let mut nested = Nested::default();
+        nested.register("rules", 1, ScrollHandle::new());
+        nested.run.route(Some(("rules", true)), Instant::now());
+        easing_list(&mut nested, "rules");
+        // A press has not moved the scroll offset yet. Waiting for an offset
+        // mismatch in advance() would leave the previous wheel animation live.
+        nested.cancel();
+        assert!(!nested.advance());
+        assert!(!nested.active());
+        assert_eq!(
+            nested.route(None, px(-1.), Instant::now()),
+            Scroller::Dialog
+        );
+    }
+
+    #[test]
+    fn replacing_a_virtual_list_generation_cannot_apply_old_easing_to_its_new_handle() {
+        let mut nested = Nested::default();
+        let old = ScrollHandle::new();
+        nested.register("rules", 1, old.clone());
+        easing_list(&mut nested, "rules");
+        let replacement = ScrollHandle::new();
+        nested.register("rules", 2, replacement.clone());
+        assert!(!nested.advance());
+        assert_eq!(replacement.offset().y, px(0.));
+        old.set_offset(point(px(0.), px(-40.)));
+        assert_eq!(nested.handle("rules").offset().y, px(0.));
+        nested.handle("rules").set_offset(point(px(0.), px(-10.)));
+        assert_eq!(replacement.offset().y, px(-10.));
+        assert_eq!(old.offset().y, px(-40.));
+    }
+
+    #[test]
+    fn registering_the_same_virtual_viewport_preserves_a_running_wheel_animation() {
+        let mut nested = Nested::default();
+        let handle = ScrollHandle::new();
+        nested.register("rules", 1, handle.clone());
+        easing_list(&mut nested, "rules");
+        nested.register("rules", 1, handle);
+        assert!(nested.active());
+        // Stopping motion while transferring to the dialog does not release
+        // the edge latch: only an explicit grab or a new transaction does.
+        nested.run.route(Some(("rules", true)), Instant::now());
+        nested.cancel_motion();
+        assert_eq!(
+            nested.route(Some("rules"), px(-1.), Instant::now()),
+            Scroller::List("rules")
+        );
+    }
 
     #[test]
     fn a_run_of_wheel_steps_moves_one_container() {

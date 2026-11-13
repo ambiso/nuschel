@@ -827,6 +827,8 @@
               pkgs.cargo-audit
               pkgs.just
               pkgs.gh
+              # Release notes; release/local-release.py runs it offline with cliff.toml.
+              pkgs.git-cliff
               pkgs.nixfmt
               pkgs.taplo
               pkgs.jujutsu

@@ -506,6 +506,48 @@ fn labelled_slider(
         .into_any_element()
 }
 
+/// What a finished echo test found. The gate's share only means echo would
+/// be sent when echo was detected: without it, the gate opened on other
+/// sound at the microphone (speech, noise, a test tone), which is reported
+/// as such and says nothing about echo.
+fn echo_verdict(report: &crate::preview::EchoReport) -> (Token, String) {
+    let gate_opened = report.transmitted >= 0.05;
+    let opened = report.transmitted * 100.;
+    match (report.echo_db, report.reduction_db) {
+        (None, _) if gate_opened => (
+            TEXT_MUTED,
+            format!(
+                "No echo of the test sound stood out at the microphone. The voice gate opened for {opened:.0}% of the test on other sound it picked up, such as speech or background noise."
+            ),
+        ),
+        (echo, reduction) => {
+            let measured = match (echo, reduction) {
+                (None, _) => "No echo of the test sound reached Nuschl (headphones, or a system canceller removed it).".to_string(),
+                (Some(echo), Some(reduction)) => format!(
+                    "The test sound reached the microphone {:.0} dB below its level; processing removed another {reduction:.0} dB.",
+                    -echo
+                ),
+                (Some(echo), None) => format!("The test sound reached the microphone {:.0} dB below its level.", -echo),
+            };
+            if gate_opened {
+                (
+                    WARNING,
+                    format!(
+                        "{measured} The voice gate opened for {opened:.0}% of it, so others may hear themselves: use headphones, lower the speaker volume, or set echo cancellation to Always on."
+                    ),
+                )
+            } else {
+                (
+                    SUCCESS,
+                    format!(
+                        "{measured} Nothing would have been sent, so others will not hear themselves."
+                    ),
+                )
+            }
+        }
+    }
+}
+
 /// Microphone and echo checks that need neither a server nor unmuting.
 fn audio_check(this: &Desktop, cx: &mut Context<Desktop>) -> Vec<AnyElement> {
     let Some(preview) = this.preview.as_ref() else {
@@ -563,36 +605,10 @@ fn audio_check(this: &Desktop, cx: &mut Context<Desktop>) -> Vec<AnyElement> {
         EchoTestState::Idle => None,
         EchoTestState::Running => Some((
             TEXT_MUTED,
-            "Playing a test sound through your speakers for about four seconds…".to_string(),
+            "Playing the test sound through your speakers for about 7 seconds…".to_string(),
         )),
         EchoTestState::Failed(message) => Some((WARNING, message.clone())),
-        EchoTestState::Done(report) => {
-            let leaked = report.transmitted >= 0.05;
-            let measured = match (report.echo_db, report.reduction_db) {
-                (None, _) => "No echo of the test sound reached Nuschl (headphones, or a system canceller removed it).".to_string(),
-                (Some(echo), Some(reduction)) => format!(
-                    "The test sound reached the microphone {:.0} dB below its level; processing removed another {reduction:.0} dB.",
-                    -echo
-                ),
-                (Some(echo), None) => format!("The test sound reached the microphone {:.0} dB below its level.", -echo),
-            };
-            Some(if leaked {
-                (
-                    WARNING,
-                    format!(
-                        "{measured} The voice gate opened for {:.0}% of it, so others may hear themselves: use headphones, lower the speaker volume, or set echo cancellation to Always on.",
-                        report.transmitted * 100.
-                    ),
-                )
-            } else {
-                (
-                    SUCCESS,
-                    format!(
-                        "{measured} Nothing would have been sent, so others will not hear themselves."
-                    ),
-                )
-            })
-        }
+        EchoTestState::Done(report) => Some(echo_verdict(report)),
     };
     rows.push(
         div()
@@ -617,6 +633,32 @@ fn audio_check(this: &Desktop, cx: &mut Context<Desktop>) -> Vec<AnyElement> {
                 },
                 cx,
             ))
+            .into_any_element(),
+    );
+    // Shown before anything plays, and kept in place while it does. "About
+    // 7 seconds" is checked against the worker's timeline by
+    // `settings_says_about_seven_seconds` in apps/media-worker/src/probe.rs.
+    rows.push(
+        div()
+            .flex()
+            .items_start()
+            .gap_2()
+            .text_xs()
+            .text_color(color(TEXT_MUTED))
+            .child(
+                div()
+                    .w(px(18.))
+                    .flex_shrink_0()
+                    .flex()
+                    .justify_center()
+                    .child(icon("alert", 14., color(WARNING))),
+            )
+            .child(
+                div().flex_1().min_w_0().child(
+                    text!("Turn your volume down first: the test plays a speech-like sound for about 7 seconds. Use your speakers to find out whether the microphone picks them up; with headphones it can only confirm that no sound leaks back.")
+                        .with_id("echo-test-warning"),
+                ),
+            )
             .into_any_element(),
     );
     if let Some((tone, text)) = verdict {
@@ -1571,4 +1613,65 @@ fn shortcut_rows(this: &Desktop, cx: &mut Context<Desktop>) -> Vec<AnyElement> {
         );
     }
     rows
+}
+
+#[cfg(test)]
+mod echo_verdict_tests {
+    // Not `super::*`: GPUI's prelude brings its own `test` attribute.
+    use super::echo_verdict;
+    use crate::{
+        preview::EchoReport,
+        theme::{SUCCESS, TEXT_MUTED, Token, WARNING},
+    };
+
+    fn verdict(
+        echo_db: Option<f32>,
+        reduction_db: Option<f32>,
+        transmitted: f32,
+    ) -> (Token, String) {
+        echo_verdict(&EchoReport {
+            echo_db,
+            reduction_db,
+            transmitted,
+        })
+    }
+
+    #[test]
+    fn a_gate_opened_by_other_sound_is_not_called_echo() {
+        // A constant test tone (or speech) at the microphone, no echo.
+        let (tone, text) = verdict(None, None, 1.);
+        assert_eq!(tone, TEXT_MUTED, "{text}");
+        assert!(
+            text.contains("opened for 100% of the test on other sound"),
+            "{text}"
+        );
+        assert!(!text.contains("hear themselves"), "{text}");
+        assert!(!text.contains("Always on"), "{text}");
+    }
+
+    #[test]
+    fn detected_echo_that_opens_the_gate_still_warns() {
+        let (tone, text) = verdict(Some(-31.), Some(2.), 0.8);
+        assert_eq!(tone, WARNING, "{text}");
+        assert!(
+            text.contains("31 dB below") && text.contains("others may hear themselves"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn a_closed_gate_sends_nothing_with_or_without_echo() {
+        for echo_db in [None, Some(-31.)] {
+            let (tone, text) = verdict(echo_db, echo_db.map(|_| 40.), 0.);
+            assert_eq!(tone, SUCCESS, "{text}");
+            assert!(
+                text.ends_with("Nothing would have been sent, so others will not hear themselves.")
+            );
+        }
+        let (_, text) = verdict(None, None, 0.);
+        assert!(
+            text.starts_with("No echo of the test sound reached Nuschl"),
+            "{text}"
+        );
+    }
 }

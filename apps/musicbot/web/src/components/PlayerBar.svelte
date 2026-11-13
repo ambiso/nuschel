@@ -7,6 +7,8 @@
   import Icon from "./Icon.svelte";
   import Progress from "./Progress.svelte";
   import DuckingPanel from "./DuckingPanel.svelte";
+  import SongRating from "./SongRating.svelte";
+  import BrowserListen from "./BrowserListen.svelte";
 
   const index = $derived(store.selected);
   const player = $derived(store.player);
@@ -21,7 +23,7 @@
     if (player.paused) return "Paused";
     if (player.listeners === 0) return "Waiting for listeners";
     if (current.buffering) return "Buffering…";
-    if (player.ducked) return "Quieter while someone talks";
+    if (player.ducked) return "Mumble quieter while someone talks";
     return null;
   });
   let dropping = $state(false);
@@ -92,9 +94,9 @@
       <button class="icon-button" disabled={!current} aria-label="Skip" title="Skip" onclick={() => store.skip(index)}>
         <Icon name="skip" />
       </button>
-      {#if status}<span class="status" role="status">{status}</span>{/if}
     </div>
     <Progress player={index} {current} />
+    <span class="status" role="status" title={status ?? ""}>{status ?? ""}</span>
   </div>
 
   <div class="side">
@@ -108,14 +110,16 @@
         </select>
       </label>
     {/if}
+    <BrowserListen player={index} />
     {#if player}
-      <label class="volume" title="Volume {volume}%">
+      <label class="volume" title="Mumble volume {volume}%; does not change browser volume">
         <Icon name="volume" />
-        <span class="visually-hidden">Volume</span>
+        <span>Mumble <span class="visually-hidden">volume</span></span>
         <input type="range" min="0" max="100" value={volume} oninput={(event) => store.setVolume(index, Number(event.currentTarget.value))} />
       </label>
       <DuckingPanel player={index} />
     {/if}
+    {#if track}<SongRating library={track.library} songId={track.id} title={track.title} namespace={store.browseKey} />{/if}
   </div>
 </footer>
 
@@ -151,8 +155,8 @@
     flex: none;
   }
   .play:disabled { opacity: 0.4; cursor: default; }
-  .status { min-width: 0; overflow-wrap: anywhere; font-size: 0.8rem; color: var(--muted); }
-  .side { display: flex; align-items: center; justify-content: flex-end; gap: 0.5rem; min-width: 0; }
+  .status { width: 100%; height: 1.25rem; line-height: 1.25rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: center; font-size: 0.8rem; color: var(--muted); }
+  .side { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 0.5rem; min-width: 0; }
   .queue-select select { max-width: 10rem; }
   .volume { display: flex; align-items: center; gap: 0.35rem; color: var(--muted); }
   .volume input { width: 7rem; }
@@ -166,9 +170,12 @@
     }
     .song { grid-area: song; }
     .center { grid-area: center; }
-    .side { grid-area: side; justify-content: flex-end; flex-wrap: wrap; }
-    .status { white-space: normal; }
+    .side { grid-area: side; }
     .volume input { width: 5rem; }
     .queue-select select { max-width: 8rem; }
+  }
+  @media (max-width: 480px) {
+    .player { grid-template-columns: minmax(0, 1fr); grid-template-areas: "song" "center" "side"; }
+    .side { justify-content: flex-start; }
   }
 </style>

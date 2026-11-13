@@ -1,0 +1,52 @@
+# SPDX-License-Identifier: EUPL-1.2
+# git-cliff configuration for Nuschl release notes (docs/local-release.md).
+#
+# release/local-release.py runs the git-cliff of the selected tag's flake
+# development shell with only the tag's own copy of this file, over the exact
+# range from the previous ancestor version tag to the prepared commit, with
+# --offline --no-exec and an empty environment. It refuses keys outside its
+# whitelist: no replace_command, remotes, output paths, headers or footers, and no
+# remote, environment, clock or statistics variables in the template.
+
+[changelog]
+body = """
+{% if previous.version %}\
+## Changes since {{ previous.version }}
+{% else %}\
+## Changes
+{% endif %}\
+{% for group, commits in commits | group_by(attribute="group") %}
+### {{ group | striptags | trim }}
+{% for commit in commits %}
+- {% if commit.scope %}{{ commit.scope }}: {% endif %}\
+{{ commit.message | split(pat="\n") | first | trim | upper_first }} \
+({{ commit.id | truncate(length=12, end="") }})\
+{% endfor %}
+{% endfor %}
+"""
+trim = true
+render_always = false
+
+[git]
+conventional_commits = true
+filter_unconventional = true
+require_conventional = false
+split_commits = false
+protect_breaking_commits = true
+filter_commits = true
+tag_pattern = "^v[0-9]+\\.[0-9]+\\.[0-9]+(-[A-Za-z0-9.-]+)?$"
+topo_order = false
+topo_order_commits = true
+sort_commits = "oldest"
+recurse_submodules = false
+commit_preprocessors = []
+# Breaking changes come first, before any type filter: a subject "!" or a
+# conventional BREAKING CHANGE / BREAKING-CHANGE footer, on any commit type.
+commit_parsers = [
+    { message = "^[a-z]+(\\([^)]*\\))?!:", group = "<!-- 0 -->Breaking changes" },
+    { footer = "^BREAKING[ -]CHANGE:", group = "<!-- 0 -->Breaking changes" },
+    { message = "^feat", group = "<!-- 1 -->Features" },
+    { message = "^fix", group = "<!-- 2 -->Fixes" },
+    { message = "^perf", group = "<!-- 3 -->Performance" },
+    { message = "^revert", group = "<!-- 4 -->Reverted" },
+]

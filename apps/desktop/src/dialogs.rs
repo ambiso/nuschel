@@ -306,6 +306,11 @@ pub fn modal(
         )
         .child(
             crate::layout::scrollable(id, label, this.modal_scroll.clone())
+                .capture_any_mouse_down(cx.listener(|this, event: &MouseDownEvent, _, _| {
+                    if event.button == MouseButton::Left {
+                        this.cancel_modal_scroll();
+                    }
+                }))
                 .track_focus(&this.modal_focus)
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .role(Role::Dialog)
@@ -320,24 +325,29 @@ pub fn modal(
                 .border_color(color(BORDER_STRONG))
                 .shadow_lg()
                 .child(
-                    // Wheel steps ease like the timeline's (the content sees
-                    // them before the scroll container).
                     div()
                         .id(SharedString::from(format!("{id}-content")))
-                        .on_scroll(cx.listener(|this, event, window, cx| {
-                            this.scroll_modal(None, event, window, cx)
-                        }))
                         .child(content),
-                ),
+                )
+                .child(crate::layout::scrollbar(
+                    SharedString::from(format!("{id}-scrollbar")),
+                    &this.modal_scroll,
+                    MAIN,
+                ))
+                .child(crate::layout::scroll_before_parent(
+                    this.modal_scroll.clone(),
+                    cx.listener(|this, event, window, cx| {
+                        this.scroll_modal(None, event, window, cx)
+                    }),
+                )),
         )
         .into_any_element()
 }
 
 /// A list that scrolls inside a dialog, at most `max_height` tall, around
-/// `content`. The content takes each wheel step before any scroll container
-/// does, and `Desktop::scroll_modal` moves either the list or the dialog. So
-/// that the content covers all of the list, the list itself has no padding or
-/// border; a frame goes around it.
+/// `content`. Its viewport (including the reserved scrollbar gutter) takes
+/// each wheel step before native scrolling. `Desktop::scroll_modal` moves
+/// either the list or the dialog, retaining one wheel transaction at an edge.
 pub fn nested_list(
     this: &Desktop,
     id: &'static str,
@@ -347,11 +357,60 @@ pub fn nested_list(
 ) -> Stateful<Div> {
     crate::layout::scrollable(id, id, this.nested.handle(id))
         .max_h(max_height)
-        .child(
-            content.on_scroll(cx.listener(move |this, event, window, cx| {
+        .capture_any_mouse_down(cx.listener(|this, event: &MouseDownEvent, _, _| {
+            if event.button == MouseButton::Left {
+                this.cancel_modal_scroll();
+            }
+        }))
+        .child(content)
+        .child(crate::layout::capture_scroll(
+            this.nested.handle(id),
+            cx.listener(move |this, event, window, cx| {
                 this.scroll_modal(Some(id), event, window, cx)
-            })),
-        )
+            }),
+        ))
+        .child(crate::layout::scrollbar(
+            SharedString::from(format!("{id}-scrollbar")),
+            &this.nested.handle(id),
+            MAIN,
+        ))
+}
+
+/// A virtualized list inside a modal participates in the same latched wheel
+/// transaction as ordinary nested lists, using its original retained handle.
+pub fn nested_virtual_list(
+    id: &'static str,
+    version: u64,
+    scroll: &UniformListScrollHandle,
+    list: UniformList,
+    is_current: impl Fn(&Desktop) -> bool + 'static,
+    cx: &mut Context<Desktop>,
+) -> Stateful<Div> {
+    let handle = scroll.0.borrow().base_handle.clone();
+    let is_current = Rc::new(is_current);
+    let grab_current = is_current.clone();
+    crate::layout::scroll_frame(
+        id,
+        scroll,
+        list.pr(px(crate::layout::SCROLLBAR_GUTTER)),
+        MAIN,
+    )
+    .capture_any_mouse_down(cx.listener(move |this, event: &MouseDownEvent, _, _| {
+        if event.button == MouseButton::Left && grab_current(this) {
+            this.cancel_modal_scroll();
+        }
+    }))
+    .child(crate::layout::capture_scroll(
+        handle.clone(),
+        cx.listener(move |this, event, window, cx| {
+            if !is_current(this) {
+                cx.stop_propagation();
+                return;
+            }
+            this.nested.register(id, version, handle.clone());
+            this.scroll_modal(Some(id), event, window, cx)
+        }),
+    ))
 }
 
 pub fn server_form(this: &Desktop, cx: &mut Context<Desktop>) -> AnyElement {

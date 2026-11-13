@@ -970,9 +970,13 @@ impl Desktop {
         self.server_motion.cancel();
         self.server_scroll.scroll_to_item(slot);
     }
-    /// A wheel step or touchpad motion in the open dialog, over `list` (one
-    /// of the lists that scroll inside it) or elsewhere. It moves either the
-    /// list or the dialog, never both (see `scrolling::WheelRun`).
+    /// Direct manipulation replaces easing before the first thumb movement.
+    pub fn cancel_modal_scroll(&mut self) {
+        self.modal_motion.cancel();
+        self.nested.cancel();
+    }
+
+    /// Move one nested list or the dialog per wheel run (`scrolling::WheelRun`).
     pub fn scroll_modal(
         &mut self,
         list: Option<&'static str>,
@@ -987,14 +991,20 @@ impl Desktop {
         }
         let reduce_motion = cx.reduce_motion();
         match self.nested.route(list, delta, std::time::Instant::now()) {
-            Scroller::List(id) => self.nested.scroll(id, event, line_height, reduce_motion),
-            Scroller::Dialog => scrolling::scroll_by(
-                &mut self.modal_motion,
-                &self.modal_scroll,
-                event,
-                line_height,
-                reduce_motion,
-            ),
+            Scroller::List(id) => {
+                self.modal_motion.cancel();
+                self.nested.scroll(id, event, line_height, reduce_motion);
+            }
+            Scroller::Dialog => {
+                self.nested.cancel_motion();
+                scrolling::scroll_by(
+                    &mut self.modal_motion,
+                    &self.modal_scroll,
+                    event,
+                    line_height,
+                    reduce_motion,
+                );
+            }
         }
         cx.stop_propagation();
         cx.notify();

@@ -5,6 +5,7 @@
   import { getJSON, query } from "../api.js";
   import { buildRoute, formatDuration, mergeHistory } from "../logic.js";
   import Cover from "./Cover.svelte";
+  import SongRating from "./SongRating.svelte";
 
   const selected = $derived(store.selected);
   const players = $derived(store.snapshot?.players ?? []);
@@ -85,11 +86,14 @@
     <ol class="history-list" aria-label="Played tracks">
       {#each history.items as item (item.id)}
         {@const track = item.entry.track}
-        {@const available = connected && loaded && track.library !== null}
+        {@const available = connected && loaded && track.library != null}
         <li>
           <Cover library={track.library} art={available ? track.cover_art : null} size={128} px={56} />
           <div class="description">
-            <div class="title">{track.title}</div>
+            <div class="track-heading">
+              <div class="title">{track.title}</div>
+              <SongRating library={track.library} songId={track.id} title={track.title} namespace={store.browseKey} enabled={available} />
+            </div>
             <div class="muted">{#if available && track.artist_id}<a href={buildRoute({ view: "artist", library: track.library, id: track.artist_id, namespace: store.browseKey })}>{track.artist || "Unknown artist"}</a>{:else}{track.artist || "Unknown artist"}{/if}</div>
             {#if track.album}<div class="muted">{#if available && track.album_id}<a href={buildRoute({ view: "album", library: track.library, id: track.album_id, namespace: store.browseKey })}>{track.album}</a>{:else}{track.album}{/if}</div>{/if}
             <p class="metadata muted">{item.library_name || "Unknown library"}{!available ? " (unavailable)" : ""} · Queued by {item.entry.added_by}</p>
@@ -113,6 +117,8 @@
   .history-list { list-style: none; padding: 0; margin: 1rem 0; }
   li { display: flex; gap: 0.85rem; padding: 1rem 0; border-bottom: 1px solid var(--border); }
   .description { min-width: 0; flex: 1; overflow-wrap: anywhere; }
+  .track-heading { display: flex; align-items: start; justify-content: space-between; gap: 0.5rem; }
+  .track-heading .title { min-width: 0; }
   .title { font-weight: 650; }
   .metadata { font-size: 0.85rem; margin: 0.4rem 0; }
   dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.35rem 1rem; margin: 0.6rem 0 0; font-size: 0.85rem; }

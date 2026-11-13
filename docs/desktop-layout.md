@@ -45,6 +45,43 @@ child's target before passing it to the enclosing dialog. This does not continua
 while someone intentionally reads another part of the text. Modal dialogs use
 the same keyboard/focus contract with their existing smooth-scroll handle.
 
+Native scroll panels share `layout::scrollbar` and its twelve-logical-pixel
+content gutter. The native track stays visible while that axis overflows and
+is absent for short content. It uses the retained handle's viewport, so an
+ordinary panel can append it after its content without scrolling the track
+away or changing the unread sentinel/item indexes. Virtual lists use the same
+bar in `scroll_frame`; rows remain virtualized and keep their navigation handles.
+The rail keeps its original 72-pixel tile/decoration lane beside the gutter.
+
+Modal and nested settings panels, ACL rule/group/member and stale-draft lists,
+server/channel/chat panes, context menus, search, the quick switcher and emoji
+picker use this pattern. Nested virtual lists join the existing latched wheel
+routing through a capture-phase listener with normal occlusion. One wheel run
+moves one container, including at an edge. A thumb grab cancels easing before
+its first offset change; replacing an editor generation cannot transfer an old
+animation to the new handle. Keyboard/focus reveal and input editing retain
+their existing handlers. No continuous timer or full-content measurement is
+added by these helpers.
+
+`tests/native_scrollbars.py` accepts the ACL fixture's arguments and exercises
+actual painted thumbs, wheel routing over content and scrollbar gutters, thumb
+dragging, row clicks, text selection, native editing keys and focus reveal at
+100/125/150/200% zoom under an owned private GNOME compositor and loopback stock
+Murmur. It also checks Settings/font nesting, the rail/channel/finder/search/emoji
+viewports, no thumb after filtering to short content, and context-menu wheel
+isolation at 100/200%. Fresh catalog entries never auto-connect; long channel
+lists are seeded in the fixture's stopped server database. ImageMagick measures
+thumb pixels. Tesseract reads rendered input values because the current native
+Entry has no AT-SPI Text interface; the fixture settles injected keyboard input
+before moving focus and removes the blinking caret before OCR. Set `MAGICK` and
+`TESSERACT` when those tools are outside the test environment's path.
+
+The screenshots and JSON record the exercised artifact. These Linux software
+rendering checks do not establish physical Windows/macOS, precise touchpad or
+matched frame-time benchmark results. The existing `rail-layout` scene separately
+checks first/last tile and outline clearance and same-frame animated contours at
+100/125/150/200% zoom.
+
 GPUI dispatches focus listeners during its focus draw phase, where an immediate
 refresh does not schedule a new frame. The helper retains one reveal intent and
 schedules an ordinary next-frame refresh. A changed scroll offset schedules one

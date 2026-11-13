@@ -113,6 +113,10 @@ impl Tokens {
         Ok(token)
     }
 
+    pub(crate) fn is_valid(&self, token: &Uuid) -> bool {
+        self.lock().contains_key(token)
+    }
+
     pub fn owner(&self, token: &Uuid) -> Option<Owner> {
         self.lock().get(token).cloned()
     }

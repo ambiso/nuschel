@@ -126,9 +126,16 @@ shown (`**word**` copies as `word`), with the message's lines.
   to `http`, `https` and `mumble` targets (`[text](https://…)`, titles
   dropped) and `<https://…>`; headings (`#` to `######`, levels 4 to 6 drawn
   as 3, and `Title` over `===` or `---`); bullet and numbered lists (numbered
-  from the first number, nested up to four levels); block quotes; rules
-  (`---`); fenced and four-space indented code; `~~strikethrough~~`;
-  backslash escapes and hard line breaks; formulas.
+  from the first number, nested up to four levels); block quotes (`> text`,
+  see below); rules (`---`); fenced and four-space indented code;
+  `~~strikethrough~~`; backslash escapes and hard line breaks; formulas.
+- **Quotes need a space.** A line quotes only when its `>` is followed by a
+  space, a tab or the end of the line: `> text` and `>> text` are quotes,
+  while `>text`, `>w<`, `>:3` and `>>text` stay as typed. This is a deliberate
+  Nuschl variant, not CommonMark (which quotes both), so chat emoticons are
+  not eaten. `\>` also keeps a `>` as typed. A line typed right after a quote
+  line, without a blank line between, still continues that quote, as in
+  CommonMark.
 - **Shown as typed:** raw HTML, images (`![alt](src)` is never fetched),
   reference links and their definitions, links to other schemes (and past 128
   links a message), email autolinks, entity references (`&amp;`), a single

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: EUPL-1.2
 // Live state from the bot, the commands that change it, and the client-side
 // guesses (optimistic values) shown until the server confirms them.
-import { getJSON, postCommand, HttpError } from "./api.js";
+import { getJSON, postJSON, HttpError } from "./api.js";
 import { applyMove, browseItemIsCurrent, buildRoute, clamp, debounce, libraryForNamespace, parseRoute, queueStorageKey, routeForLibrary, routeForNamespace, seekSettled, selectedQueue } from "./logic.js";
 
 const storageKey = queueStorageKey(location.pathname);
@@ -249,7 +249,7 @@ class Store {
   async command(body, signal) {
     if (signal?.aborted) return false;
     try {
-      await postCommand(body, signal);
+      await postJSON("api/command", body, signal);
       return true;
     } catch (error) {
       if (signal?.aborted) return false;
