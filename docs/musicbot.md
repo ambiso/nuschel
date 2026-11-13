@@ -33,9 +33,10 @@ browsers. People control what plays on a web page; they get their link by writin
   the returned thumbnail is at most 400×400 RGBA pixels (300×300 by default).
   The browser validates these pixels and paints Canvas; encoded image bytes never
   reach its image decoder. Unsupported formats and failed helpers show a placeholder.
-  Finished covers stay in a shared memory cache (64 MiB, each for at most a day),
-  so the library and the worker see each cover and size once a day at most, and
-  the browser keeps them for a day as well.
+  Finished covers are kept on disk in the state directory (`web.cover_cache_mib`,
+  64 MiB by default, each for at most a day), so the library and the worker see
+  each cover and size once a day at most, also across restarts. The browser keeps
+  them for a day as well.
 - **Channels.** One Mumble connection per configured channel, each with its own
   client certificate. Every channel starts with its own queue. On the web page a
   channel can play another channel's queue instead: then both hear the same song,
@@ -163,7 +164,7 @@ services.nuschl-musicbot = {
 `credentials` are passed with systemd's `LoadCredential`; a relative `*_file` in the
 settings names one of them. The service runs as a dynamic user with its state in
 `/var/lib/nuschl-musicbot` (certificates in `identities/<channel>/`, links in
-`tokens.json`, playback state in `queues.json`). The package includes the Svelte
+`tokens.json`, playback state in `queues.json`, decoded covers in `covers/`). The package includes the Svelte
 frontend. nginx keeps no access log for the page, since the links are secrets.
 
 The NixOS module validates the generated TOML during the build with the selected
@@ -614,10 +615,14 @@ and `id`. The authenticated `art/<library>/<id>?size=…&v=…` route returns
 authority. Invalid images return 404, busy workers (two jobs) or a missing
 worker return 503. Library failures preserve the existing redacted errors.
 
-Successful answers are kept in a shared memory cache of 64 MiB, keyed by
-library, cover ID and size, each for at most 24 hours; the least recently used
-leave first and no single cover may take more than 8 MiB. A cached cover needs no
-library call and no worker job. State/SSE includes `art_keys`, one short key per
+Successful answers are kept on disk in `covers/` below the state directory, up to
+`web.cover_cache_mib` MiB (64 by default; 0 turns the cache off and deletes the
+files). Entries are keyed by library, cover ID and size and are kept for at most
+24 hours; the least recently used leave first, and no single cover may take more
+than an eighth of the space. Every file holds its key and is checked again when
+read: a damaged file is deleted and fetched anew, and only well-formed pixels are
+served. A restart keeps the files and drops expired or unfinished ones. A cached
+cover needs no library call and no worker job. State/SSE includes `art_keys`, one short key per
 library derived from its name and URL. With `v` set to that key the answer is
 `private, max-age=86400`, so the browser keeps it for a day. Without `v` it stays
 `private, no-store`. A `v` for another library (the configuration changed) gets

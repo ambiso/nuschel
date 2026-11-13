@@ -2,6 +2,7 @@
 //! A Mumble music bot: plays songs from Subsonic servers in one or more
 //! channels; people control the queues on a web page they get a link to.
 mod config;
+mod covers;
 mod decode;
 mod mumble;
 mod persist;
@@ -62,6 +63,8 @@ pub struct Bot {
     pub rating_revision: AtomicU64,
     /// Serializes checkpoints with the final shutdown save.
     pub persistence: Mutex<()>,
+    /// Decoded covers in `covers/` below the state directory.
+    pub covers: covers::CoverCache,
 }
 
 fn main() -> ExitCode {
@@ -152,6 +155,11 @@ async fn run(arguments: Arguments) -> Result<(), String> {
             )
         })
         .collect();
+    let covers = covers::CoverCache::open(
+        state_directory.join("covers"),
+        config.web.cover_cache_mib.saturating_mul(1024 * 1024),
+    )
+    .map_err(|error| format!("{}: {error}", state_directory.join("covers").display()))?;
     let bot = Arc::new(Bot {
         state_directory,
         web_assets: arguments.web_assets,
@@ -163,6 +171,7 @@ async fn run(arguments: Arguments) -> Result<(), String> {
         changes,
         rating_revision: AtomicU64::new(0),
         persistence: Mutex::new(()),
+        covers,
         config,
     });
     // The queues of the last run come back before anything plays.

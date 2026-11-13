@@ -6,6 +6,7 @@
 //! contract is described in docs/musicbot.md ("Web API").
 use crate::{
     Bot,
+    covers::CoverKey,
     player::{BrowserSubscription, Ducking, MAX_DUCK_HOLD},
     subsonic::{
         self, Album, AlbumList, Artist, Library, LibraryIdentity, Playlist, SongDetails,
@@ -50,13 +51,6 @@ static SSE_WATCHERS: Semaphore = Semaphore::const_new(MAX_SSE_WATCHERS);
 /// Includes fetching and the actual isolated worker exit, not HTTP lifetime.
 const MAX_COVER_JOBS: usize = 2;
 static COVER_JOBS: Semaphore = Semaphore::const_new(MAX_COVER_JOBS);
-/// Finished cover responses shared by every viewer, so the library and the
-/// worker handle each cover and size at most once a day.
-const COVER_CACHE_BYTES: usize = 64 * 1024 * 1024;
-const COVER_CACHE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
-static COVERS: std::sync::LazyLock<std::sync::Mutex<CoverCache>> = std::sync::LazyLock::new(|| {
-    std::sync::Mutex::new(CoverCache::new(COVER_CACHE_BYTES, COVER_CACHE_TTL))
-});
 /// Live bodies have their own admission, independent of library metadata calls.
 const MAX_LISTEN_STREAMS: usize = 16;
 static LISTEN_STREAMS: Semaphore = Semaphore::const_new(MAX_LISTEN_STREAMS);
@@ -434,103 +428,6 @@ struct ArtQuery {
     v: Option<String>,
 }
 
-/// The library's art key, cover ID and edge length.
-type CoverKey = (String, String, u32);
-
-/// Least recently used covers within a byte budget, each for at most `ttl`.
-struct CoverCache {
-    budget: usize,
-    ttl: Duration,
-    bytes: usize,
-    tick: u64,
-    entries: std::collections::HashMap<CoverKey, CachedCover>,
-}
-
-struct CachedCover {
-    body: Bytes,
-    stored: std::time::Instant,
-    used: u64,
-}
-
-impl CachedCover {
-    fn cost(&self, key: &CoverKey) -> usize {
-        self.body.len() + key.0.len() + key.1.len()
-    }
-}
-
-impl CoverCache {
-    fn new(budget: usize, ttl: Duration) -> Self {
-        Self {
-            budget,
-            ttl,
-            bytes: 0,
-            tick: 0,
-            entries: std::collections::HashMap::new(),
-        }
-    }
-
-    fn get(&mut self, key: &CoverKey, now: std::time::Instant) -> Option<Bytes> {
-        let entry = self.entries.get(key)?;
-        if now.saturating_duration_since(entry.stored) >= self.ttl {
-            self.bytes -= entry.cost(key);
-            self.entries.remove(key);
-            return None;
-        }
-        self.tick += 1;
-        let entry = self.entries.get_mut(key)?;
-        entry.used = self.tick;
-        Some(entry.body.clone())
-    }
-
-    fn insert(&mut self, key: CoverKey, body: Bytes, now: std::time::Instant) {
-        let entry = CachedCover {
-            body,
-            stored: now,
-            used: 0,
-        };
-        let cost = entry.cost(&key);
-        // A few large covers must not push out everything else.
-        if cost > self.budget / 8 {
-            return;
-        }
-        if let Some(old) = self.entries.remove(&key) {
-            self.bytes -= old.cost(&key);
-        }
-        let ttl = self.ttl;
-        let mut freed = 0;
-        self.entries.retain(|key, entry| {
-            let fresh = now.saturating_duration_since(entry.stored) < ttl;
-            if !fresh {
-                freed += entry.cost(key);
-            }
-            fresh
-        });
-        self.bytes -= freed;
-        while self.bytes + cost > self.budget {
-            let Some(oldest) = self
-                .entries
-                .iter()
-                .min_by_key(|(_, entry)| entry.used)
-                .map(|(key, _)| key.clone())
-            else {
-                break;
-            };
-            if let Some(gone) = self.entries.remove(&oldest) {
-                self.bytes -= gone.cost(&oldest);
-            }
-        }
-        self.tick += 1;
-        self.bytes += cost;
-        self.entries.insert(
-            key,
-            CachedCover {
-                used: self.tick,
-                ..entry
-            },
-        );
-    }
-}
-
 fn default_art_size() -> u32 {
     300
 }
@@ -585,10 +482,7 @@ async fn art(
     };
     let size = query.size.clamp(32, nuschl_ipc::MAX_THUMBNAIL_EDGE);
     let key: CoverKey = (source.art_key().to_owned(), id, size);
-    let cached = COVERS
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .get(&key, std::time::Instant::now());
+    let cached = bot.covers.get(&key).await;
     let body = match cached {
         Some(body) => body,
         None => fetch_cover(&bot, library, key).await?,
@@ -669,10 +563,7 @@ async fn fetch_cover(bot: &Arc<Bot>, library: usize, key: CoverKey) -> Result<By
             })
             .expect("cover pixels serialize"),
         );
-        COVERS
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(key, body.clone(), std::time::Instant::now());
+        owned.covers.insert(&key, &body).await;
         Ok::<_, ApiError>(body)
     });
     match tokio::time::timeout(LIBRARY_TIMEOUT + Duration::from_secs(10), task).await {
@@ -1891,6 +1782,8 @@ mod tests {
             tokens,
             changes: crate::Changes::default(),
             persistence: std::sync::Mutex::new(()),
+            covers: crate::covers::CoverCache::open(directory.path().join("covers"), 1 << 20)
+                .unwrap(),
             rating_revision: std::sync::atomic::AtomicU64::new(0),
         });
         (directory, bot, token)
@@ -2467,36 +2360,6 @@ mod tests {
         drop(occupied);
     }
 
-    #[test]
-    fn the_cover_cache_keeps_recent_covers_within_budget_and_age() {
-        let start = std::time::Instant::now();
-        let key = |id: &str| -> CoverKey { ("k".into(), id.into(), 300) };
-        // Each entry costs its body plus the key text: 98 + 1 + 1 = 100 bytes.
-        let body = || Bytes::from(vec![b'x'; 98]);
-        let mut cache = CoverCache::new(800, Duration::from_secs(60));
-        for id in ["a", "b", "c", "d", "e", "f", "g", "h"] {
-            cache.insert(key(id), body(), start);
-        }
-        assert_eq!(cache.bytes, 800);
-        // Using "a" makes "b" the least recently used one.
-        assert!(cache.get(&key("a"), start).is_some());
-        cache.insert(key("i"), body(), start);
-        assert!(cache.get(&key("b"), start).is_none());
-        assert!(cache.get(&key("a"), start).is_some());
-        assert_eq!(cache.bytes, 800);
-        // Replacing an entry does not count it twice.
-        cache.insert(key("a"), body(), start);
-        assert_eq!((cache.bytes, cache.entries.len()), (800, 8));
-        // More than an eighth of the budget is never cached.
-        cache.insert(key("big"), Bytes::from(vec![0; 101]), start);
-        assert!(cache.get(&key("big"), start).is_none());
-        // Old entries are gone when read or when something new arrives.
-        let later = start + Duration::from_secs(60);
-        assert!(cache.get(&key("a"), later).is_none());
-        cache.insert(key("j"), body(), later);
-        assert_eq!((cache.bytes, cache.entries.len()), (100, 1));
-    }
-
     #[tokio::test]
     async fn cached_covers_skip_the_library_and_only_versioned_urls_may_be_kept() {
         let _exclusive = API_TESTS.lock().await;
@@ -2508,11 +2371,9 @@ mod tests {
         let art_key = bot.libraries[0].art_key().to_owned();
         assert_eq!(snapshot(&bot, "x").art_keys, [art_key.as_str()]);
         let body = Bytes::from_static(br#"{"width":1,"height":1,"rgba":"AAAAAA=="}"#);
-        COVERS.lock().unwrap().insert(
-            (art_key.clone(), "cover".into(), 300),
-            body.clone(),
-            std::time::Instant::now(),
-        );
+        bot.covers
+            .insert(&(art_key.clone(), "cover".into(), 300), &body)
+            .await;
         // A hit needs no artwork job.
         let jobs = COVER_JOBS
             .acquire_many(MAX_COVER_JOBS as u32)

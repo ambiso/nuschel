@@ -34,7 +34,7 @@ import urllib.request
 import wave
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from fake_subsonic import API_KEY, COVER_PNG, PASSWORD, Library  # noqa: E402
+from fake_subsonic import API_KEY, COVER, COVER_PNG, PASSWORD, Library  # noqa: E402
 from mumble_client import Client, ReferenceOpus, certificate_pin  # noqa: E402
 
 MUSIC, LOBBY = 6, 1  # local_murmur.py's channels
@@ -901,6 +901,13 @@ def main():
                 watchers.append(Events(bob_link))
                 after = api(link)
                 assert after["libraries"] == ["Open", "Plain"], after
+                # Covers decoded before the restart come from disk. The art key
+                # belongs to the library, so the swapped index does not matter.
+                asked = [seen for seen in Library.seen if seen[1] == "getCoverArt"]
+                cover = f"art/1/{urllib.parse.quote(COVER, safe='')}?size=300&v={after['art_keys'][1]}"
+                with urllib.request.urlopen(link + cover, timeout=HTTP_TIMEOUT) as response:
+                    assert response.headers["Cache-Control"] == "private, max-age=86400", dict(response.headers)
+                assert [seen for seen in Library.seen if seen[1] == "getCoverArt"] == asked, "covers were not kept on disk"
                 music = next(index for index, player in enumerate(after["players"]) if player["name"] == "music")
                 restored = after["players"][music]
                 assert restored["paused"] and restored["volume"] == 63 and restored["ducking"] == settings, restored

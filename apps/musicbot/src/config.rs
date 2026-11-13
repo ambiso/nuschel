@@ -27,6 +27,14 @@ pub struct Web {
     pub listen: SocketAddr,
     /// Where users reach the web page; the links the bot hands out start with it.
     pub public_url: String,
+    /// Disk space for decoded covers in the state directory, in MiB; 0 turns
+    /// the cache off.
+    #[serde(default = "default_cover_cache_mib")]
+    pub cover_cache_mib: u64,
+}
+
+fn default_cover_cache_mib() -> u64 {
+    64
 }
 
 #[derive(Debug, Deserialize)]
