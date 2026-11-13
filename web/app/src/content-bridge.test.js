@@ -120,3 +120,20 @@ test("admitted renders reach the serial codec one at a time; a queued cancel ACK
   finish.get("s3")({marked_text:"ok",plain_text:"ok",document});await settle();
   assert.deepEqual(started,["s1","s2","s3"]);assert.equal(bridge.pending.size,0);bridge.dispose();
 });
+
+test("a cancelled running job holds the next job and its own ACK until the worker releases it",async()=>{
+  const m=await fresh();const started=[],acks=[];let releaseWorker;
+  const service={render(packet,{signal}){started.push(packet.source);return new Promise((resolve,reject)=>{
+    if(packet.source==="s1")signal.addEventListener("abort",()=>{const error=new Error("Content processing was cancelled.");error.workerReleased=new Promise(done=>{releaseWorker=done;});reject(error);});
+    else resolve({marked_text:"ok",plain_text:"ok",document});
+  });},dispose(){}};
+  const bridge=new m.ContentBridge(async(method,id,raw)=>{acks.push([id,raw.length]);return "null";},{service});
+  bridge.handle({kind:"content_work",operations:[{kind:"render",request:"1",mode:"plain",source:"s1"},{kind:"render",request:"2",mode:"plain",source:"s2"}]});
+  bridge.handle({kind:"content_work",operations:[{kind:"cancel",request:"1"}]});await settle();
+  assert.deepEqual(started,["s1"],"the next job does not start while the cancelled one still holds the worker");
+  assert.deepEqual(acks,[],"the SDK head stays the cancelled job until the actual release");
+  assert.equal(bridge.pending.size,2);
+  releaseWorker();await settle();
+  assert.deepEqual(started,["s1","s2"]);assert.deepEqual(acks,[["1",0],["2",JSON.stringify({marked_text:"ok",plain_text:"ok",document}).length]]);
+  assert.equal(bridge.pending.size,0);bridge.dispose();
+});

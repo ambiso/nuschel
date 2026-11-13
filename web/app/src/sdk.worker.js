@@ -124,8 +124,12 @@ onmessage = async ({ data }) => {
       }else if(data.context!==undefined)throw new Error("Unexpected browser action context.");
       let value;
       if (data.method === "content_complete") {
-        if(typeof data.args[0]!=="string"||data.args[0].length>20||typeof data.args[1]!=="string"||data.args[1].length>2*1024*1024||new TextEncoder().encode(data.args[1]).length>2*1024*1024)throw new Error("Invalid content reply.");
-        value=client.content_complete(...data.args);
+        const [request,reply]=data.args;
+        if(typeof request!=="string"||!/^[1-9][0-9]{0,19}$/.test(request))throw new Error("Invalid content request.");
+        // An invalid codec reply is still this job's ACK: release its exact SDK
+        // credit as a terminal failure instead of leaving the lease outstanding.
+        const valid=typeof reply==="string"&&reply.length<=2*1024*1024&&new TextEncoder().encode(reply).length<=2*1024*1024;
+        value=client.content_complete(request,valid?reply:"");
       } else if (data.method === "image_begin" || data.method === "image_send") {
         const raw=JSON.stringify(data.args[0]);
         if(raw.length>2*1024*1024)throw new Error("Invalid image command.");

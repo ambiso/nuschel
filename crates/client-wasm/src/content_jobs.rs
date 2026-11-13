@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! Bounded SDK-owned source leases. Posted work retains credit until its reply
-//! acknowledges completion, even after cancellation or expiry.
+//! acknowledges completion, even after cancellation or expiry. A cancelled job
+//! whose ACK misses its bound retires the lane visibly; its credit stays held.
 
 use crate::content_broker::{
     MAX_PENDING_BYTES, MAX_PENDING_JOBS, MAX_POSTED_JOBS, SourceMode, ValidatedRender,
@@ -11,7 +12,14 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
 const QUEUE_DEADLINE_MS: u64 = 60_000;
+/// Progress wall limit for the oldest unacknowledged posted job. The UI runs
+/// posted jobs one at a time in request order, so only that job can hold the
+/// codec. This is not the content worker's own execution deadline (in the UI).
 const EXECUTION_DEADLINE_MS: u64 = 12_000;
+/// Logical active-runtime bound for the ACK of a cancelled posted job.
+const CANCEL_ACK_DEADLINE_MS: u64 = 15_000;
+/// A posted job that has not reached the head of the serial lane.
+const UNARMED: u64 = u64::MAX;
 const MAX_FAILED_HANDLES: usize = 128;
 #[cfg(test)]
 const DEADLINE_MS: u64 = QUEUE_DEADLINE_MS;
@@ -21,11 +29,13 @@ const TOO_LARGE: &str =
     "[This content exceeds the local 256 KiB preview limit. It cannot be previewed here.]";
 const EXHAUSTED: &str =
     "[Preview tickets are exhausted. Reload this page to prepare new previews.]";
+const RETIRED: &str = "[Message previews stopped because a preview job was not acknowledged. Reload this page to prepare previews again.]";
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RequestError {
     Overloaded,
     TooLarge,
     Exhausted,
+    Retired,
 }
 impl RequestError {
     pub fn message(self) -> &'static str {
@@ -33,6 +43,7 @@ impl RequestError {
             Self::Overloaded => "Content processing is busy. Retry when pending work finishes.",
             Self::TooLarge => TOO_LARGE,
             Self::Exhausted => EXHAUSTED,
+            Self::Retired => RETIRED,
         }
     }
     pub fn terminal(self) -> Option<nuschl_core::MessageDocument> {
@@ -44,7 +55,7 @@ impl RequestError {
 /// This controls presentation recovery only: it never supplies a source, mode,
 /// authority, origin or ticket. The original SDK row remains authoritative.
 pub fn is_terminal_document(document: &nuschl_core::MessageDocument) -> bool {
-    matches!(document.blocks.as_slice(), [nuschl_core::ContentBlock::Text { text, spans, role: nuschl_core::TextRole::Paragraph }] if spans.is_empty() && (text == TOO_LARGE || text == EXHAUSTED))
+    matches!(document.blocks.as_slice(), [nuschl_core::ContentBlock::Text { text, spans, role: nuschl_core::TextRole::Paragraph }] if spans.is_empty() && (text == TOO_LARGE || text == EXHAUSTED || text == RETIRED))
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -130,7 +141,9 @@ struct Job {
     source: String,
     mode: SourceMode,
     charge: usize,
+    /// Queue deadline until posted; then `UNARMED` until this job is the head.
     deadline: u64,
+    ack_deadline: u64,
     posted: bool,
     cancelled: bool,
     cancel_sent: bool,
@@ -172,6 +185,7 @@ pub struct Jobs {
     handles: BTreeMap<Origin, Handle>,
     plain_bytes: usize,
     selected: Option<(String, u32)>,
+    retired: bool,
 }
 
 impl Jobs {
@@ -184,6 +198,9 @@ impl Jobs {
     ) -> Result<(), RequestError> {
         if source.len() > nuschl_core::MAX_CONTENT_BYTES {
             return Err(RequestError::TooLarge);
+        }
+        if self.retired {
+            return Err(RequestError::Retired);
         }
         if self.pending_source(&origin, source, mode) {
             return Ok(());
@@ -206,6 +223,7 @@ impl Jobs {
                 mode,
                 charge,
                 deadline: now.saturating_add(QUEUE_DEADLINE_MS),
+                ack_deadline: UNARMED,
                 posted: false,
                 cancelled: false,
                 cancel_sent: false,
@@ -249,6 +267,7 @@ impl Jobs {
                 }
                 if !job.cancel_sent {
                     job.cancel_sent = true;
+                    job.ack_deadline = now.saturating_add(CANCEL_ACK_DEADLINE_MS);
                     operations.push(Operation::Cancel {
                         request: request.to_string(),
                     });
@@ -256,6 +275,34 @@ impl Jobs {
             }
             true
         });
+        // A lost ACK never releases credit. Retire the lane instead: terminal,
+        // visible to every waiting row, and without replacement capacity.
+        let mut stopped = Vec::new();
+        if !self.retired
+            && self
+                .pending
+                .values()
+                .any(|job| job.cancel_sent && now >= job.ack_deadline)
+        {
+            self.retired = true;
+            self.pending.retain(|request, job| {
+                if job.cancelled {
+                    return true;
+                }
+                stopped.push(job.origin.clone());
+                if !job.posted {
+                    self.pending_bytes -= job.charge;
+                    return false;
+                }
+                job.cancelled = true;
+                job.cancel_sent = true;
+                job.ack_deadline = now.saturating_add(CANCEL_ACK_DEADLINE_MS);
+                operations.push(Operation::Cancel {
+                    request: request.to_string(),
+                });
+                true
+            });
+        }
         let mut failures = Vec::new();
         for (request, origin, mode, digest) in expired {
             if self.successful_row(&origin) {
@@ -268,7 +315,11 @@ impl Jobs {
                 let evicted =
                     self.install_digest(origin.clone(), digest, mode, request.to_string(), 0, true);
                 failures.push(Failure {
-                    terminal: (self.next == u64::MAX).then_some(RequestError::Exhausted),
+                    terminal: if self.retired {
+                        Some(RequestError::Retired)
+                    } else {
+                        (self.next == u64::MAX).then_some(RequestError::Exhausted)
+                    },
                     origin,
                     evicted,
                 });
@@ -282,6 +333,21 @@ impl Jobs {
                 });
             }
         }
+        for origin in stopped {
+            if !self.successful_row(&origin) {
+                failures.push(Failure {
+                    terminal: Some(RequestError::Retired),
+                    origin,
+                    evicted: Vec::new(),
+                });
+            }
+        }
+        if self.retired {
+            return Batch {
+                operations,
+                failures,
+            };
+        }
         // Cancelled posted jobs remain charged and occupy a slot until ACK.
         let mut posted = self.pending.values().filter(|job| job.posted).count();
         for (request, job) in &mut self.pending {
@@ -292,7 +358,7 @@ impl Jobs {
                 continue;
             }
             job.posted = true;
-            job.deadline = now.saturating_add(EXECUTION_DEADLINE_MS);
+            job.deadline = UNARMED;
             posted += 1;
             operations.push(Operation::Render {
                 request: request.to_string(),
@@ -300,10 +366,35 @@ impl Jobs {
                 mode: job.mode,
             });
         }
+        // The oldest unacknowledged posted job holds the serial codec, even
+        // when cancelled: its worker can still be busy until the real ACK. The
+        // next job's budget starts only once that ACK removed it here.
+        if let Some(head) = self.pending.values_mut().find(|job| job.posted)
+            && !head.cancelled
+            && head.deadline == UNARMED
+        {
+            head.deadline = now.saturating_add(EXECUTION_DEADLINE_MS);
+        }
         Batch {
             operations,
             failures,
         }
+    }
+
+    /// Whether a queue, progress or cancelled-ACK deadline needs a refresh.
+    pub fn due(&self, now: u64) -> bool {
+        !self.retired
+            && self.pending.values().any(|job| {
+                if job.cancel_sent {
+                    now >= job.ack_deadline
+                } else {
+                    !job.cancelled && now >= job.deadline
+                }
+            })
+    }
+
+    pub fn retired(&self) -> bool {
+        self.retired
     }
 
     /// The reply itself releases transport credit. Invalid/stale results never
@@ -528,6 +619,8 @@ impl Jobs {
     pub fn permanent_refusal(&self, source: &str) -> Option<RequestError> {
         if source.len() > nuschl_core::MAX_CONTENT_BYTES {
             Some(RequestError::TooLarge)
+        } else if self.retired {
+            Some(RequestError::Retired)
         } else if self.next == u64::MAX {
             Some(RequestError::Exhausted)
         } else {
@@ -563,9 +656,10 @@ impl Jobs {
         }
     }
 
-    /// Explicit navigation only: bounded metadata recovery preserves source
-    /// representation even when a document/handle was evicted. No source copy,
-    /// processing or authority rebinding occurs in snapshots or this planner.
+    /// Explicit navigation, or a reconnect of the selected conversation: bounded
+    /// metadata recovery preserves source representation even when a
+    /// document/handle was evicted. No source copy or processing occurs in
+    /// snapshots or this planner; only verified handles are re-keyed (`rebind`).
     pub fn recover_rows(
         &mut self,
         server: &str,
@@ -582,17 +676,17 @@ impl Jobs {
                 if is_terminal_document(&message.document) {
                     return None;
                 }
-                Some((
-                    Origin::Message {
-                        server: server.into(),
-                        generation,
-                        channel: channel.id,
-                        instance: channel.instance,
-                        serial: message.serial,
-                        revision: message.revision,
-                    },
-                    message.source_format?,
-                ))
+                let mode = message.source_format?;
+                let origin = Origin::Message {
+                    server: server.into(),
+                    generation,
+                    channel: channel.id,
+                    instance: channel.instance,
+                    serial: message.serial,
+                    revision: message.revision,
+                };
+                self.rebind(&origin, &message.source, mode);
+                Some((origin, mode))
             })
             .collect();
         for (origin, _) in rows.iter().rev() {
@@ -605,6 +699,34 @@ impl Jobs {
                     && !self.pending(origin)
             })
             .collect()
+    }
+
+    /// After a connection lifetime change, a row's handle is keyed by its old
+    /// origin. Re-key it ONLY for a successful derivative whose current row has
+    /// the same serial, revision, source digest and mode; revoke anything else
+    /// so the row is requested again from its current source. In-flight jobs
+    /// are never re-keyed: `complete` still requires their exact origin.
+    fn rebind(&mut self, origin: &Origin, source: &str, mode: SourceMode) {
+        if self.handles.contains_key(origin) {
+            return;
+        }
+        let Some(stale) = self
+            .handles
+            .keys()
+            .find(|stored| stored.same_row(origin))
+            .cloned()
+        else {
+            return;
+        };
+        let handle = self.handles.remove(&stale).expect("observed handle");
+        if !handle.failed
+            && handle.mode == mode
+            && handle.source_digest == <[u8; 32]>::from(Sha256::digest(source.as_bytes()))
+        {
+            self.handles.insert(origin.clone(), handle);
+        } else {
+            self.plain_bytes -= handle.plain_bytes;
+        }
     }
 
     pub fn is_failed(&self, origin: &Origin) -> bool {
@@ -720,9 +842,11 @@ mod tests {
         }
         assert!(jobs.request(origin(999), "", SourceMode::Plain, 0).is_err());
         assert_eq!(jobs.take(0, |_, _| true).len(), 4);
+        // Every queued job and the head of the serial lane expire; the other
+        // posted jobs wait for the head and keep their unacknowledged credit.
         let expired = jobs.take_with_failures(DEADLINE_MS, |_, _| true);
-        assert_eq!(expired.operations.len(), 4);
-        assert_eq!(expired.failures.len(), MAX_PENDING_JOBS);
+        assert_eq!(expired.operations.len(), 1);
+        assert_eq!(expired.failures.len(), MAX_PENDING_JOBS - 3);
         assert_eq!(jobs.pending.len(), 4);
         assert!(
             jobs.complete("1", Some("[]"), DEADLINE_MS, |_, _| true)
@@ -782,13 +906,17 @@ mod tests {
         }
         let posted = jobs.take(0, |_, _| true);
         let expired = jobs.take_with_failures(DEADLINE_MS, |_, _| true);
-        assert_eq!(expired.failures.len(), 6);
-        assert_eq!(expired.operations.len(), MAX_POSTED_JOBS);
+        // Queued jobs and the serial head expire; posted followers still wait.
+        assert_eq!(expired.failures.len(), 3);
+        assert_eq!(expired.operations.len(), 1);
         assert_eq!(jobs.pending.len(), MAX_POSTED_JOBS);
         let held = jobs.pending_bytes;
-        for serial in 0..6 {
+        for serial in [0, 4, 5] {
             assert!(jobs.is_failed(&origin(serial)));
             assert!(jobs.token(&origin(serial)).is_some());
+        }
+        for serial in 1..4 {
+            assert!(jobs.pending(&origin(serial)));
         }
         assert!(
             jobs.take_with_failures(DEADLINE_MS + 1, |_, _| true)
@@ -1228,13 +1356,17 @@ mod tests {
 
     #[test]
     fn reconnect_never_rebinds_a_changed_source_or_mode() {
-        let mut servers = resident_model(1, 2);
+        let mut servers = resident_model(1, 3);
         let mut jobs = Jobs::default();
         for row in 0..2 {
             let origin = model_origin(&servers[0], 0, row);
             render_model(&mut jobs, &mut servers, origin);
         }
-        let stale: Vec<String> = (0..2)
+        // A failure handle is not a successful receipt, even for unchanged input.
+        let failed = model_origin(&servers[0], 0, 2);
+        let source = servers[0].channels[0].timeline.messages[2].source.clone();
+        jobs.failed(failed, &source, SourceMode::Legacy).unwrap();
+        let stale: Vec<String> = (0..3)
             .map(|row| {
                 jobs.token(&model_origin(&servers[0], 0, row))
                     .unwrap()
@@ -1249,7 +1381,7 @@ mod tests {
         let recovery = jobs.recover_rows("owned", servers[0].generation, &servers[0].channels[0]);
         assert_eq!(
             recovery.len(),
-            2,
+            3,
             "unverified rows are requested again from their current source"
         );
         for (row, token) in stale.iter().enumerate() {
@@ -1268,27 +1400,43 @@ mod tests {
         }
         let posted = jobs.take(0, |_, _| true);
         assert_eq!(posted.len(), MAX_POSTED_JOBS);
-        // Every posted job expires; its Cancel is sent but no ACK ever arrives.
+        // The serial head expires; its Cancel is sent but no ACK ever arrives.
         let expired = jobs.take_with_failures(EXECUTION_DEADLINE_MS, |_, _| true);
-        assert_eq!(expired.operations.len(), MAX_POSTED_JOBS);
+        assert_eq!(expired.operations.len(), 1);
         let held = jobs.pending_bytes;
-        // Later, but before the queued jobs' own deadline, lost ACKs become a
-        // visible terminal lane state rather than a permanently silent busy.
-        let now = EXECUTION_DEADLINE_MS + 30_000; // below QUEUE_DEADLINE_MS
-        let retired = jobs.take_with_failures(now, |_, _| true);
-        assert!(retired.operations.is_empty());
-        assert_eq!(
-            retired.failures.len(),
-            2,
-            "queued rows are told the lane stopped"
-        );
-        assert!(retired.failures.iter().all(|failure| failure
-            .terminal
-            .is_some_and(|error| error.terminal().is_some())));
+        let deadline = EXECUTION_DEADLINE_MS + CANCEL_ACK_DEADLINE_MS;
+        assert!(!jobs.due(deadline - 1));
         assert!(
-            matches!(jobs.request(origin(9), "new", SourceMode::Plain, now), Err(error) if error.terminal().is_some())
+            jobs.take_with_failures(deadline - 1, |_, _| true)
+                .failures
+                .is_empty()
         );
-        assert!(jobs.permanent_refusal("new").is_some());
+        assert!(!jobs.retired());
+        // The followers never started their budget behind the unacknowledged
+        // head. The lost ACK becomes a visible terminal lane state rather than
+        // a permanently silent busy, before any queued job's own deadline.
+        assert!(jobs.due(deadline));
+        let retired = jobs.take_with_failures(deadline, |_, _| true);
+        assert!(jobs.retired());
+        assert!(!jobs.due(deadline + 1));
+        assert_eq!(
+            retired.operations.len(),
+            MAX_POSTED_JOBS - 1,
+            "posted followers are cancelled but keep their credit"
+        );
+        assert_eq!(retired.failures.len(), 5, "every waiting row is told");
+        assert!(
+            retired
+                .failures
+                .iter()
+                .all(|failure| failure.terminal == Some(RequestError::Retired))
+        );
+        assert_eq!(
+            jobs.request(origin(9), "new", SourceMode::Plain, deadline),
+            Err(RequestError::Retired)
+        );
+        assert!(RequestError::Retired.terminal().is_some_and(|document| is_terminal_document(&document)));
+        assert_eq!(jobs.permanent_refusal("new"), Some(RequestError::Retired));
         assert_eq!(
             jobs.pending.len(),
             MAX_POSTED_JOBS,
@@ -1300,13 +1448,50 @@ mod tests {
             panic!()
         };
         assert!(
-            jobs.complete(request, Some(REPLY), now + 1, |_, _| true)
+            jobs.complete(request, Some(REPLY), deadline + 1, |_, _| true)
                 .unwrap()
                 .is_none()
         );
         assert_eq!(jobs.pending.len(), MAX_POSTED_JOBS - 1);
-        assert!(jobs.take(now + 2, |_, _| true).is_empty());
-        assert!(jobs.request(origin(10), "new", SourceMode::Plain, now + 2).is_err());
+        assert!(jobs.take(deadline + 2, |_, _| true).is_empty());
+        assert_eq!(
+            jobs.request(origin(10), "new", SourceMode::Plain, deadline + 2),
+            Err(RequestError::Retired)
+        );
+    }
+
+    #[test]
+    fn cancelled_head_holds_the_following_job_until_its_real_ack() {
+        let mut jobs = Jobs::default();
+        for serial in 0..2 {
+            jobs.request(origin(serial), "source", SourceMode::Plain, 0)
+                .unwrap();
+        }
+        assert_eq!(jobs.take(0, |_, _| true).len(), 2);
+        // The head's row changes; its worker may still be busy with it.
+        let cancelled = jobs.take_with_failures(1, |lease, _| lease != &origin(0));
+        assert!(matches!(cancelled.operations.as_slice(), [Operation::Cancel { request }] if request == "1"));
+        // Past the follower's budget had it been armed at posting or at the
+        // cancellation; it is still waiting behind the unacknowledged head.
+        let waiting = jobs.take_with_failures(EXECUTION_DEADLINE_MS + 2, |_, _| true);
+        assert!(waiting.failures.is_empty() && waiting.operations.is_empty());
+        assert!(!jobs.retired());
+        // Only the real ACK releases the head and starts the follower's budget.
+        assert!(
+            jobs.complete("1", None, EXECUTION_DEADLINE_MS + 3, |_, _| true)
+                .unwrap()
+                .is_none()
+        );
+        let start = EXECUTION_DEADLINE_MS + 3;
+        assert!(jobs.take(start, |_, _| true).is_empty());
+        assert!(!jobs.due(start + EXECUTION_DEADLINE_MS - 1));
+        assert!(jobs.due(start + EXECUTION_DEADLINE_MS));
+        let done = jobs
+            .complete("2", Some(REPLY), start + EXECUTION_DEADLINE_MS - 1, |_, _| true)
+            .unwrap()
+            .unwrap();
+        assert!(!done.failed);
+        assert_eq!(jobs.pending_bytes, 0);
     }
 
     #[test]

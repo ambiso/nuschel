@@ -48,7 +48,8 @@ test("UI state ACK has independent exact-owner control credit and application fa
  const worker={postMessage:value=>messages.push(value),terminate:()=>terminated++};
  const clock={setTimeout(fn){timers.set(++next,fn);return next;},clearTimeout:id=>timers.delete(id)};
  const rpc=new SdkRpc(worker,{clock});rpc.initialize("ws://127.0.0.1/relay");rpc.acceptReady();
- const pending=Array.from({length:128},()=>rpc.request("content_request",["1"]).catch(error=>error));
+ // A full aggregate table: 124 ordinary slots plus the four reserved ACK slots.
+ const pending=[...Array.from({length:124},()=>rpc.request("content_request",["1"]).catch(error=>error)),...Array.from({length:4},(_,index)=>rpc.request("content_complete",[String(index+1),""]).catch(error=>error))];
  assert.equal(rpc.ackState(null),false);assert.equal(rpc.ackState(0),false);
  assert.equal(rpc.acceptState(1),true);assert.equal(rpc.size,128);assert.equal(rpc.ackState(1),true);assert.deepEqual(messages.at(-1),{method:"state_applied",args:[1]});assert.equal(rpc.size,128);assert.equal(rpc.ackState(1),false);
  assert.equal(rpc.acceptState(2),true);rpc.close("UI apply failed");assert.equal(rpc.ackState(2),false);assert.equal(terminated,1);await Promise.all(pending);

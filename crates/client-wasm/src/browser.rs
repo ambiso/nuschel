@@ -1357,7 +1357,10 @@ impl WebClient {
                 });
                 false
             });
-        changed || expired
+        // Content deadlines (including a cancelled job's ACK bound) must not
+        // wait for unrelated network traffic to be observed.
+        let due = self.shared.jobs.borrow().due(now_ms.max(0.0) as u64);
+        changed || expired || due
     }
 
     /// Apply what arrived; what changed, as JSON (`[{"kind": …}]`).
@@ -1368,10 +1371,12 @@ impl WebClient {
             let Some(input) = input else { break };
             self.client.handle(input);
         }
+        let mut reconnected = false;
         if let (Some(previous), Some(current)) =
             (previous_lifetime, selected_lifetime(&self.client))
         {
             if previous.0 == current.0 && previous.2 == current.2 && previous != current {
+                reconnected = true;
                 // Initial cached/offline channels and reconnects get a NEW
                 // storage request/ticket once the real wire lifetime is known.
                 // Never retarget an old reply or its already-posted render.
@@ -1396,6 +1401,11 @@ impl WebClient {
             .jobs
             .borrow_mut()
             .retain(|origin| content_resident(&self.client, &self.shared, origin));
+        if reconnected {
+            // Rebind verified derivatives of the visible conversation before
+            // the next snapshot; anything unverified is requested again.
+            self.recover_selected_content();
+        }
         self.reconcile_voice();
         if self.client.navigation.selection().is_none() {
             if let Some(index) = self
@@ -1499,6 +1509,13 @@ impl WebClient {
         }
         if now_ms() >= self.recovery_until {
             self.recovery.clear();
+            return;
+        }
+        if self.shared.jobs.borrow().retired() {
+            // A retired lane admits nothing; tell each waiting row why.
+            while let Some((origin, _)) = self.recovery.pop_front() {
+                self.source_refused(&origin, RequestError::Retired);
+            }
             return;
         }
         while self.shared.jobs.borrow().recovery_credit() {

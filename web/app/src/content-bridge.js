@@ -1,11 +1,17 @@
 // SPDX-License-Identifier: EUPL-1.2
-// The SDK owns origins/source tickets. This bridge holds inert derivatives;
-// codec jobs receive no SDK, TLS, storage, conversation or identity capability.
+// The SDK owns origins/source tickets. This bridge holds inert derivatives.
+// Codec jobs receive only source text and mode; the codec Worker holds no SDK,
+// TLS, conversation or identity state. As a same-origin Worker it can still use
+// IndexedDB and CSP-permitted fetch: a browser realm, not an OS sandbox.
 import {ContentService} from "./content-service.js";
 import {MAX_REPLY, textBytes, validateDocument} from "./content-protocol.js";
 
 export const DOCUMENT_BYTES = 16 * 1024 * 1024;
 export const DOCUMENT_COUNT = 256;
+// Matches the SDK's posted-job window and the RPC layer's ACK reserve.
+const MAX_ADMITTED = 4;
+// Mounting a long conversation must not fill the shared SDK RPC table.
+const REHYDRATION_RPCS = 8, MAX_WAITING = 128;
 const listeners = new Set();
 const tokenListeners = new Map();
 let version = 0, active, consumed = false;
@@ -58,7 +64,7 @@ export class DocumentCache {
 const cache = new DocumentCache();
 export function contentDocument(token) { return cache.get(token); }
 export function contentFailed(token) { return Boolean(cache.entries.get(token)?.failed || active?.denied.has(token)); }
-export function contentUnavailable(token) { return !active || active.service.retired === true || active.denied.get(token) === true; }
+export function contentUnavailable(token) { return !active || active.unavailable() || active.denied.get(token) === true; }
 export function retryContent(token) { active?.retry(token); }
 export function retainDocument(token,failed=false) {
   if(typeof token!=="string")return()=>{};
@@ -67,21 +73,26 @@ export function retainDocument(token,failed=false) {
   if(!release&&!failed)owner?.rehydrate(token);
   // UI dedupe metadata follows the mounted lease. Removing it neither cancels
   // background SDK work nor releases any codec/transport concurrency credit.
-  return()=>{release?.();owner?.missing.delete(token);};
+  return()=>{release?.();owner?.forget(token);};
 }
 
 export class ContentBridge {
   constructor(command,{service=new ContentService()}={}) {
     if(consumed)throw new Error("The content bridge already consumed its page-lifetime owner. Reload to reconnect.");
     consumed=true;
-    this.command=command;this.service=service;this.pending=new Map();this.missing=new Set();this.denied=new Map();this.welcomes=new Map();this.disposed=false;this.reportedRetirement=false;active=this;
+    this.command=command;this.service=service;
+    // SDK-admitted renders stay here until their exact ACK reached the SDK.
+    this.pending=new Map();this.queue=[];this.running=null;
+    this.missing=new Set();this.waiting=new Set();this.requesting=0;
+    this.denied=new Map();this.welcomes=new Map();this.disposed=false;this.retired=false;this.reportedRetirement=false;active=this;
   }
+  unavailable() { return this.retired||this.service.retired===true; }
   rehydrate(token) {
-    if(this.disposed||this.service.retired||this.denied.has(token)||this.missing.has(token))return;
-    if(this.missing.size>=128){this.deny(token);return;}
-    this.missing.add(token);
-    this.command("content_request",token).then(queued=>{if(queued!==true)this.deny(token);}).catch(()=>this.deny(token,true));
+    if(this.disposed||this.unavailable()||this.denied.has(token)||this.missing.has(token))return;
+    if(this.missing.size>=MAX_WAITING){this.deny(token);return;}
+    this.missing.add(token);this.request(token);
   }
+  forget(token) { this.missing.delete(token);this.waiting.delete(token); }
   deny(token,terminal=false) {
     if(this.denied.size>=512)this.denied.delete(this.denied.keys().next().value);
     this.denied.set(token,terminal||this.denied.get(token)===true);this.notify(token);
@@ -91,8 +102,19 @@ export class ContentBridge {
     if(this.service.retired&&!this.reportedRetirement){this.reportedRetirement=true;changed();}
   }
   retry(token) {
-    if(this.disposed||this.service.retired||this.denied.get(token)===true)return;
-    this.command("content_request",token).then(queued=>{if(queued!==true)this.deny(token);}).catch(()=>this.deny(token,true));
+    if(this.disposed||this.unavailable()||this.denied.get(token)===true)return;
+    this.request(token);
+  }
+  request(token) {
+    if(!this.waiting.has(token)&&this.waiting.size>=MAX_WAITING){this.deny(token);return;}
+    this.waiting.add(token);this.drainRequests();
+  }
+  drainRequests() {
+    while(!this.disposed&&this.requesting<REHYDRATION_RPCS&&this.waiting.size) {
+      const token=this.waiting.values().next().value;this.waiting.delete(token);this.requesting++;
+      this.command("content_request",token).then(queued=>{if(queued!==true)this.deny(token);},()=>this.deny(token,true))
+        .finally(()=>{this.requesting--;this.drainRequests();});
+    }
   }
   handle(data) {
     if(data?.kind!=="content_work")return false;
@@ -100,29 +122,67 @@ export class ContentBridge {
     for(const operation of data.operations) {
       const id=operation?.request;
       if(typeof id!=="string"||!/^[1-9][0-9]{0,19}$/.test(id))throw new Error("Invalid content work ticket.");
-      if(operation.kind==="cancel") { this.pending.get(id)?.abort();continue; }
-      if(operation.kind!=="render"||this.pending.has(id)||this.pending.size>=4)throw new Error("Invalid content work admission.");
-      const controller=new AbortController();this.pending.set(id,controller);
-      this.render(id,operation,controller);
+      if(operation.kind==="cancel") { this.cancel(id);continue; }
+      if(operation.kind!=="render"||this.pending.has(id)||this.pending.size>=MAX_ADMITTED)throw new Error("Invalid content work admission.");
+      const entry={id,source:operation.source,mode:operation.mode,controller:new AbortController()};
+      this.pending.set(id,entry);this.queue.push(entry);
     }
+    this.pump();
     return true;
   }
-  async render(id,operation,controller) {
+  cancel(id) {
+    const entry=this.pending.get(id);
+    if(!entry)return; // its ACK has already reached the SDK
+    const index=this.queue.indexOf(entry);
+    if(index<0){entry.controller.abort();return;}
+    this.queue.splice(index,1);this.acknowledge(entry,""); // never reached the codec
+  }
+  // The content service runs one job at a time and the SDK times only its oldest
+  // unacknowledged job. Hand over the next job only after the previous one has
+  // actually left the worker, so queue wait never runs against a job's deadline.
+  pump() {
+    if(this.running||this.disposed||this.retired||!this.queue.length)return;
+    this.run(this.queue.shift());
+  }
+  async run(entry) {
+    this.running=entry;
+    let result,released;
+    try { result=await this.service.render({source:entry.source,mode:entry.mode},{signal:entry.controller.signal}); }
+    catch(error) { released=error?.workerReleased; }
+    // A cancelled active job is settled early but still holds the worker until
+    // its real reply or owner retirement; so does its SDK ACK.
+    if(released)await released;
+    if(this.running===entry)this.running=null;
+    this.pump();
     let reply="";
-    try { const result=await this.service.render({source:operation.source,mode:operation.mode},{signal:controller.signal});reply=JSON.stringify(result);textBytes(reply,MAX_REPLY); }
-    catch { /* A bounded failure ACK never grants parser fallback. */ }
+    if(result!==undefined) {
+      try { const json=JSON.stringify(result);textBytes(json,MAX_REPLY);reply=json; }
+      catch { /* A bounded failure ACK never grants parser fallback. */ }
+    }
+    await this.acknowledge(entry,reply);
+  }
+  // Only this exact ACK releases the SDK's credit for the job. It is never
+  // dropped locally: failed delivery keeps the credit charged and retires the
+  // preview lane visibly, instead of degrading into a permanently silent busy.
+  async acknowledge(entry,reply) {
+    if(this.disposed||this.retired)return;
+    let raw;
+    try { raw=await this.command("content_complete",entry.id,reply); }
+    catch { if(!this.disposed)this.retire();return; }
+    this.pending.delete(entry.id);
     if(this.disposed)return;
     try {
-      const raw=await this.command("content_complete",id,reply);
-      if(this.disposed)return;
       textBytes(raw,MAX_REPLY);
       const accepted=JSON.parse(raw);
       if(accepted&&Object.keys(accepted).length===4&&typeof accepted.failed==="boolean") {
         if(cache.insert(accepted.token,accepted.document,accepted.charge,accepted.failed))this.notify(accepted.token);
         else this.deny(accepted.token); // never turn pinned-cache pressure into a re-render loop
       }
-    } catch { this.deny(id); /* Original source remains in the SDK for explicit retry. */ }
-    finally { this.pending.delete(id); }
+    } catch { this.deny(entry.id); /* Original source remains in the SDK for explicit retry. */ }
+  }
+  retire() {
+    if(this.retired)return;
+    this.retired=true;changed();
   }
   state(servers,updates) {
     // Welcome references use the same cache/charge as timeline documents.
@@ -138,9 +198,9 @@ export class ContentBridge {
   }
   dispose() {
     if(this.disposed)return;this.disposed=true;
-    for(const controller of this.pending.values())controller.abort();
+    for(const entry of this.pending.values())entry.controller.abort();
     for(const entry of this.welcomes.values())entry.release();
-    this.service.dispose();this.pending.clear();this.missing.clear();this.denied.clear();this.welcomes.clear();
+    this.service.dispose();this.pending.clear();this.queue.length=0;this.running=null;this.missing.clear();this.waiting.clear();this.denied.clear();this.welcomes.clear();
     // Retained views/canvases may outlive this callback. Keep their cache charge
     // and permanently consume this page owner; disposal is not an exit ACK or
     // permission to manufacture another 16 MiB of derivative capacity.
