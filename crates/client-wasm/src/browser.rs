@@ -1205,6 +1205,15 @@ impl WebClient {
         }
     }
 
+    /// The UI's terminal retirement of its preview lane, with a fixed reason.
+    /// Posted credit stays held until each real ACK; nothing is replaced.
+    pub fn content_retire(&mut self, reason: String) -> Result<bool, String> {
+        reason.parse::<crate::content_jobs::RetireReason>()?;
+        let retired = self.shared.jobs.borrow_mut().retire_lane();
+        self.drain_recovery();
+        Ok(retired)
+    }
+
     pub fn timeline(&self) -> String {
         let mut view = snapshot::timeline(&self.client);
         let context = self

@@ -5,11 +5,10 @@
 // IndexedDB and CSP-permitted fetch: a browser realm, not an OS sandbox.
 import {ContentService} from "./content-service.js";
 import {MAX_REPLY, textBytes, validateDocument} from "./content-protocol.js";
+import {CONTENT_WINDOW} from "./sdk-rpc.js";
 
 export const DOCUMENT_BYTES = 16 * 1024 * 1024;
 export const DOCUMENT_COUNT = 256;
-// Matches the SDK's posted-job window and the RPC layer's ACK reserve.
-const MAX_ADMITTED = 4;
 // Mounting a long conversation must not fill the shared SDK RPC table.
 const REHYDRATION_RPCS = 8, MAX_WAITING = 128;
 const listeners = new Set();
@@ -62,6 +61,16 @@ export class DocumentCache {
 }
 
 const cache = new DocumentCache();
+const ticket=id=>typeof id==="string"&&/^[1-9][0-9]{0,19}$/.test(id);
+// A normal content_complete result: bounded JSON text of null (nothing to
+// install) or exactly {token, charge, document, failed}. Anything else throws.
+function completion(raw) {
+  textBytes(raw,MAX_REPLY);
+  const value=JSON.parse(raw);
+  if(value===null)return null;
+  if(typeof value!=="object"||Array.isArray(value)||Object.keys(value).length!==4||typeof value.token!=="string"||!Number.isSafeInteger(value.charge)||!value.document||typeof value.document!=="object"||typeof value.failed!=="boolean")throw new Error("Invalid content completion.");
+  return value;
+}
 export function contentDocument(token) { return cache.get(token); }
 export function contentFailed(token) { return Boolean(cache.entries.get(token)?.failed || active?.denied.has(token)); }
 export function contentUnavailable(token) { return !active || active.unavailable() || active.denied.get(token) === true; }
@@ -118,17 +127,32 @@ export class ContentBridge {
   }
   handle(data) {
     if(data?.kind!=="content_work")return false;
-    if(!Array.isArray(data.operations)||data.operations.length>8)throw new Error("Invalid content work batch.");
-    for(const operation of data.operations) {
-      const id=operation?.request;
-      if(typeof id!=="string"||!/^[1-9][0-9]{0,19}$/.test(id))throw new Error("Invalid content work ticket.");
-      if(operation.kind==="cancel") { this.cancel(id);continue; }
-      if(operation.kind!=="render"||this.pending.has(id)||this.pending.size>=MAX_ADMITTED)throw new Error("Invalid content work admission.");
-      const entry={id,source:operation.source,mode:operation.mode,controller:new AbortController()};
-      this.pending.set(id,entry);this.queue.push(entry);
+    const operations=Array.isArray(data.operations)&&data.operations.length<=8?data.operations:null;
+    if(!operations||!this.admissible(operations)) {
+      // A batch that violates the protocol admits nothing and never throws into
+      // the App's handler. Admitted credit stays held, the lane retires
+      // visibly, and the batch's well-formed cancellations are still honoured.
+      this.retire("protocol");
+      for(const operation of operations??[])if(operation?.kind==="cancel"&&ticket(operation.request))this.cancel(operation.request);
+      return true;
+    }
+    for(const operation of operations) {
+      if(operation.kind==="cancel") { this.cancel(operation.request);continue; }
+      const entry={id:operation.request,source:operation.source,mode:operation.mode,controller:new AbortController()};
+      this.pending.set(entry.id,entry);this.queue.push(entry);
     }
     this.pump();
     return true;
+  }
+  admissible(operations) {
+    const renders=new Set();
+    for(const operation of operations) {
+      if(!operation||typeof operation!=="object"||!ticket(operation.request))return false;
+      if(operation.kind==="cancel")continue;
+      if(operation.kind!=="render"||this.pending.has(operation.request)||renders.has(operation.request))return false;
+      renders.add(operation.request);
+    }
+    return this.pending.size+renders.size<=CONTENT_WINDOW;
   }
   cancel(id) {
     const entry=this.pending.get(id);
@@ -161,28 +185,28 @@ export class ContentBridge {
     }
     await this.acknowledge(entry,reply);
   }
-  // Only this exact ACK releases the SDK's credit for the job. It is never
-  // dropped locally: failed delivery keeps the credit charged and retires the
-  // preview lane visibly, instead of degrading into a permanently silent busy.
+  // Only a normal, well-formed content_complete result is the SDK's ACK for
+  // this job. A local refusal, a remote exception (possibly raised before the
+  // job was reached) or a malformed result keeps the credit charged and
+  // retires the preview lane visibly, instead of a permanently silent busy.
   async acknowledge(entry,reply) {
     if(this.disposed||this.retired)return;
-    let raw;
-    try { raw=await this.command("content_complete",entry.id,reply); }
-    catch { if(!this.disposed)this.retire();return; }
+    let accepted;
+    try { accepted=completion(await this.command("content_complete",entry.id,reply)); }
+    catch { if(!this.disposed)this.retire("undelivered");return; }
     this.pending.delete(entry.id);
-    if(this.disposed)return;
+    if(this.disposed||accepted===null)return;
     try {
-      textBytes(raw,MAX_REPLY);
-      const accepted=JSON.parse(raw);
-      if(accepted&&Object.keys(accepted).length===4&&typeof accepted.failed==="boolean") {
-        if(cache.insert(accepted.token,accepted.document,accepted.charge,accepted.failed))this.notify(accepted.token);
-        else this.deny(accepted.token); // never turn pinned-cache pressure into a re-render loop
-      }
-    } catch { this.deny(entry.id); /* Original source remains in the SDK for explicit retry. */ }
+      if(cache.insert(accepted.token,accepted.document,accepted.charge,accepted.failed))this.notify(accepted.token);
+      else this.deny(accepted.token); // never turn pinned-cache pressure into a re-render loop
+    } catch { this.deny(accepted.token); /* Original source remains in the SDK for explicit retry. */ }
   }
-  retire() {
+  retire(reason) {
     if(this.retired)return;
     this.retired=true;changed();
+    // One bounded, best-effort notice; never retried. If the RPC layer refuses
+    // it (all ACK slots in flight), the SDK's own deadlines still retire it.
+    if(!this.disposed)Promise.resolve().then(()=>this.command("content_retire",reason)).catch(()=>{});
   }
   state(servers,updates) {
     // Welcome references use the same cache/charge as timeline documents.

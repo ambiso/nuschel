@@ -130,6 +130,9 @@ onmessage = async ({ data }) => {
         // credit as a terminal failure instead of leaving the lease outstanding.
         const valid=typeof reply==="string"&&reply.length<=2*1024*1024&&new TextEncoder().encode(reply).length<=2*1024*1024;
         value=client.content_complete(request,valid?reply:"");
+      } else if (data.method === "content_retire") {
+        if(!["undelivered","protocol"].includes(data.args[0]))throw new Error("Invalid content lane retirement.");
+        value=client.content_retire(data.args[0]);
       } else if (data.method === "image_begin" || data.method === "image_send") {
         const raw=JSON.stringify(data.args[0]);
         if(raw.length>2*1024*1024)throw new Error("Invalid image command.");

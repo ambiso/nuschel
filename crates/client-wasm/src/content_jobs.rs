@@ -55,6 +55,24 @@ impl RequestError {
         })
     }
 }
+/// Why the UI retired its preview lane. Both variants are equally terminal.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RetireReason {
+    /// A content ACK could not be delivered to the SDK.
+    Undelivered,
+    /// The UI received a content work batch that violates the protocol.
+    Protocol,
+}
+impl std::str::FromStr for RetireReason {
+    type Err = &'static str;
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "undelivered" => Ok(Self::Undelivered),
+            "protocol" => Ok(Self::Protocol),
+            _ => Err("Invalid content lane retirement."),
+        }
+    }
+}
 /// This controls presentation recovery only: it never supplies a source, mode,
 /// authority, origin or ticket. The original SDK row remains authoritative.
 pub fn is_terminal_document(document: &nuschl_core::MessageDocument) -> bool {
@@ -279,15 +297,18 @@ impl Jobs {
             true
         });
         // A lost ACK never releases credit. Retire the lane instead: terminal,
-        // visible to every waiting row, and without replacement capacity.
-        let mut stopped = Vec::new();
-        if !self.retired
-            && self
-                .pending
-                .values()
-                .any(|job| job.cancel_sent && now >= job.ack_deadline)
+        // visible to every waiting row, and without replacement capacity. The
+        // UI can also retire it explicitly (`retire_lane`); both stop the same
+        // outstanding work here, once.
+        if self
+            .pending
+            .values()
+            .any(|job| job.cancel_sent && now >= job.ack_deadline)
         {
             self.retired = true;
+        }
+        let mut stopped = Vec::new();
+        if self.retired {
             self.pending.retain(|request, job| {
                 if job.cancelled {
                     return true;
@@ -386,18 +407,28 @@ impl Jobs {
 
     /// Whether a queue, progress or cancelled-ACK deadline needs a refresh.
     pub fn due(&self, now: u64) -> bool {
-        !self.retired
-            && self.pending.values().any(|job| {
-                if job.cancel_sent {
-                    now >= job.ack_deadline
-                } else {
-                    !job.cancelled && now >= job.deadline
-                }
-            })
+        if self.retired {
+            // An explicit retirement still has outstanding work to stop.
+            return self.pending.values().any(|job| !job.cancelled);
+        }
+        self.pending.values().any(|job| {
+            if job.cancel_sent {
+                now >= job.ack_deadline
+            } else {
+                !job.cancelled && now >= job.deadline
+            }
+        })
     }
 
     pub fn retired(&self) -> bool {
         self.retired
+    }
+
+    /// The UI's explicit, terminal retirement of its preview lane. Outstanding
+    /// work is stopped at the next `take_with_failures`; posted credit stays
+    /// held until each real ACK. Returns whether this call retired the lane.
+    pub fn retire_lane(&mut self) -> bool {
+        !std::mem::replace(&mut self.retired, true)
     }
 
     /// The reply itself releases transport credit. Invalid/stale results never
@@ -1470,6 +1501,61 @@ mod tests {
             jobs.request(origin(10), "new", SourceMode::Plain, deadline + 2),
             Err(RequestError::Retired)
         );
+    }
+
+    #[test]
+    fn explicit_retirement_is_idempotent_terminal_and_keeps_posted_credit() {
+        let mut jobs = Jobs::default();
+        for serial in 0..6 {
+            jobs.request(origin(serial), "source", SourceMode::Plain, 0)
+                .unwrap();
+        }
+        let posted = jobs.take(0, |_, _| true);
+        assert_eq!(posted.len(), MAX_POSTED_JOBS);
+        let held = jobs.pending_bytes;
+        assert!(!jobs.due(1));
+        assert!(jobs.retire_lane());
+        assert!(!jobs.retire_lane(), "a second retirement is a no-op");
+        assert!(jobs.due(1), "outstanding work still has to be stopped");
+        let stopped = jobs.take_with_failures(1, |_, _| true);
+        assert_eq!(
+            stopped.operations.len(),
+            MAX_POSTED_JOBS,
+            "posted jobs are cancelled, never released"
+        );
+        assert_eq!(stopped.failures.len(), 6, "every waiting row is told");
+        assert!(
+            stopped
+                .failures
+                .iter()
+                .all(|failure| failure.terminal == Some(RequestError::Retired))
+        );
+        assert_eq!(jobs.pending.len(), MAX_POSTED_JOBS);
+        assert!(jobs.pending_bytes > 0 && jobs.pending_bytes < held);
+        assert!(!jobs.due(2));
+        let again = jobs.take_with_failures(2, |_, _| true);
+        assert!(again.operations.is_empty() && again.failures.is_empty());
+        assert!(!jobs.retire_lane());
+        assert_eq!(
+            jobs.request(origin(9), "new", SourceMode::Plain, 2),
+            Err(RequestError::Retired)
+        );
+        // Only each real ACK releases its posted credit; nothing is installed.
+        for operation in posted {
+            let Operation::Render { request, .. } = operation else {
+                panic!()
+            };
+            assert!(
+                jobs.complete(&request, Some(REPLY), 3, |_, _| true)
+                    .unwrap()
+                    .is_none()
+            );
+        }
+        assert_eq!(jobs.pending_bytes, 0);
+        assert!(jobs.handles.is_empty());
+        assert_eq!("undelivered".parse(), Ok(RetireReason::Undelivered));
+        assert_eq!("protocol".parse(), Ok(RetireReason::Protocol));
+        assert!("busy".parse::<RetireReason>().is_err());
     }
 
     #[test]

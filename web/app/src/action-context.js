@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: EUPL-1.2
 // Original VISIBLE scalar references, never a lookup of newer SDK authority.
-const ARITY=Object.freeze({add_server:5,connect:1,disconnect:1,accept_certificate:2,open:2,browse_server:1,open_direct:2,send_text:1,older:0,join:2,toggle_mute:1,toggle_deaf:1,audio_ready:1,voice_packet:1,remove_server:1,dismiss_notice:1,dismiss_welcome:2,connect_with_password:2,stop_audio:0,edit_server:6,set_server_order:1,set_voice_bitrate:1,content_complete:2,content_request:1,image_begin:1,image_send:1,image_cancel:1});
+const ARITY=Object.freeze({add_server:5,connect:1,disconnect:1,accept_certificate:2,open:2,browse_server:1,open_direct:2,send_text:1,older:0,join:2,toggle_mute:1,toggle_deaf:1,audio_ready:1,voice_packet:1,remove_server:1,dismiss_notice:1,dismiss_welcome:2,connect_with_password:2,stop_audio:0,edit_server:6,set_server_order:1,set_voice_bitrate:1,content_complete:2,content_request:1,content_retire:1,image_begin:1,image_send:1,image_cancel:1});
 export const UI_METHODS=Object.freeze(Object.keys(ARITY));
-const EXEMPT=new Set(["add_server","set_server_order","set_voice_bitrate","stop_audio","audio_ready","voice_packet","content_complete","content_request","image_begin","image_send","image_cancel"]);
+const EXEMPT=new Set(["add_server","set_server_order","set_voice_bitrate","stop_audio","audio_ready","voice_packet","content_complete","content_request","content_retire","image_begin","image_send","image_cancel"]);
 const LOCAL=new Set(["browse_server","connect","connect_with_password","edit_server","remove_server","dismiss_notice","dismiss_welcome"]);
 const TARGET=new Set(["open","join","open_direct"]);
 const SELECTED=new Set(["send_text","older"]);

@@ -2,11 +2,16 @@
 // An RPC timeout is not a worker acknowledgment. Retire the entire owned lane
 // before settling timed-out requests. A closed owner never posts new work
 // while the browser finishes its asynchronous native shutdown.
-export const SDK_RPC_LIMIT=128, SDK_RPC_ACK_RESERVE=4, SDK_RPC_TIMEOUT=15000, SDK_STARTUP_TIMEOUT=30000;
+// The SDK posts at most this many content jobs before their ACKs (Rust
+// MAX_POSTED_JOBS; tests/content_window.unit.mjs keeps the two equal).
+export const CONTENT_WINDOW=4;
+export const SDK_RPC_LIMIT=128, SDK_RPC_ACK_RESERVE=CONTENT_WINDOW, SDK_RPC_TIMEOUT=15000, SDK_STARTUP_TIMEOUT=30000;
 // A content completion ACK releases credit the SDK holds for one posted job.
 // Four of the 128 slots (one per posted job) are reserved for these ACKs, so
-// ordinary command pressure can never refuse one locally.
-const ACK_METHODS=new Set(["content_complete"]);
+// ordinary command pressure can never refuse one locally. The lane's single
+// best-effort retirement notice shares that reserve and is refused, not
+// queued, when all four are in flight.
+const ACK_METHODS=new Set(["content_complete","content_retire"]);
 export class SdkUnavailableError extends Error {
   constructor(message="The client is unavailable. Reload to reconnect.") {super(message);this.name="SdkUnavailableError";this.code="SDK_UNAVAILABLE";}
 }

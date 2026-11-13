@@ -93,3 +93,15 @@ test("content completion ACKs keep four of the 128 slots so ordinary command pre
  assert.equal(worker.messages.filter(message=>message.method==="content_complete").length,5);
  clock.expire();assert.equal(rpc.size,0);await Promise.all(ordinary);await Promise.allSettled(acks);
 });
+test("the lane retirement notice shares the four ACK slots and is refused, not queued, when they are full",async()=>{
+ const {worker,clock,rpc}=fixture();const ordinary=[];
+ for(let index=0;index<ORDINARY;index++)ordinary.push(rpc.request("content_request",[String(index+1)]).catch(error=>error));
+ const acks=[];for(let index=0;index<SDK_RPC_ACK_RESERVE;index++)acks.push(rpc.request("content_complete",[String(index+1),""]).catch(error=>error));
+ const posted=worker.messages.length;
+ await assert.rejects(rpc.request("content_retire",["undelivered"]),/busy/);
+ assert.equal(worker.messages.length,posted,"a refused notice posts nothing");assert.equal(rpc.size,SDK_RPC_LIMIT,"and takes no extra slot");
+ const ack=worker.messages.find(message=>message.method==="content_complete");rpc.accept({kind:"result",id:ack.id,value:"null"});
+ const retire=rpc.request("content_retire",["undelivered"]).catch(error=>error);
+ assert.equal(worker.messages.at(-1).method,"content_retire");assert.equal(rpc.size,SDK_RPC_LIMIT);
+ clock.expire();await Promise.all([...ordinary,...acks,retire]);
+});
