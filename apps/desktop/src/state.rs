@@ -447,10 +447,15 @@ impl Desktop {
             .iter()
             .map(|bookmark| (bookmark.id.clone(), ServerUi::new(bookmark)))
             .collect();
-        let client = Client::new(
+        let mut client = Client::new(
             Box::new(driver.clone()),
             bookmarks,
             nuschl_client::native::preferences(&settings),
+        );
+        let link_preview_settings = profile.load_link_previews();
+        client.set_link_preview_settings(
+            link_preview_settings.effective.settings.clone(),
+            monotonic_ms(),
         );
         let (services, mut service_events) = Services::new(handle.clone(), driver.settings());
         // The desktop's own services report apart from the driver.
@@ -512,7 +517,7 @@ impl Desktop {
             notes: crate::notify::start(&handle),
             driver,
             services,
-            link_preview: Default::default(),
+            link_preview: crate::link_preview::ComposerPreview::new(link_preview_settings),
             profile,
             form: None,
             composer,

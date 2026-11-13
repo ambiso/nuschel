@@ -73,6 +73,9 @@ pub async fn fetch(
         } else {
             result
         };
+        // Publish completion only once capacity is available to the Hub's
+        // already-bounded latest request; retirement has finished above.
+        drop(_permit);
         let _ = tx.send(result);
     });
     struct Revoke(Arc<Cancel>);

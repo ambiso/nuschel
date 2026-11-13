@@ -34,7 +34,7 @@ pub(super) fn system_managed() -> Option<PathBuf> {
     if !cfg!(all(unix, not(target_os = "macos"))) {
         return None;
     }
-    crate::layout::xdg_config_dirs(std::env::var_os)
+    crate::layout::xdg_config_dirs(|name| std::env::var_os(name))
         .into_iter()
         .flat_map(|directory| {
             ["nuschl", "nuschel"]

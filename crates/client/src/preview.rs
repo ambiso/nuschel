@@ -2,7 +2,7 @@
 //! Sender-only composer state. No renderer or received message starts a fetch.
 //! The platform owns physical worker retirement; cancelling here only revokes
 //! the result and asks the platform to stop its owned work.
-use crate::{Client, platform::Platform, server::Status as ConnectionStatus};
+use crate::{Client, server::Status as ConnectionStatus};
 pub use nuschl_link_preview::{
     card::Card,
     draft::{Delivery, Ineligible, RequestId, Status, SubmissionToken},
@@ -27,9 +27,21 @@ pub struct Context {
     pub instance: u64,
     pub peer: Option<(u32, u64)>,
     pub certificate: String,
+    pub own: (u32, u64),
 }
 
 pub type FetchTicket = Ticket<Context>;
+
+/// One preview-bearing logical message. The native adapter must check this
+/// frozen authority both when enqueuing and when consuming the command.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PreviewSend {
+    pub context: Context,
+    pub connection: u64,
+    pub target: crate::model::TextTarget,
+    pub html: String,
+    pub expected_peer: Option<u64>,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Snapshot {
@@ -162,6 +174,7 @@ impl Client {
             return None;
         }
         let certificate = server.peer_sha256.clone()?;
+        let own = server.own_session.and_then(|id| server.users.get(&id))?;
         let carry = if server.mls {
             Err(Ineligible::EndToEnd)
         } else if matches!(
@@ -186,6 +199,7 @@ impl Client {
                     .as_ref()
                     .map(|peer| (peer.session, peer.instance)),
                 certificate,
+                own: (own.session, own.instance),
             },
             server.generation,
             carry,
@@ -366,7 +380,7 @@ impl Client {
         }
     }
 
-    pub(crate) fn link_preview_wire(&self, body: &str) -> Option<String> {
+    pub(crate) fn link_preview_wire(&self, body: &str) -> Option<(Context, u64, String)> {
         let source = self.previews.current.as_ref()?;
         let (context, connection, carry) = self.preview_destination()?;
         if context != source.context
@@ -380,7 +394,7 @@ impl Client {
         let (server, _) = self.selected_indices()?;
         let limits = self.servers[server].limits.clone().unwrap_or_default();
         match projection::project(body, card, &limits) {
-            Projection::Card { html, .. } => Some(html),
+            Projection::Card { html, .. } => Some((context, connection, html)),
             Projection::TextOnly(_) => None,
         }
     }
@@ -427,6 +441,7 @@ mod tests {
                 instance: 2,
                 peer: None,
                 certificate: "fixture-certificate".into(),
+                own: (5, 6),
             },
             connection: 3,
             text: text.into(),

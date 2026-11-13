@@ -537,6 +537,7 @@ impl Client {
             }
             Err(error) => server.set_notice(error),
         }
+        self.validate_link_preview(self.now_ms);
     }
 
     /// Trust the certificate server `index` presented (its
@@ -643,6 +644,7 @@ impl Client {
             .find(|server| server.id != id && server.status != Status::Disconnected)
             .map(|server| server.id.clone());
         self.voice.disconnected(&id, fallback.as_deref());
+        self.validate_link_preview(self.now_ms);
     }
 
     /// Toggle our mute (or deafen) on server `index`. Unmuting where your
@@ -850,6 +852,7 @@ impl Client {
             );
         }
         self.request_selected_description(index);
+        self.validate_link_preview(self.now_ms);
         result
     }
 
@@ -1154,9 +1157,17 @@ impl Client {
             },
             target: target.clone(),
             body: body.clone(),
-            wire: preview_wire.clone(),
+            wire: preview_wire.as_ref().map(|(_, _, html)| html.clone()),
             preview,
         };
+        let scoped_preview =
+            preview_wire.map(|(context, connection, html)| crate::preview::PreviewSend {
+                context,
+                connection,
+                html,
+                target: target.clone(),
+                expected_peer,
+            });
         let request = if server.mls {
             let Some(conversation) = channel.conversation else {
                 return Err(SendError::Refused(server.refuse_send(
@@ -1175,12 +1186,6 @@ impl Client {
                 conversation,
                 text: body,
             }
-        } else if let Some(html) = preview_wire {
-            Request::SendHtml {
-                target,
-                html: vec![html],
-                expected_peer,
-            }
         } else {
             Request::SendText {
                 target,
@@ -1188,7 +1193,11 @@ impl Client {
                 expected_peer,
             }
         };
-        match self.platform.request(&server.id, request) {
+        let submitted = match scoped_preview {
+            Some(preview) => self.platform.send_link_preview(preview),
+            None => self.platform.request(&server.id, request),
+        };
+        match submitted {
             Ok(()) => {
                 self.sending = Some(pending);
                 // Sent: we are no longer typing it.
@@ -2840,6 +2849,7 @@ mod tests {
     /// A platform that records what the client asked of it.
     #[derive(Default)]
     struct Recorder {
+        preview_sends: Mutex<Vec<crate::preview::PreviewSend>>,
         previews: Mutex<Vec<crate::preview::FetchTicket>>,
         cancelled_previews: Mutex<Vec<crate::preview::RequestId>>,
         reject_requests: std::sync::atomic::AtomicBool,
@@ -2851,6 +2861,17 @@ mod tests {
     }
 
     impl Platform for Recorder {
+        fn send_link_preview(&self, request: crate::preview::PreviewSend) -> Result<(), String> {
+            self.preview_sends.lock().unwrap().push(request.clone());
+            self.request(
+                &request.context.server,
+                Request::SendHtml {
+                    target: request.target,
+                    html: vec![request.html],
+                    expected_peer: request.expected_peer,
+                },
+            )
+        }
         fn link_preview(
             &self,
             _: crate::preview::Settings,
@@ -3378,7 +3399,6 @@ mod tests {
         let (mut client, recorder, _) = connected();
         let ticket = prepare_link(&mut client, &recorder);
         client.open(0, 3).unwrap();
-        client.settle();
         assert_eq!(
             *recorder.cancelled_previews.lock().unwrap(),
             vec![ticket.id]
@@ -3411,7 +3431,43 @@ mod tests {
         });
         recorder.requests.lock().unwrap().clear();
         let original = "https://example.org/ ";
+        recorder
+            .reject_requests
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        assert!(matches!(
+            client.send_text(original.into()),
+            Err(SendError::Refused(_))
+        ));
+        assert!(!client.sending());
+        assert_eq!(
+            recorder.requests.lock().unwrap().len(),
+            1,
+            "refused scoped preview must not fall back to a second text request"
+        );
+        assert!(matches!(
+            client.link_preview_status(),
+            crate::preview::Status::Ready(_)
+        ));
+        recorder
+            .reject_requests
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+        recorder.requests.lock().unwrap().clear();
         client.send_text(original.into()).unwrap();
+        let scoped = recorder.preview_sends.lock().unwrap();
+        let frozen = scoped.last().unwrap();
+        let own = client.servers[0].users.get(&1).unwrap();
+        assert_eq!(frozen.context.own, (own.session, own.instance));
+        assert_eq!(frozen.connection, 1);
+        assert_eq!(
+            frozen.context.instance,
+            client.servers[0]
+                .channels
+                .iter()
+                .find(|channel| channel.id == 2)
+                .unwrap()
+                .instance
+        );
+        drop(scoped);
         let requests = recorder.requests.lock().unwrap();
         let [(server, Request::SendHtml { target, html, .. })] = requests.as_slice() else {
             panic!("one atomic HTML request required")

@@ -9,6 +9,7 @@ pub mod murmur;
 #[cfg(not(target_family = "wasm"))]
 pub mod musicbot;
 pub mod preview;
+pub mod preview_fetch;
 pub mod server;
 pub mod windows_sandbox;
 

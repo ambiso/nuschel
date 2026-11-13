@@ -2459,6 +2459,11 @@ fn pinned_host(audio_host: &(Option<String>, tokio::time::Instant)) -> Option<St
 }
 
 impl Platform for Driver {
+    fn send_link_preview(&self, request: crate::preview::PreviewSend) -> Result<(), String> {
+        let (server, generation, command) = link_preview::scoped_send(request)?;
+        self.command_scoped(&server, generation, command)
+    }
+
     fn link_preview(
         &self,
         settings: nuschl_link_preview::policy::Settings,

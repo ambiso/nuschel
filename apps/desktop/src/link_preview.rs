@@ -17,6 +17,7 @@ pub struct ImageTicket {
 
 #[derive(Default)]
 pub struct ComposerPreview {
+    pub policy: Option<nuschl_session::config::LinkPreviewSettings>,
     pub pasted: bool,
     timer: bool,
     pending: Option<ImageTicket>,
@@ -24,7 +25,41 @@ pub struct ComposerPreview {
     pixels: Option<Arc<RenderImage>>,
 }
 
+impl ComposerPreview {
+    pub fn new(policy: nuschl_session::config::LinkPreviewSettings) -> Self {
+        Self {
+            policy: Some(policy),
+            ..Self::default()
+        }
+    }
+}
+
 impl Desktop {
+    pub fn choose_link_preview_mode(&mut self, mode: Mode, cx: &mut Context<Self>) {
+        let Some(loaded) = &self.link_preview.policy else {
+            return;
+        };
+        // A managed route is never copied into the user's sidecar.
+        let mut settings = loaded.user.settings.clone();
+        settings.mode = mode;
+        match self.profile.save_link_previews(&settings) {
+            Ok(loaded) => {
+                self.client.set_link_preview_settings(
+                    loaded.effective.settings.clone(),
+                    crate::state::monotonic_ms(),
+                );
+                self.link_preview.policy = Some(loaded);
+                self.sync_link_preview(cx);
+            }
+            Err(_) => {
+                self.error = Some(
+                    "Link preview settings could not be saved; the previous policy remains active."
+                        .into(),
+                )
+            }
+        }
+        cx.notify();
+    }
     fn preview_image_ticket(&self) -> Option<ImageTicket> {
         let Status::Ready(card) = self.client.link_preview_status() else {
             return None;
@@ -170,11 +205,13 @@ pub fn composer(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement>
                 .child(
                     div()
                         .text_sm()
+                        .truncate()
                         .child(text!(title).with_id("link-preview-title")),
                 )
                 .child(
                     div()
                         .text_xs()
+                        .truncate()
                         .text_color(color(TEXT_MUTED))
                         .child(text!(detail).with_id("link-preview-detail")),
                 ),
@@ -212,17 +249,26 @@ pub fn composer(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement>
 }
 
 pub fn settings(this: &Desktop, cx: &mut Context<Desktop>) -> AnyElement {
-    let mode = this.client.link_preview_settings().mode;
+    let mode = this
+        .link_preview
+        .policy
+        .as_ref()
+        .map_or(Mode::Off, |loaded| loaded.user.settings.mode);
+    let problem = this
+        .link_preview
+        .policy
+        .as_ref()
+        .and_then(|loaded| loaded.effective.problem.as_ref())
+        .map(ToString::to_string);
     div().flex().flex_col().gap_2()
         .child(crate::settings::segmented("link-preview-mode", "Link previews", [
             ("Off", Mode::Off), ("Direct", Mode::Direct), ("Proxy required", Mode::ProxyRequired),
         ].into_iter().map(|(label, chosen)| {
             (label, mode == chosen, std::rc::Rc::new(move |this: &mut Desktop, _: &mut Window, cx: &mut Context<Desktop>| {
-                let mut settings = this.client.link_preview_settings().clone(); settings.mode = chosen;
-                this.client.set_link_preview_settings(settings, crate::state::monotonic_ms());
-                this.sync_link_preview(cx); cx.notify();
+                this.choose_link_preview_mode(chosen, cx);
             }) as crate::settings::Action)
         }).collect(), cx))
         .child(div().text_xs().text_color(color(TEXT_MUTED)).child(text!("Off makes no requests. Direct contacts the website. Proxy required stays disabled until an explicit proxy and proxied DNS are configured. Receivers never fetch previews.").with_id("link-preview-privacy")))
+        .when_some(problem, |settings, problem| settings.child(div().text_xs().text_color(color(TEXT_MUTED)).child(text!(problem).with_id("link-preview-policy-status"))))
         .into_any_element()
 }
