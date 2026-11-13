@@ -196,7 +196,16 @@ def browse(link):
             assert pixels["width"] == pixels["height"] == 1, pixels
             assert base64.b64decode(pixels["rgba"], validate=True) == bytes([200, 80, 40, 255]), pixels
             assert response.headers.get_content_type() == "application/json", dict(response.headers)
-            assert response.headers["Cache-Control"].startswith("private"), dict(response.headers)
+            assert response.headers["Cache-Control"] == "private, no-store", dict(response.headers)
+        # The same cover again comes from the bot's cache. With the state's art
+        # key the browser may keep it; a key for another library is refused.
+        asked = [seen for seen in Library.seen if seen[1] == "getCoverArt"]
+        key = api(link)["art_keys"][library]
+        with urllib.request.urlopen(link + cover + f"?size=300&v={key}", timeout=HTTP_TIMEOUT) as response:
+            assert response.headers["Cache-Control"] == "private, max-age=86400", dict(response.headers)
+            assert json.load(response) == pixels
+        assert [seen for seen in Library.seen if seen[1] == "getCoverArt"] == asked, "the cover was fetched again"
+        expect_error(link + cover + "?size=300&v=0000000000000000", 404)
         expect_error(link + f"art/{library}/missing", 404)
     # Only Open (index 1) advertises sonicSimilarity; Plain refuses before asking.
     expect_error(link + "api/similar?library=0&id=s1", 502, json_error=True)

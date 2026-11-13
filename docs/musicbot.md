@@ -32,6 +32,9 @@ browsers. People control what plays on a web page; they get their link by writin
   the returned thumbnail is at most 400×400 RGBA pixels (300×300 by default).
   The browser validates these pixels and paints Canvas; encoded image bytes never
   reach its image decoder. Unsupported formats and failed helpers show a placeholder.
+  Finished covers stay in a shared memory cache (64 MiB, each for at most a day),
+  so the library and the worker see each cover and size once a day at most, and
+  the browser keeps them for a day as well.
 - **Channels.** One Mumble connection per configured channel, each with its own
   client certificate. Every channel starts with its own queue. On the web page a
   channel can play another channel's queue instead: then both hear the same song,
@@ -604,11 +607,20 @@ or null for the end. Successful commands return 204 and broadcast the new state.
 Browsing uses `albums`, `album`, `artists`, `artist`, `playlists`, `playlist`, and
 `search` JSON endpoints. Library identity in requests is its current config index.
 Album lists accept `library`, `list`, and `page`; detail endpoints accept `library`
-and `id`. The authenticated `art/<library>/<id>?size=…` route returns
-`{"width":N,"height":N,"rgba":"<canonical base64 RGBA>"}` with private/no-store
-caching. Size is clamped to 32–400. There are exactly these three fields, no
-encoded-file or source-URL authority. Invalid images return 404, unavailable or
-busy workers return 503. Library failures preserve the existing redacted errors.
+and `id`. The authenticated `art/<library>/<id>?size=…&v=…` route returns
+`{"width":N,"height":N,"rgba":"<canonical base64 RGBA>"}`. Size is clamped to
+32–400. There are exactly these three fields, no encoded-file or source-URL
+authority. Invalid images return 404, busy workers (two jobs) or a missing
+worker return 503. Library failures preserve the existing redacted errors.
+
+Successful answers are kept in a shared memory cache of 64 MiB, keyed by
+library, cover ID and size, each for at most 24 hours; the least recently used
+leave first and no single cover may take more than 8 MiB. A cached cover needs no
+library call and no worker job. State/SSE includes `art_keys`, one short key per
+library derived from its name and URL. With `v` set to that key the answer is
+`private, max-age=86400`, so the browser keeps it for a day. Without `v` it stays
+`private, no-store`. A `v` for another library (the configuration changed) gets
+404, so a browser never keeps one server's cover under another's URL.
 API errors carry an HTTP error status and `{"error":"message"}`.
 
 `GET song?library=N&id=ID` returns `{"song":Track,"details":{…},"appearances":[Track],

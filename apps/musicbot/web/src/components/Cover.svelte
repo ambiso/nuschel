@@ -7,7 +7,7 @@
 
   let { library, art, size = 300, px = null, round = false } = $props();
   const bound = $derived(Math.max(32, Math.min(MAX_EDGE, Math.trunc(size))));
-  const src = $derived(art ? artUrl(library, art, bound) : null);
+  const src = $derived(art ? artUrl(library, art, bound, store.snapshot?.art_keys?.[library]) : null);
   let container = $state(null), canvas = $state(null), visible = $state(false), ready = $state(false);
 
   $effect(() => {

@@ -44,7 +44,12 @@ export function query(path, params) {
   return `${path}?${new URLSearchParams(Object.entries(params).map(([key, value]) => [key, String(value)]))}`;
 }
 
-/** URL of a cover image `size` pixels wide. */
-export function artUrl(library, coverArt, size) {
-  return `art/${library}/${encodeURIComponent(coverArt)}?size=${size}`;
+/**
+ * URL of a cover image `size` pixels wide. `key` is the library's `art_keys`
+ * entry; with it the browser may keep the answer, since the URL changes when
+ * the library does.
+ */
+export function artUrl(library, coverArt, size, key) {
+  const url = `art/${library}/${encodeURIComponent(coverArt)}?size=${size}`;
+  return typeof key === "string" && key ? `${url}&v=${encodeURIComponent(key)}` : url;
 }
