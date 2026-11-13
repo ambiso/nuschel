@@ -14,7 +14,7 @@ import struct
 import subprocess
 
 from output_quality import Reference, compare, rms
-from output_resample import device_clip, read_mix_dump, read_pcm, write_pcm
+from output_resample import read_pcm, write_pcm
 
 RATE = 48000
 FRAME = 960
@@ -103,13 +103,13 @@ def main():
         if args.native_test_binary:
             native_fixture=args.output/f'{name}-native.json'
             native_fixture.write_text(json.dumps([{'volume':1,'packets':[list(packet) for packet in packets]}]))
-            output=args.output/f'{name}-native.f64le'
+            output=args.output/f'{name}-native.f32le'
             import os
             subprocess.run([str(args.native_test_binary),'--ignored','--exact','mixer::mixer_fixture::dump'],
                 env={**os.environ,'NUSCHL_MIX_INPUT':str(native_fixture.resolve()),'NUSCHL_MIX_OUTPUT':str(output.resolve())},
                 check=True,capture_output=True,timeout=20)
             clipped=[max(-1,min(1,v)) for v in stock]
-            observed=device_clip(read_mix_dump(output,len(packets)*960))
+            observed=read_pcm(output)
             metrics['native_receive']=compare(clipped,observed)
             fold=lambda pcm:[(a+b)*.5 for a,b in zip(pcm[::2],pcm[1::2])]
             metrics['native_postmix_mono_fold']=compare(fold(clipped),fold(observed))

@@ -2,6 +2,7 @@
 //! Explicit device-free access to the actual decoder/jitter/mixer for test-side
 //! libopus comparisons. Fixed virtual arrival clock; no sockets/devices.
 use super::*;
+use crate::playback::device_sample;
 
 #[test]
 #[ignore = "explicit independent PCM fixture; invoked by tests/output_headroom.py"]
@@ -57,9 +58,12 @@ fn dump() {
         let mut out = [[0.; 2]; FRAME];
         mixer.mix(&mut wide);
         finish(2, &wide, &[0.; FRAME], &mut out);
-        // Interleaved stereo little-endian f64 before the device's final clip
-        // (tests/output_resample.py `read_mix_dump`).
-        raw.extend(out.iter().flatten().flat_map(|value| value.to_le_bytes()));
+        // What a 48 kHz device plays: the final clip, as f32.
+        raw.extend(
+            out.iter()
+                .flatten()
+                .flat_map(|v| device_sample(*v).to_le_bytes()),
+        );
     }
     std::fs::write(output, raw).unwrap();
 }

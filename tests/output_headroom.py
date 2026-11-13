@@ -12,7 +12,7 @@ from pathlib import Path
 import subprocess
 
 from output_quality import Reference, compare, overshoot_fixture
-from output_resample import device_clip, read_mix_dump, write_pcm
+from output_resample import read_pcm, write_pcm
 
 
 def main():
@@ -41,12 +41,11 @@ def main():
     old = [max(-1., min(1., max(-1., min(1., a * 3.)) + max(-1., min(1., b * 2.5)))) for a, b in zip(*decoded)]
     fixture = args.output / 'fixture.json'
     fixture.write_text(json.dumps(streams))
-    output = args.output / 'native.f64le'
+    output = args.output / 'native.f32le'
     subprocess.run([str(args.test_binary), '--ignored', '--exact', 'mixer::mixer_fixture::dump'],
         env={**os.environ, 'NUSCHL_MIX_INPUT': str(fixture.resolve()), 'NUSCHL_MIX_OUTPUT': str(output.resolve())},
         capture_output=True, check=True, timeout=20)
-    # Two 10 ms ticks per 20 ms packet; the reference is final-clipped like the device.
-    actual = device_clip(read_mix_dump(output, len(packets) * 960))
+    actual = read_pcm(output)
     measured = compare(expected, actual)
     negative = compare(expected, old)
     assert measured['fixed_gain_snr_db'] >= 40, measured
