@@ -183,6 +183,9 @@ pub enum Input {
         generation: u64,
         message: String,
     },
+    /// The microphone stopped without our asking (the media worker or the
+    /// device failed). The connection is muted until an explicit Unmute.
+    MicrophoneStopped { server: String, generation: u64 },
     AudioDevices {
         server: String,
         generation: u64,

@@ -38,6 +38,10 @@ pub struct Link {
     pub voice_allowed: bool,
     pub muted: bool,
     pub deafened: bool,
+    /// The server does not let us speak here: it suppressed us (no Speak
+    /// permission in the channel), muted or deafened us. Nothing it would
+    /// drop is captured, encoded or shown as our speech.
+    pub restricted: bool,
     pub bitrate: u32,
     pub loss_percent: u8,
 }
@@ -122,8 +126,48 @@ struct Stream {
     generation: u64,
     /// The worker's number for it (new for every connection).
     number: u32,
+    /// As the connection set it, but muted while `held`.
     link: Link,
     voice: mpsc::Sender<Outgoing>,
+    /// The microphone stopped without our asking while it went here (the
+    /// worker or the device failed): it stays closed until the connection
+    /// stops speaking (is muted), so only an explicit Unmute opens it (#199).
+    held: bool,
+}
+
+impl Stream {
+    /// The connection's `link` as this stream serves it.
+    fn served(&self, link: &Link) -> Link {
+        Link {
+            muted: link.muted || (self.held && speaking_to(link)),
+            ..*link
+        }
+    }
+}
+
+/// The microphone stopped without our asking (its worker failed): hold
+/// every stream it went to, asking each connection to mute, so the next
+/// worker starts without it.
+async fn hold_microphone(
+    streams: &mut BTreeMap<String, Stream>,
+    events: &mpsc::Sender<Event>,
+    planned: &mut Plan,
+) {
+    if !planned.capture {
+        return;
+    }
+    for (server, stream) in streams.iter_mut() {
+        if speaking_to(&stream.link) {
+            stream.held = true;
+            stream.link.muted = true;
+            let stopped = Event::MicrophoneStopped {
+                server: server.clone(),
+                generation: stream.generation,
+            };
+            let _ = events.send(stopped).await;
+        }
+    }
+    *planned = plan(streams.values().map(|stream| &stream.link));
 }
 
 /// What the worker does for the attached servers.
@@ -168,12 +212,14 @@ fn plan<'a>(links: impl Iterator<Item = &'a Link>) -> Plan {
     plan
 }
 
-/// The microphone goes to this server.
-fn speaking_to(link: &Link) -> bool {
+/// The microphone goes to this server. The connection admits its frames by
+/// the same rule.
+pub(super) fn speaking_to(link: &Link) -> bool {
     link.voice_allowed
         && link.bitrate >= nuschl_core::audio::MIN_VOICE_BITRATE
         && !link.muted
         && !link.deafened
+        && !link.restricted
 }
 
 /// A destination started/stopped receiving the microphone, or changed its
@@ -298,7 +344,7 @@ async fn run_with_start(
                         || streams.get(server).is_some_and(|old| speaking_to(&old.link)),
                     Control::Update { server, generation, link, .. } => streams.get(server)
                         .filter(|old| old.generation == *generation)
-                        .is_some_and(|old| capture_route_changed(&old.link, link)),
+                        .is_some_and(|old| capture_route_changed(&old.link, &old.served(link))),
                     Control::Detach { server, generation } => streams.get(server)
                         .is_some_and(|old| old.generation == *generation && speaking_to(&old.link)),
                     Control::Sound(_) | Control::Chime(_) => false,
@@ -314,7 +360,7 @@ async fn run_with_start(
                 match message {
                     Control::Attach { server, generation, link, voice } => {
                         numbers = numbers.wrapping_add(1);
-                        if let Some(old) = streams.insert(server, Stream { generation, number: numbers, link, voice }) {
+                        if let Some(old) = streams.insert(server, Stream { generation, number: numbers, link, voice, held: false }) {
                             send_control(&mut media, &mut epoch, &mut retry, LiveMediaRequest::EndStream { stream: old.number });
                         }
                     }
@@ -325,7 +371,8 @@ async fn run_with_start(
                                 // What it had buffered is not played.
                                 send_control(&mut media, &mut epoch, &mut retry, LiveMediaRequest::EndStream { stream: stream.number });
                             }
-                            stream.link = link;
+                            stream.held &= speaking_to(&link);
+                            stream.link = stream.served(&link);
                         }
                         cues.extend(cue.map(|sound| (sound, true)));
                     }
@@ -483,6 +530,7 @@ async fn run_with_start(
                         audio_host.1 = Instant::now() + HOST_PIN;
                         media.take();
                         epoch += 1;
+                        hold_microphone(&mut streams, &events, &mut planned).await;
                         retry = Instant::now() + std::time::Duration::from_millis(if message.starts_with("Audio reconnecting") { 2000 } else { 200 });
                     }
                     // A worker for listening only says so; a server you listen
@@ -494,6 +542,7 @@ async fn run_with_start(
                 None => {
                     media.take();
                     epoch += 1;
+                    hold_microphone(&mut streams, &events, &mut planned).await;
                     retry = Instant::now() + std::time::Duration::from_secs(2);
                     broadcast(&streams, &events, |server, generation| Event::AudioStatus { server, generation, message: "Audio worker restarting…".into() }).await;
                 },
@@ -571,6 +620,7 @@ mod tests {
             voice_allowed: true,
             muted,
             deafened,
+            restricted: false,
             bitrate,
             loss_percent,
         }
@@ -834,7 +884,7 @@ mod tests {
             mpsc::Receiver<LiveMediaRequest>,
             mpsc::Sender<LiveMediaEvent>,
         )>,
-        _events: mpsc::Receiver<Event>,
+        events: mpsc::Receiver<Event>,
         _settings: watch::Sender<ClientSettings>,
         task: tokio::task::JoinHandle<()>,
     }
@@ -845,7 +895,7 @@ mod tests {
     fn push_to_talk() -> Rig {
         let (control, input) = mpsc::unbounded_channel();
         let (playback, playback_rx) = mpsc::channel(2048);
-        let (events, _events) = mpsc::channel(1024);
+        let (events, events_rx) = mpsc::channel(1024);
         let mut current = ClientSettings::default();
         current.audio.transmit = TransmitMode::PushToTalk;
         current.audio.ptt_release_ms = TAIL_MS;
@@ -867,7 +917,7 @@ mod tests {
             playback,
             keys,
             workers,
-            _events,
+            events: events_rx,
             _settings,
             task,
         }
@@ -1059,6 +1109,117 @@ mod tests {
             })
             .next_back();
         assert_eq!(last, Some(false), "the replacement knows the key is up");
+        rig.task.abort();
+        let _ = rig.task.await;
+    }
+
+    /// The next worker the supervisor starts: its queues, and whether it
+    /// starts with the microphone closed.
+    async fn next_worker(
+        rig: &mut Rig,
+    ) -> (
+        mpsc::Receiver<LiveMediaRequest>,
+        mpsc::Sender<LiveMediaEvent>,
+        bool,
+    ) {
+        let (mut requests, replies) = tokio::time::timeout(WAIT, rig.workers.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        let start = until(&mut requests, |request| {
+            matches!(request, LiveMediaRequest::SetState { .. })
+        })
+        .await;
+        let Some(LiveMediaRequest::SetState { muted, .. }) = start.last() else {
+            unreachable!()
+        };
+        (requests, replies, *muted)
+    }
+
+    /// #199: a microphone that stopped without our asking (its worker or
+    /// device failed) stays closed. The next worker starts without it and
+    /// the connection is asked to mute; only its mute ends the hold, so the
+    /// next opening is an explicit Unmute.
+    #[tokio::test]
+    async fn a_failed_microphone_stays_closed_until_an_explicit_unmute() {
+        let mut rig = push_to_talk();
+        let (_outgoing, _requests, replies, _) = talk_server(&mut rig).await;
+        let failed = LiveMediaEvent::Status {
+            ready: false,
+            message: "Microphone unplugged".into(),
+        };
+        replies.send(failed).await.unwrap();
+        let stopped = tokio::time::timeout(WAIT, async {
+            loop {
+                if let Some(Event::MicrophoneStopped { server, generation }) =
+                    rig.events.recv().await
+                {
+                    return (server, generation);
+                }
+            }
+        })
+        .await
+        .expect("the connection is asked to mute");
+        assert_eq!(stopped, ("one".to_string(), 1));
+        let (_requests, _replies, muted) = next_worker(&mut rig).await;
+        assert!(muted, "the replacement reopened the microphone");
+        let update = |revision, muted| Control::Update {
+            server: "one".into(),
+            generation: 1,
+            link: Link {
+                revision,
+                ..link(muted, false, 40_000, 1)
+            },
+            cue: None,
+        };
+        // A new routing revision of the still unmuted connection keeps it closed.
+        rig.control.send(update(1, false)).unwrap();
+        let (reply, inspected) = tokio::sync::oneshot::channel();
+        rig.control.send(Control::Inspect(reply)).unwrap();
+        assert!(!inspected.await.unwrap().1, "an update reopened it");
+        // The connection's mute ends the hold; the Unmute after it opens it.
+        rig.control.send(update(2, true)).unwrap();
+        rig.control.send(update(3, false)).unwrap();
+        let (_requests, _replies, muted) = next_worker(&mut rig).await;
+        assert!(!muted);
+        rig.task.abort();
+        let _ = rig.task.await;
+    }
+
+    /// #199: unmuted where the server does not let us speak (suppressed,
+    /// server muted or deafened), we listen without a microphone.
+    #[tokio::test]
+    async fn a_restricted_server_gets_no_microphone() {
+        let mut rig = push_to_talk();
+        let restricted = Link {
+            restricted: true,
+            ..link(false, false, 40_000, 1)
+        };
+        let (voice, _outgoing) = mpsc::channel(4);
+        rig.control
+            .send(Control::Attach {
+                server: "one".into(),
+                generation: 1,
+                link: restricted,
+                voice,
+            })
+            .unwrap();
+        let (_requests, _replies, muted) = next_worker(&mut rig).await;
+        assert!(muted, "a restricted server opened the microphone");
+        rig.control
+            .send(Control::Update {
+                server: "one".into(),
+                generation: 1,
+                link: Link {
+                    revision: 1,
+                    restricted: false,
+                    ..restricted
+                },
+                cue: None,
+            })
+            .unwrap();
+        let (_requests, _replies, muted) = next_worker(&mut rig).await;
+        assert!(!muted, "the restriction alone kept it closed");
         rig.task.abort();
         let _ = rig.task.await;
     }

@@ -253,6 +253,20 @@ impl ServerState {
             .any(|capability| capability == "e2ee/1")
     }
 
+    /// The server does not let us speak here: it suppressed us (no Speak
+    /// permission in the channel), muted or deafened us, or its bandwidth
+    /// limit leaves no room for voice.
+    pub fn speech_blocked(&self) -> bool {
+        self.own_session
+            .and_then(|session| self.users.get(&session))
+            .is_some_and(|own| own.suppressed || own.muted || own.deafened)
+            || self
+                .limits
+                .as_ref()
+                .and_then(|limits| limits.max_bandwidth)
+                .is_some_and(|bandwidth| nuschl_core::audio::voice_bitrate(bandwidth) == 0)
+    }
+
     /// A saved server, offline, with its cached channels to browse.
     pub fn new(bookmark: ServerBookmark) -> Self {
         let mut channels = bookmark

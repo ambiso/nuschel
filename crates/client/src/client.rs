@@ -28,6 +28,9 @@ use nuschl_protocol::nuschl::{self, v1};
 use std::collections::{BTreeMap, BTreeSet};
 
 const MAX_RECOVERY_BYTES: usize = 4 * 1024 * 1024;
+/// Notices for a microphone that stays muted (#199).
+const CANT_SPEAK_HERE: &str = "You can't speak here.";
+const MICROPHONE_STOPPED: &str = "Microphone stopped.";
 
 /// Cosmetic labels never change account IDs or ACL completeness. Bound scan,
 /// deduplication, command count and attempts for both legacy and draft replies.
@@ -841,6 +844,22 @@ impl Client {
         self.voice.role(&server.id, seat(server))
     }
 
+    /// Mute server `index` because the microphone stopped or the server
+    /// stopped us from speaking, never because we asked. Only an explicit
+    /// Unmute opens it again (#199); the server sees us self-muted.
+    fn hold_voice(&mut self, index: usize) {
+        let server = &self.servers[index];
+        if server.muted {
+            return;
+        }
+        let change = voice::Change {
+            server: server.id.clone(),
+            muted: true,
+            deafened: server.deafened,
+        };
+        self.apply_voice(vec![change]);
+    }
+
     /// Send what the voice policy decided.
     fn apply_voice(&mut self, changes: Vec<voice::Change>) {
         for change in changes {
@@ -853,6 +872,18 @@ impl Client {
             };
             let muted = change.muted || change.deafened;
             if (server.muted, server.deafened) == (muted, change.deafened) {
+                continue;
+            }
+            // #199: only an explicit Unmute opens the microphone, and only
+            // where you may speak: connected, and not stopped by the server.
+            // Anywhere else you stay muted.
+            if server.muted
+                && !muted
+                && (server.status != Status::Connected || server.speech_blocked())
+            {
+                if server.status == Status::Connected {
+                    server.set_notice(CANT_SPEAK_HERE.into());
+                }
                 continue;
             }
             server.muted = muted;
@@ -2067,6 +2098,9 @@ impl Client {
                     }
                     server.page_epoch = server.page_epoch.wrapping_add(1);
                     self.platform.cancel_history(&server.id, server.page_epoch);
+                    // The driver reconnects muted: only an explicit Unmute
+                    // opens the microphone again (#199).
+                    server.muted = true;
                     for channel in &mut server.channels {
                         channel.timeline.loading = false;
                     }
@@ -2238,6 +2272,14 @@ impl Client {
             } => {
                 if let Some(index) = self.current(&server, generation) {
                     self.servers[index].audio_status = message;
+                }
+            }
+            Input::MicrophoneStopped { server, generation } => {
+                if let Some(index) = self.current(&server, generation)
+                    && !self.servers[index].muted
+                {
+                    self.hold_voice(index);
+                    self.servers[index].set_notice(MICROPHONE_STOPPED.into());
                 }
             }
             Input::Message {
@@ -3102,6 +3144,12 @@ impl Client {
             ServerEvent::Transport(stats) => server.transport = Some(stats),
             // Handled above.
             ServerEvent::PluginData(_) | ServerEvent::PluginDataAdmission { .. } => {}
+        }
+        // The server stopping us from speaking mutes us: lifting it later
+        // leaves us muted until an explicit Unmute (#199).
+        let server = &self.servers[index];
+        if !server.muted && server.status == Status::Connected && server.speech_blocked() {
+            self.hold_voice(index);
         }
         if refresh_history {
             let server = &mut self.servers[index];
@@ -4300,6 +4348,159 @@ mod tests {
         // Its disconnection hands the talk role to beta.
         client.disconnect(0);
         assert_eq!(client.voice.talk(), [b]);
+    }
+
+    /// Our own presence as the server reports it (session 1, channel 2).
+    fn own(id: &str, user: User) -> Input {
+        Input::Server {
+            server: id.into(),
+            generation: 1,
+            event: ServerEvent::User(User {
+                session: 1,
+                name: "andi".into(),
+                ..user
+            }),
+        }
+    }
+
+    /// #199: only an explicit Unmute opens the microphone. The server
+    /// stopping us from speaking mutes us (and says so to the server);
+    /// lifting it, or the server claiming we unmuted, leaves us muted.
+    #[test]
+    fn a_server_restriction_mutes_and_only_an_explicit_unmute_reopens() {
+        for restriction in [
+            User {
+                channel: 2,
+                suppressed: true,
+                ..User::default()
+            },
+            User {
+                channel: 2,
+                muted: true,
+                ..User::default()
+            },
+            User {
+                channel: 2,
+                deafened: true,
+                ..User::default()
+            },
+        ] {
+            let (mut client, recorder, id) = connected();
+            assert_eq!(client.set_mute(0, false), None);
+            assert_eq!(self_states(&recorder), [(id.clone(), false, false)]);
+            client.handle(own(&id, restriction.clone()));
+            assert!(client.servers[0].muted, "{restriction:?}");
+            assert_eq!(self_states(&recorder), [(id.clone(), true, false)]);
+            // Unmuting where the server stops us is refused, with a notice.
+            assert_eq!(client.set_mute(0, false), None);
+            assert_eq!(client.toggle_voice(false), None);
+            assert!(self_states(&recorder).is_empty());
+            assert!(client.servers[0].muted);
+            assert_eq!(client.servers[0].notice.as_deref(), Some(CANT_SPEAK_HERE));
+            // Moved into a channel where we may speak: still muted.
+            client.handle(own(
+                &id,
+                User {
+                    channel: 3,
+                    self_muted: true,
+                    ..User::default()
+                },
+            ));
+            // An echo claiming we unmuted ourselves changes nothing either.
+            client.handle(own(
+                &id,
+                User {
+                    channel: 3,
+                    ..User::default()
+                },
+            ));
+            assert!(client.servers[0].muted);
+            assert!(self_states(&recorder).is_empty());
+            // Only the explicit Unmute opens it.
+            assert_eq!(client.set_mute(0, false), None);
+            assert_eq!(self_states(&recorder), [(id.clone(), false, false)]);
+        }
+    }
+
+    #[test]
+    fn no_voice_budget_mutes_and_its_return_does_not_unmute() {
+        let (mut client, recorder, id) = connected();
+        client.set_mute(0, false);
+        self_states(&recorder);
+        let limits = |max_bandwidth| Input::Server {
+            server: id.clone(),
+            generation: 1,
+            event: ServerEvent::Limits(nuschl_core::model::ServerLimits {
+                max_bandwidth: Some(max_bandwidth),
+                ..nuschl_core::model::ServerLimits::default()
+            }),
+        };
+        client.handle(limits(1_000));
+        assert!(client.servers[0].muted);
+        assert_eq!(self_states(&recorder), [(id.clone(), true, false)]);
+        client.handle(limits(72_000));
+        assert!(client.servers[0].muted);
+        assert!(self_states(&recorder).is_empty());
+    }
+
+    #[test]
+    fn a_reconnect_comes_back_muted() {
+        let (mut client, recorder, id) = connected();
+        client.set_mute(0, false);
+        self_states(&recorder);
+        client.handle(Input::Reconnecting {
+            server: id.clone(),
+            generation: 1,
+            attempt: 1,
+            delay_secs: 1,
+            reason: "lost".into(),
+        });
+        assert!(client.servers[0].muted);
+        // Nothing unmutes while reconnecting.
+        assert_eq!(client.set_mute(0, false), None);
+        assert!(self_states(&recorder).is_empty());
+        client.handle(Input::Server {
+            server: id.clone(),
+            generation: 1,
+            event: ServerEvent::Connected { session: 1 },
+        });
+        client.handle(own(
+            &id,
+            User {
+                channel: 2,
+                self_muted: true,
+                ..User::default()
+            },
+        ));
+        assert!(client.servers[0].muted);
+        assert!(self_states(&recorder).is_empty());
+        assert_eq!(client.set_mute(0, false), None);
+        assert_eq!(self_states(&recorder), [(id, false, false)]);
+    }
+
+    #[test]
+    fn a_stopped_microphone_mutes_its_own_connection_only() {
+        let (mut client, recorder, id) = connected();
+        client.set_mute(0, false);
+        self_states(&recorder);
+        // A report for an earlier connection changes nothing.
+        client.handle(Input::MicrophoneStopped {
+            server: id.clone(),
+            generation: 0,
+        });
+        assert!(!client.servers[0].muted);
+        client.handle(Input::MicrophoneStopped {
+            server: id.clone(),
+            generation: 1,
+        });
+        assert!(client.servers[0].muted);
+        assert_eq!(self_states(&recorder), [(id.clone(), true, false)]);
+        assert_eq!(
+            client.servers[0].notice.as_deref(),
+            Some(MICROPHONE_STOPPED)
+        );
+        assert_eq!(client.set_mute(0, false), None);
+        assert_eq!(self_states(&recorder), [(id, false, false)]);
     }
 
     #[test]
