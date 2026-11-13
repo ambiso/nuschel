@@ -7450,6 +7450,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "nuschl-sframe"
+version = "0.1.0"
+dependencies = [
+ "aes-gcm 0.11.1",
+ "libcrux-hkdf 0.0.9",
+ "thiserror 2.0.21",
+ "zeroize",
+]
+
+[[package]]
 name = "nuschl-storage"
 version = "0.1.0"
 dependencies = [
@@ -7479,13 +7489,11 @@ dependencies = [
 name = "nuschl-stream"
 version = "0.1.0"
 dependencies = [
- "aes-gcm 0.11.1",
  "base64ct",
  "hpke-rs 0.8.0",
  "hpke-rs-libcrux 0.8.0",
  "libcrux-chacha20poly1305 0.0.10",
  "libcrux-hkdf 0.0.9",
- "libcrux-hmac 0.0.9",
  "libcrux-kem",
  "libcrux-sha2 0.0.9",
  "rand_core 0.10.1",
