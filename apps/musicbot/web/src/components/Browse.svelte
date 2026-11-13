@@ -35,7 +35,7 @@
   const titles = { albums: "Albums", artists: "Artists", playlists: "Playlists", search: "Search" };
   const heading = $derived(titles[route.view]
     ?? (route.view === "similar" ? (data?.song ? `Similar to ${data.song.title}` : "Similar songs")
-      : route.view === "path" ? (matches.length ? `Sonic path: ${matches[0].track.title} → ${matches.at(-1).track.title}` : "Sonic path")
+      : route.view === "path" ? (matches.length ? `Blend: ${matches[0].track.title} → ${matches.at(-1).track.title}` : "Blend")
       : route.view === "song" ? data?.song?.title ?? (data ? "Song" : "Loading…")
       : detail?.name ?? "Loading…"));
   const libraries = $derived(store.snapshot?.libraries ?? []);
@@ -145,6 +145,9 @@
       {#if !data.results.length}<p class="notice muted">No results.</p>{/if}
     {:else if sonicView}
       <div class="sonic-header">
+        {#if route.view === "path"}
+          <p class="muted">Songs that lead step by step from the first song to the last, picked by how they sound.</p>
+        {/if}
         {#if route.view === "similar" && data.song?.artist}
           <p>{#if data.song.artist_id}<a href={buildRoute({ view: "artist", library: data.song.library, id: data.song.artist_id, namespace })}>{data.song.artist}</a>{:else}{data.song.artist}{/if}</p>
         {/if}
@@ -155,7 +158,7 @@
         </div>
       </div>
       <SongList songs={matchSongs} {namespace} covers similarities={matches.map((match) => match.similarity)} />
-      {#if !matches.length}<p class="notice muted">{route.view === "similar" ? "The library found no similar songs." : "The library found no sonic path between these songs."}</p>{/if}
+      {#if !matches.length}<p class="notice muted">{route.view === "similar" ? "The library found no similar songs." : "The library found no songs to blend these two."}</p>{/if}
     {:else if route.view === "song"}
       {#if data.song}<SongPage {data} {namespace} {current} />{:else}<p class="notice muted">This song is not in the library.</p>{/if}
     {:else if detail}

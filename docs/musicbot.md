@@ -22,8 +22,9 @@ browsers. People control what plays on a web page; they get their link by writin
   Choose the destination queue in the player bar; the browser remembers the
   selection for that link.
 - **Sonic similarity.** Libraries with the OpenSubsonic `sonicSimilarity` extension
-  offer **Similar songs** for library tracks and the playing song, plus **Sonic
-  path from now playing** to a chosen song. The library analyses the audio, for
+  offer **Similar songs** for library tracks and the playing song, plus **Blend
+  into this song**: songs that lead from the playing song to a chosen one by how
+  they sound (the library's sonic path). The library analyses the audio, for
   example Navidrome or Ampache with AudioMuse-AI. Results show the library's
   similarity score; add songs one by one, or use **Add all** / **Play all next**.
 - **Covers.** The bot fetches at most 8 MiB of encoded art, then a credential-free,
@@ -397,7 +398,7 @@ Sonic similarity was checked against real Navidrome 0.64.2 with a local
 `SonicSimilarity` plugin over six fixture songs. Navidrome advertised
 `sonicSimilarity` only after the plugin was enabled. In the browser, the similar
 list showed Navidrome's order and scores, **Add all** queued it in that order, and
-**Play all next** for a sonic path from the playing song queued the rest of the path.
+**Play all next** for a blend from the playing song queued the rest of the path.
 
 ```sh
 cargo build -p nuschl-cli -p nuschl-musicbot -p nuschl-musicbot-codec-worker
