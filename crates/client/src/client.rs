@@ -2840,6 +2840,8 @@ mod tests {
     /// A platform that records what the client asked of it.
     #[derive(Default)]
     struct Recorder {
+        previews: Mutex<Vec<crate::preview::FetchTicket>>,
+        cancelled_previews: Mutex<Vec<crate::preview::RequestId>>,
         reject_requests: std::sync::atomic::AtomicBool,
         metadata: Mutex<Vec<nuschl_core::model::MetadataAuthority>>,
         requests: Mutex<Vec<(String, Request)>>,
@@ -2849,6 +2851,17 @@ mod tests {
     }
 
     impl Platform for Recorder {
+        fn link_preview(
+            &self,
+            _: crate::preview::Settings,
+            ticket: crate::preview::FetchTicket,
+        ) -> Result<(), crate::preview::Unavailable> {
+            self.previews.lock().unwrap().push(ticket);
+            Ok(())
+        }
+        fn cancel_link_preview(&self, id: crate::preview::RequestId) {
+            self.cancelled_previews.lock().unwrap().push(id);
+        }
         fn connect(&self, _: ServerBookmark, _: Option<String>, _: bool) -> Result<u64, String> {
             Ok(1)
         }
@@ -3342,6 +3355,96 @@ mod tests {
         client.settle();
         client.take_updates();
         (client, recorder, id)
+    }
+
+    fn prepare_link(client: &mut Client, recorder: &Recorder) -> crate::preview::FetchTicket {
+        client.open(0, 2).unwrap();
+        client.set_link_preview_settings(
+            crate::preview::Settings {
+                mode: crate::preview::Mode::Direct,
+                ..Default::default()
+            },
+            0,
+        );
+        client.composing_link_preview("https://example.org/ ", false, false, false, 0);
+        client.poll_link_preview(crate::preview::DEBOUNCE_MS - 1);
+        assert!(recorder.previews.lock().unwrap().is_empty());
+        client.poll_link_preview(crate::preview::DEBOUNCE_MS);
+        recorder.previews.lock().unwrap().last().unwrap().clone()
+    }
+
+    #[test]
+    fn preview_arc_hooks_cancel_and_discard_a_departed_conversation_result() {
+        let (mut client, recorder, _) = connected();
+        let ticket = prepare_link(&mut client, &recorder);
+        client.open(0, 3).unwrap();
+        client.settle();
+        assert_eq!(
+            *recorder.cancelled_previews.lock().unwrap(),
+            vec![ticket.id]
+        );
+        client.handle(Input::LinkPreview {
+            id: ticket.id,
+            result: Err(crate::preview::Unavailable::Network),
+        });
+        assert_eq!(client.link_preview_status(), crate::preview::Status::None);
+    }
+
+    #[test]
+    fn preview_sends_one_html_entry_and_acknowledges_exact_original_logical_text() {
+        let (mut client, recorder, id) = connected();
+        let ticket = prepare_link(&mut client, &recorder);
+        let card = crate::preview::Card::new(
+            &ticket.target,
+            &nuschl_link_preview::metadata::ExtractedMetadata {
+                title: "Fixture title".into(),
+                description: "Fixture description".into(),
+                image: None,
+                image_alt: String::new(),
+            },
+            None,
+        )
+        .unwrap();
+        client.handle(Input::LinkPreview {
+            id: ticket.id,
+            result: Ok(card),
+        });
+        recorder.requests.lock().unwrap().clear();
+        let original = "https://example.org/ ";
+        client.send_text(original.into()).unwrap();
+        let requests = recorder.requests.lock().unwrap();
+        let [(server, Request::SendHtml { target, html, .. })] = requests.as_slice() else {
+            panic!("one atomic HTML request required")
+        };
+        assert_eq!(server, &id);
+        assert_eq!(html.len(), 1);
+        assert!(html[0].contains("Fixture title"));
+        let target = target.clone();
+        let wire = html[0].clone();
+        drop(requests);
+        client.handle(Input::Sent {
+            server: id.clone(),
+            generation: 1,
+            target: target.clone(),
+            body: original.into(),
+        });
+        assert!(
+            client.sending(),
+            "logical text cannot fake the actual wire ACK"
+        );
+        client.handle(Input::Sent {
+            server: id,
+            generation: 1,
+            target,
+            body: wire,
+        });
+        assert!(!client.sending());
+        assert!(
+            client
+                .take_updates()
+                .iter()
+                .any(|update| matches!(update, Update::Sent { body, .. } if body == original))
+        );
     }
 
     #[test]
