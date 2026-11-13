@@ -13,19 +13,13 @@ from pathlib import Path
 import tempfile
 from output_quality import Reference, PrivatePulse, fixture, playback, delay_only, amplitude
 from output_resample import Speex
-from media_live import check_echo_test, Worker
+from media_live import check_echo_test, echo_room, Worker
 import time
 
 
-def compare_echo(current, baseline, pulse, output):
-    module=pulse.ctl('load-module','module-loopback','source=speakers.monitor','sink=mic',
-        'latency_msec=30','adjust_time=0','sink_input_properties=media.name=room').strip()
+def compare_echo(current, baseline, pulse, output, delay_plugin):
     results=[]
-    try:
-        time.sleep(.5)
-        room=next(entry['index'] for entry in pulse.ctl('list','sink-inputs',json_output=True)
-            if entry['properties'].get('media.name')=='room')
-        pulse.ctl('set-sink-input-volume',str(room),'30%')
+    with echo_room(pulse, delay_plugin):
         for label,binary in [('baseline',baseline),('current',current),('current',current),('baseline',baseline)]:
             time.sleep(.5)
             worker=Worker(binary,pulse)
@@ -44,8 +38,7 @@ def compare_echo(current, baseline, pulse, output):
                     'result':result,'passed':passed})
                 (output/'paired-progress.json').write_text(json.dumps(results,indent=2)+'\n')
             finally:worker.stop()
-    finally:pulse.ctl('unload-module',module)
-    return {'seed':'EchoProbe0x12345678','same_daemon_and_loopback':True,'order':'baseline/current/current/baseline',
+    return {'seed':'EchoProbe0x12345678','same_daemon_and_room':True,'order':'baseline/current/current/baseline',
         'rate':44100,'capture_rate':48000,'host_devices':False,'results':results,
         'passed_current':all(r['passed'] for r in results if r['worker']=='current'),
         'passed_baseline':all(r['passed'] for r in results if r['worker']=='baseline')}
@@ -58,12 +51,13 @@ def main():
     parser.add_argument('--compare-worker',type=Path,help='ABBA echo comparison on one unchanged private graph')
     parser.add_argument('--echo-only',action='store_true',help='run only identical private AEC graph for a frozen worker baseline')
     parser.add_argument('--echo',action='store_true',help='also prove private 44.1 kHz render/reference AEC loop')
+    parser.add_argument('--delay-plugin',type=Path,help="the LADSPA SDK's delay.so, for the echo room")
     args = parser.parse_args()
     args.output.mkdir(parents=True,exist_ok=True)
     if args.compare_worker:
         with tempfile.TemporaryDirectory(prefix='paired-44100-',dir=args.output) as temporary:
             pulse=PrivatePulse(args.pulse_bin,Path(temporary),44100)
-            try:report=compare_echo(args.worker,args.compare_worker,pulse,args.output)
+            try:report=compare_echo(args.worker,args.compare_worker,pulse,args.output,args.delay_plugin)
             finally:pulse.stop()
         (args.output/'proof.json').write_text(json.dumps(report,indent=2)+'\n');print(json.dumps(report),flush=True)
         if not report['passed_current']:raise SystemExit(1)
@@ -99,9 +93,9 @@ def main():
     if args.echo or args.echo_only:
         with tempfile.TemporaryDirectory(prefix='echo-44100-',dir=args.output) as temporary:
             pulse=PrivatePulse(args.pulse_bin,Path(temporary),44100)
-            try:check_echo_test(args.worker,pulse)
+            try:check_echo_test(args.worker,pulse,args.delay_plugin)
             finally:pulse.stop()
-        echo={'rate':44100,'capture_rate':48000,'passed':True,'fixture':'existing independent loopback/probe assertions'}
+        echo={'rate':44100,'capture_rate':48000,'passed':True,'fixture':'media_live echo room and probe assertions'}
     report={'echo':echo,'passed':True,'worker':str(args.worker),'host_devices':False,'cases':cases,
         'limits':['Low-band encoded carriers; broad passband/alias/chunk/clock are direct converter fixtures.',
             'Gain compared without fitting; fractional endpoint delay prevents a single integer-aligned PCM identity claim.',

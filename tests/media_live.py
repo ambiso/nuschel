@@ -9,10 +9,10 @@
    per-microphone overrides must be honoured.
 3. Adaptive controller: a microphone driven to full scale is reported as
    clipping, and no system level is changed.
-4. Echo test (Settings): with the speakers looped into the microphone at a
-   realistic -31 dB, Nuschl's canceller must remove most of the echo and
-   keep the voice gate mostly shut, and the test must show that without it
-   the echo would be sent.
+4. Echo test (Settings): with the speakers heard by the microphone 30 ms
+   later at a realistic -31 dB (echo_room), Nuschl's canceller must remove
+   most of the echo and keep the voice gate mostly shut, and the test must
+   show that with the canceller off the echo would be sent.
 5. Double talk: while the far end plays, the user's own speech must not be
    ducked by more than 3 dB nor cut by the voice gate.
 6. Sound effects: a requested sound reaches the speakers at its loudness and
@@ -20,6 +20,7 @@
    what is sent stays below -60 dBFS, as while voice plays).
 """
 import argparse
+import contextlib
 import json
 import math
 import os
@@ -258,16 +259,50 @@ def conditions(worker, before):
             f"stolen, tasks waiting for a CPU {(waited - before[2]) / seconds:.0%} of the time")
 
 
-def check_echo_test(binary, pulse):
-    """The Settings echo test, without a server: nothing is sent, and the verdict is right."""
-    pulse.ctl("set-default-source", "mic.monitor")
-    module = pulse.ctl("load-module", "module-loopback", "source=speakers.monitor", "sink=mic",
-                       "latency_msec=30", "adjust_time=0", "sink_input_properties=media.name=room").strip()
+@contextlib.contextmanager
+def echo_room(pulse, delay_plugin):
+    """Speakers that the microphone hears 30 ms later at about -31 dB, all on one null sink's clock.
+
+    The speakers are a remap sink (at the daemon's own speakers' rate and channels) feeding a
+    LADSPA delay line into the null sink "room", which also takes the user's voice. The microphone
+    is a remap source of the room's monitor (at the daemon's own microphone's rate and channels).
+    The room's timer renders the speakers' monitor, which Nuschl records as its reference, and the
+    echo in the same pass, so a rewind or a latency change moves both alike. A loopback between two
+    null sinks could shift the echo alone, and the canceller then started over (#10).
+    """
+    specs = {sink["name"]: sink["sample_specification"].split()[1:] for sink in
+             pulse.ctl("list", "sinks", json_output=True)}
+    def like(name):
+        channels, rate = specs[name]
+        return f"channels={channels.removesuffix('ch')}", f"rate={rate.removesuffix('Hz')}"
+    defaults = [pulse.ctl(f"get-default-{kind}").strip() for kind in ("sink", "source")]
+    modules = []
     try:
-        time.sleep(0.5)
-        room = next(entry["index"] for entry in pulse.ctl("list", "sink-inputs", json_output=True)
-                    if entry["properties"].get("media.name") == "room")
-        pulse.ctl("set-sink-input-volume", str(room), "30%")  # about -31 dB of acoustic coupling
+        for arguments in (("module-null-sink", "sink_name=room", "rate=48000"),
+                          # delay_5s: a 0.03 s delay, fully wet.
+                          ("module-ladspa-sink", "sink_name=room_delay", "sink_master=room", f"plugin={delay_plugin}",
+                           "label=delay_5s", "control=0.03,1"),
+                          ("module-remap-sink", "sink_name=room_speakers", "master=room_delay", *like("speakers"),
+                           "sink_properties=device.description=Speakers"),
+                          ("module-remap-source", "source_name=room_microphone", "master=room.monitor",
+                           *like("mic"), "source_properties=device.description=Microphone")):
+            modules.append(pulse.ctl("load-module", *arguments).strip())
+        speakers = next(entry["index"] for entry in pulse.ctl("list", "sink-inputs", json_output=True)
+                        if str(entry["owner_module"]) == modules[2])
+        pulse.ctl("set-sink-input-volume", str(speakers), "30%")  # about -31 dB of acoustic coupling
+        pulse.ctl("set-default-sink", "room_speakers")
+        pulse.ctl("set-default-source", "room_microphone")
+        yield
+    finally:
+        for kind, name in zip(("sink", "source"), defaults):
+            pulse.ctl(f"set-default-{kind}", name)
+        for module in reversed(modules):
+            pulse.ctl("unload-module", module)
+
+
+def check_echo_test(binary, pulse, delay_plugin):
+    """The Settings echo test, without a server: nothing is sent, and the verdict is right."""
+    with echo_room(pulse, delay_plugin):
         def run(mode):
             before = cpu_counters()
             worker = Worker(binary, pulse)
@@ -275,6 +310,9 @@ def check_echo_test(binary, pulse):
                          "settings": {"echo_cancellation": mode}})
             worker.send({"kind": "preview", "capture": True, "loopback": False})
             worker.wait(lambda e: e["kind"] == "status" and e["ready"], "audio did not start")
+            devices = worker.wait(lambda e: e["kind"] == "devices", "no device report")
+            # The canceller's reference is the recorded monitor of the speakers.
+            assert mode == "off" or (devices["echo"]["kind"] == "nuschl" and devices["reference"]), devices
             worker.send({"kind": "echo_test"})
             result = worker.wait(lambda e: e["kind"] == "echo_test", "no echo test result", timeout=20)
             assert not any(e["kind"] == "packet" for e in worker.events), "a preview sent audio"
@@ -293,14 +331,12 @@ def check_echo_test(binary, pulse):
         on = min(attempts, key=lambda result: (not passes(result), result["transmitted"]))
         off = run("off")
         assert on["echo_db"] is not None and -40 < on["echo_db"] < -20, on
-        # Measured over many runs of this rig: 20-45 dB and at most a fifth of
-        # the far end's speech (the loopback itself glitches now and then).
+        # Limits kept from the earlier two-sink loopback rig, measured there over
+        # many runs: 20-45 dB and at most a fifth of the far end's speech.
         assert on["transmitted"] <= 0.25 and on["reduction_db"] >= 15, f"the canceller let echo through: {attempts}"
         assert off["transmitted"] > 0.5, f"without a canceller the test must report a leak: {off}"
         print(f"Echo test: {-on['echo_db']:.0f} dB coupling; canceller removed {on['reduction_db']:.0f} dB "
               f"and sent {on['transmitted']:.0%}; without it {off['transmitted']:.0%} would be sent.", flush=True)
-    finally:
-        pulse.ctl("unload-module", module)
 
 
 def near_voice(seconds):
@@ -314,21 +350,14 @@ def near_voice(seconds):
     return bytes(out)
 
 
-def check_double_talk(binary, pulse, root):
+def check_double_talk(binary, pulse, root, delay_plugin):
     """The user talking over the far end keeps their level (no ducking)."""
-    pulse.ctl("set-default-source", "mic.monitor")
-    module = pulse.ctl("load-module", "module-loopback", "source=speakers.monitor", "sink=mic",
-                       "latency_msec=30", "adjust_time=0", "sink_input_properties=media.name=room").strip()
     voice = root / "near.raw"
     voice.write_bytes(near_voice(40))
-    player = subprocess.Popen([str(pulse.bin / "pacat"), f"--server=unix:{pulse.socket}", "--device=mic", "--raw",
-                               "--format=float32le", "--rate=48000", "--channels=1", str(voice)],
-                              start_new_session=True)
-    try:
-        time.sleep(0.5)
-        room = next(entry["index"] for entry in pulse.ctl("list", "sink-inputs", json_output=True)
-                    if entry["properties"].get("media.name") == "room")
-        pulse.ctl("set-sink-input-volume", str(room), "30%")
+    with echo_room(pulse, delay_plugin):
+        player = subprocess.Popen([str(pulse.bin / "pacat"), f"--server=unix:{pulse.socket}", "--device=room",
+                                   "--raw", "--format=float32le", "--rate=48000", "--channels=1", str(voice)],
+                                  start_new_session=True)
 
         def peaks(events):
             levels = sorted(event["level_db"] for event in events)[len(events) // 2:]
@@ -355,15 +384,16 @@ def check_double_talk(binary, pulse, root):
             return alone[0] - together[0], together[1]
         # Convergence still varies from run to run (see check_echo_test). Prefer an attempt
         # meeting both limits: the least ducking alone can come with a gate that cut the user.
-        attempts = [run() for _ in range(2)]
+        try:
+            attempts = [run() for _ in range(2)]
+        finally:
+            os.killpg(player.pid, signal.SIGTERM)
+            player.wait(timeout=5)
         ducking, gate = min(attempts, key=lambda result: (not (result[0] <= 3 and result[1] >= 0.9), result[0]))
         assert ducking <= 3 and gate >= 0.9, \
             f"the user was ducked by {ducking:.1f} dB, gate open {gate:.0%}; (ducking, gate) attempts: {attempts}"
         print(f"Double talk: the user's speech kept its level ({ducking:.1f} dB) with the gate open {gate:.0%}.",
               flush=True)
-    finally:
-        os.killpg(player.pid, signal.SIGTERM)
-        pulse.ctl("unload-module", module)
 
 
 def loudest_400ms(samples):
@@ -424,6 +454,7 @@ def main():
     parser.add_argument("binaries", type=Path)
     parser.add_argument("--pulse-bin", type=Path, required=True)
     parser.add_argument("--opus-library", type=Path, required=True)
+    parser.add_argument("--delay-plugin", type=Path, required=True, help="the LADSPA SDK's delay.so (echo_room)")
     parser.add_argument("--output", type=Path, default=Path(tempfile.gettempdir()))
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
@@ -438,9 +469,9 @@ def main():
             if only in (None, "echo_routes"):
                 check_echo_routes(worker, pulse)
             if only in (None, "echo_test"):
-                check_echo_test(worker, pulse)
+                check_echo_test(worker, pulse, args.delay_plugin)
             if only in (None, "double_talk"):
-                check_double_talk(worker, pulse, Path(temporary))
+                check_double_talk(worker, pulse, Path(temporary), args.delay_plugin)
             if only in (None, "clipping"):
                 check_clipping(worker, pulse, Path(temporary))
             if only in (None, "sounds"):
