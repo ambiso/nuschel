@@ -48,9 +48,6 @@ class Pulse:
             f"load-module module-native-protocol-unix socket={self.socket} auth-anonymous=1\n"
             "load-module module-null-sink sink_name=speakers rate=48000 sink_properties=device.description=Speakers\n"
             "load-module module-null-sink sink_name=mic rate=48000 sink_properties=device.description=Microphone\n"
-            # analog_gain_control=0: the system canceller must not move the test's levels.
-            "load-module module-echo-cancel aec_method=webrtc aec_args=analog_gain_control=0 "
-            "source_master=mic.monitor sink_master=speakers source_name=ec_source sink_name=ec_sink\n"
             "set-default-sink speakers\nset-default-source mic.monitor\n")
         self.process = subprocess.Popen(
             [str(self.bin / "pulseaudio"), "--daemonize=no", "--use-pid-file=no", "--exit-idle-time=-1", "-n",
@@ -183,6 +180,11 @@ def sink_of_our_stream(pulse):
 
 
 def check_echo_routes(binary, pulse):
+    # Loaded only for this check: the daemon's own canceller would compete for the CPU in the others.
+    # analog_gain_control=0: the system canceller must not move the test's levels.
+    module = pulse.ctl("load-module", "module-echo-cancel", "aec_method=webrtc", "aec_args=analog_gain_control=0",
+                       "source_master=mic.monitor", "sink_master=speakers", "source_name=ec_source",
+                       "sink_name=ec_sink").strip()
     pulse.ctl("set-default-source", "ec_source")
     worker = start(binary, pulse, muted=False)
     devices = worker.wait(lambda e: e["kind"] == "devices", "no device report")
@@ -208,6 +210,7 @@ def check_echo_routes(binary, pulse):
     devices = worker.wait(lambda e: e["kind"] == "devices", "no device report")
     assert devices["echo"]["kind"] == "nuschl" and devices["output"].endswith(":speakers"), devices
     worker.stop()
+    pulse.ctl("unload-module", module)
     print("Echo modes, per-microphone override and plain microphones passed.", flush=True)
 
 
