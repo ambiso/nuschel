@@ -274,29 +274,63 @@ list.
 Windows 11 Enterprise 25H2 (build 26200) in `tests/windows_vm.py`, two vCPUs, a QEMU
 HDA sound card without a host backend, no network except forwards into host
 loopback. `crates/sandbox-windows/tests/confinement.rs` (see tests/README.md) starts
-itself through `nuschl_ipc::host`'s real commands as each worker kind and probes
-from the inside. The results below were produced by the supervisor code before
+itself through the supervisor's real commands as each worker kind and probes from
+the inside. The table was first produced on 2026-11-11 by the code before
 `nuschl-sandbox` (`nuschl_ipc::host`'s per-role builders, revision 9546e083 and
-earlier); they have not been repeated with `nuschl_sandbox::command`. Result on
-2026-11-11, every worker kind:
+earlier), without the math column. On 2026-11-14 it was repeated with
+`nuschl_sandbox::command` (the run is identified below the table): every cell
+matched, and the math column is from that run.
 
-| Attempt | content | storage | crypto | media | transfer |
-| --- | --- | --- | --- | --- | --- |
-| Token is an AppContainer | yes | yes | yes | yes | yes |
-| Its job, read from inside: one process, memory limit, all 8 UI restrictions | yes (512 MiB) | yes (1 GiB) | yes (1 GiB) | yes (1 GiB) | yes (1 GiB) |
-| Read a file in Documents | denied | denied | denied | denied | denied |
-| List the user's profile | denied | denied | denied | denied | denied |
-| Write to the profile, `C:\Users\Public`, the user's `TEMP` | denied | denied | denied | denied | denied |
-| Write in its own directory | n/a | allowed | allowed | n/a | n/a |
-| TCP connection to 10.0.2.100:80 | denied (Winsock does not start) | denied (same) | denied (same) | denied (WSAEACCES) | allowed |
-| Start `cmd.exe` | denied (blocked) | denied | denied | denied | denied |
-| Open the supervisor's process to query or terminate | denied | denied | denied | denied | denied |
-| Commit more memory than its limit | denied | denied | denied | denied | denied |
-| Read the offered file by handle | n/a | n/a | n/a | n/a | allowed |
-| Read `HKCU\Environment` (the user's environment variables) | denied | denied | denied | allowed | allowed |
-| Read `HKCU\...\CurrentVersion\Run` (autostart) | denied | denied | denied | denied | denied |
-| Create a key under `HKCU\Software` | denied | denied | denied | denied | denied |
-| Read text the test put on the clipboard | denied | denied | denied | denied | denied |
+| Attempt | content | math | storage | crypto | media | transfer |
+| --- | --- | --- | --- | --- | --- | --- |
+| Token is an AppContainer | yes | yes | yes | yes | yes | yes |
+| Its job, read from inside: one process, memory limit, all 8 UI restrictions | yes (512 MiB) | yes (512 MiB) | yes (1 GiB) | yes (1 GiB) | yes (1 GiB) | yes (1 GiB) |
+| Read a file in Documents | denied | denied | denied | denied | denied | denied |
+| List the user's profile | denied | denied | denied | denied | denied | denied |
+| Write to the profile, `C:\Users\Public`, the user's `TEMP` | denied | denied | denied | denied | denied | denied |
+| Write in its own directory | n/a | n/a | allowed | allowed | n/a | n/a |
+| TCP connection to 10.0.2.100:80 | denied (Winsock does not start) | denied (same) | denied (same) | denied (same) | denied (WSAEACCES) | allowed |
+| Start `cmd.exe` | denied (blocked) | denied | denied | denied | denied | denied |
+| Open the supervisor's process to query or terminate | denied | denied | denied | denied | denied | denied |
+| Commit more memory than its limit | denied | denied | denied | denied | denied | denied |
+| Read the offered file by handle | n/a | n/a | n/a | n/a | n/a | allowed |
+| Read `HKCU\Environment` (the user's environment variables) | denied | denied | denied | denied | allowed | allowed |
+| Read `HKCU\...\CurrentVersion\Run` (autostart) | denied | denied | denied | denied | denied | denied |
+| Create a key under `HKCU\Software` | denied | denied | denied | denied | denied | denied |
+| Read text the test put on the clipboard | denied | denied | denied | denied | denied | denied |
+
+The 2026-11-14 run:
+
+- Source: e6076e2a7e3e5f0146e4dd496afee947f1c853b4, main (1b3ff4c6) merged with
+  #258 (6ec9e3278521). Guest: the same VM, Windows 11 Enterprise 25H2 build 26200.6584.
+- Workers: `nix build .#windows` at that revision,
+  `/nix/store/n054fhbwqm8pghgqqmnp43mx1mn7dwmq-nuschl-windows-x86_64-w64-mingw32-0.1.0/bin/`.
+- Test: `cargo test --locked --target x86_64-pc-windows-gnu -p nuschl-sandbox-windows
+  --test confinement --no-run` on a `git archive` of that revision, with the flake's
+  stable toolchain and MinGW:
+  `target/x86_64-pc-windows-gnu/debug/deps/confinement-b1a13081509668d4.exe`.
+- SHA-256 of the files run in the guest (checked there after download):
+
+  | File | SHA-256 |
+  | --- | --- |
+  | `confinement.exe` | `687054ca490f1165a3318cbc3f8287b733ff8f3d3612fc7c8359aaedeb917a8d` |
+  | `nuschl-content-worker.exe` | `fcb3547c2ec955e4dda2ccae9db0f2e0e1ff45a3cf760366b9de2059b4ebdb15` |
+  | `nuschl-math-worker.exe` | `b670dd3b6ffe9fb1c6939a97af46cfa6a4635f0b6af6ac635d662e7f4a464bce` |
+  | `nuschl-storage-worker.exe` | `c5e065068501053a7c03193f9b22d56df6d6220929a4e2397b296b808861e525` |
+  | `nuschl-crypto-worker.exe` | `f4b0de1a8798b61bd454ab92f99a7fc581f44dcc23c27ab9471ab8602da0f171` |
+  | `nuschl-media-worker.exe` | `641b0eeb21e197885abfdd3e86724274b187a02b072e69f58012998625807c3e` |
+  | `nuschl-transfer-worker.exe` | `95b0fd17221788b2c36e0183c5d3981ff8106e9ae0f40a193908129a8484aa70` |
+
+- Runs, each with 0 failed checks: `confinement.exe --workers DIR --rendezvous
+  ws://10.0.2.100:4710/v1 --relay tcp://10.0.2.100:4711` (104 checks), the same with
+  `--nested` (105), and the same with `--code-file` and `--receive` against a private
+  mailbox server and transit relay on host loopback (105). The real workers: math
+  rendered a formula (63×24), content decoded a PNG, storage wrote and read back
+  history, crypto created an identity, media opened the default WASAPI devices,
+  transfer sent the offered file to the reference CLI on the host and received a
+  26-byte file from it.
+- Not repeated on 2026-11-14: the junction refusal, the DACL inspection and the desktop
+  run against a stock Murmur described below, which date from 2026-11-11.
 
 `EnumProcesses` from inside returns two process ids (not the system's list), and the
 launch stage refuses a policy it cannot apply (exit 125). With `--nested` the test

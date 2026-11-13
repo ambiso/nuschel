@@ -185,6 +185,9 @@ Result on 2026-11-11 (Windows 11 25H2): all checks passed for every worker kind,
 including both transfer directions; the desktop, run in the VM against a stock Murmur
 on host loopback, rendered an image message, stored history and captured from the
 microphone with its workers in AppContainers.
+On 2026-11-14 the confinement checks ran again through `nuschl_sandbox` (revision
+e6076e2a, docs/windows-sandbox.md): all passed for every worker kind, nested and not,
+including both transfer directions.
 
 The VM also checks worker confinement, SQLite/PostgreSQL pagination and the NixOS
 module's hardened database preflight. `vm-server` runs the protocol suites against
