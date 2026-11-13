@@ -176,10 +176,6 @@ fn sha256(parts: &[&[u8]]) -> [u8; 32] {
     out
 }
 
-fn now_ms() -> u64 {
-    crate::kt::now_ms()
-}
-
 fn key(prefix: u8, parts: &[&[u8]]) -> Vec<u8> {
     let mut out = vec![prefix];
     for part in parts {
@@ -271,7 +267,7 @@ impl MlsHandle {
 
     /// The delivery service's clock (Unix ms).
     pub fn now_ms(&self) -> u64 {
-        now_ms().saturating_add_signed(self.clock_offset.load(Ordering::Relaxed))
+        crate::kt::now_ms().saturating_add_signed(self.clock_offset.load(Ordering::Relaxed))
     }
 
     /// Moves the service's clock (tests: a device inactive for 90 days).
@@ -885,7 +881,7 @@ fn promote(
     let mut pushes = Vec::new();
     if let Some(welcome) = welcome {
         for (account, device, last_resort, reference) in recipients {
-            let mut id = now_ms().to_be_bytes().to_vec();
+            let mut id = crate::kt::now_ms().to_be_bytes().to_vec();
             id.extend_from_slice(&crate::state::random::<8>());
             let entry = v1::MlsWelcome {
                 id: id.clone(),
@@ -1202,7 +1198,7 @@ impl Service {
         }
         let mut device: Option<Device> = None;
         let mut records = Vec::new();
-        let now = now_ms();
+        let now = crate::kt::now_ms();
         for (index, (bytes, last_resort)) in packages.into_iter().enumerate() {
             let info = check_key_package(&bytes).map_err(|error| {
                 tracing::info!(%error, "refused a key package");
@@ -1667,7 +1663,8 @@ impl Service {
             .scan_prefix(&key(PREFIX_WELCOME, &[&account, &device]))
             .await
             .map_err(store_failure)?;
-        let horizon = now_ms().saturating_sub(u64::from(self.config.welcome_days) * 86_400_000);
+        let horizon =
+            crate::kt::now_ms().saturating_sub(u64::from(self.config.welcome_days) * 86_400_000);
         let mut expired = Vec::new();
         let mut welcomes = Vec::new();
         for (key, value) in entries {

@@ -1696,10 +1696,7 @@ impl Profile {
         if current.exists() {
             let backup = self.places.identity.join(format!(
                 "identity.{}.json.bak",
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|elapsed| elapsed.as_secs())
-                    .unwrap_or(0)
+                nuschl_core::now_ms() / 1000
             ));
             fs::copy(&current, backup).map_err(|error| error.to_string())?;
         }

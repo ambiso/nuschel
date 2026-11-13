@@ -319,6 +319,17 @@ impl PreviewPolicy {
     }
 }
 
+/// Wall-clock Unix time in milliseconds: 0 before 1970, saturating far in the
+/// future. Not in browsers, where the system clock is unavailable.
+#[cfg(not(target_family = "wasm"))]
+pub fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| {
+            i64::try_from(elapsed.as_millis()).unwrap_or(i64::MAX)
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

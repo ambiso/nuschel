@@ -1023,7 +1023,7 @@ async fn before_the_date_an_outdated_client_is_admitted_and_told_when() {
     // 2999-01-01T00:00:00Z.
     assert_eq!(policy.minimum_client_from, 32_472_144_000);
     assert_eq!(
-        negotiated.standing(connection::now_ms()),
+        negotiated.standing(nuschld::chat::now_ms()),
         nuschl::version::Standing::Required {
             version: nuschl::version::Version::new(99, 0, 0),
             from: 32_472_144_000,
@@ -1041,7 +1041,7 @@ async fn before_the_date_an_outdated_client_is_admitted_and_told_when() {
     ))
     .await;
     assert_eq!(
-        negotiated.unwrap().standing(connection::now_ms()),
+        negotiated.unwrap().standing(nuschld::chat::now_ms()),
         nuschl::version::Standing::Recommended {
             version: nuschl::version::Version::new(99, 1, 0)
         }

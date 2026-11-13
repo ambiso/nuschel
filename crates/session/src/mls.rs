@@ -1398,7 +1398,7 @@ impl Context {
                     *message = reconstructed_archive_chat(
                         std::mem::take(message),
                         text,
-                        crate::connection::now_ms().max(0) as u64,
+                        nuschl_core::now_ms().max(0) as u64,
                     );
                     message.author = None;
                     continue;
@@ -1460,7 +1460,7 @@ impl Context {
                     *message = reconstructed_archive_chat(
                         std::mem::take(message),
                         text,
-                        crate::connection::now_ms().max(0) as u64,
+                        nuschl_core::now_ms().max(0) as u64,
                     );
                     message.author = None;
                 }
