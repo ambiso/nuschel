@@ -152,6 +152,10 @@ impl Graphics {
                 _ => None,
             })
             .unwrap_or([0, 0, 0]);
+        #[expect(
+            deprecated,
+            reason = "halfblocks() hardcodes a 10x20 cell; we rasterise at 1x2"
+        )]
         let mut picker = if picker.protocol_type() == ProtocolType::Halfblocks {
             Picker::from_fontsize((1, 2).into())
         } else {
@@ -595,6 +599,10 @@ mod tests {
     fn raster_rows_are_legible_clipped_and_composited_without_a_terminal() {
         use ratatui::{buffer::Buffer, layout::Rect, widgets::Widget};
         use ratatui_image::sliced::SlicedImage;
+        #[expect(
+            deprecated,
+            reason = "halfblocks() hardcodes a 10x20 cell; we rasterise at 1x2"
+        )]
         let picker = Picker::from_fontsize((1, 2).into());
         let pixels = image::RgbaImage::from_fn(12, 12, |x, y| {
             if x == y {

@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! Informational and administrative dialogs.
 use crate::{
-    assets::icon,
     dialogs::{Tone, modal, styled_button},
     menus::ActionOrigin,
     state::{Desktop, ServerView, Status},
@@ -13,10 +12,7 @@ use gpui_kit::{
     prelude::*,
     *,
 };
-use nuschl_session::{
-    connection::Command,
-    model::{AclEntry, permission},
-};
+use nuschl_session::connection::Command;
 
 pub enum Panel {
     UserInfo {
@@ -510,7 +506,6 @@ pub fn panel(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement> {
         Panel::RegisteredUsers { server: _, origin } => {
             let server = &origin.live_index(this)?;
             let view = this.client.servers.get(*server)?;
-            let index = *server;
             let body = match &view.registered_users {
                 None => div()
                     .px_6()
@@ -603,7 +598,6 @@ pub fn panel(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement> {
         Panel::Bans { server: _, origin } => {
             let server = &origin.live_index(this)?;
             let view = this.client.servers.get(*server)?;
-            let index = *server;
             let body = match &view.bans {
                 None => div()
                     .px_6()
@@ -723,7 +717,7 @@ pub fn panel(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement> {
             position,
             max_users,
             channel,
-            server,
+            server: _,
         } => {
             let server = &origin.live_index(this)?;
             let view = this.client.servers.get(*server)?;
@@ -834,8 +828,8 @@ pub fn reconnect_banner(view: &ServerView) -> Option<String> {
 #[cfg(test)]
 mod tests {
     // Not `super::*`: that glob includes GPUI's `test` macro, which shadows `#[test]`.
-    use super::{AclEntry, permission};
     use crate::acl_editor::cycle;
+    use nuschl_session::model::{AclEntry, permission};
     #[test]
     fn acl_bits_cycle_allow_deny_unset() {
         let mut entry = AclEntry {

@@ -117,8 +117,10 @@ fn fallback_echo() {
         let raw = std::fs::read(path).unwrap();
         assert_eq!(raw.len() % 4, 0);
         let samples: Vec<_> = raw
-            .chunks_exact(4)
-            .map(|sample| f32::from_le_bytes(sample.try_into().unwrap()))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|sample| f32::from_le_bytes(*sample))
             .collect();
         assert!(
             samples
@@ -140,9 +142,9 @@ fn fallback_echo() {
     chain.set_delay_hint(40);
     chain.set_far_end(true);
     let (mut before, mut after, mut sent, mut measured) = (0., 0., 0, 0);
-    for (index, frame) in mic.chunks_exact(FRAME).enumerate() {
+    for (index, frame) in mic.as_chunks::<FRAME>().0.iter().enumerate() {
         chain.render(&render[index * 2 * FRAME..(index + 1) * 2 * FRAME]);
-        let mut output: [f32; FRAME] = frame.try_into().unwrap();
+        let mut output: [f32; FRAME] = *frame;
         let result = chain.process(&mut output, false, true);
         if (300..600).contains(&index) {
             before += frame

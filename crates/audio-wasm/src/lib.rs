@@ -188,7 +188,13 @@ mod tests {
             assert!(encoded.len() <= MAX_ENCODED_BYTES);
             let output = decoder.decode(&encoded).unwrap();
             assert_eq!(output.len(), FRAME_SAMPLES * OUTPUT_CHANNELS);
-            samples.extend(output.chunks_exact(OUTPUT_CHANNELS).map(|frame| frame[0]));
+            samples.extend(
+                output
+                    .as_chunks::<OUTPUT_CHANNELS>()
+                    .0
+                    .iter()
+                    .map(|frame| frame[0]),
+            );
         }
         let energy: f32 = samples.iter().map(|v| v * v).sum::<f32>() / samples.len() as f32;
         assert!(

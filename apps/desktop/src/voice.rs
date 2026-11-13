@@ -811,10 +811,10 @@ impl Desktop {
     }
 
     pub fn answer_second_server(&mut self, both: bool) {
-        if let Some(ask) = self.second_server.take() {
-            if let Some(index) = ask.resolve(&self.client) {
-                self.client.speak_here(index, both);
-            }
+        if let Some(ask) = self.second_server.take()
+            && let Some(index) = ask.resolve(&self.client)
+        {
+            self.client.speak_here(index, both);
         }
     }
 

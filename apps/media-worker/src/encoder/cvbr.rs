@@ -156,7 +156,7 @@ fn encode(
     let mut output = vec![0; buffer.unwrap_or(1275)];
     let mut record = Record::new();
     let mut run = Run::default();
-    for (index, frame) in pcm.chunks_exact(FRAME).enumerate() {
+    for (index, frame) in pcm.as_chunks::<FRAME>().0.iter().enumerate() {
         let size = encoder.encode(frame, FRAME, &mut output).unwrap();
         let opus = &output[..size];
         packet::validate(opus).unwrap();

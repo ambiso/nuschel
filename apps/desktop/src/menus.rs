@@ -522,23 +522,23 @@ impl Desktop {
             .servers
             .get(server)
             .map(|view| ActionOrigin::capture(view, target));
-        if matches!(action, PromptAction::DeleteMessage { .. }) {
-            if let Some(origin) = &mut origin {
-                if let Some((_, channel)) = self.selected_indices() {
-                    let view = &self.client.servers[server];
-                    let selected = &view.channels[channel];
-                    *origin = ActionOrigin::capture(
-                        view,
-                        match selected.target {
-                            TextTarget::Channel(id) => MenuTarget::Channel(id),
-                            TextTarget::Direct(id) => MenuTarget::User(id),
-                            _ => MenuTarget::Message,
-                        },
-                    );
-                    origin.authority.conversations.extend(selected.conversation);
-                }
-                origin.conversation = self.client.navigation.selection().cloned();
+        if matches!(action, PromptAction::DeleteMessage { .. })
+            && let Some(origin) = &mut origin
+        {
+            if let Some((_, channel)) = self.selected_indices() {
+                let view = &self.client.servers[server];
+                let selected = &view.channels[channel];
+                *origin = ActionOrigin::capture(
+                    view,
+                    match selected.target {
+                        TextTarget::Channel(id) => MenuTarget::Channel(id),
+                        TextTarget::Direct(id) => MenuTarget::User(id),
+                        _ => MenuTarget::Message,
+                    },
+                );
+                origin.authority.conversations.extend(selected.conversation);
             }
+            origin.conversation = self.client.navigation.selection().cloned();
         }
         self.prompt = Some(Prompt {
             origin,
@@ -2389,8 +2389,8 @@ mod target_and_focus_tests {
     }
     #[test]
     fn builtin_focus_identity_survives_label_and_permission_row_changes() {
-        let before = vec![Entry::Separator, profile("Profile old name")];
-        let after = vec![profile("Profile renamed"), Entry::Separator];
+        let before = [Entry::Separator, profile("Profile old name")];
+        let after = [profile("Profile renamed"), Entry::Separator];
         assert_eq!(key(&before[1]), key(&after[0]));
     }
     #[test]

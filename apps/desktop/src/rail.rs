@@ -180,9 +180,9 @@ impl Rail {
             if bounds.contains(&point) {
                 let edge = px(28.);
                 let speed = if point.y < bounds.top() + edge {
-                    280. * f32::from((bounds.top() + edge - point.y) / edge)
+                    280. * ((bounds.top() + edge - point.y) / edge)
                 } else if point.y > bounds.bottom() - edge {
-                    -280. * f32::from((point.y - bounds.bottom() + edge) / edge)
+                    -280. * ((point.y - bounds.bottom() + edge) / edge)
                 } else {
                     0.
                 };

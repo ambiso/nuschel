@@ -100,7 +100,7 @@ impl CaptureQueue {
             return None;
         }
         let mut samples = [0.; 2 * FRAME];
-        for half in samples.chunks_exact_mut(FRAME) {
+        for half in samples.as_chunks_mut::<FRAME>().0 {
             if let Some(frame) = self.pending.pop_front() {
                 half.copy_from_slice(&frame.samples);
             }

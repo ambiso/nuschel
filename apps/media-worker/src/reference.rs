@@ -400,7 +400,9 @@ mod tests {
             }
             let samples: Vec<_> = std::iter::from_fn(|| output.pop().ok()).collect();
             let peak = samples
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .enumerate()
                 .max_by(|(_, a), (_, b)| a[0].abs().total_cmp(&b[0].abs()))
                 .unwrap()

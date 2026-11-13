@@ -100,7 +100,7 @@ impl Speaker {
 
     fn extend(&mut self, samples: &[f32]) {
         self.pcm
-            .extend(samples.chunks_exact(2).map(|frame| QueuedFrame {
+            .extend(samples.as_chunks::<2>().0.iter().map(|frame| QueuedFrame {
                 samples: [frame[0], frame[1]].map(
                     |sample: f32| {
                         if sample.is_finite() { sample } else { 0. }

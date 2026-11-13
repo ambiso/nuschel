@@ -403,12 +403,13 @@ fn draw_tree(frame: &mut Frame, app: &App, area: Rect, cursor: &mut Option<Posit
                 {
                     Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD)
                 }
-                Row::Channel { .. } | Row::Direct { .. } => Style::new().fg(Color::LightBlue),
+                // Before the plain arm below; `index` is into the same `channels`.
                 Row::Direct { server, index }
                     if app.client.servers[*server].channels[*index].unread > 0 =>
                 {
-                    Style::new().add_modifier(Modifier::BOLD)
+                    Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD)
                 }
+                Row::Channel { .. } | Row::Direct { .. } => Style::new().fg(Color::LightBlue),
                 _ => Style::new(),
             };
             if selected {

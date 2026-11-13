@@ -332,11 +332,11 @@ fn server_rail(this: &Desktop, selected: Option<usize>, cx: &mut Context<Desktop
                                 cx.stop_propagation();
                                 return;
                             }
-                            if activation_key(event) {
-                                if let Some(index) = this.client.server_index(&key_id) {
-                                    this.browse_server(index, window, cx);
-                                    cx.notify();
-                                }
+                            if activation_key(event)
+                                && let Some(index) = this.client.server_index(&key_id)
+                            {
+                                this.browse_server(index, window, cx);
+                                cx.notify();
                             }
                         }))
                         .map(|tile| {
@@ -3563,7 +3563,7 @@ fn blocks(
     // Code asks for a monospace face when the configured code font is missing.
     let code_font = crate::document::resolve_code_font(cx);
     // The height of one line of message text (GPUI's default line height).
-    let line = px((this.settings.appearance.text_size * 1.618_034).round());
+    let line = px((this.settings.appearance.text_size * std::f32::consts::GOLDEN_RATIO).round());
     let last = document.blocks.len().saturating_sub(1);
     document
         .blocks

@@ -399,13 +399,12 @@ fn inspect_list(
                     label,
                     selected,
                     move |this, _, cx| {
-                        if let Some(editor) = local_editor(this, token) {
-                            if editor.stale
-                                && inspect_row(editor, kind, index)
-                                    .is_some_and(|(current, _)| current == id)
-                            {
-                                inspect_select(editor, kind, index, id);
-                            }
+                        if let Some(editor) = local_editor(this, token)
+                            && editor.stale
+                            && inspect_row(editor, kind, index)
+                                .is_some_and(|(current, _)| current == id)
+                        {
+                            inspect_select(editor, kind, index, id);
                         }
                         cx.notify();
                     },
@@ -437,14 +436,14 @@ fn inspect_list(
                     return;
                 }
                 let current = inspect_selection(editor, kind).map_or(0, |(index, _)| index);
-                if let Some(next) = list_key(event, current, count) {
-                    if let Some((id, _)) = inspect_row(editor, kind, next) {
-                        window.focus(&focus_on_key, cx);
-                        inspect_select(editor, kind, next, id);
-                        scroll.scroll_to_item(next, ScrollStrategy::Nearest);
-                        cx.stop_propagation();
-                        cx.notify();
-                    }
+                if let Some(next) = list_key(event, current, count)
+                    && let Some((id, _)) = inspect_row(editor, kind, next)
+                {
+                    window.focus(&focus_on_key, cx);
+                    inspect_select(editor, kind, next, id);
+                    scroll.scroll_to_item(next, ScrollStrategy::Nearest);
+                    cx.stop_propagation();
+                    cx.notify();
                 }
             }))
             .child(list),
@@ -516,26 +515,31 @@ pub fn render_stale(editor: &Editor, cx: &mut Context<Desktop>) -> AnyElement {
             draft.groups().len(),
             cx,
         ));
-    if let Some((index, id)) = editor.selected_group {
-        if let Some(group) = draft
+    if let Some((index, id)) = editor.selected_group
+        && let Some(group) = draft
             .groups()
             .get(index)
             .filter(|row| row.id == id)
             .map(|row| &row.value)
-        {
-            body=body.child(note("acl-stale-group-flags",format!("@{} · inherited: {}; inherit parent members: {}; inheritable by subchannels: {}",group.name,group.inherited,group.inherit,group.inheritable)));
-            for (kind, title, count) in [
-                (0, "Local members", group.add.len()),
-                (1, "Local exclusions", group.remove.len()),
-                (2, "Inherited members", group.inherited_members.len()),
-            ] {
-                body = body
-                    .child(note(
-                        SharedString::from(format!("acl-stale-member-title-{kind}")),
-                        format!("{title} · {count}"),
-                    ))
-                    .child(inspect_list(editor, Inspect::Members(kind), count, cx));
-            }
+    {
+        body = body.child(note(
+            "acl-stale-group-flags",
+            format!(
+                "@{} · inherited: {}; inherit parent members: {}; inheritable by subchannels: {}",
+                group.name, group.inherited, group.inherit, group.inheritable
+            ),
+        ));
+        for (kind, title, count) in [
+            (0, "Local members", group.add.len()),
+            (1, "Local exclusions", group.remove.len()),
+            (2, "Inherited members", group.inherited_members.len()),
+        ] {
+            body = body
+                .child(note(
+                    SharedString::from(format!("acl-stale-member-title-{kind}")),
+                    format!("{title} · {count}"),
+                ))
+                .child(inspect_list(editor, Inspect::Members(kind), count, cx));
         }
     }
     body.into_any_element()
@@ -687,13 +691,13 @@ fn query(this: &mut Desktop, token: u64, kind: DraftRequest, cx: &mut Context<De
     if kind == DraftRequest::Check && !require_applied_target(this, token, cx) {
         return;
     }
-    if let Some(editor) = active_editor(this, token) {
-        if editor.lookup.is_some() {
-            editor.state.error = true;
-            editor.state.message =
-                "Finish the account lookup before loading or saving permissions.".into();
-            return;
-        }
+    if let Some(editor) = active_editor(this, token)
+        && editor.lookup.is_some()
+    {
+        editor.state.error = true;
+        editor.state.message =
+            "Finish the account lookup before loading or saving permissions.".into();
+        return;
     }
     let request = request_id();
     let channel = match this.panel.as_ref() {
@@ -732,11 +736,11 @@ fn enqueue_query(
             .timer(std::time::Duration::from_secs(15))
             .await;
         let _ = this.update(cx, |this, cx| {
-            if let Some(editor) = active_editor(this, token) {
-                if editor.state.pending() == Some(request) {
-                    editor.state.timeout(request);
-                    inputs_readonly(editor, false, cx);
-                }
+            if let Some(editor) = active_editor(this, token)
+                && editor.state.pending() == Some(request)
+            {
+                editor.state.timeout(request);
+                inputs_readonly(editor, false, cx);
             }
             cx.notify();
         });
@@ -957,10 +961,8 @@ fn resolve(this: &mut Desktop, token: u64, selection: LookupSelection, cx: &mut 
     let task=cx.spawn(async move|this,cx| {
         cx.background_executor().timer(std::time::Duration::from_secs(15)).await;
         let _=this.update(cx,|this,cx| {
-            if let Some(editor)=active_editor(this,token) {
-                if editor.lookup.as_ref().is_some_and(|lookup|lookup.request==request) {
-                    editor.lookup=None;editor.state.error=true;editor.state.message="Account lookup timed out. Your draft is retained; wait for the earlier reply or reconnect before resolving again.".into();
-                }
+            if let Some(editor)=active_editor(this,token) && editor.lookup.as_ref().is_some_and(|lookup|lookup.request==request) {
+                editor.lookup=None;editor.state.error=true;editor.state.message="Account lookup timed out. Your draft is retained; wait for the earlier reply or reconnect before resolving again.".into();
             }cx.notify();
         });
     });
@@ -1459,7 +1461,7 @@ fn rule_detail(
                         let Some(origin) = origin(this, token) else {
                             return;
                         };
-                        let Some(index) = origin.live_index(this) else {
+                        let Some(_) = origin.live_index(this) else {
                             return;
                         };
                         let value = match this.panel.as_ref() {
@@ -1599,21 +1601,21 @@ fn rule_detail(
                                 Tone::Secondary,
                                 move |this, _, cx| {
                                     change_rule(this, token, id, |editor| {
-                                        if let Some(draft) = editor.state.draft_mut() {
-                                            if draft.move_entry(id, down) {
-                                                editor.selected_rule = Some((
-                                                    if down {
-                                                        editor.selected_rule.unwrap().0 + 1
-                                                    } else {
-                                                        editor.selected_rule.unwrap().0 - 1
-                                                    },
-                                                    id,
-                                                ));
-                                                editor.rule_scroll.scroll_to_item(
-                                                    editor.selected_rule.unwrap().0,
-                                                    ScrollStrategy::Nearest,
-                                                );
-                                            }
+                                        if let Some(draft) = editor.state.draft_mut()
+                                            && draft.move_entry(id, down)
+                                        {
+                                            editor.selected_rule = Some((
+                                                if down {
+                                                    editor.selected_rule.unwrap().0 + 1
+                                                } else {
+                                                    editor.selected_rule.unwrap().0 - 1
+                                                },
+                                                id,
+                                            ));
+                                            editor.rule_scroll.scroll_to_item(
+                                                editor.selected_rule.unwrap().0,
+                                                ScrollStrategy::Nearest,
+                                            );
                                         }
                                     });
                                     cx.notify();
@@ -1628,10 +1630,10 @@ fn rule_detail(
                     Tone::Danger,
                     move |this, _, cx| {
                         change_rule(this, token, id, |editor| {
-                            if let Some(draft) = editor.state.draft_mut() {
-                                if draft.remove_entry(id) {
-                                    editor.selected_rule = None;
-                                }
+                            if let Some(draft) = editor.state.draft_mut()
+                                && draft.remove_entry(id)
+                            {
+                                editor.selected_rule = None;
                             }
                         });
                         cx.notify();
@@ -1691,18 +1693,17 @@ fn groups(view: &ServerView, editor: &Editor, cx: &mut Context<Desktop>) -> AnyE
                     label,
                     selected,
                     move |this, _, cx| {
-                        if let Some(editor) = active_editor(this, token) {
-                            if editor
+                        if let Some(editor) = active_editor(this, token)
+                            && editor
                                 .state
                                 .draft()
                                 .and_then(|draft| draft.groups().get(index))
                                 .is_some_and(|row| row.id == id)
-                            {
-                                invalidate_lookup(editor, true);
-                                editor.selected_group = Some((index, id));
-                                for scroll in &editor.member_scroll {
-                                    scroll.scroll_to_item(0, ScrollStrategy::Top);
-                                }
+                        {
+                            invalidate_lookup(editor, true);
+                            editor.selected_group = Some((index, id));
+                            for scroll in &editor.member_scroll {
+                                scroll.scroll_to_item(0, ScrollStrategy::Top);
                             }
                         }
                         cx.notify();
@@ -1843,7 +1844,7 @@ fn groups(view: &ServerView, editor: &Editor, cx: &mut Context<Desktop>) -> AnyE
             .child(styled_button(SharedString::from(format!("acl-resolve-member-{token}-{id}")),"Resolve member",Tone::Secondary,move|this,_,cx|{resolve(this,token,LookupSelection {member:true,row:id},cx);cx.notify();},cx))
             .children([(false,"Add member"),(true,"Exclude inherited member")].into_iter().map(|(exclude,label)| {
                 styled_button(SharedString::from(format!("acl-member-add-{token}-{id}-{exclude}")),label,Tone::Secondary,move|this,_,cx| {
-                    let Some(origin)=origin(this,token) else{return;};let Some(index)=origin.live_index(this) else{return;};
+                    let Some(origin)=origin(this,token) else{return;};let Some(_)=origin.live_index(this) else{return;};
                     let value=match this.panel.as_ref(){Some(Panel::Acl{editor,..})=>editor.member.read(cx).value().to_string(),_=>return};
                     let Some(account)=(match this.panel.as_ref(){Some(Panel::Acl{editor,..}) if editor.selected_group.is_some_and(|(_,selected)|selected==id)=>selected_account(editor,&value,true),_=>return}) else{fail(this,token,"Resolve the registered member first. No membership was changed.");cx.notify();return;};
                     change_group(this,token,id,|editor|if let Some(group)=editor.state.draft_mut().and_then(|draft|draft.group_mut(id)) {
@@ -1858,7 +1859,7 @@ fn groups(view: &ServerView, editor: &Editor, cx: &mut Context<Desktop>) -> AnyE
                 .child(member_list(editor,kind,count,cx)).into_any_element()
         }))
         .child(styled_button(SharedString::from(format!("acl-remove-group-{token}-{id}")),if group.inherited{"Reset local group overrides"}else{"Remove group"},Tone::Danger,move|this,_,cx| {
-            change_group(this,token,id,|editor|if let Some(draft)=editor.state.draft_mut(){if draft.remove_group(id){editor.selected_group=None;}});cx.notify();
+            change_group(this,token,id,|editor|if let Some(draft)=editor.state.draft_mut() && draft.remove_group(id){editor.selected_group=None;});cx.notify();
         },cx));
     body.into_any_element()
 }
@@ -2007,14 +2008,13 @@ fn member_list(
                     editor.member_scroll[kind].scroll_to_item(next, ScrollStrategy::Nearest);
                     cx.stop_propagation();
                     cx.notify();
-                } else if matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                    if let Some((index, account)) = editor.member_selected[kind] {
-                        if members.get(index) == Some(&account) {
-                            member_action(this, token, group_key.1, kind, account);
-                            cx.stop_propagation();
-                            cx.notify();
-                        }
-                    }
+                } else if matches!(event.keystroke.key.as_str(), "enter" | "space")
+                    && let Some((index, account)) = editor.member_selected[kind]
+                    && members.get(index) == Some(&account)
+                {
+                    member_action(this, token, group_key.1, kind, account);
+                    cx.stop_propagation();
+                    cx.notify();
                 }
             }))
             .child(list),
