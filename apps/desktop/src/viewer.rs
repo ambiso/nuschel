@@ -149,6 +149,7 @@ pub fn overlay(this: &Desktop, window: &Window, cx: &mut Context<Desktop>) -> Op
             .items_center()
             .justify_center()
             .bg(tint(BACKDROP, 0xe0))
+            .map(|backdrop| crate::chrome::round(backdrop, this.window_corners))
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_click(cx.listener(|this, _, _, cx| {
                 this.viewer = None;

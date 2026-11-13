@@ -484,6 +484,7 @@ pub fn overlay(
             .absolute()
             .inset_0()
             .bg(color(SCRIM))
+            .map(|backdrop| crate::chrome::round(backdrop, this.window_corners))
             .flex()
             .flex_col()
             .items_center()

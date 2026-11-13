@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: EUPL-1.2
-//! Window chrome. GNOME and other compositors without server-side decorations
-//! expect the application to draw its title bar, controls and resize edges.
+//! Window chrome. Nuschl asks for server-side decorations; compositors without
+//! them (GNOME) answer client-side and expect the application to draw its frame,
+//! window controls and resize edges.
+//!
+//! GPUI clips overflow to rectangles, so the rounded frame does not round what
+//! is inside it: elements that paint into a window corner take [`corner_radii`].
 use crate::{
     assets::{app_icon, icon},
     state::Desktop,
@@ -12,6 +16,8 @@ use gpui_kit::{prelude::*, *};
 /// and resize hit areas.
 const INSET: Pixels = px(10.);
 const RADIUS: Pixels = px(10.);
+/// The frame's border width.
+const FRAME_BORDER: Pixels = px(1.);
 pub const TITLE_HEIGHT: Pixels = px(38.);
 
 fn client_decorated(window: &Window) -> Option<Tiling> {
@@ -21,16 +27,52 @@ fn client_decorated(window: &Window) -> Option<Tiling> {
     }
 }
 
-/// Wraps the application in client-side decorations when the platform asks for them.
-pub fn frame(window: &mut Window, content: AnyElement) -> AnyElement {
-    let Some(tiling) = client_decorated(window) else {
-        return div().size_full().child(content).into_any_element();
-    };
-    let edges = if window.is_maximized() || window.is_fullscreen() {
+/// The edges the frame keeps against something else, when Nuschl draws the frame.
+fn frame_edges(window: &Window) -> Option<Tiling> {
+    let tiling = client_decorated(window)?;
+    Some(if window.is_maximized() || window.is_fullscreen() {
         Tiling::tiled()
     } else {
         tiling
+    })
+}
+
+/// The frame's corner radii: a corner is round where neither of its edges is tiled.
+fn frame_radii(window: &Window, radius: Pixels) -> Corners<Pixels> {
+    let Some(edges) = frame_edges(window) else {
+        return Corners::default();
     };
+    let corner = |a: bool, b: bool| if a || b { px(0.) } else { radius };
+    Corners {
+        top_left: corner(edges.top, edges.left),
+        top_right: corner(edges.top, edges.right),
+        bottom_left: corner(edges.bottom, edges.left),
+        bottom_right: corner(edges.bottom, edges.right),
+    }
+}
+
+/// The radii of the window's rounded corners inside its border. An element that
+/// paints a background into a corner of the window rounds it by these (see
+/// [`round`]); otherwise its square corner shows outside the frame's curve.
+pub fn corner_radii(window: &Window) -> Corners<Pixels> {
+    frame_radii(window, RADIUS - FRAME_BORDER)
+}
+
+/// Rounds `element`'s corners by `radii`, as from [`corner_radii`].
+pub fn round<E: Styled>(element: E, radii: Corners<Pixels>) -> E {
+    element
+        .rounded_tl(radii.top_left)
+        .rounded_tr(radii.top_right)
+        .rounded_bl(radii.bottom_left)
+        .rounded_br(radii.bottom_right)
+}
+
+/// Wraps the application in client-side decorations when the platform asks for them.
+pub fn frame(window: &mut Window, content: AnyElement) -> AnyElement {
+    let Some(edges) = frame_edges(window) else {
+        return div().size_full().child(content).into_any_element();
+    };
+    let outer = frame_radii(window, RADIUS);
     window.set_client_inset(if edges.is_tiled() { px(0.) } else { INSET });
     div()
         .id("window-frame")
@@ -74,10 +116,10 @@ pub fn frame(window: &mut Window, content: AnyElement) -> AnyElement {
                 .overflow_hidden()
                 .cursor(CursorStyle::Arrow)
                 .bg(color(MAIN))
+                .map(|surface| round(surface, outer))
                 .when(!edges.is_tiled(), |surface| {
                     surface
-                        .rounded(RADIUS)
-                        .border_1()
+                        .border(FRAME_BORDER)
                         .border_color(color(BORDER_STRONG))
                         .shadow(vec![
                             BoxShadow::new(px(0.), px(2.), color(SHADOW).into())
@@ -138,6 +180,7 @@ pub fn title_bar(title: SharedString, window: &Window, cx: &mut Context<Desktop>
     let draws_controls = client || cfg!(target_os = "windows");
     let controls = window.window_controls();
     let maximized = window.is_maximized();
+    let corners = corner_radii(window);
     div()
         .id("title-bar")
         .h(TITLE_HEIGHT)
@@ -147,6 +190,8 @@ pub fn title_bar(title: SharedString, window: &Window, cx: &mut Context<Desktop>
         .items_center()
         .gap_2()
         .bg(color(APP))
+        .rounded_tl(corners.top_left)
+        .rounded_tr(corners.top_right)
         .border_b_1()
         .border_color(color(BORDER))
         .window_control_area(WindowControlArea::Drag)

@@ -208,9 +208,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     appears_transparent: true,
                     traffic_light_position: Some(point(px(14.), px(12.))),
                 }),
-                // GNOME and several other compositors do not draw decorations; Nuschl
-                // draws a consistent title bar with window controls on Linux.
-                window_decorations: Some(if cfg!(target_os = "linux") {
+                // A request, not a decision: the compositor decides who decorates.
+                //
+                // Wayland: GPUI sends this through xdg-decoration `set_mode`, and the
+                // compositor answers in its `configure`, which may say CLIENT-SIDE
+                // despite this request, at startup or at any later time. GPUI then
+                // reports `Decorations::Client` and Nuschl draws its own frame, window
+                // controls and resize edges after all (see `chrome::frame`, which reads
+                // `window.window_decorations()` on every render). Without the
+                // xdg-decoration protocol (GNOME, Weston) GPUI treats the window as
+                // client-side from the start. A compositor that decorates (KDE) or asks
+                // clients to omit decorations (niri with prefer-no-csd, Sway) answers
+                // server-side, and Nuschl draws no frame or window controls.
+                //
+                // X11 has no such answer: a server-side request only hints through
+                // _MOTIF_WM_HINTS, and GPUI would report server-side even if the window
+                // manager drew nothing. So on X11 Nuschl asks for client-side and draws
+                // its own frame; GPUI falls back to server-side when no compositing
+                // manager runs or the window manager lacks _GTK_FRAME_EXTENTS, since a
+                // client-side frame needs both (transparent inset, resize extents).
+                window_decorations: Some(if cx.compositor_name() == "X11" {
                     WindowDecorations::Client
                 } else {
                     WindowDecorations::Server

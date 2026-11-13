@@ -232,6 +232,9 @@ pub struct Desktop {
     pub nested: Nested,
     pub modal_shown: std::cell::Cell<Option<&'static str>>,
     pub modal_seen: std::cell::Cell<Option<&'static str>>,
+    /// The window's rounded corners this frame (chrome::corner_radii): what paints
+    /// into a window corner, like a dialog's backdrop, is rounded by them.
+    pub window_corners: Corners<Pixels>,
     /// Which dialogs were open in the last frame (see `keep_dialog_focus`).
     pub dialogs_seen: u8,
     scroll_frame_pending: bool,
@@ -524,6 +527,7 @@ impl Desktop {
             nested: Nested::default(),
             modal_shown: Default::default(),
             modal_seen: Default::default(),
+            window_corners: Corners::default(),
             dialogs_seen: 0,
             scroll_frame_pending: false,
             anchor: Anchor::default(),
