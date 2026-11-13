@@ -338,6 +338,8 @@ def desktop(args):
                 observation["requested_radio_focused_before_space"] = node.focused
             except (RuntimeError, ValueError, TypeError, KeyError, IndexError) as error:
                 observation["requested_radio_focus_error"] = type(error).__name__
+            eventually(lambda: node.focused, f"{mode} radio did not acquire keyboard focus")
+            observation["requested_radio_focused_before_space"] = node.focused
             shell.key("space")
             eventually(lambda: not any("Saving preference" in label for label in labels())
                 and any(label.startswith(f"Active policy: {mode}.") for label in labels()),
@@ -533,6 +535,149 @@ def desktop(args):
             time.sleep(.4)
             assert len(events()) == before_send, "receiving/rendering a carried image initiated a fetch"
             mark("direct_sender_only_embedded_image")
+
+            # The minimum frame exercises compact navigation and the shared
+            # context region while a long draft uses the editor's own scrolling.
+            observation.update(stage="compact_geometry", requested_width=860,
+                requested_height=520, requested_zoom=300)
+            saved_pane = json.loads((root / "profile/config/settings.json").read_text()).get("sidebar_width", 248)
+            compact_body = f"compact-{uuid.uuid4().hex[:8]} http://93.184.215.14/page " + "retained draft text " * 12
+            type_message(compact_body)
+            eventually(ready_card, "compact draft card did not reach Ready")
+            def copied_input(select_all=False):
+                # The dedicated guest GNOME clipboard observes real editor copy.
+                # A fresh sentinel binds each observation to its own Ctrl+C.
+                focus_window(sender_pid)
+                field = wait("Message")
+                assert field.call("Component", "GrabFocus")[0]
+                eventually(lambda: field.focused, "message editor did not acquire keyboard focus")
+                if select_all:
+                    shell.chord("Control_L", "a")
+                sentinel = f"owned-preview-copy-{uuid.uuid4().hex}"
+                St = "imports.gi.St"
+                shell.eval(f"{St}.Clipboard.get_default().set_text({St}.ClipboardType.CLIPBOARD, {json.dumps(sentinel)}); 'ok'")
+                shell.chord("Control_L", "c")
+                def observed():
+                    shell.eval(f"global._previewCopy = undefined; {St}.Clipboard.get_default().get_text("
+                        f"{St}.ClipboardType.CLIPBOARD, (c,t)=>{{global._previewCopy=t;}}); 'ok'")
+                    value = eventually(lambda: (value if (value := json.loads(shell.eval(
+                        "JSON.stringify({done:global._previewCopy!==undefined,text:global._previewCopy??null})")))["done"] else None),
+                        "guest clipboard observation did not finish", timeout=10)
+                    text = value["text"]
+                    assert isinstance(text, str) and len(text) <= 4096
+                    return None if text == sentinel else text
+                return eventually(observed, "editor copy did not replace the guest clipboard sentinel", timeout=10)
+            assert copied_input(select_all=True) == compact_body
+            shell.chord("Control_L", "Home")
+            shell.press("Control_L", "Shift_L", "Right")
+            selection = copied_input()
+            assert 0 < len(selection) < len(compact_body) and compact_body.startswith(selection)
+            shell.eval("(()=>{const w=global.get_window_actors().map(a=>a.meta_window)"
+                f".find(w=>w.get_pid()==={sender_pid});if(w.is_maximized())w.unmaximize();"
+                "w.move_resize_frame(true,40,40,860,520);return true;})()")
+            eventually(lambda: window_rect(sender_pid, frame=True)[2:] == [860, 520],
+                "compact actual frame did not reach 860 by 520")
+            for _ in range(7):
+                shell.chord("Control_L", "equal")
+                time.sleep(.1)
+            wait_zoom(300)
+            assert window_rect(sender_pid, frame=True)[2:] == [860, 520]
+            assert copied_input() == selection, "minimum-window layout changed the selected text"
+            assert copied_input(select_all=True) == compact_body, "minimum-window layout changed the draft"
+            compact_rect = window_rect(sender_pid)
+            def inside(node, region):
+                x, y, width, height = node.extents()
+                rx, ry, rw, rh = region
+                return width > 0 and height > 0 and x >= rx and y >= ry and x + width <= rx + rw + 1 and y + height <= ry + rh + 1
+            timeline = wait("Messages in #Root", "list")
+            for node in (wait("Message"), wait("Send"), timeline):
+                eventually(lambda node=node: inside(node, (0, 0, compact_rect[2], compact_rect[3])),
+                    "minimum-window editor, Send or timeline left its viewport")
+            assert timeline.extents()[3] >= wait("Message").extents()[3], "timeline lost its usable text line"
+            details = wait("Message details and controls", "panel")
+            assert details.call("Component", "GrabFocus")[0]
+            shell.key("Home")
+            channels_top = wait("Channels", "push button").extents()
+            ox, oy, _, _ = compact_rect
+            dx, dy, dw, dh = details.extents()
+            shell.wheel(ox + dx + dw // 2, oy + dy + dh // 2, 12)
+            eventually(lambda: wait("Channels", "push button").extents() != channels_top,
+                "wheel did not move compact message details")
+            shell.key("Home")
+            eventually(lambda: wait("Channels", "push button").extents() == channels_top,
+                "keyboard Home did not restore compact message details")
+            own = next(user for user in receiver.users.values() if user["name"] == "Welcome reader")
+            voice_channel = own["channel"]
+            voice_start = len(receiver.events)
+            activate("Channels")
+            wait("Channels and servers", "dialog")
+            lobby = wait("Lobby", "tree item")
+            lobby.call("Component", "ScrollTo", "u", "0")
+            assert lobby.call("Component", "GrabFocus")[0]
+            lobby.press()
+            wait("Messages in #Lobby", "list")
+            time.sleep(.25)
+            assert receiver.users[own["session"]]["channel"] == voice_channel
+            assert all(event["user"]["channel"] == voice_channel for event in list(receiver.events)[voice_start:]
+                if event.get("kind") == "user" and event["user"]["session"] == own["session"])
+            activate("Close channels")
+            eventually(lambda: named("Channels and servers", "dialog") is None, "Close channels kept the sheet open")
+            wait("Messages in #Lobby", "list")
+            activate("Channels")
+            wait("Channels and servers", "dialog")
+            shell.key("Escape")
+            eventually(lambda: named("Channels and servers", "dialog") is None, "Escape kept the sheet open")
+            activate("Channels")
+            root_channel = wait("Root", "tree item")
+            root_channel.call("Component", "ScrollTo", "u", "0")
+            assert root_channel.call("Component", "GrabFocus")[0]
+            root_channel.press()
+            wait("Messages in #Root", "list")
+            activate("Close channels")
+            eventually(lambda: named("Channels and servers", "dialog") is None, "returning to Root kept the sheet open")
+            assert copied_input(select_all=True) == compact_body, "returning to Root changed the retained draft"
+            eventually(ready_card, "returning to Root did not restore the ready preview")
+            timeline = wait("Messages in #Root", "list")
+            assert timeline.call("Component", "GrabFocus")[0]
+            shell.key("Home")
+            shell.key("End")
+            def latest():
+                return next((node for node, role, label, _ in items(application)
+                    if role == "list item" and body.split()[0] in label), None)
+            latest_row = eventually(latest, "compact timeline lost the previously sent message")
+            def latest_visible():
+                _, y, width, height = latest_row.extents()
+                _, top, _, viewport = timeline.extents()
+                return width > 1 and height > 1 and max(y, top) < min(y + height, top + viewport)
+            eventually(latest_visible, "keyboard End did not reveal the latest message")
+            before_wheel = latest_row.extents()
+            tx, ty, tw, th = timeline.extents()
+            shell.wheel(ox + tx + tw // 2, oy + ty + th // 2, -12)
+            eventually(lambda: latest_row.extents() != before_wheel, "wheel did not scroll the compact timeline")
+            shell.key("End")
+            eventually(latest_visible, "keyboard End did not restore the latest message after wheel scrolling")
+            remove = wait("Remove link preview", "push button")
+            assert remove.call("Component", "GrabFocus")[0]
+            eventually(lambda: inside(remove, details.extents()), "focus did not reveal the compact Remove control")
+            compact_controls = {name: wait(name).extents() for name in
+                ("Message", "Send", "Messages in #Root", "Remove link preview")}
+            shell.screenshot(args.output / "sender-minimum-300.png")
+            activate("Remove link preview")
+            wait("Link preview removed")
+            assert copied_input(select_all=True) == compact_body
+            send_and_receive(compact_body, False)
+            shell.chord("Control_L", "0")
+            wait_zoom(100)
+            shell.eval("(()=>{const w=global.get_window_actors().map(a=>a.meta_window)"
+                f".find(w=>w.get_pid()==={sender_pid});w.move_resize_frame(true,40,40,1280,800);return true;}})()")
+            eventually(lambda: window_rect(sender_pid, frame=True)[2:] == [1280, 800],
+                "wide actual frame did not reach 1280 by 800")
+            eventually(lambda: named("Channels", "tree") is not None and named("Channels", "push button") is None,
+                "wide window did not restore inline navigation")
+            assert json.loads((root / "profile/config/settings.json").read_text()).get("sidebar_width", 248) == saved_pane
+            mark("minimum_real_300_percent_retains_draft_selection_navigation_and_timeline",
+                frame=[860, 520], zoom=300, controls=compact_controls,
+                selection=selection, saved_sidebar_width=saved_pane, voice_channel=voice_channel)
 
             # Explicit removal of a ready card suppresses attachment while the
             # entire original text still goes in one ordinary message.
