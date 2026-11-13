@@ -2,8 +2,9 @@
 //! The grammar of formulas in messages (docs/math.md): hostile text through
 //! the content worker's parse. Every formula token is exactly the bytes typed
 //! between its delimiters; none comes from what is code when the text is
-//! parsed without math (code spans, fenced and indented code) or overlaps a
-//! URL the linkifier links; the document
+//! parsed without math (code spans, fenced and indented code; read with
+//! Nuschl's quote variant, `markdown::bare_quotes`) or overlaps a URL the
+//! linkifier links; the document
 //! shows the tokens in order, as typed; and its text, formulas included, is
 //! the message's without exactly the Markdown syntax it hides.
 #![no_main]
@@ -22,10 +23,10 @@ fuzz_target!(|data: &[u8]| {
         return;
     };
     let tokens = math::tokens(source);
-    // What is code without math.
+    // What is code without math, with a bare `>` as text as Nuschl reads it.
     let mut code = Vec::new();
     let mut block = None;
-    for (event, range) in Parser::new(source).into_offset_iter() {
+    for (event, range) in Parser::new(&markdown::bare_quotes(source)).into_offset_iter() {
         match event {
             Event::Code(_) => code.push(range),
             Event::Start(Tag::CodeBlock(_)) => block = Some(range.start),
