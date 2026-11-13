@@ -9,7 +9,7 @@ use nnnoiseless::DenoiseState;
 use nuschl_core::audio::{AudioSettings, TransmitMode};
 use sonora::{
     AudioProcessing, Config, StreamConfig,
-    config::{AdaptiveDigital, EchoCanceller, GainController2, HighPassFilter},
+    config::{AdaptiveDigital, EchoCanceller, EchoCanceller3Config, GainController2, HighPassFilter},
 };
 use sonora_agc2::vad_wrapper::VoiceActivityDetectorWrapper;
 
@@ -57,6 +57,20 @@ pub struct CapturePipeline {
     render_split: [[f32; FRAME]; 2],
 }
 
+/// AEC3 with a two-channel reference models each speaker once the channels
+/// differ. Upstream waits for 2 s of consecutive differing frames; until then
+/// it averages the channels and reports an echo path change on every
+/// differing frame, which restarts its linear filter. Sound whose channels
+/// fall silent in turn (music between notes, game effects) stays below the
+/// 2 s, so its echo was left to the suppressor. Stereo processing now starts
+/// with the first differing frame, and stays for the default 300 s after the
+/// last one.
+fn stereo_from_the_first_frame() -> EchoCanceller3Config {
+    let mut config = EchoCanceller3Config::default();
+    config.multi_channel.stereo_detection_hysteresis_seconds = 0.;
+    config
+}
+
 fn stream() -> StreamConfig {
     StreamConfig::new(RATE, 1)
 }
@@ -98,6 +112,7 @@ impl CapturePipeline {
             })
             .capture_config(stream())
             .render_config(StreamConfig::new(RATE, reference_channels as u16))
+            .echo_canceller3_config(stereo_from_the_first_frame())
             .echo_detector(echo_cancellation)
             .build();
         Self {
@@ -815,6 +830,40 @@ mod evaluation {
     fn energy_db(frames: &[[f32; FRAME]]) -> f32 {
         let energy: f32 = frames.iter().flatten().map(|sample| sample * sample).sum();
         10. * (energy / (frames.len() * FRAME) as f32).max(1e-12).log10()
+    }
+
+    /// Another application's stereo music whose channels fall silent in turn
+    /// (as in tests/pipewire_recovery.py): the canceller models its echo.
+    #[test]
+    fn music_whose_channels_take_turns_is_modelled() {
+        let settings = AudioSettings {
+            noise_suppression: false,
+            automatic_gain: false,
+            transmit: TransmitMode::Continuous,
+            ..Default::default()
+        };
+        let mut aec = CapturePipeline::with_reference(&settings, true, 2);
+        let tau = std::f32::consts::TAU;
+        let channels = |t: f32| {
+            let left = 0.3 * (tau * 220. * t).sin() * (tau * 2.3 * t).sin().max(0.);
+            let right = 0.3 * (tau * 330. * t).sin() * (tau * 1.7 * t + 1.).sin().max(0.);
+            (left, right)
+        };
+        for index in 0..800 {
+            let mut reference = [0.; 2 * FRAME];
+            let mut mic = [0.; FRAME];
+            for sample in 0..FRAME {
+                let t = (index * FRAME + sample) as f32 / RATE as f32;
+                (reference[2 * sample], reference[2 * sample + 1]) = channels(t);
+                // One microphone hears both speakers 10 ms later, at about -30 dB.
+                let (left, right) = channels((t - 0.01).max(0.));
+                mic[sample] = 0.03 * (left + right);
+            }
+            aec.render(&reference);
+            aec.process(&mut mic, false, false);
+        }
+        let erle = aec.echo_metrics().erle_db.unwrap_or(0.);
+        assert!(erle >= 10., "the canceller modelled {erle:.1} dB of the music's echo");
     }
 
     #[test]
