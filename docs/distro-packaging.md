@@ -128,11 +128,12 @@ The production content supervisor also passes rendering and filesystem/network/
 environment denial canaries there. This does not establish distro user-namespace
 or Ubuntu AppArmor compatibility.
 
-Still pending: source-package/PPA artifacts and compatible compiler enrollment,
+Still pending: a clean source-package rebuild and compatible compiler enrollment,
 clean Debian/Ubuntu/Arch package-manager install/runtime tests, physical-platform
 support, interactive URI/icon integration, removal/upgrade behavior and
-package-manager update proof. Media's public configuration mounts remain a
-coordinated sandbox change before native packaging can claim usable audio.
+package-manager update proof. Media's public PipeWire/ALSA configuration mounts
+are integrated, with scoped startup checks against an owned virtual sound server;
+physical input/output quality and target-distribution installation remain unproved.
 No external repository/account action is authorized merely by building these
 local artifacts. A successful archive extraction or package metadata check alone
 does not prove any runtime or sandbox behavior.
@@ -172,8 +173,24 @@ role-specific data paths; no whole `/etc` or home grant is proposed.
 
 ## Builder interfaces and local validation artifacts
 
-These modules are libraries for the coordinator's flake wiring; the public flake
-outputs are not yet registered:
+The flake exposes these local validation artifacts on `x86_64-linux`:
+
+```sh
+nix build --cores 2 --max-jobs 2 .#deb
+nix build --cores 2 --max-jobs 2 .#arch-bin
+nix build --cores 2 --max-jobs 2 .#deb-source .#deb-source-check
+nix build --cores 2 --max-jobs 2 \
+  .#checks.x86_64-linux.distro-metadata \
+  .#checks.x86_64-linux.distro-source-assets
+```
+
+`linux-native-stage` exposes the shared FHS installation tree. These outputs do
+not publish or install anything. `deb-source-check` checks source assembly and
+offline Cargo metadata; it does not compile the source package. Default flake
+builds use unpublished local versions, as described below. Other platforms omit
+these Linux artifact names; the existing default and cross builders are unchanged.
+
+The underlying library interfaces are:
 
 - `nix/portable-linux.nix` takes pinned `pkgs`, `toolchain`, application
   `projectRoot`, exact `revision`, actual `nativeNotices`, desktop integration and
@@ -244,3 +261,58 @@ Unrelated branches have no implicit release ordering. A new tagged release must
 also sort above the previously published development version; increment the
 workspace release version rather than relabeling a newer development build with
 an older release number. Actual package revision changes remain explicit.
+
+## Pure exported-source interface
+
+The pure entrypoints are `packaging/linux/version.nix` (`mkVersion`) and
+`packaging/linux/default.nix` (`mkPackages`). The latter takes `pkgs`, `toolchain`,
+`craneLib`, actual unfiltered `sourceInfo`, optional `versionMetadata`,
+`nativeNotices`, `desktopFiles`, `appstreamXML` (or explicit `null` until the shared
+metadata is present), and an explicit maintainer for publication. It takes the
+application tree **only** from `sourceInfo.outPath`. It returns `versions`,
+`nativeStage`, `deb`, `archBin`, `debSource`, `debSourceCheck`, `metadataTests`, and
+`assetBinding`. The coordinator registers the flake attrs; this library never
+moves a bookmark or edits a lockfile.
+
+Notice/desktop inputs are not accepted merely by name: a bounded binding check
+compares them with the canonical source helpers, requires the actual Cargo.lock,
+and records their hashes plus the actual source NarHash. Non-null AppStream must
+match the tracked shared XML. The final stage checks the installed bytes against
+that attestation. This is not a legal or runtime certification.
+
+A path/GitHub export need not contain `.git`, `revCount`, or an authenticated
+commit timestamp. Missing official metadata therefore gives deterministic,
+explicitly unpublished local versions: Debian `base~local.n<source-identity>` and
+Arch `baselocal.n<source-identity>`, with normalized epoch 1. They sort below the
+corresponding tagged release; arbitrary local snapshots have no promised update
+ordering. Unknown Git revision stays `null`. The identity comes from the actual
+unfiltered source NarHash, not a guessed revision or path-copy modification time.
+`aptRepository` is absent for these local builds.
+
+For official version ordering, prepare a **separate public sidecar outside the
+source**; embedding its own source hash would be circular. Schema 1 has exactly
+`schema`, `kind`, `base_version`, `source_nar_hash`, `source_revision`, `sequence`,
+`commit_epoch`, `commit_stamp`, `tag`, and `package_revision`. The pure function
+checks types/bounds, version/tag policy, the actual NarHash, and the revision when
+sourceInfo provides it. The exporter supplies the fixed commit date, never a
+current clock; pure Nix does not authenticate a date or Git tag from a path mtime.
+
+`packaging/linux/export-version.py --repo <owned-repository> --revision <full-sha>
+--exported-source <immutable-sourceInfo.outPath> --mode development --output
+<new-outside-source.json>` verifies the full tracked Git membership, bytes,
+executable/link modes and source NarHash before writing the sidecar. It refuses
+untracked/missing content, escape links, mutable exports, mismatched NarHash and
+checkpoint overwrite. Release mode additionally requires the exact workspace
+version's local tag target; signature/enrollment authority remains with the
+release operator. Prior published source/package arguments enforce ancestry and
+actual distro ordering. No private key or account is used by this tool.
+
+The release script can pass that fixed sourceInfo and JSON into the **same pure
+lib builder**, without Git or a new flake input inside evaluation/derivations.
+An official sidecar makes `aptRepository` available as an unsigned preparation
+artifact. That convenience fixture uses the source commit epoch, so its seven-day
+validity can already have expired. For publication, assemble fresh indexes with
+`packaging/debian/apt-repository.nix` and an explicit current `publicationEpoch`,
+then sign outside Nix. This does not close source-license, clean-build,
+install/runtime, signing or publication gates. `versions.publicationReady`
+deliberately remains false.
