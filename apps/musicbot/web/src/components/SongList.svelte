@@ -32,7 +32,7 @@
       </div>
       {#if similarities}
         {@const percent = similarityPercent(similarities[i])}
-        {#if percent !== null}<span class="similarity muted" title="Sonic similarity">{percent}%</span>{/if}
+        {#if percent !== null}<span class="similarity muted" title="Sonic similarity">{percent}%<span class="visually-hidden"> similar</span></span>{/if}
       {/if}
       <span class="duration muted">{formatDuration(song.duration)}</span>
       <div class="actions" class:sonic={sonic(song)}>
