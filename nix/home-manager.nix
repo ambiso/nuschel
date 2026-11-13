@@ -34,7 +34,9 @@ let
     Type=Application
     Name=Nuschl
     Comment=Voice and text chat
-    Exec=${lib.getExe cfg.package} --autostart
+    Exec=${lib.getExe cfg.package} --autostart${
+      lib.optionalString (cfg.windowDecorations != null) " --window-decorations ${cfg.windowDecorations}"
+    }
     Icon=org.nuschl.Nuschl
     Terminal=false
     X-GNOME-Autostart-enabled=true
@@ -270,6 +272,30 @@ in
       '';
     };
 
+    windowDecorations = mkOption {
+      type = types.nullOr (
+        types.enum [
+          "auto"
+          "server"
+          "client"
+        ]
+      );
+      default = null;
+      example = "server";
+      description = ''
+        Who should draw Nuschl's window frame on Linux, set as
+        `NUSCHL_WINDOW_DECORATIONS` in the session (and passed as
+        `--window-decorations` by the autostart entry). Only a preference: on
+        Wayland the compositor decides, and Nuschl follows its answer.
+        `auto` (Nuschl's default) states no preference on Wayland, so the
+        compositor's own setting applies, such as niri's `prefer-no-csd`;
+        on X11 Nuschl draws the frame. `server` asks the compositor or window
+        manager to draw it, `client` asks to draw it in Nuschl. Programs
+        started before the session variables are loaded (some compositors
+        launch apps without them) do not see the variable.
+      '';
+    };
+
     initialSettings = mkOption {
       type = types.attrsOf json.type;
       default = { };
@@ -451,6 +477,13 @@ in
         ++ serverAssertions "servers" cfg.servers;
         home.packages = [ cfg.package ];
       }
+      (lib.mkIf (cfg.windowDecorations != null) {
+        home.sessionVariables.NUSCHL_WINDOW_DECORATIONS = cfg.windowDecorations;
+      })
+      # Graphical sessions started through systemd take the user manager's environment.
+      (lib.mkIf (cfg.windowDecorations != null && isLinux) {
+        systemd.user.sessionVariables.NUSCHL_WINDOW_DECORATIONS = cfg.windowDecorations;
+      })
       (lib.mkIf (cfg.autostart && isLinux && !autostartReadOnly) {
         xdg.configFile."autostart/org.nuschl.Nuschl.desktop" = {
           source = "${autostartEntry}/org.nuschl.Nuschl.desktop";

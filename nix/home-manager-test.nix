@@ -83,6 +83,12 @@ let
     programs.nuschl.autostart = true;
   };
   plain = homeWith { };
+  decorated = homeWith {
+    programs.nuschl = {
+      autostart = true;
+      windowDecorations = "server";
+    };
+  };
   legacy = homeWith { programs.nuschel.settings.force_tcp = true; };
   # Key-transparency witnesses as typed options (docs/witness.md).
   witnessKey = lib.removeSuffix "\n" (builtins.readFile ../tests/fixtures/witness-test.vkey);
@@ -238,6 +244,19 @@ assert lib.assertMsg (accepts {
         jq -e --arg key "${witnessKey}" '.settings.key_transparency == {default_witnesses: true,
           witnesses: [{key: $key, enabled: true}], max_age_hours: 12, block_new_devices: true}' \
           ${witnessed.activationPackage}/home-files/.config/nuschl/managed.json
+
+        # The window decorations preference: the session's environment, the
+        # user manager's, and the autostart entry's arguments.
+        decorated=${decorated.activationPackage}
+        grep -qFx 'export NUSCHL_WINDOW_DECORATIONS="server"' $decorated/home-path/etc/profile.d/hm-session-vars.sh
+        grep -qFx 'NUSCHL_WINDOW_DECORATIONS=server' $decorated/home-files/.config/environment.d/10-home-manager.conf
+        desktop-file-validate $decorated/home-files/.config/autostart/org.nuschl.Nuschl.desktop
+        grep -qFx 'Exec=${lib.getExe nuschl} --autostart --window-decorations server' \
+          $decorated/home-files/.config/autostart/org.nuschl.Nuschl.desktop
+        if grep -q NUSCHL_WINDOW_DECORATIONS ${plain.activationPackage}/home-path/etc/profile.d/hm-session-vars.sh; then
+          echo "the decorations preference is set although none was chosen" >&2
+          exit 1
+        fi
 
         # Without autostart or initial files the module installs the package only.
         test ! -e ${plain.activationPackage}/home-files/.config/nuschl/managed.json

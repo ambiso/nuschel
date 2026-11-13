@@ -292,6 +292,7 @@ pub fn modal(
         .absolute()
         .inset_0()
         .bg(color(SCRIM))
+        .map(|backdrop| crate::chrome::round(backdrop, this.window_corners))
         .flex()
         .items_center()
         .justify_center()
@@ -514,6 +515,7 @@ pub fn empty(this: &Desktop, cx: &mut Context<Desktop>) -> AnyElement {
         .items_center()
         .gap_4()
         .bg(color(MAIN))
+        .rounded_br(this.window_corners.bottom_right)
         .child(app_icon(px(72.)))
         .child(
             div()

@@ -47,6 +47,9 @@ programs.nuschl = {
   enable = true;
   # Start minimised at login (Linux), with the entry Settings → General writes.
   autostart = true;
+  # Who should draw the window frame: "auto" (the compositor decides), "server"
+  # or "client". Sets NUSCHL_WINDOW_DECORATIONS (see desktop.md, Troubleshooting).
+  windowDecorations = "server";
   # Applied on every start; read-only in the app.
   settings = {
     enter_sends = false;
