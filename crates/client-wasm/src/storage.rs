@@ -41,7 +41,7 @@ enum Pending {
         context: Context,
         target: TextTarget,
         peer: Option<User>,
-        message: IncomingMessage,
+        message: Box<IncomingMessage>,
     },
     Page {
         context: Context,
@@ -112,7 +112,7 @@ impl Storage {
                 context,
                 target,
                 peer,
-                message,
+                message: Box::new(message),
             },
         );
         Ok(())
@@ -201,7 +201,7 @@ impl Storage {
                     target,
                     storage_key: message.message.channel.clone(),
                     peer,
-                    message,
+                    message: *message,
                 });
                 result
             }

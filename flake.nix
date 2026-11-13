@@ -95,6 +95,8 @@
             (craneLib.filterCargoSources path type)
             # Trusted precompiled syntax bundle; no runtime grammar files.
             || lib.hasSuffix "/crates/content/assets/default-nix.packdump" path
+            # The content-WASM integration test's fixed, tracked PNG.
+            || lib.hasSuffix "/crates/content-wasm/tests/fixtures/rgba-2x2.png" path
             || lib.hasSuffix ".proto" path
             || lib.hasSuffix ".sql" path
             || lib.hasSuffix ".json" path
