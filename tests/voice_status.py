@@ -65,6 +65,10 @@ def run(args, root, shell, registry, bots, profile, second_port, second_pin, sho
     def state(which, status, channel=None):
         label = names[which] + (" #" + channel if channel else "") + ": " + status
         eventually(lambda: any(name == label for _, _, name, _ in items(app)), "voice state absent: " + label)
+    def listed(which):
+        # The voice card's row, its "Go to" link and the card's summary all
+        # name "<server> #<channel>"; nothing else in the window does.
+        return any(names[which] + " #" in name for _, _, name, _ in items(app))
     def record(step):
         tree = list(items(app))
         links = [name for _, role, name, _ in tree if role == "push button" and name.startswith("Go to ")]
@@ -101,23 +105,28 @@ def run(args, root, shell, registry, bots, profile, second_port, second_pin, sho
     # Force a real ACK delay in the owned server, without network/worker state
     # injection. The local intent/paint must remain truthful until it resumes.
     murmur.process.send_signal(signal.SIGSTOP)
+    # A server you deafened yourself leaves the voice card, pending or not;
+    # the rail still says so.
     try:
         find("Deafen").press()
-        state("beta", "Deafened · awaiting server", "Root")
+        eventually(lambda: "Deafened · awaiting server" in find(names["beta"] + ";",prefix=True).name,
+                   "pending deafen absent from Beta's rail button")
         assert not own("beta")["self_deafened"], "stopped server unexpectedly acknowledged"
-        assert "Deafened · awaiting server" in find(names["beta"] + ";",prefix=True).name
+        eventually(lambda: not listed("beta"), "pending self-deafen kept Beta's voice-card row")
         record("pending-deafen-real-ack-delay")
     finally:
         murmur.process.send_signal(signal.SIGCONT)
     eventually(lambda: own("beta")["self_deafened"] and own("beta")["self_muted"], "secondary deafen not acknowledged")
+    assert "Deafened" in find(names["beta"] + ";",prefix=True).name
     deaf = record("secondary-deafened")
-    if not any(names["beta"] in label for label in deaf["voice_links"]):
-        failures.append("secondary deafened connected server has no voice destination row")
+    if any(names["beta"] in label for label in deaf["voice_links"]) or listed("beta"):
+        failures.append("self-deafened connected server still has a voice destination row")
     find("Unmute").press(); find("Speak on two servers?", "dialog"); find("Cancel").press()
     assert own("beta")["self_deafened"] and not own("alpha")["self_muted"]
     record("consent-cancel")
     find("Unmute").press(); find("Speak on two servers?", "dialog"); find("Only on " + names["beta"]).press()
     eventually(lambda: own("alpha")["self_muted"] and not own("beta")["self_muted"] and not own("beta")["self_deafened"], "destination move not acknowledged")
+    eventually(lambda: listed("beta"), "Beta's voice-card row did not return after undeafening")
     record("destination-swapped")
     setting("Continuous")
     eventually(lambda: any(event["kind"] == "audio" and event["sender"] == own("beta")["session"] and not event["end"] for event in peer.events), "synthetic continuous audio absent")
@@ -128,7 +137,9 @@ def run(args, root, shell, registry, bots, profile, second_port, second_pin, sho
     state("beta", "Microphone destination · server muted", "Root"); record("server-muted")
     admin.send(kind="moderate", session=own("beta")["session"], action="deafen")
     eventually(lambda: own("beta")["deafened"], "server deafen not observed")
-    state("beta", "Deafened by server", "Root"); record("server-deafened")
+    # A server's deafen is not the user's choice: the row stays and says why.
+    state("beta", "Deafened by server", "Root"); find("Go to " + names["beta"] + " #Root")
+    record("server-deafened")
     admin.send(kind="moderate", session=own("beta")["session"], action="undeafen")
     admin.send(kind="moderate", session=own("beta")["session"], action="unmute")
     eventually(lambda: not own("beta")["deafened"] and not own("beta")["muted"], "server voice restrictions not cleared")
@@ -142,8 +153,11 @@ def run(args, root, shell, registry, bots, profile, second_port, second_pin, sho
     record("rapid-deafen-final")
     find("Unmute").press(); eventually(lambda: not own("beta")["self_muted"], "unmute after rapid gestures failed")
     find("Deafen").press(); eventually(lambda: own("beta")["self_deafened"], "primary deafen failed")
+    eventually(lambda: not listed("beta"), "self-deafened Beta kept its voice-card row")
     select("alpha"); record("alpha-text-beta-deafened")
+    # The footer still undeafens the server the card leaves out.
     select("beta"); find("Undeafen").press(); eventually(lambda: not own("beta")["self_deafened"], "undeafen failed")
+    eventually(lambda: listed("beta"), "Beta's voice-card row did not return after Undeafen")
     find("Unmute").press(); eventually(lambda: not own("beta")["self_muted"], "primary unmute failed")
     channel = find("Lobby", role=None)
     # A real double click is generated with one device gesture.
