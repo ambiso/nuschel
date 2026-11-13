@@ -34,9 +34,14 @@ export class SdkRpc {
     try { this.worker.postMessage({method:"state_applied",args:[id]});this.statePending=null;return true; }
     catch { this.close("The browser worker could not accept its state acknowledgment. Reload to reconnect.");return false; }
   }
-  request(method,args=[]) {
+  request(method,args=[],proof) {
     if(this.closed)return Promise.reject(new SdkUnavailableError());
     if(this.phase!=="ready")return Promise.reject(new Error("The client is still starting."));
+    let context;
+    if(proof!==undefined){
+      try{context=JSON.stringify(proof);if(typeof context!=="string"||context.length>4096||new TextEncoder().encode(context).length>4096)throw new Error("Action context exceeds the browser limit.");}
+      catch(error){return Promise.reject(error);}
+    }
     if(this.pending.size>=SDK_RPC_LIMIT)return Promise.reject(new Error("The client is busy. Try again shortly."));
     if(!Number.isSafeInteger(this.next+1)) {
       this.close("The client request counter is exhausted. Reload to reconnect.");
@@ -46,7 +51,7 @@ export class SdkRpc {
     return new Promise((resolve,reject)=>{
       const timer=this.clock.setTimeout(()=>this.close("The browser worker did not respond. Reload to reconnect."),SDK_RPC_TIMEOUT);
       this.pending.set(id,{resolve,reject,timer});
-      try {this.worker.postMessage({id,method,args});}
+      try {this.worker.postMessage(context===undefined?{id,method,args}:{id,method,args,context});}
       catch {this.close("The browser worker could not accept a command. Reload to reconnect.");}
     });
   }

@@ -1,6 +1,7 @@
 <!-- SPDX-License-Identifier: EUPL-1.2 -->
 <script>
   import { onMount, tick } from "svelte";
+  import {actionProof,serverReference} from "./action-context.js";
   import { ContentBridge } from "./content-bridge.js";
   import { flip } from "svelte/animate";
   import { serverIndices, moveServer, sameOrder, edgeSpeed } from "./server-order.js";
@@ -40,6 +41,7 @@
   let lastChannelPointer = "";
   let initialState = true, follow = true, worker, rpc, audio, activateAudio = () => {}, disposeAudio = () => {};
   const drafts = new Map();
+  let editingReference=null;
   const selected = $derived(servers.find((server) => server.id === timeline?.server) || servers.find(server => server.id === selectedFallback) || servers[0]);
   const selectedIndex = $derived(selected?.runtime_index ?? -1);
   const voiceServer = $derived(servers.find(server => server.id === voice?.server_id));
@@ -70,14 +72,16 @@
     headphones:"M4 14v-3a8 8 0 0 1 16 0v3M4 13h4v8H4v-8Zm12 0h4v8h-4v-8", search:"m21 21-5-5M10 18a8 8 0 1 0 0-16 8 8 0 0 0 0 16", people:"M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M16 3a4 4 0 0 1 0 8m6 10v-2a4 4 0 0 0-3-3.87M13 7a4 4 0 1 1-8 0 4 4 0 0 1 8 0",
     settings:"m9 3-.7 3-2.8 1-2.5-1.5-2 3.5 2.3 2V14L1 16l2 3.5L5.5 18l2.8 1L9 22h4l.7-3 2.8-1 2.5 1.5 2-3.5-2.3-2v-3L21 9l-2-3.5L16.5 7l-2.8-1L13 3H9ZM15 12a4 4 0 1 1-8 0 4 4 0 0 1 8 0", send:"m22 2-7 20-4-9-9-4 20-7ZM11 13 22 2", leave:"M10 17l5-5-5-5M15 12H3M15 3h5v18h-5", lock:"M5 10h14v11H5V10Zm3 0V6a4 4 0 0 1 8 0", unlock:"M5 10h14v11H5V10Zm3 0V6a4 4 0 0 1 7-3", chevron:"m9 5 7 7-7 7",
   };
-  function command(method, ...args) {
+  function commandFrom(reference,method, ...args) {
     if (!worker || !rpc || rpc.closed) return Promise.reject(clientUnavailable
       ? new SdkUnavailableError() : new Error("The client is still starting."));
+    let proof;try{proof=actionProof(method,args,servers,timeline,voice,reference);}catch(reason){return Promise.reject(reason);}
     if (["connect","connect_with_password","disconnect","remove_server","edit_server"].includes(method) && servers.find(server => server.runtime_index === args[0])?.id === voice?.server_id) {
       audio?.syncVoice(null); voice = null; audioActionPending = null;
     }
-    return rpc.request(method,args);
+    return rpc.request(method,args,proof);
   }
+  function command(method,...args){return commandFrom(undefined,method,...args);}
   async function act(method, ...args) { try { return await command(method, ...args); } catch (reason) { setError(String(reason?.message || reason)); } }
   function rememberDraft() {
     const key = conversationKey(timeline, selected);
@@ -220,13 +224,14 @@
     try {
       setError("");
       const fields = [serverName.trim(),host.trim(),Number(port),username.trim(),pin.trim() || undefined];
-      const index = editingIndex === null ? await command("add_server",...fields) : await command("edit_server",editingIndex,...fields);
-      if (password) await command("connect_with_password",index,password); else await command("connect", index);
-      password = ""; await command("open", index, 0); showAdd = false;
+      const created = editingIndex === null ? await command("add_server",...fields) : await commandFrom(editingReference,"edit_server",editingIndex,...fields);
+      const {index,reference}=created;
+      if (password) await commandFrom(reference,"connect_with_password",index,password); else await commandFrom(reference,"connect", index);
+      password = ""; await commandFrom(reference,"browse_server",index); showAdd = false;
     } catch (reason) { setError(String(reason?.message || reason)); }
   }
-  function addServer() { editingIndex = null; password = ""; serverName = ""; host = ""; port = 64738; username = selected?.username || ""; pin = ""; showAdd = true; drawer = false; }
-  function editServer() { if (!selected) return; editingIndex = selectedIndex; password = ""; serverName = selected.name; host = selected.host; port = selected.port; username = selected.username; pin = selected.pin || ""; showAdd = true; drawer = false; }
+  function addServer() { editingIndex = null; editingReference=null; password = ""; serverName = ""; host = ""; port = 64738; username = selected?.username || ""; pin = ""; showAdd = true; drawer = false; }
+  function editServer() { if (!selected) return; try{editingReference=serverReference(selected);}catch(reason){setError(String(reason?.message||reason));return;} editingIndex = selectedIndex; password = ""; serverName = selected.name; host = selected.host; port = selected.port; username = selected.username; pin = selected.pin || ""; showAdd = true; drawer = false; }
   async function send(event) {
     event?.preventDefault();
     const sent = body;

@@ -2,6 +2,7 @@
 // The SDK/session/storage owner. Complex parsing stays in the content Worker.
 import init, { WebClient } from "./sdk/nuschl_client_wasm.js";
 import { openHistory } from "./history.js";
+import {UI_METHODS,projectedAction} from "./action-context.js";
 import { StatePublication, stateFrame } from "./state-publication.js";
 import { createContentPublication } from "./content-publication.js";
 import { restoreOrder } from "./server-order.js";
@@ -93,7 +94,7 @@ async function persistServerOrder(ids) {
   orderQueue = action.catch(() => {});
   return action;
 }
-const methods = new Set(["add_server", "connect", "disconnect", "accept_certificate", "open", "browse_server", "open_direct", "send_text", "older", "join", "toggle_mute", "toggle_deaf", "audio_ready", "voice_packet", "remove_server", "dismiss_notice", "dismiss_welcome", "connect_with_password", "stop_audio", "edit_server", "set_server_order", "content_complete", "content_request", "image_begin", "image_send", "image_cancel"]);
+const methods = new Set(UI_METHODS);
 onmessage = async ({ data }) => {
   try {
     if(states.closed)return;
@@ -115,6 +116,12 @@ onmessage = async ({ data }) => {
       postMessage({ kind: "ready", capabilities:["remove_server","dismiss_notice", "dismiss_welcome","connect_with_password","voice","stop_audio", "edit_server", "server_order"] });
     } else {
       if (!client || !methods.has(data.method) || !Array.isArray(data.args) || data.args.length > 6) throw new Error("Unsupported browser command.");
+      const call=projectedAction(data.method,data.args);
+      if(call){
+        const projection=JSON.stringify(call);
+        if(projection.length>512||new TextEncoder().encode(projection).length>512||typeof data.context!=="string"||data.context.length>4096||new TextEncoder().encode(data.context).length>4096)throw new Error("This view changed. Your draft was kept; use the updated view and try again.");
+        client.validate_action(projection,data.context);
+      }else if(data.context!==undefined)throw new Error("Unexpected browser action context.");
       let value;
       if (data.method === "content_complete") {
         if(typeof data.args[0]!=="string"||data.args[0].length>20||typeof data.args[1]!=="string"||data.args[1].length>2*1024*1024||new TextEncoder().encode(data.args[1]).length>2*1024*1024)throw new Error("Invalid content reply.");
@@ -123,6 +130,9 @@ onmessage = async ({ data }) => {
         const raw=JSON.stringify(data.args[0]);
         if(raw.length>2*1024*1024)throw new Error("Invalid image command.");
         value=JSON.parse(client[data.method](raw));
+      } else if(data.method === "add_server" || data.method === "edit_server") {
+        const index=client[data.method](...data.args);
+        value={index,reference:JSON.parse(client.server_reference(index))};
       } else if (data.method === "set_server_order") {
         value = await persistServerOrder(data.args[0]);
       } else if (data.method === "audio_ready") {
