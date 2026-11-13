@@ -1371,9 +1371,7 @@ pub async fn run(
                         Command::SelectVoiceTargetAt { id, revision } => {
                             if id == 0 || state.voice_target_valid(id) { state.admit_voice_target(revision,id); }
                         },
-                        Command::Voice { target, packet } => if state.voice_target_valid(if target == 0 { state.voice_target } else { target })
-                            && let Some(packet) = state.outgoing_voice(packet)
-                            && let Ok(payload) = voice::encode_voice(state.version, if target == 0 { state.voice_target } else { target }, &packet) {
+                        Command::Voice { target, packet } => if let Some(payload) = state.voice_payload(target, packet) {
                             let sent = match state.udp.as_mut() { Some(udp) => udp.send_voice(&payload).await, None => false };
                             if !sent { write_control(&mut writer, kind::UDP_TUNNEL, &payload).await?; }
                         },
@@ -2064,6 +2062,18 @@ impl State {
             packet.opus = nuschl_core::audio::SILENT_OPUS.to_vec();
             packet
         })
+    }
+    /// One captured frame as a voice datagram. Target 0 follows the selected
+    /// route, where 31 marks it suspended. An explicit 31 is the server
+    /// loopback: it returns only to this user, so it needs no whisper
+    /// authority, but the route revision, mute and deafen still apply.
+    fn voice_payload(&self, target: u32, packet: VoicePacket) -> Option<Vec<u8>> {
+        let loopback = target == u32::from(nuschl_protocol::relay::TARGET_LOOPBACK);
+        let target = if target == 0 { self.voice_target } else { target };
+        if !loopback && !self.voice_target_valid(target) {
+            return None;
+        }
+        voice::encode_voice(self.version, target, &self.outgoing_voice(packet)?).ok()
     }
     fn may_speak(&self) -> bool {
         self.own_session
@@ -7564,6 +7574,48 @@ mod delayed_action_authority_tests {
             .targets()
             .is_none()
         );
+    }
+    #[test]
+    fn explicit_loopback_needs_no_whisper_target_but_obeys_route_and_mute() {
+        let mut state = observed();
+        state.local_muted = false;
+        let packet = || VoicePacket {
+            sender: 0,
+            sequence: 1,
+            opus: vec![0xf8, 0xff, 0xfe],
+            end: false,
+            volume: 1.,
+        };
+        let version = state.version;
+        let addressed = |target| voice::encode_voice(version, target, &packet()).ok();
+        // Normal talking: 31 is no installed whisper target, yet an explicit
+        // loopback frame leaves addressed to the server loopback.
+        assert!(!state.voice_target_valid(31));
+        assert_eq!(state.voice_payload(31, packet()), addressed(31));
+        assert_ne!(addressed(31), addressed(0));
+        state.local_muted = true;
+        assert_eq!(state.voice_payload(31, packet()), None);
+        state.local_muted = false;
+
+        // While whispering, too.
+        let install = Command::Whisper {
+            revision: state.voice_route.suspend(),
+            id: 1,
+            targets: vec![VoiceTargetSpec::Users(vec![2])],
+        };
+        let lease = snapshot().for_command(&install).unwrap();
+        assert!(state.authorize(scoped(lease, install)).is_some());
+        state.select_voice_target(1);
+        assert_eq!(state.voice_payload(0, packet()), addressed(1));
+        assert_eq!(state.voice_payload(31, packet()), addressed(31));
+
+        // The whispered user reconnects: the selected route is suspended, and
+        // neither it nor an explicit loopback sends anything.
+        state.users.get_mut(&2).unwrap().instance = 222;
+        state.invalidate_voice_target();
+        assert_eq!(state.voice_target, 31);
+        assert_eq!(state.voice_payload(0, packet()), None);
+        assert_eq!(state.voice_payload(31, packet()), None);
     }
     #[test]
     fn whisper_reuse_and_failed_replacement_suspend_without_fallback() {
