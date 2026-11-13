@@ -13,11 +13,11 @@ audio device, profile or recording is used. Checks and screenshots:
 - Settings → VOICE QUALITY names each server below the requested rate with
   its effective rate and reason, and the rest in one line; choosing 256 kb/s
   writes voice-quality.json only (settings.json keeps the keys Nuschl 0.1.0
-  reads);
+  reads); Narrow's Connection info shows the same rate and reason;
 - the change reconfigures the encoder only: the same media worker and
   capture stream, frames up to the new per-frame allowance;
 - the voice card shows each server's rate; speaking on both lowers Wide to
-  Narrow's 48 kb/s ("shared with another server");
+  Narrow's 48 kb/s ("shared encoder");
 - a live ServerConfig (setConf) lowers Narrow's rate, and one too small for
   voice stops sending there without stopping playback;
 - narrow and zoomed layouts (layout-narrow.json): a window requested at
@@ -239,6 +239,19 @@ class DesktopBitrate:
                 print(f"  {server:<7} {step:<44} first accepted frame after {seconds:.1f} s", flush=True)
                 return seconds
         raise AssertionError(f"{server} {step}: no voice within 90 s")
+
+    def connection_bitrate(self, server):
+        """The Voice bitrate row of `server`'s Connection info."""
+        self.select(server)
+        bx, by, _, _ = self.rects()["buffer"]
+        x, y, width, height = self.find("push button", "Server options").extents()
+        self.shell.click(bx + x + width // 2, by + y + height // 2)
+        self.press("menu item", "Connection info")
+        self.named("Voice bitrate")
+        names = [name for _, _, _, name in self.nodes() if name]
+        self.shot(f"connection-{server.lower()}")
+        self.press("push button", "Done")
+        return names[names.index("Voice bitrate") + 1]
 
     def files(self):
         config = self.profile / "config"
@@ -676,7 +689,7 @@ class DesktopBitrate:
         group = self.find("radio button", "128 kb/s")
         group.call("Component", "ScrollTo", "u", "0")
         self.named("1 other server: 128 kb/s")
-        self.named("Narrow: 48 kb/s (server limit)")
+        self.named("Narrow: 48 of 128 kb/s · server limit")
         self.shot("2-settings-default")
         capture = self.capture_streams()
         assert len(capture) == 1, capture
@@ -688,7 +701,7 @@ class DesktopBitrate:
         assert sidecar == {"version": 1, "voice_bitrate": 256_000}, sidecar
         assert set(settings) <= RELEASED_KEYS and "voice_bitrate" not in settings, settings
         self.named("1 other server: 256 kb/s")
-        self.named("Narrow: 48 kb/s (server limit)")
+        self.named("Narrow: 48 of 256 kb/s · server limit")
         self.find("radio button", "256 kb/s").call("Component", "ScrollTo", "u", "0")
         self.shot("3-settings-256")
         time.sleep(1.0)
@@ -705,6 +718,8 @@ class DesktopBitrate:
         self.named("256 kb/s")
         self.named("48 of 256 kb/s · server limit")
         self.shot("4-voice-card-256")
+        value = self.connection_bitrate("Narrow")
+        assert value == "48 of 256 kb/s · server limit", value
 
         # Speaking on both: one encoder, Narrow's 48 kb/s for both.
         self.select("Narrow")
