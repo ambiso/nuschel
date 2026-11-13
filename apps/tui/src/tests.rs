@@ -712,8 +712,8 @@ fn the_switcher_opens_and_joins_and_commands_do_the_same() {
     );
 }
 
-/// #199: where the server stops you from speaking, unmuting says "You
-/// can't speak here.", and the people list says it in words.
+/// #199: where the server stops you from speaking, each unmute says "You
+/// can't speak here." once, and the people list says it in words.
 #[test]
 fn unmuting_where_you_cannot_speak_says_so() {
     let (mut app, _, id) = connected();
@@ -730,7 +730,7 @@ fn unmuting_where_you_cannot_speak_says_so() {
         }),
     });
     app.command("mute");
-    // Said once: by the TUI, or by the client when it refuses the unmute.
+    app.command("mute");
     let said = app
         .notes
         .iter()
@@ -738,7 +738,7 @@ fn unmuting_where_you_cannot_speak_says_so() {
         .map(|note| note.text.as_str())
         .chain(app.client.servers[0].notice.as_deref())
         .collect::<Vec<_>>();
-    assert_eq!(said, ["You can't speak here."]);
+    assert_eq!(said, ["You can't speak here.", "You can't speak here."]);
     let server = &app.client.servers[0];
     assert!(
         view::person_label(&app.client, server, &server.users[&1]).contains("can't speak here")

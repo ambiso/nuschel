@@ -707,18 +707,21 @@ impl App {
                 elsewhere.join(" and ")
             ));
         }
-        let server = &self.client.servers[index];
+        let server = &mut self.client.servers[index];
+        // A refused unmute (#199): the client's notice says why, every time.
+        if unmuting
+            && server.muted
+            && let Some(reason) = server.notice.clone()
+        {
+            server.dismiss_notice();
+            return self.warn(reason);
+        }
         let line = match (server.muted, server.deafened) {
             (_, true) => "Deafened (and muted).",
-            // The client refused it: the server stops you from speaking (#199).
-            _ if unmuting && server.speech_blocked() => "You can't speak here.",
             (true, false) => "Muted.",
             (false, false) => "Unmuted: others hear you.",
         };
-        // Said once: the client may have said it already (a refused unmute).
-        if server.notice.as_deref() != Some(line) {
-            self.say(line);
-        }
+        self.say(line);
     }
 
     // Conversations.
