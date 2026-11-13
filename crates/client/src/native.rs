@@ -4772,7 +4772,7 @@ mod reply_owner_tests {
         );
         assert!(
             driver
-                .server_history(id.clone(), ASKED, (retired_ticket, None), retired_page)
+                .server_history(id.clone(), ASKED, retired_ticket, None, retired_page)
                 .is_err(),
             "a retired ticket cannot be re-enqueued"
         );
