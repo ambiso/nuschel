@@ -496,6 +496,13 @@ impl Session {
         }
     }
 
+    /// An explicit self-state request the server has not confirmed yet while
+    /// its bounded retries still run. An exhausted budget ends this; capture
+    /// stays blocked by [`Self::voice_policy`] either way.
+    pub fn self_state_settling(&self) -> bool {
+        self.self_change_pending && self.self_retry.is_some()
+    }
+
     /// Server acknowledgement AND local intent gate the transport itself.
     pub fn voice_policy(&self) -> (bool, bool) {
         let Some(own) = self.own_session().and_then(|id| self.users.get(&id)) else {
@@ -2796,5 +2803,150 @@ mod tests {
             .into(),
         );
         assert!(session.users[&7].self_muted && session.users[&7].self_deafened);
+    }
+
+    /// The page's mute toggle carries the voice view it was shown
+    /// (actions.rs). The first view that offers it after Join must not be
+    /// replaced by the server's echo of the self-state Join itself requested:
+    /// an explicit Unmute right after joining was refused as stale
+    /// (tests/sdk_rpc.browser.mjs). The steps follow browser.rs `join` and
+    /// `reconcile_voice`, which only build for wasm32.
+    #[test]
+    fn first_joined_voice_view_survives_the_joins_own_self_state_echo() {
+        use crate::actions::{Catalog, ServerRef, validate};
+        use crate::voice::{Context, Ready, Route, VoiceView};
+        use nuschl_client::server::{ServerState, Status};
+        use serde_json::json;
+
+        // Logged in to channel 0; the server echoed the login's muted and
+        // deafened self-state.
+        let mut s = voice_session();
+        let own = s.users.get_mut(&3).unwrap();
+        own.channel = 0;
+        own.self_muted = true;
+        own.self_deafened = true;
+        let mut server = ServerState::new(
+            crate::snapshot::bookmark("owned", "127.0.0.1", 64738, "rpc", None).unwrap(),
+        );
+        server.generation = 2;
+        server.status = Status::Connected;
+        server.own_session = Some(3);
+        server.users.insert(
+            3,
+            User {
+                instance: 1,
+                ..s.users[&3].clone()
+            },
+        );
+        // Join's shared-SDK intent: sound on, microphone still muted.
+        server.muted = true;
+        server.deafened = false;
+        let servers = [server];
+        let mut catalog = Catalog::default();
+        let stamp = catalog.reserve(0, None).unwrap();
+        catalog.commit(0, stamp);
+        let mut route = Route::default();
+        route.select(servers[0].id.clone(), servers[0].generation, 0);
+        s.set_self(true, false);
+        let reconcile = |route: &mut Route, s: &Session| {
+            let (muted, deafened) = s.voice_policy();
+            route.observe(
+                servers[0].voice_channel() == Some(0),
+                s.self_state_settling(),
+                muted || servers[0].muted,
+                deafened || servers[0].deafened,
+            );
+            route.view().unwrap()
+        };
+        let mut published = vec![reconcile(&mut route, &s)];
+        s.control(
+            kind::USER_STATE,
+            proto::UserState {
+                session: Some(3),
+                self_mute: Some(true),
+                self_deaf: Some(false),
+                ..Default::default()
+            }
+            .encode_to_vec()
+            .into(),
+        );
+        published.push(reconcile(&mut route, &s));
+        let current = route.view().unwrap();
+        let proof = |view: &VoiceView| {
+            json!({
+                "server": ServerRef::capture(&servers[0], catalog.get(0).unwrap()),
+                "voice": {"server_id": view.server_id,
+                    "connection_generation": view.connection_generation,
+                    "voice_generation": view.voice_generation, "channel_id": view.channel_id,
+                    "muted": view.muted, "deafened": view.deafened},
+            })
+            .to_string()
+        };
+        let toggle = json!({"method": "toggle_mute", "index": 0}).to_string();
+        let admits = |view: &VoiceView| {
+            validate(
+                &servers,
+                &catalog,
+                None,
+                Some(&current),
+                &toggle,
+                &proof(view),
+            )
+        };
+        let shown = published.iter().find(|view| view.joined).expect("joined");
+        assert_eq!(admits(shown), Ok(()));
+        // Nothing was offered before the echo, and the echo grants nothing:
+        // capture still needs an explicit unmute and current readiness.
+        assert!(!published[0].joined && !published[0].can_transmit);
+        assert!(current.joined && current.muted && !current.deafened && !current.can_transmit);
+        assert!(s.voice_policy().0);
+        // The stale-action guard is unchanged: an older view or generation,
+        // or readiness for one, is refused.
+        assert!(admits(&published[0]).is_err());
+        let older = VoiceView {
+            voice_generation: published[0].voice_generation.clone(),
+            ..shown.clone()
+        };
+        assert!(admits(&older).is_err());
+        assert!(
+            route
+                .ready(Ready {
+                    context: Context {
+                        server_id: older.server_id,
+                        connection_generation: older.connection_generation,
+                        voice_generation: older.voice_generation,
+                    },
+                    capture: true,
+                    playback: true,
+                })
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn an_unconfirmed_join_self_state_joins_muted_once_retries_are_exhausted() {
+        use crate::voice::Route;
+        let mut s = voice_session();
+        let own = s.users.get_mut(&3).unwrap();
+        own.self_muted = true;
+        own.self_deafened = true;
+        let mut route = Route::default();
+        route.select("owned".into(), 2, 1);
+        s.set_self(true, false);
+        let observe = |route: &mut Route, s: &Session| {
+            let (muted, deafened) = s.voice_policy();
+            route.observe(true, s.self_state_settling(), muted, deafened);
+            route.view().unwrap()
+        };
+        assert!(s.self_state_settling());
+        assert!(!observe(&mut route, &s).joined);
+        for tick in 1..=7 {
+            s.tick(tick as f64 * SELF_RETRY_MS);
+        }
+        assert!(!s.self_state_settling());
+        // The notice asks for a manual retry, so the toggle is offered again;
+        // without an acknowledgement capture and sound stay blocked.
+        let view = observe(&mut route, &s);
+        assert!(view.joined && view.muted && view.deafened && !view.can_transmit);
     }
 }

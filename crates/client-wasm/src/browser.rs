@@ -1821,13 +1821,17 @@ impl WebClient {
             self.shared.voice_packets.borrow_mut().clear();
             return;
         };
-        let (muted, deafened) = self
+        let (muted, deafened, settling) = self
             .shared
             .connections
             .borrow()
             .get(&server.id)
-            .map(|c| c.session.borrow().voice_policy())
-            .unwrap_or((true, true));
+            .map(|c| {
+                let session = c.session.borrow();
+                let (muted, deafened) = session.voice_policy();
+                (muted, deafened, session.self_state_settling())
+            })
+            .unwrap_or((true, true, true));
         let requested = self.shared.voice.borrow().requested();
         let target = self
             .shared
@@ -1837,8 +1841,9 @@ impl WebClient {
             .map(|connection| connection.session.borrow().voice_target(requested))
             .unwrap_or_else(|| nuschl_core::bitrate::VoiceBitrate::resolve(requested, 0));
         self.shared.voice.borrow_mut().set_target(target);
-        self.shared.voice.borrow_mut().policy(
+        self.shared.voice.borrow_mut().observe(
             server.voice_channel() == Some(view.channel_id),
+            settling,
             muted || server.muted,
             deafened || server.deafened,
         );
