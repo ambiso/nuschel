@@ -275,7 +275,7 @@ def desktop(args):
             assert not snapshot["overrun"]
             return snapshot["events"]
         def sent_by_reader():
-            return [event for event in receiver.events if event.get("kind") == "text"
+            return [event for event in list(receiver.events) if event.get("kind") == "text"
                 and event.get("author") == "Welcome reader"]
         def send_and_receive(body, preview):
             marker = body.split()[0]
@@ -303,6 +303,7 @@ def desktop(args):
             return wire
 
         initial = len(events())
+        assert initial == 0, "startup/receiver display unexpectedly contacted a synthetic peer"
         assert image_pixels(sender_pid, args.output / "before-preview.png") < 300, "image pixel control is not discriminating"
         plain = f"off-{uuid.uuid4().hex[:8]} http://93.184.215.14/page "
         type_message(plain)

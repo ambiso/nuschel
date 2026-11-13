@@ -37,6 +37,10 @@ in
 pkgs.testers.runNixOSTest {
   name = "nuschl-link-previews-desktop";
   nodes.machine = {
+    # If production accidentally performs system DNS, the owned peer records
+    # it; no resolver request can escape this VM's loopback-only output policy.
+    networking.nameservers = [ "127.0.0.53" ];
+    services.resolved.enable = false;
     environment.systemPackages = [
       nuschl
       pkgs.python3
