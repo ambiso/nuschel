@@ -69,7 +69,7 @@ async function open(username,fault="",width=1280,trust=true) {
  const page=await context.newPage();
  await page.addInitScript(()=>{
   globalThis.captureCalls=0;navigator.mediaDevices.getUserMedia=()=>{captureCalls++;return Promise.reject(new Error("No capture in broker fixture"));};
-  const fixture=globalThis.brokerFixture={sdk:null,last:null,work:[],replies:[],pending:new Map(),workers:[],completions:[],codec:[],snapshots:0,snapshot_bytes:0,holdAck:false,heldAck:null,invalidateState:false,ackCount:0,commands:new Map(),errors:[],fatals:[],requestIds:new Set(),requestResults:new WeakSet(),requestsOutstanding:0,requestsPeak:0,delayRequestResults:0,dropAck:false,droppedAck:null};
+  const fixture=globalThis.brokerFixture={sdk:null,last:null,work:[],replies:[],pending:new Map(),workers:[],completions:[],codec:[],snapshots:0,snapshot_bytes:0,holdAck:false,heldAck:null,invalidateState:false,ackCount:0,commands:new Map(),errors:[],fatals:[],requestIds:new Set(),requestResults:new WeakSet(),requestsOutstanding:0,requestsPeak:0,delayRequestResults:0,dropAck:false,droppedAck:null,ackPosts:0,watch:new Map()};
   const NativeWorker=globalThis.Worker;
   globalThis.Worker=class extends NativeWorker {
    constructor(...args) {
@@ -80,9 +80,10 @@ async function open(username,fault="",width=1280,trust=true) {
     this.addEventListener("message",event=>{const {data}=event;
      if(data?.kind==="result"&&fixture.requestIds.delete(data.id))fixture.requestResults.add(event);
      if(data?.kind==="state"){if(fixture.invalidateState&&data.servers.length){fixture.invalidateState=false;data.servers[0].runtime_index=data.servers.length;}fixture.last=data;fixture.snapshots++;fixture.snapshot_bytes+=new TextEncoder().encode(JSON.stringify(data)).length;}
-     if(data?.kind==="content_work")for(const operation of data.operations){fixture.work.push(operation);if(fixture.work.length>128)fixture.work.shift();}
+     if(data?.kind==="content_work")for(const operation of data.operations){fixture.work.push(operation);if(fixture.work.length>128)fixture.work.shift();if(operation.kind==="render"&&typeof operation.source==="string"&&operation.source.startsWith("PRESSURE_PEER_")&&fixture.watch.size<16)fixture.watch.set(operation.source,{request:operation.request,value:null,error:null});}
      if(data?.kind==="fatal")fixture.fatals.push(data.message);
      if(data?.kind==="result"&&fixture.commands.has(data.id)){if(data.error)fixture.errors.push({method:fixture.commands.get(data.id),error:data.error});fixture.commands.delete(data.id);}
+     if(data?.kind==="result"&&fixture.pending.has(data.id))for(const entry of fixture.watch.values())if(entry.request===fixture.pending.get(data.id)){entry.value=data.value??null;entry.error=data.error??null;}
      if(data?.kind==="result"&&fixture.pending.has(data.id)) {
       fixture.replies.push({request:fixture.pending.get(data.id),value:data.value,error:data.error});fixture.pending.delete(data.id);
       if(fixture.replies.length>128)fixture.replies.shift();
@@ -104,7 +105,7 @@ async function open(username,fault="",width=1280,trust=true) {
     if(data?.method==="state_applied")fixture.ackCount++;
     if(data?.method==="state_applied"&&fixture.holdAck){fixture.heldAck=data.args[0];return;}
     if(this.fixtureSdk&&data?.id!==undefined){fixture.commands.set(data.id,data.method);if(fixture.commands.size>256)throw Error("fixture command bound");}
-    if(data?.method==="content_complete"){fixture.pending.set(data.id,data.args[0]);fixture.completions.push({request:data.args[0],bytes:data.args[1]?.length});if(fixture.completions.length>128)fixture.completions.shift();}
+    if(data?.method==="content_complete"){fixture.ackPosts++;fixture.pending.set(data.id,data.args[0]);fixture.completions.push({request:data.args[0],bytes:data.args[1]?.length});if(fixture.completions.length>128)fixture.completions.shift();}
     if(this.fixtureSdk&&data?.method==="content_request"&&data.id!==undefined){fixture.requestIds.add(data.id);fixture.requestsPeak=Math.max(fixture.requestsPeak,++fixture.requestsOutstanding);}
     if(this.fixtureSdk&&data?.method==="content_complete"&&fixture.dropAck) {
      // A lost ACK: the SDK never receives it, and the App sees a failed RPC.
@@ -377,7 +378,7 @@ try {
   const browserSession=[...observer.users.values()].find(user=>user.name==="broker-recovery").session;
   const peerSources=Array.from({length:6},(_,index)=>`PRESSURE_PEER_${index}`);
   const pressureErrors=await recovery.evaluate(()=>{brokerFixture.delayRequestResults=2000;brokerFixture.requestsPeak=brokerFixture.requestsOutstanding;return brokerFixture.errors.length;});
-  const pressureStart=await recovery.evaluate(()=>({at:performance.now(),completions:brokerFixture.completions.length}));
+  const pressureStart=await recovery.evaluate(()=>({at:performance.now(),acks:brokerFixture.ackPosts}));
   await rpc(recovery,"open",0,0);
   await recovery.waitForFunction(()=>brokerFixture.last?.timeline?.channel===0&&!brokerFixture.last.timeline.loading&&brokerFixture.last.timeline.messages.length>=900);
   await recovery.waitForFunction(()=>brokerFixture.requestsOutstanding>0);
@@ -385,13 +386,13 @@ try {
   for(const source of peerSources)directText(observer,browserSession,source);
   try {
    await recovery.waitForFunction(()=>brokerFixture.last.timeline.messages.every(message=>!message.content_failed&&!message.document.blocks.some(block=>block.kind==="text"&&block.text.startsWith("["))),null,{timeout:60000});
-   await recovery.waitForFunction(sources=>sources.every(source=>{const operation=brokerFixture.work.find(work=>work.kind==="render"&&work.source===source);return operation&&brokerFixture.replies.some(reply=>reply.request===operation.request&&reply.error===undefined&&typeof reply.value==="string"&&reply.value!=="null");}),peerSources,{timeout:30000});
+   await recovery.waitForFunction(sources=>sources.every(source=>{const entry=brokerFixture.watch.get(source);return entry&&entry.error===null&&typeof entry.value==="string"&&entry.value!=="null";}),peerSources,{timeout:30000});
   }
   catch(error) {
-   const diagnostic=await recovery.evaluate(()=>({count:brokerFixture.last?.timeline?.messages.length,missing:brokerFixture.last?.timeline?.messages.filter(message=>!message.content_token).length,peak:brokerFixture.requestsPeak,errors:brokerFixture.errors.slice(-6),work:brokerFixture.work.slice(-10).map(({kind,request})=>({kind,request}))}));
+   const diagnostic=await recovery.evaluate(()=>({count:brokerFixture.last?.timeline?.messages.length,missing:brokerFixture.last?.timeline?.messages.filter(message=>!message.content_token).length,peak:brokerFixture.requestsPeak,errors:brokerFixture.errors.slice(-6),watch:[...brokerFixture.watch].map(([source,entry])=>({source,request:entry.request,error:entry.error,accepted:typeof entry.value==="string"&&entry.value!=="null"})),servers:brokerFixture.last?.servers[0].channels.filter(channel=>channel.direct).map(channel=>({id:channel.id,name:channel.name})),work:brokerFixture.work.slice(-10).map(({kind,request,source})=>({kind,request,source:source?.slice(0,40)}))}));
    console.error("pressure-diagnostic",JSON.stringify(diagnostic));result.pressure_failure=diagnostic;throw error;
   }
-  result.pressure=await recovery.evaluate(({errors,start})=>({milliseconds:performance.now()-start.at,messages:brokerFixture.last.timeline.messages.length,delayed_request_ms:brokerFixture.delayRequestResults,peak_request_rpcs:brokerFixture.requestsPeak,acks_sent:brokerFixture.completions.length-start.completions,ack_errors:brokerFixture.errors.slice(errors).filter(error=>error.method==="content_complete").length,request_errors:brokerFixture.errors.slice(errors).filter(error=>error.method==="content_request").length}),{errors:pressureErrors,start:pressureStart});
+  result.pressure=await recovery.evaluate(({errors,start})=>({milliseconds:performance.now()-start.at,messages:brokerFixture.last.timeline.messages.length,delayed_request_ms:brokerFixture.delayRequestResults,peak_request_rpcs:brokerFixture.requestsPeak,acks_sent:brokerFixture.ackPosts-start.acks,ack_errors:brokerFixture.errors.slice(errors).filter(error=>error.method==="content_complete").length,request_errors:brokerFixture.errors.slice(errors).filter(error=>error.method==="content_request").length}),{errors:pressureErrors,start:pressureStart});
   result.pressure.peer_direct_renders_accepted=peerSources.length;result.pressure.request_rpcs_outstanding_at_send=outstandingAtSend;
   await recovery.evaluate(()=>{brokerFixture.delayRequestResults=0;});
   assert.ok(result.pressure.peak_request_rpcs<=8,`rehydration RPCs in flight ${result.pressure.peak_request_rpcs}`);
