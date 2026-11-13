@@ -19,8 +19,10 @@ fn dump() {
     assert!((1..=32).contains(&channels) && (8000..=384000).contains(&rate));
     assert_eq!(raw.len() % (4 * channels), 0);
     let source: Vec<f32> = raw
-        .chunks_exact(4)
-        .map(|s| f32::from_le_bytes(s.try_into().unwrap()))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|s| f32::from_le_bytes(*s))
         .collect();
     assert!(source.iter().all(|s| s.is_finite()));
     let chunks: Vec<usize> = std::env::var("NUSCHL_CAPTURE_CHUNKS")

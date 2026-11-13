@@ -499,10 +499,14 @@ mod tests {
         let path = std::env::var_os("NUSCHL_NOISE_REPLAY")
             .expect("set NUSCHL_NOISE_REPLAY to the owned synthetic PCM fixture");
         let bytes = std::fs::read(path).unwrap();
-        assert!(!bytes.is_empty() && bytes.len() <= 1_000_000 && bytes.len() % (FRAME * 4) == 0);
+        assert!(
+            !bytes.is_empty() && bytes.len() <= 1_000_000 && bytes.len().is_multiple_of(FRAME * 4)
+        );
         let samples: Vec<f32> = bytes
-            .chunks_exact(4)
-            .map(|v| f32::from_le_bytes(v.try_into().unwrap()))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|v| f32::from_le_bytes(*v))
             .collect();
         assert!(samples.iter().all(|v| v.is_finite() && v.abs() <= 1.));
         let mut reports = Vec::new();
@@ -515,8 +519,8 @@ mod tests {
             let mut prefix = crate::capture_queue::CaptureQueue::default();
             let mut probabilities = Vec::new();
             let mut admitted = Vec::new();
-            for (index, raw) in samples.chunks_exact(FRAME).enumerate() {
-                let mut a: [f32; FRAME] = raw.try_into().unwrap();
+            for (index, raw) in samples.as_chunks::<FRAME>().0.iter().enumerate() {
+                let mut a: [f32; FRAME] = *raw;
                 let mut b = a;
                 before.render(&[0.; 2 * FRAME]);
                 after.render(&[0.; 2 * FRAME]);

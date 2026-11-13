@@ -278,7 +278,9 @@ mod tests {
             let (dry, handed) = converter.pull(&mut output, &mut input, &mut played);
             assert!(!dry);
             let peak = output
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .enumerate()
                 .max_by(|(_, a), (_, b)| a[0].abs().total_cmp(&b[0].abs()))
                 .unwrap()
@@ -293,10 +295,18 @@ mod tests {
                 "reference timestamps count reconstructed48k frames"
             );
             let samples: Vec<_> = std::iter::from_fn(|| reference.pop().ok()).collect();
-            assert!(samples.chunks_exact(2).any(|frame| frame[0].abs() > 0.001));
             assert!(
                 samples
-                    .chunks_exact(2)
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .any(|frame| frame[0].abs() > 0.001)
+            );
+            assert!(
+                samples
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
                     .all(|frame| (frame[1] + frame[0] * 0.5).abs() < 1e-7)
             );
             assert_eq!(handed, (512_u64 * 48_000).div_ceil(u64::from(rate)));
@@ -326,7 +336,9 @@ mod tests {
         let mut output = [0_f32; 1024];
         converter.pull(&mut output, &mut input, &mut played);
         let peak = output
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .enumerate()
             .max_by(|(_, a), (_, b)| a[0].abs().total_cmp(&b[0].abs()))
             .unwrap();
@@ -355,7 +367,7 @@ mod tests {
                 converter.pull(&mut output, &mut input, &mut played);
             });
             assert_eq!(recovered.count_total, 0);
-            for frame in output[output.len() - 128..].chunks_exact(2) {
+            for frame in output[output.len() - 128..].as_chunks::<2>().0 {
                 assert!(
                     (frame[0] - 0.25).abs() < 1e-4 && (frame[1] + 0.125).abs() < 1e-4,
                     "{rate}: {frame:?}"
@@ -426,7 +438,7 @@ mod tests {
                     .iter()
                     .all(|value| value.is_finite() && value.abs() <= 1.)
             );
-            for frame in output[output.len() - 64..].chunks_exact(2) {
+            for frame in output[output.len() - 64..].as_chunks::<2>().0 {
                 assert!(
                     (frame[0] - 0.25).abs() < 1e-4 && (frame[1] + 0.125).abs() < 1e-4,
                     "{rate}: {frame:?}"
