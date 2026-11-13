@@ -19,8 +19,8 @@ use nuschl_client::{HistorySource, SessionSecurity, conversation::Entry};
 use nuschl_session::connection::{TextTarget, User};
 use std::{collections::HashMap, rc::Rc};
 
-// Match the existing rail, splitter, icon controls and composer padding. The
-// sidebar preference is never changed by viewport fitting.
+// Match the existing rail, splitter, icon controls and composer padding.
+// Viewport fitting preserves the saved sidebar preference.
 const RAIL_WIDTH: f32 = 72. + layout::SCROLLBAR_GUTTER;
 const SPLITTER_WIDTH: f32 = 5.;
 const CONTROL_HEIGHT: f32 = 32.;
@@ -42,14 +42,17 @@ impl PaneLayout {
         let wrap = f32::from(wrap).max(0.);
         let minimum = *nuschl_session::config::SIDEBAR_WIDTH.start();
         let available = f32::from(size.width) - RAIL_WIDTH - SPLITTER_WIDTH - minimum;
-        // At short heights one shared context region scrolls header, notices,
-        // preview and hints. The editor and at least one timeline line stay out.
+        // Header, notices, preview and hints share a scroll region at short heights.
+        // The editor and at least one timeline line retain dedicated space.
         let (input, bottom, gap) = Self::padding(false);
-        let content = CONTROL_HEIGHT.max(line + 8.) + wrap; // editor's py_1, or an icon
-        let dense = height < 52. + CONTROL_HEIGHT + content + input * 2. + 2. + bottom + gap + line;
+        let content = CONTROL_HEIGHT.max(line + 8.); // editor's py_1, or an icon
+        let baseline = 52. + CONTROL_HEIGHT + content + input * 2. + 2. + bottom + gap + line;
+        // Stable navigation width lets measured wrapping adjust vertical space.
+        let navigation_fits = height >= baseline && available >= minimum;
+        let dense = height < baseline + wrap;
         let chrome = if dense { 0. } else { height / 4. };
         let (input, bottom, gap) = Self::padding(dense);
-        let editor = content + input * 2. + 2.; // input border
+        let editor = content + wrap + input * 2. + 2.; // input border
         let auxiliary = (height / 3.)
             .max(CONTROL_HEIGHT)
             .min((height - chrome - editor - bottom - gap - line).max(0.));
@@ -58,7 +61,7 @@ impl PaneLayout {
             .floor()
             .clamp(1., 10.) as usize;
         Self {
-            sidebar: (!dense && available >= minimum).then(|| preferred.min(available)),
+            sidebar: navigation_fits.then(|| preferred.min(available)),
             dense,
             chrome: px(chrome),
             auxiliary: px(auxiliary),
@@ -4139,9 +4142,9 @@ mod viewport_tests {
     use super::*;
 
     #[test]
-    fn viewport_reserves_editor_and_timeline_without_changing_pane_preference() {
-        // Measured body sizes at minimum/300%, 900x800/200% and a normal
-        // window, with small/default/large actual font line heights.
+    fn viewport_preserves_editor_timeline_and_pane_preference() {
+        // Representative body sizes for minimum/300%, 900x800/200% and a
+        // normal window, with small/default/large font line heights.
         for (width, height) in [(286., 125.), (450., 354.), (1280., 754.)] {
             for line in [18., 24., 36.] {
                 let pane = PaneLayout::new(size(px(width), px(height)), 560., px(line), px(0.));
@@ -4183,7 +4186,18 @@ mod viewport_tests {
             354. - f32::from(pane.chrome + pane.auxiliary) - editor - bottom - gap
         };
         assert!(remaining(wrapped) >= 24.);
-        // Omitting the measured second row loses the timeline with long text.
+        // The uncharged-wrap control demonstrates the timeline's space requirement.
         assert!(remaining(PaneLayout::new(viewport, 560., px(24.), px(0.))) < 24.);
+    }
+
+    #[test]
+    fn wrap_reservation_preserves_navigation_at_the_height_threshold() {
+        let viewport = size(px(600.), px(200.));
+        let single = PaneLayout::new(viewport, 560., px(24.), px(0.));
+        let wrapped = PaneLayout::new(viewport, 560., px(24.), px(40.));
+        assert_eq!(single.sidebar, Some(311.));
+        assert_eq!(wrapped.sidebar, single.sidebar);
+        assert!(!single.dense && wrapped.dense);
+        assert_ne!(single.auxiliary, wrapped.auxiliary);
     }
 }

@@ -217,10 +217,10 @@ pub struct Desktop {
     pub profile: Profile,
     pub form: Option<ServerForm>,
     pub composer: Entity<TextareaState>,
-    /// Actual logical body bounds, excluding the window chrome and update bar.
+    /// Logical body bounds below the window chrome and update bar.
     pub body_size: std::rc::Rc<std::cell::Cell<Size<Pixels>>>,
     pub composer_rows: usize,
-    /// Observed additional control-row height; wrapping cannot spend timeline space.
+    /// Observed extra control-row height contributes to the timeline reservation.
     pub composer_wrap: std::rc::Rc<std::cell::Cell<Pixels>>,
     pub channels_open: bool,
     pub scroll: ScrollHandle,
