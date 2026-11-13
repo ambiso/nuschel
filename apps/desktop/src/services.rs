@@ -12,6 +12,10 @@ use tokio::{
 };
 
 pub enum ServiceEvent {
+    LinkPreviewImage {
+        ticket: crate::link_preview::ImageTicket,
+        pixels: Option<nuschl_ipc::preview::Pixels>,
+    },
     /// The local audio check in Settings.
     Preview(crate::preview::Event),
     Update(crate::update::UpdateEvent),
@@ -44,6 +48,38 @@ pub struct Services {
 }
 
 impl Services {
+    /// Exact carried bytes are decoded only in the confined content worker.
+    /// The composer admits one such request until its completion is received.
+    pub fn render_link_preview(
+        &self,
+        ticket: crate::link_preview::ImageTicket,
+        image: nuschl_core::preview::EmbeddedImage,
+    ) {
+        let events = self.sender.clone();
+        self.handle.spawn(async move {
+            let pixels = match content_worker() {
+                Some(worker) => match nuschl_ipc::host::preview(
+                    &worker,
+                    nuschl_ipc::preview::Request::RenderImage {
+                        schema: nuschl_ipc::preview::SCHEMA,
+                        image,
+                    },
+                )
+                .await
+                {
+                    Ok(nuschl_ipc::preview::Response::Pixels {
+                        schema: nuschl_ipc::preview::SCHEMA,
+                        pixels,
+                    }) if pixels.is_bounded() => Some(pixels),
+                    _ => None,
+                },
+                None => None,
+            };
+            let _ = events
+                .send(ServiceEvent::LinkPreviewImage { ticket, pixels })
+                .await;
+        });
+    }
     /// The services, following the driver's preferences, and the events
     /// they report.
     pub fn new(
