@@ -47,6 +47,21 @@ pub(crate) fn request<R: rand_core::TryCryptoRng>(
         .unwrap()
 }
 
+/// Receives a request and approves it.
+pub(crate) fn admit<R: rand_core::TryCryptoRng>(
+    sharer: &mut Sharer,
+    request: &[u8],
+    now: u64,
+    rng: &mut R,
+) -> ViewerId {
+    let SharerEvent::Requested { viewer, digest, .. } = sharer.receive(request, now, rng).unwrap()
+    else {
+        panic!("expected a request");
+    };
+    sharer.approve(&viewer, &digest).unwrap();
+    viewer
+}
+
 /// Runs one join to a confirmed key; returns the viewer, its key and the rekey's other
 /// messages.
 pub(crate) fn join(
@@ -57,12 +72,7 @@ pub(crate) fn join(
 ) -> (Viewer, ReceiveKey, Vec<(ViewerId, Vec<u8>)>) {
     let mut rng = rng(seed);
     let (mut viewer, request) = request(link, now, &mut rng);
-    let SharerEvent::Requested { viewer: id, .. } =
-        sharer.receive(&request, now, &mut rng).unwrap()
-    else {
-        panic!("expected a request");
-    };
-    sharer.approve(&id).unwrap();
+    admit(sharer, &request, now, &mut rng);
     let mut others = Vec::new();
     let mut key = None;
     for (to, message) in sharer.rekey(now, &mut rng).unwrap().messages {
@@ -221,8 +231,7 @@ fn seeded_exchange_known_answer() {
     let mut rng = rng(42);
     let mut sharer = Sharer::new(link.keys(), CredentialCache::new(1, 1));
     let (mut viewer, request) = request(&link, T0, &mut rng);
-    sharer.receive(&request, T0, &mut rng).unwrap();
-    sharer.approve(&viewer.id()).unwrap();
+    admit(&mut sharer, &request, T0, &mut rng);
     let rekey = sharer.rekey(T0, &mut rng).unwrap();
     let grant = &rekey.messages[0].1;
     let ViewerEvent::Granted { key, ack } = viewer.receive(grant, T0, &mut rng).unwrap() else {
@@ -404,7 +413,8 @@ fn rekey_grants_only_approved_requests() {
     let mut sharer = sharer(&link);
     let mut rng = rng(31);
     let (_, request) = request(&link, T0, &mut rng);
-    let SharerEvent::Requested { viewer, .. } = sharer.receive(&request, T0, &mut rng).unwrap()
+    let SharerEvent::Requested { viewer, digest, .. } =
+        sharer.receive(&request, T0, &mut rng).unwrap()
     else {
         panic!("expected a request");
     };
@@ -413,7 +423,8 @@ fn rekey_grants_only_approved_requests() {
         [(viewer, ViewerState::Requested)]
     );
     assert!(sharer.rekey(T0, &mut rng).unwrap().messages.is_empty());
-    sharer.approve(&viewer).unwrap();
+    assert_eq!(sharer.approve(&viewer, &[0; 32]), Err(Error::UnknownViewer));
+    sharer.approve(&viewer, &digest).unwrap();
     assert_eq!(
         sharer.viewers().collect::<Vec<_>>(),
         [(viewer, ViewerState::Approved)]
@@ -421,11 +432,57 @@ fn rekey_grants_only_approved_requests() {
     let rekey = sharer.rekey(T0 + 1000, &mut rng).unwrap();
     assert_eq!(rekey.messages.len(), 1);
     assert_eq!(rekey.messages[0].0, viewer);
-    assert_eq!(sharer.approve(&[0; 16]), Err(Error::UnknownViewer));
+    assert_eq!(sharer.approve(&[0; 16], &digest), Err(Error::UnknownViewer));
     assert_eq!(
-        sharer.approve(&viewer),
+        sharer.approve(&viewer, &digest),
         Err(Error::UnknownViewer),
         "already granted"
+    );
+}
+
+/// N1: an approval names the request by its digest, so a late approval cannot grant a
+/// newer request that reuses the viewer id.
+#[test]
+fn late_approvals_name_the_request() {
+    let link = link(45);
+    let keys = link.keys();
+    let mut sharer = sharer(&link);
+    let mut rng = rng(46);
+    let (_, original) = request(&link, T0, &mut rng);
+    let SharerEvent::Requested { viewer, digest, .. } =
+        sharer.receive(&original, T0, &mut rng).unwrap()
+    else {
+        panic!("expected a request");
+    };
+    // The request expires while its binding is verified; a rekey drops it.
+    let later = T0 + REQUEST_LIFETIME_MS + 1;
+    sharer.rekey(later, &mut rng).unwrap();
+    assert_eq!(sharer.viewers().count(), 0);
+
+    // A link holder sends a new request under the same viewer id, with its own pk_v.
+    let (_, other) = request(&link, later, &mut rng);
+    let (_, mut body) = open_message(&keys, &other).unwrap();
+    body[..16].copy_from_slice(&viewer);
+    let reused = seal_message(&keys, REQUEST, &body, &mut rng).unwrap();
+    let SharerEvent::Requested { digest: newer, .. } =
+        sharer.receive(&reused, later, &mut rng).unwrap()
+    else {
+        panic!("expected a request");
+    };
+    assert_ne!(newer, digest);
+
+    // The original verification finishes late.
+    assert_eq!(sharer.approve(&viewer, &digest), Err(Error::UnknownViewer));
+    assert_eq!(
+        sharer.viewers().collect::<Vec<_>>(),
+        [(viewer, ViewerState::Requested)]
+    );
+    assert!(
+        sharer
+            .rekey(later + 1000, &mut rng)
+            .unwrap()
+            .messages
+            .is_empty()
     );
 }
 
@@ -482,8 +539,7 @@ fn passive_link_holder_cannot_decrypt() {
     let mut sharer = sharer(&link);
     let mut rng = rng(12);
     let (mut viewer, request) = request(&link, T0, &mut rng);
-    sharer.receive(&request, T0, &mut rng).unwrap();
-    sharer.approve(&viewer.id()).unwrap();
+    admit(&mut sharer, &request, T0, &mut rng);
     let first = sharer.rekey(T0, &mut rng).unwrap();
     let grant = first.messages[0].1.clone();
     let ViewerEvent::Granted { key, ack } = viewer.receive(&grant, T0, &mut rng).unwrap() else {
@@ -536,8 +592,7 @@ fn any_link_holder_can_act_as_sharer() {
     let mut rng = rng(35);
     let (mut viewer, request) = request(&link, T0, &mut rng);
     genuine.receive(&request, T0, &mut rng).unwrap();
-    impostor.receive(&request, T0, &mut rng).unwrap();
-    impostor.approve(&viewer.id()).unwrap();
+    admit(&mut impostor, &request, T0, &mut rng);
     let forged = impostor.rekey(T0, &mut rng).unwrap();
     let ViewerEvent::Granted { key, .. } =
         viewer.receive(&forged.messages[0].1, T0, &mut rng).unwrap()
@@ -561,9 +616,8 @@ fn parties_without_the_link_secret_are_rejected() {
 
     // An interceptor relaying between two links: the sharer's grant does not open under
     // the other link's keys.
-    let (viewer, request) = self::request(&link, T0, &mut rng);
-    sharer.receive(&request, T0, &mut rng).unwrap();
-    sharer.approve(&viewer.id()).unwrap();
+    let (_, request) = self::request(&link, T0, &mut rng);
+    admit(&mut sharer, &request, T0, &mut rng);
     let grant = sharer.rekey(T0, &mut rng).unwrap().messages.remove(0).1;
     assert_eq!(
         outsider.receive(&grant, T0, &mut rng).err(),
@@ -578,7 +632,10 @@ fn replays_reflections_and_bad_confirmations_fail() {
     let mut sharer = sharer(&link);
     let mut rng = rng(14);
     let (mut viewer, request) = request(&link, T0, &mut rng);
-    sharer.receive(&request, T0, &mut rng).unwrap();
+    let SharerEvent::Requested { digest, .. } = sharer.receive(&request, T0, &mut rng).unwrap()
+    else {
+        panic!("expected a request");
+    };
     assert_eq!(
         sharer.receive(&request, T0, &mut rng).err(),
         Some(Error::Replay)
@@ -589,7 +646,7 @@ fn replays_reflections_and_bad_confirmations_fail() {
         Some(Error::Unexpected)
     );
 
-    sharer.approve(&viewer.id()).unwrap();
+    sharer.approve(&viewer.id(), &digest).unwrap();
     let grant = sharer.rekey(T0, &mut rng).unwrap().messages.remove(0).1;
     assert_eq!(
         sharer.receive(&grant, T0, &mut rng).err(),
@@ -668,8 +725,7 @@ fn time_limits_and_clock_steps() {
 
     // A grant after the request's lifetime, and a viewer that never confirms.
     let (mut slow, request) = self::request(&link, T0, &mut rng);
-    sharer.receive(&request, T0, &mut rng).unwrap();
-    sharer.approve(&slow.id()).unwrap();
+    admit(&mut sharer, &request, T0, &mut rng);
     let grant = sharer.rekey(T0, &mut rng).unwrap().messages.remove(0).1;
     assert_eq!(sharer.rekey(T0 + 999, &mut rng).err(), Some(Error::TooSoon));
     assert_eq!(
@@ -730,9 +786,8 @@ fn caps() {
     let mut now = T0;
     while sharer.viewers().count() < MAX_VIEWERS {
         for _ in 0..MAX_PENDING.min(MAX_VIEWERS - sharer.viewers().count()) {
-            let (viewer, request) = request(&link, now, &mut rng);
-            sharer.receive(&request, now, &mut rng).unwrap();
-            sharer.approve(&viewer.id()).unwrap();
+            let (_, request) = request(&link, now, &mut rng);
+            admit(&mut sharer, &request, now, &mut rng);
         }
         sharer.rekey(now, &mut rng).unwrap();
         now += 1000;
@@ -877,8 +932,7 @@ fn mutated_messages_are_rejected() {
     let mut sharer = sharer(&link);
     let mut rng = rng(22);
     let (mut viewer, request) = request(&link, T0, &mut rng);
-    sharer.receive(&request, T0, &mut rng).unwrap();
-    sharer.approve(&viewer.id()).unwrap();
+    admit(&mut sharer, &request, T0, &mut rng);
     let grant = sharer.rekey(T0, &mut rng).unwrap().messages.remove(0).1;
     let mut noise = self::rng(23);
     for message in [&request, &grant] {

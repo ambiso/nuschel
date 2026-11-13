@@ -44,8 +44,9 @@ pub const MAX_PENDING: usize = 32;
 pub const MAX_VIEWERS: usize = 256;
 /// Request nonces remembered until their `not_after`.
 pub const MAX_SEEN: usize = 256;
-/// Rekeys a viewer may have missed and still catch up.
-const MAX_MISSED_REKEYS: u64 = 64;
+/// Rekeys a viewer may have missed and still catch up. Further behind, every Rekey
+/// fails with [`Error::LimitReached`] and the viewer has to join again.
+pub const MAX_MISSED_REKEYS: u64 = 64;
 
 pub(crate) const REQUEST: u8 = 1;
 pub(crate) const GRANT: u8 = 2;
@@ -60,7 +61,9 @@ pub type ViewerId = [u8; 16];
 
 /// The sharer's key for one epoch; [`Sharer::rekey`] returns it once. Hand it to one
 /// `nuschl_sframe::SendKey`: a second set of encryptors for the same epoch repeats
-/// AES-GCM nonces.
+/// AES-GCM nonces. The key authority never sends an epoch's key to a restarted sender
+/// (a new encoder, track or worker process); it rekeys, and the new sender gets the new
+/// epoch's key.
 pub struct SendKey {
     epoch: u32,
     key: Secret,
@@ -356,10 +359,12 @@ pub enum ViewerState {
 
 #[derive(Debug)]
 pub enum SharerEvent {
-    /// A viewer asked to join. Verify the binding against its digest, then call
-    /// [`Sharer::approve`]; without a binding policy, approve at once.
+    /// A viewer asked to join. Verify the binding against `digest`, then call
+    /// [`Sharer::approve`] with both; without a binding policy, approve at once.
     Requested {
         viewer: ViewerId,
+        /// This request's [`JoinDraft::binding_digest`], which covers pk_v.
+        digest: [u8; 32],
         binding: Option<VerifiableBinding>,
     },
     /// The request names credentials this sharer lacks; send `message` to the viewer.
@@ -380,6 +385,7 @@ pub struct Rekey {
 
 struct Pending {
     viewer: ViewerId,
+    digest: [u8; 32],
     body: Vec<u8>,
     not_after: u64,
     approved: bool,
@@ -482,36 +488,39 @@ impl Sharer {
         }
         self.seen.push((request.nonce, request.not_after));
         let viewer = request.viewer;
+        let digest = binding_digest(
+            &self.keys,
+            &viewer,
+            &request.nonce,
+            request.not_after,
+            request.public_key,
+        );
         let binding = match &request.binding {
             None => None,
-            Some(binding) => {
-                let digest = binding_digest(
-                    &self.keys,
-                    &viewer,
-                    &request.nonce,
-                    request.not_after,
-                    request.public_key,
-                );
-                match self.credentials.resolve(binding, digest)? {
-                    Ok(binding) => Some(binding),
-                    Err(missing) => {
-                        let mut reply = viewer.to_vec();
-                        reply.push(u8::try_from(missing.len()).expect("at most 4"));
-                        reply.extend(missing.iter().flatten());
-                        let message = seal_message(&self.keys, NEED_CREDENTIALS, &reply, rng)?;
-                        return Ok(SharerEvent::NeedCredentials { viewer, message });
-                    }
+            Some(binding) => match self.credentials.resolve(binding, digest)? {
+                Ok(binding) => Some(binding),
+                Err(missing) => {
+                    let mut reply = viewer.to_vec();
+                    reply.push(u8::try_from(missing.len()).expect("at most 4"));
+                    reply.extend(missing.iter().flatten());
+                    let message = seal_message(&self.keys, NEED_CREDENTIALS, &reply, rng)?;
+                    return Ok(SharerEvent::NeedCredentials { viewer, message });
                 }
-            }
+            },
         };
         let not_after = request.not_after;
         self.pending.push(Pending {
             viewer,
+            digest,
             body,
             not_after,
             approved: false,
         });
-        Ok(SharerEvent::Requested { viewer, binding })
+        Ok(SharerEvent::Requested {
+            viewer,
+            digest,
+            binding,
+        })
     }
 
     fn ack(&mut self, body: &[u8]) -> Result<SharerEvent, Error> {
@@ -534,12 +543,14 @@ impl Sharer {
         Ok(SharerEvent::Confirmed(viewer))
     }
 
-    /// Lets the next [`Sharer::rekey`] grant this request.
-    pub fn approve(&mut self, viewer: &ViewerId) -> Result<(), Error> {
+    /// Lets the next [`Sharer::rekey`] grant the request `Requested` reported with
+    /// this viewer id and digest. A later request that reuses the viewer id has another
+    /// digest and stays unapproved.
+    pub fn approve(&mut self, viewer: &ViewerId, digest: &[u8; 32]) -> Result<(), Error> {
         let pending = self
             .pending
             .iter_mut()
-            .find(|pending| pending.viewer == *viewer)
+            .find(|pending| pending.viewer == *viewer && pending.digest == *digest)
             .ok_or(Error::UnknownViewer)?;
         pending.approved = true;
         Ok(())

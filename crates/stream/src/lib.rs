@@ -80,7 +80,14 @@
 //! **Delivery.** [`Sharer::rekey`] returns the messages and the new [`SendKey`]. Send the
 //! messages, send them again after [`RESEND_AFTER_MS`] (viewers drop duplicates as
 //! replays), and switch the encryptors to the new key [`SWITCH_AFTER_MS`] after the
-//! first send. A viewer that missed a Rekey catches up with the next one.
+//! first send. A viewer that missed Rekeys catches up with the next one, up to
+//! [`MAX_MISSED_REKEYS`]; further behind, a Rekey fails with [`Error::LimitReached`] and
+//! the viewer joins again. Rekeys carry no acknowledgement, so the sharer cannot tell;
+//! the old join's id stays in its roster until the caller removes it.
+//!
+//! **Restarted senders.** Never send an epoch's key to a restarted sender (a new
+//! encoder, track or worker process): its counters start at zero and would repeat
+//! AES-GCM nonces. Rekey, and give the new sender the new epoch's key.
 //!
 //! **Who can do what.**
 //! - A passive party with S and every recording cannot decrypt: sk_v and every epoch
@@ -107,8 +114,8 @@ use zeroize::Zeroizing;
 
 pub use credentials::{Binding, CredentialCache, Fingerprint, VerifiableBinding, fingerprint};
 pub use exchange::{
-    JoinDraft, RESEND_AFTER_MS, ReceiveKey, Rekey, SWITCH_AFTER_MS, SendKey, Sharer, SharerEvent,
-    Viewer, ViewerEvent, ViewerId, ViewerState,
+    JoinDraft, MAX_MISSED_REKEYS, RESEND_AFTER_MS, ReceiveKey, Rekey, SWITCH_AFTER_MS, SendKey,
+    Sharer, SharerEvent, Viewer, ViewerEvent, ViewerId, ViewerState,
 };
 pub use link::{Link, LinkKeys};
 
