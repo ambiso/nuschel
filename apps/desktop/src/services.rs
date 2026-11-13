@@ -164,7 +164,7 @@ impl Services {
         self.handle.spawn(async move {
             let pixels = match content_worker() {
                 Some(worker) => match nuschl_ipc::host::preview(
-                    &worker,
+                    worker,
                     nuschl_ipc::preview::Request::RenderImage {
                         schema: nuschl_ipc::preview::SCHEMA,
                         image,
