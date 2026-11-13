@@ -3,29 +3,67 @@
   import { store } from "../store.svelte.js";
   import { resource } from "../resource.svelte.js";
   import { query } from "../api.js";
-  import { ALBUM_LISTS, buildRoute, formatDuration, totalDuration } from "../logic.js";
+  import { ALBUM_LISTS, buildRoute, formatDuration, shareRoute, shareUrl, totalDuration } from "../logic.js";
   import { startItemDrag } from "../dnd.js";
   import Cover from "./Cover.svelte";
   import MediaCard from "./MediaCard.svelte";
   import SongList from "./SongList.svelte";
+  import SongPage from "./SongPage.svelte";
   import Icon from "./Icon.svelte";
 
   let { route } = $props();
   let page = $state(0);
   const namespace = store.browseKey;
   const current = $derived(namespace !== null && namespace === store.browseKey && store.connection === "open" && !store.invalid);
+  const sonicView = $derived(route.view === "similar" || route.view === "path");
   const result = resource(() => {
     if (!current || (route.library != null && !store.browseItemCurrent({ library: route.library, namespace }))
-      || (route.id != null && route.namespace !== namespace)) return null;
+      || ((route.id != null || route.to != null) && route.namespace !== namespace)) return null;
     if (route.view === "search") return route.q.trim() ? query("api/search", { q: route.q }) : null;
     if (route.view === "albums") return query("api/albums", { library: route.library, list: route.list, page });
+    if (route.view === "path") return query("api/path", { library: route.library, from: route.from, to: route.to });
     return query(`api/${route.view}`, { library: route.library, ...(route.id == null ? {} : { id: route.id }) });
   }, () => store.browseSignal);
   const data = $derived(current ? result.data : null);
-  const detail = $derived(data?.[route.view] ?? null);
+  const detail = $derived(sonicView ? null : data?.[route.view] ?? null);
   const songs = $derived(data?.songs ?? []);
+  const matches = $derived(sonicView ? data?.matches ?? [] : []);
+  const matchSongs = $derived(matches.map((match) => match.track));
+  const sonicItem = $derived(route.view === "path"
+    ? { kind: "path", library: route.library, id: route.from, to: route.to, namespace }
+    : { kind: "similar", library: route.library, id: route.id, namespace });
   const titles = { albums: "Albums", artists: "Artists", playlists: "Playlists", search: "Search" };
-  const heading = $derived(titles[route.view] ?? detail?.name ?? "Loading…");
+  const heading = $derived(titles[route.view]
+    ?? (route.view === "similar" ? (data?.song ? `Similar to ${data.song.title}` : "Similar songs")
+      : route.view === "path" ? (matches.length ? `Blend: ${matches[0].track.title} → ${matches.at(-1).track.title}` : "Blend")
+      : route.view === "song" ? data?.song?.title ?? (data ? "Song" : "Loading…")
+      : detail?.name ?? "Loading…"));
+  const libraryKeys = $derived(store.snapshot?.library_keys ?? []);
+  const libraryRoute = $derived(typeof route.library === "number");
+  const shareProblem = $derived(route.sharedLibrary != null || (libraryRoute && (!current || libraryKeys[route.library] === undefined))
+    ? "Sharing is available once the library is loaded."
+    : shareRoute(route, libraryKeys) === null ? "Copy link is unavailable: another library has the same name and server, so a shared link could not tell them apart." : null);
+  const link = $derived(shareProblem === null ? shareUrl(location.href, route, libraryKeys) : null);
+  let manualLink = $state(null);
+
+  async function copyLink() {
+    const text = link;
+    if (text === null) return;
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error("The clipboard is unavailable.");
+      await navigator.clipboard.writeText(text);
+      manualLink = null;
+      store.toast("Link copied — it works for people who have their own link to this bot.");
+    } catch {
+      // Plain HTTP pages and denied permissions have no clipboard: let the user copy it by hand.
+      manualLink = text;
+    }
+  }
+
+  function selectAll(node) {
+    node.focus();
+    node.select();
+  }
 
   function changePage(next) {
     if (!current) return;
@@ -37,14 +75,26 @@
 <section class="browse" aria-labelledby="browse-title" aria-busy={result.loading}>
   <div class="section-heading">
     <h1 id="browse-title">{heading}</h1>
-    {#if route.view === "albums"}
-      <label class="sort"><span class="visually-hidden">Sort albums</span>
-        <select value={route.list} disabled={!current} onchange={(event) => { if (current) store.navigate({ ...route, list: event.currentTarget.value }); }}>
-          {#each ALBUM_LISTS as [value, label]}<option {value}>{label}</option>{/each}
-        </select>
-      </label>
-    {/if}
+    <div class="heading-actions">
+      {#if route.view === "albums"}
+        <label class="sort"><span class="visually-hidden">Sort albums</span>
+          <select value={route.list} disabled={!current} onchange={(event) => { if (current) store.navigate({ ...route, list: event.currentTarget.value }); }}>
+            {#each ALBUM_LISTS as [value, label]}<option {value}>{label}</option>{/each}
+          </select>
+        </label>
+      {/if}
+      <button class="share" disabled={link === null} aria-label="Copy link to this page" aria-describedby={shareProblem === null ? undefined : "share-problem"} title={shareProblem === null ? "Copy a link for people who have their own link to this bot" : undefined} onclick={copyLink}><Icon name="link" size={18} /> Copy link</button>
+    </div>
   </div>
+  {#if shareProblem !== null}
+    <p id="share-problem" class="share-problem muted small">{shareProblem}</p>
+  {/if}
+  {#if manualLink !== null}
+    <div class="manual-link">
+      <label class="muted small" for="share-link">Copy this link. It works for people who have their own link to this bot.</label>
+      <input id="share-link" type="text" readonly value={manualLink} use:selectAll onfocus={(event) => event.currentTarget.select()} />
+    </div>
+  {/if}
   {#if route.view === "albums"}
     <div class="pagination">
       <button disabled={!current || page === 0 || result.loading} onclick={() => changePage(page - 1)}>Previous</button>
@@ -96,6 +146,24 @@
         </section>
       {/each}
       {#if !data.results.length}<p class="notice muted">No results.</p>{/if}
+    {:else if sonicView}
+      <div class="sonic-header">
+        {#if route.view === "path"}
+          <p class="muted">Songs that lead step by step from the first song to the last, picked by how they sound.</p>
+        {/if}
+        {#if route.view === "similar" && data.song?.artist}
+          <p>{#if data.song.artist_id}<a href={buildRoute({ view: "artist", library: data.song.library, id: data.song.artist_id, namespace })}>{data.song.artist}</a>{:else}{data.song.artist}{/if}</p>
+        {/if}
+        <p class="muted metadata"><span>{matchSongs.length} tracks</span><span>{formatDuration(totalDuration(matchSongs))}</span></p>
+        <div class="detail-actions">
+          <button class="primary" disabled={!current || !store.player || !matches.length} title={route.view === "similar" ? "Adds every song listed except exact copies of this one" : undefined} onclick={() => store.add(store.selected, sonicItem)}><Icon name="add" /> Add all</button>
+          <button disabled={!current || !store.player || !matches.length} title={route.view === "similar" ? "Plays every song listed next except exact copies of this one" : undefined} onclick={() => store.add(store.selected, sonicItem, 0)}><Icon name="next" /> Play all next</button>
+        </div>
+      </div>
+      <SongList songs={matchSongs} {namespace} covers similarities={matches.map((match) => match.similarity)} />
+      {#if !matches.length}<p class="notice muted">{route.view === "similar" ? "The library found no similar songs." : "The library found no songs to blend these two."}</p>{/if}
+    {:else if route.view === "song"}
+      {#if data.song}<SongPage {data} {namespace} {current} />{:else}<p class="notice muted">This song is not in the library.</p>{/if}
     {:else if detail}
       <div class="detail-header" role="group" aria-label={detail.name} draggable={current && route.view !== "artist"} ondragstart={(event) => {
         if (route.view !== "artist") startItemDrag(event, route.view, detail.library, detail.id, detail.name, namespace);
@@ -133,7 +201,12 @@
 </section>
 
 <style>
-  .section-heading { display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; margin-bottom: 1rem; }
+  .section-heading { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem 1rem; flex-wrap: wrap; margin-bottom: 1rem; }
+  .heading-actions { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+  .share { display: inline-flex; align-items: center; gap: 0.35rem; white-space: nowrap; }
+  .manual-link { display: grid; gap: 0.35rem; margin: -0.25rem 0 1rem; }
+  .share-problem { margin: -0.25rem 0 1rem; }
+  .manual-link input { width: 100%; min-width: 0; }
   h1 { margin: 0; overflow-wrap: anywhere; }
   .sort select { max-width: 100%; }
   .pagination { display: flex; align-items: center; justify-content: center; gap: 1rem; margin: 0 0 1.25rem; }
@@ -144,5 +217,6 @@
   .detail-info { min-width: 0; }
   .metadata { display: flex; flex-wrap: wrap; gap: 0.7rem; }
   .detail-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+  .sonic-header { margin: 0 0 1.25rem; }
   @media (max-width: 600px) { .detail-header { gap: 1rem; align-items: flex-start; } .detail-art { width: 6.5rem; } .detail-actions { flex-direction: column; align-items: flex-start; } }
 </style>

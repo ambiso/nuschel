@@ -29,23 +29,17 @@ export default defineConfig({
         fs.copyFileSync(path.join(output, "NOTICES.txt"), path.join(noticeOut, "licenses/NOTICES.txt"));
       },
     },
-    {
-      name: "musicbot-token-entry",
-      configureServer(server) {
-        // Serve the app without redirecting away from the secret-token URL.
-        // Vite handles its own source/HMR requests; only API/art go to the bot.
-        server.middlewares.use((request, _response, next) => {
-          if (/^\/u\/[^/]+\/(?:\?.*)?$/.test(request.url ?? "")) {
-            request.url = `/index.html${(request.url ?? "").includes("?") ? request.url.slice(request.url.indexOf("?")) : ""}`;
-          }
-          next();
-        });
-      },
-    },
   ],
   server: {
+    // The page runs at `/` and authenticates with the bot's cookie: open
+    // `/u/<token>/` once so the bot sets it and redirects here. Vite serves
+    // index.html and source modules (including /assets) itself.
     proxy: {
-      "^/u/[^/]+/(?:api|art|licenses)(?:/|\\?|$)": {
+      "^/(?:api|art|licenses)(?:/|\\?|$)": {
+        target: "http://localhost:8474",
+        changeOrigin: true,
+      },
+      "^/u/": {
         target: "http://localhost:8474",
         changeOrigin: true,
       },
