@@ -79,6 +79,7 @@ username = "DJ2"
         codec_worker: std::path::PathBuf::from("/nonexistent/nuschl-musicbot-codec-worker"),
         tokens: Tokens::load(directory.join("tokens.json")).unwrap(),
         persistence: Mutex::new(()),
+        covers: crate::covers::CoverCache::open(directory.join("covers"), 0).unwrap(),
         rating_revision: std::sync::atomic::AtomicU64::new(0),
     }
 }
