@@ -1878,8 +1878,8 @@ async fn connect_once(
     let mut deafened = restore.deafened;
     let mut voice_revision = 0_u64;
     let mut voice_allowed = true;
-    // The server stops us from speaking (it suppressed us, no Speak
-    // permission, or muted or deafened us): see `restrict`. Sessions it
+    // The server restricts us (it suppressed us, no Speak permission, or
+    // muted or deafened us): see `hold_while_blocked`. Sessions it
     // restricts, known before our own is.
     let mut restricted = false;
     let mut restricted_users = std::collections::BTreeSet::<u32>::new();
@@ -1989,8 +1989,8 @@ async fn connect_once(
                 }
                 if let Command::SetSelf { muted: mute, deafened: deaf } = &command {
                     voice_revision = voice_revision.wrapping_add(1);
-                    // An unmute taken while the server restricts us stays muted (#199).
-                    let next = *mute || *deaf || restricted;
+                    let mut next = *mute || *deaf;
+                    hold_while_blocked(restricted, bitrate, &mut next, &mut voice_revision);
                     let cue = crate::sounds::self_state((muted, deafened), (next, *deaf));
                     muted = next; deafened = *deaf;
                     if muted && std::mem::take(&mut transmitting) {
@@ -2100,9 +2100,10 @@ async fn connect_once(
                     }
                     own_session = Some(connected_session);
                     let own_session = connected_session;
-                    restrict(restricted_users.contains(&own_session), &mut restricted, &mut muted, &mut voice_revision);
+                    restricted = restricted_users.contains(&own_session);
                     budget = max_bandwidth;
                     bitrate = VoiceBitrate::resolve(requested, budget).effective;
+                    hold_while_blocked(restricted, bitrate, &mut muted, &mut voice_revision);
                     let (sender, receiver) = mpsc::channel(64);
                     let link = media::Link { revision: voice_revision, voice_allowed, muted, deafened, bitrate, loss_percent };
                     hub.send(media::Control::Attach { server: id.clone(), generation, link, voice: sender });
@@ -2115,9 +2116,8 @@ async fn connect_once(
                         budget = max_bandwidth;
                         let next = VoiceBitrate::resolve(requested, budget).effective;
                         if (next == 0) != (bitrate == 0) { voice_revision = voice_revision.wrapping_add(1); }
-                        // No room for voice mutes us, and we stay muted when it returns (#199).
-                        muted |= next == 0;
                         bitrate = next;
+                        hold_while_blocked(restricted, bitrate, &mut muted, &mut voice_revision);
                         if voice.is_some() {
                             hub.send(media::Control::Update { server: id.clone(), generation,
                                 link: media::Link { revision: voice_revision, voice_allowed, muted, deafened, bitrate, loss_percent }, cue: None });
@@ -2148,7 +2148,8 @@ async fn connect_once(
                             own_registration = user.user_id;
                             let _ = session_commands.send(Command::Identity(nuschl_session::identity::IdentityCommand::Refresh)).await;
                         }
-                        if restrict(restricts, &mut restricted, &mut muted, &mut voice_revision) {
+                        restricted = restricts;
+                        if hold_while_blocked(restricted, bitrate, &mut muted, &mut voice_revision) {
                             if std::mem::take(&mut transmitting) {
                                 let _ = session_commands.try_send(silent_terminator(&mut sequence));
                                 mark_talking(events, &id, generation, &mut speaking, user.session, false).await;
@@ -2268,12 +2269,18 @@ async fn connect_once(
 
 const TALK_HOLD: std::time::Duration = std::time::Duration::from_millis(280);
 
-/// Our own user as the server restricts it (suppressed, server muted or
-/// deafened) or lifts that. A restriction mutes us in a new routing epoch,
-/// and we stay muted after it lifts (#199). Returns whether this muted us.
-fn restrict(restricts: bool, restricted: &mut bool, muted: &mut bool, revision: &mut u64) -> bool {
-    *restricted = restricts;
-    if !restricts || *muted {
+/// Keep the connection muted while the server stops our voice (#199): it
+/// restricts us (suppressed, server muted or deafened), or its budget leaves
+/// a voice `bitrate` of 0. That mutes us in a new routing epoch, an unmute
+/// taken meanwhile stays muted, and we stay muted after it lifts. Returns
+/// whether this muted us.
+fn hold_while_blocked(
+    restricted: bool,
+    bitrate: u32,
+    muted: &mut bool,
+    revision: &mut u64,
+) -> bool {
+    if *muted || !(restricted || bitrate == 0) {
         return false;
     }
     *muted = true;
@@ -4245,17 +4252,46 @@ mod action_scope_tests {
             _ => None,
         }
     }
-    /// #199: a restriction mutes us in a new routing epoch; its lift, or
-    /// another restriction while muted, keeps the epoch and us muted.
+    /// #199: a restriction or a lost voice budget mutes us in a new routing
+    /// epoch, an unmute taken meanwhile stays muted, and its lift keeps us
+    /// muted until the next unmute.
     #[test]
-    fn a_restriction_mutes_us_and_its_lift_keeps_us_muted() {
-        let (mut restricted, mut muted, mut revision) = (false, false, 4);
-        assert!(restrict(true, &mut restricted, &mut muted, &mut revision));
-        assert_eq!((restricted, muted, revision), (true, true, 5));
-        assert!(!restrict(false, &mut restricted, &mut muted, &mut revision));
-        assert_eq!((restricted, muted, revision), (false, true, 5));
-        assert!(!restrict(true, &mut restricted, &mut muted, &mut revision));
-        assert_eq!((restricted, muted, revision), (true, true, 5));
+    fn a_blocked_voice_holds_the_connection_muted() {
+        for (restricted, bitrate) in [(true, 40_000), (false, 0)] {
+            let (mut muted, mut revision) = (false, 4);
+            assert!(hold_while_blocked(
+                restricted,
+                bitrate,
+                &mut muted,
+                &mut revision
+            ));
+            assert_eq!((muted, revision), (true, 5));
+            // The unmute a connection takes while blocked.
+            let mut unmute = false;
+            assert!(hold_while_blocked(
+                restricted,
+                bitrate,
+                &mut unmute,
+                &mut revision
+            ));
+            assert!(unmute);
+            // Lifted: we stay muted, until the next unmute is taken.
+            assert!(!hold_while_blocked(
+                false,
+                40_000,
+                &mut muted,
+                &mut revision
+            ));
+            assert!(muted);
+            let mut unmute = false;
+            assert!(!hold_while_blocked(
+                false,
+                40_000,
+                &mut unmute,
+                &mut revision
+            ));
+            assert!(!unmute);
+        }
     }
     #[tokio::test]
     async fn a_mute_is_neither_refused_nor_lost_while_the_connection_is_busy_or_reconnecting() {
