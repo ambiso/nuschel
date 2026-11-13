@@ -357,3 +357,29 @@ history. Logical full-state serialization volume remains substantial even with
 one-in-flight publication; that bound is not a claim of minimal total work.
 Notification/mention completion after deferred rendering, larger image viewing,
 and stronger Sent/draft revision correlation remain separate follow-up work.
+
+## Completion credit, serial dispatch and reconnects
+
+The SDK keeps each posted job's source credit until its exact completion ACK.
+Four of the shared 128 SDK RPC slots are reserved for these ACKs (ordinary
+commands use at most 124), rehydration keeps at most eight content requests in
+flight, and an invalid codec reply is acknowledged as a terminal failure. If an
+ACK still cannot be delivered, the bridge keeps that credit charged and starts no
+further codec work. If a cancelled posted job is not acknowledged within 15
+seconds of active runtime, the SDK retires the preview lane for the page: credit
+stays held, waiting and new rows show a reload message, and no replacement
+capacity is created. That is a logical bound, not a wall-clock promise while a
+background tab is suspended.
+
+The bridge gives the single content worker one job at a time, and the next only
+after the previous one has actually left the worker; a cancelled running job
+holds it until its real reply or owner retirement. The worker owner's execution
+deadline (eight seconds for content, two for formulas), which retires the owner,
+starts at dispatch; queue wait has a separate reject-only deadline. The SDK's
+12-second budget is a progress wall limit for the oldest unacknowledged posted
+job, including a cancelled one, so followers do not consume it while waiting.
+
+After a connection lifetime change, a successful derivative is re-keyed to the
+row's current origin only when its serial, revision, source SHA-256 and mode
+match. Any other handle is revoked and the row is requested again. Results of
+old in-flight jobs are never re-keyed and cannot replace current rows.

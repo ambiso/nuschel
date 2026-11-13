@@ -52,6 +52,12 @@ async function open(username,fault="",width=1280,trust=true) {
   if(!url.startsWith(origin+"/")){await route.abort();return;}
   if(/\/content-worker-[^/]+\.js$/.test(new URL(url).pathname)&&fault) {
    if(fault==="stall") {await route.fulfill({contentType:"text/javascript",body:'postMessage({kind:"ready"});onmessage=()=>{};'});return;}
+   if(fault==="slow") {
+    // Every real codec result is held 2.5s: a slow but healthy serial worker.
+    const response=await route.fetch();
+    const prelude=`const originalPost=self.postMessage.bind(self);self.postMessage=(value,...rest)=>{if(value?.kind==="result")setTimeout(()=>originalPost(value,...rest),2500);else originalPost(value,...rest);};`;
+    await route.fulfill({response,body:prelude+await response.text()});return;
+   }
    if(fault==="delay"||fault==="expire") {
     const response=await route.fetch();
     const prelude=`let delayed=false;const originalPost=self.postMessage.bind(self);self.postMessage=(value,...rest)=>{if(!delayed&&value?.kind==="result"&&typeof value.result==="string"&&(value.result.includes("stale-source-canary")||value.result.includes("expiry-source-canary-0"))){delayed=true;globalThis.fixtureDelayed=true;setTimeout(()=>originalPost(value,...rest),3000);}else originalPost(value,...rest);};`;
@@ -63,7 +69,7 @@ async function open(username,fault="",width=1280,trust=true) {
  const page=await context.newPage();
  await page.addInitScript(()=>{
   globalThis.captureCalls=0;navigator.mediaDevices.getUserMedia=()=>{captureCalls++;return Promise.reject(new Error("No capture in broker fixture"));};
-  const fixture=globalThis.brokerFixture={sdk:null,last:null,work:[],replies:[],pending:new Map(),workers:[],completions:[],codec:[],snapshots:0,snapshot_bytes:0,holdAck:false,heldAck:null,invalidateState:false,ackCount:0,commands:new Map(),errors:[],fatals:[]};
+  const fixture=globalThis.brokerFixture={sdk:null,last:null,work:[],replies:[],pending:new Map(),workers:[],completions:[],codec:[],snapshots:0,snapshot_bytes:0,holdAck:false,heldAck:null,invalidateState:false,ackCount:0,commands:new Map(),errors:[],fatals:[],requestIds:new Set(),requestResults:new WeakSet(),requestsOutstanding:0,requestsPeak:0,delayRequestResults:0,dropAck:false,droppedAck:null};
   const NativeWorker=globalThis.Worker;
   globalThis.Worker=class extends NativeWorker {
    constructor(...args) {
@@ -71,7 +77,8 @@ async function open(username,fault="",width=1280,trust=true) {
     if(String(args[0]).includes("content-worker-"))this.addEventListener("message",({data})=>{fixture.codec.push({kind:data?.kind,error:data?.error,result_bytes:typeof data?.result==="string"?data.result.length:null});if(fixture.codec.length>128)fixture.codec.shift();});
     if(!String(args[0]).includes("sdk.worker-"))return;
     this.fixtureSdk=true;fixture.sdk=this;
-    this.addEventListener("message",({data})=>{
+    this.addEventListener("message",event=>{const {data}=event;
+     if(data?.kind==="result"&&fixture.requestIds.delete(data.id))fixture.requestResults.add(event);
      if(data?.kind==="state"){if(fixture.invalidateState&&data.servers.length){fixture.invalidateState=false;data.servers[0].runtime_index=data.servers.length;}fixture.last=data;fixture.snapshots++;fixture.snapshot_bytes+=new TextEncoder().encode(JSON.stringify(data)).length;}
      if(data?.kind==="content_work")for(const operation of data.operations){fixture.work.push(operation);if(fixture.work.length>128)fixture.work.shift();}
      if(data?.kind==="fatal")fixture.fatals.push(data.message);
@@ -82,11 +89,29 @@ async function open(username,fault="",width=1280,trust=true) {
      }
     });
    }
+   // Fault injection at the App boundary only: hold content_request results so
+   // their RPC slots stay outstanding. The SDK has already processed them.
+   set onmessage(handler) {
+    if(!this.fixtureSdk||typeof handler!=="function"){super.onmessage=handler;return;}
+    super.onmessage=event=>{
+     if(!fixture.requestResults.delete(event))return handler.call(this,event);
+     const deliver=()=>{fixture.requestsOutstanding--;handler.call(this,event);};
+     if(fixture.delayRequestResults)setTimeout(deliver,fixture.delayRequestResults);else deliver();
+    };
+   }
+   get onmessage(){return super.onmessage;}
    postMessage(data,...rest) {
     if(data?.method==="state_applied")fixture.ackCount++;
     if(data?.method==="state_applied"&&fixture.holdAck){fixture.heldAck=data.args[0];return;}
     if(this.fixtureSdk&&data?.id!==undefined){fixture.commands.set(data.id,data.method);if(fixture.commands.size>256)throw Error("fixture command bound");}
     if(data?.method==="content_complete"){fixture.pending.set(data.id,data.args[0]);fixture.completions.push({request:data.args[0],bytes:data.args[1]?.length});if(fixture.completions.length>128)fixture.completions.shift();}
+    if(this.fixtureSdk&&data?.method==="content_request"&&data.id!==undefined){fixture.requestIds.add(data.id);fixture.requestsPeak=Math.max(fixture.requestsPeak,++fixture.requestsOutstanding);}
+    if(this.fixtureSdk&&data?.method==="content_complete"&&fixture.dropAck) {
+     // A lost ACK: the SDK never receives it, and the App sees a failed RPC.
+     fixture.dropAck=false;fixture.droppedAck=data.args[0];
+     queueMicrotask(()=>this.dispatchEvent(new MessageEvent("message",{data:{kind:"result",id:data.id,error:"Fixture dropped this content ACK before the SDK."}})));
+     return;
+    }
     return super.postMessage(data,...rest);
    }
   };
@@ -119,7 +144,7 @@ async function send(page,text) {
  await page.getByRole("button",{name:"Send",exact:true}).click();
  await page.waitForFunction(()=>document.querySelector("textarea")?.value==="");
 }
-const result={passed:false,artifact:root,stale:null,retired:null,expiry:null,recovery:null,stress:process.argv[7]==="stress",throughput:[]};
+const result={passed:false,artifact:root,stale:null,retired:null,expiry:null,slow:null,ack_loss:null,recovery:null,pressure:null,reconnect:null,stress:process.argv[7]==="stress",throughput:[]};
 let observer;
 async function hold(page){
  await page.evaluate(()=>{brokerFixture.holdAck=true;brokerFixture.heldAck=null;});
@@ -232,7 +257,9 @@ try {
  assert.ok(expiredWork.length>=1&&expiredWork.length<=4,"only actually posted jobs consume execution deadlines");
  await expirySdk.evaluate(()=>{const originalNow=performance.now.bind(performance);performance.now=()=>originalNow()+65000;});
  await rpc(expiry,"dismiss_notice",0); // one real refresh observes elapsed SDK deadline
- await expiry.waitForFunction(count=>document.querySelectorAll("article").length===7&&[...document.querySelectorAll("article button")].filter(node=>node.textContent==="Retry message preview").length===count,expiredWork.length,{timeout:10000});
+ // Posted jobs run one at a time; only the job holding the codec consumes its
+ // progress budget. Followers start theirs after its real ACK and render.
+ await expiry.waitForFunction(count=>document.querySelectorAll("article").length===7&&[...document.querySelectorAll("article button")].filter(node=>node.textContent==="Retry message preview").length===count,1,{timeout:10000});
  // Cursor identities had not acquired source/worker credit. They may now make
  // their FIRST admission; expired posted sources must never auto-resubmit.
  await expiry.waitForFunction(()=>brokerFixture.last.timeline.messages.every(message=>message.content_failed||!message.document.blocks.some(block=>block.kind==="text"&&block.text.startsWith("["))),null,{timeout:10000});
@@ -257,6 +284,46 @@ try {
  assert.equal(before,1);assert.equal(result.retired.content_workers,1);assert.equal(result.retired.capture_calls,0);
  assert.equal(await failed.locator("article").filter({hasText:"retired-source-third"}).count(),0,"retired codec never triggers privileged rendering fallback");
  await failed.screenshot({path:screenshot.replace(".png","-retired.png")});
+
+ // Six renders on a slow serial worker (2.5s each, ~15s in total). Each job's
+ // worker and SDK budgets start when it actually runs; queue wait never retires.
+ const slow=await open("broker-slow","slow");
+ const slowSources=Array.from({length:6},(_,index)=>`slow-source-canary-${index}`);
+ const slowStart=await slow.evaluate(()=>performance.now());
+ for(const source of slowSources)await send(slow,source);
+ try { await slow.waitForFunction(sources=>sources.every(source=>(brokerFixture.last?.timeline?.messages??[]).some(message=>message.content_token&&!message.content_failed&&message.document.blocks.some(block=>block.kind==="text"&&block.text.includes(source)))),slowSources,{timeout:45000}); }
+ catch(error) {
+  const diagnostic=await slow.evaluate(()=>({messages:brokerFixture.last?.timeline?.messages.map(({serial,content_token,content_failed,document})=>({serial,content_token,content_failed,text:document.blocks.map(block=>block.text).join(" ").slice(0,120)})),unavailable:[...document.querySelectorAll("small")].map(node=>node.textContent),work:brokerFixture.work.slice(-12),codec:brokerFixture.codec.slice(-12)}));
+  console.error("slow-diagnostic",JSON.stringify(diagnostic));result.slow_failure=diagnostic;await slow.screenshot({path:screenshot.replace(".png","-slow-failure.png")});throw error;
+ }
+ result.slow=await slow.evaluate(start=>({elapsed_ms:performance.now()-start,result_delay_ms:2500,renders:brokerFixture.codec.filter(entry=>entry.kind==="result").length,unavailable:[...document.querySelectorAll("small")].filter(node=>node.textContent.includes("Preview unavailable")).length,retries:[...document.querySelectorAll("article button")].filter(node=>node.textContent==="Retry message preview").length,content_workers:brokerFixture.workers.filter(url=>url.includes("content-worker-")).length,capture_calls:captureCalls}),slowStart);
+ assert.equal(result.slow.unavailable,0,"slow healthy jobs never retire the codec");assert.equal(result.slow.retries,0);
+ assert.ok(result.slow.renders>=6&&result.slow.elapsed_ms>=6*2500);assert.equal(result.slow.content_workers,1);assert.equal(result.slow.capture_calls,0);
+ await slow.screenshot({path:screenshot.replace(".png","-slow.png")});
+
+ // A content ACK lost before the SDK: credit stays held and the lane retires
+ // visibly. Only the SDK deadline clock moves (past the 12s progress budget,
+ // then past the 15s cancelled-ACK bound); no ACK is ever delivered for it.
+ const lost=await open("broker-ack-loss");
+ await send(lost,"ack-loss-before");
+ await lost.waitForFunction(()=>(brokerFixture.last?.timeline?.messages??[]).some(message=>message.content_token&&!message.content_failed));
+ await lost.evaluate(()=>{brokerFixture.dropAck=true;});
+ await send(lost,"ack-loss-dropped");
+ await lost.waitForFunction(()=>brokerFixture.droppedAck!==null);
+ const lostSdk=lost.workers().find(worker=>worker.url().includes("sdk.worker-"));assert.ok(lostSdk);
+ await lostSdk.evaluate(()=>{const originalNow=performance.now.bind(performance);globalThis.fixtureShift=0;performance.now=()=>originalNow()+globalThis.fixtureShift;});
+ await lostSdk.evaluate(()=>{globalThis.fixtureShift=13000;});await rpc(lost,"dismiss_notice",0);
+ await lost.waitForFunction(()=>brokerFixture.work.some(operation=>operation.kind==="cancel"&&operation.request===brokerFixture.droppedAck));
+ await lost.waitForFunction(()=>[...document.querySelectorAll("small")].some(node=>node.textContent==="Preview unavailable. Reload to try again."));
+ await lostSdk.evaluate(()=>{globalThis.fixtureShift=29000;});await rpc(lost,"dismiss_notice",0);
+ await send(lost,"ack-loss-after");
+ const stopped="[Message previews stopped because a preview job was not acknowledged. Reload this page to prepare previews again.]";
+ await lost.locator("article").filter({hasText:stopped}).first().waitFor({timeout:10000});
+ result.ack_loss=await lost.evaluate(()=>({dropped:brokerFixture.droppedAck,after_render_work:brokerFixture.work.filter(operation=>operation.kind==="render"&&operation.source==="ack-loss-after").length,errors:brokerFixture.errors.filter(error=>error.method==="content_complete").length,reload_client:[...document.querySelectorAll("button")].some(node=>node.textContent==="Reload client"),content_workers:brokerFixture.workers.filter(url=>url.includes("content-worker-")).length,sdk_workers:brokerFixture.workers.filter(url=>url.includes("sdk.worker-")).length,capture_calls:captureCalls}));
+ assert.equal(result.ack_loss.after_render_work,0,"a retired lane posts no further codec work");
+ assert.equal(result.ack_loss.errors,1);assert.equal(result.ack_loss.reload_client,false,"chat stays usable");
+ assert.equal(result.ack_loss.content_workers,1);assert.equal(result.ack_loss.sdk_workers,1);assert.equal(result.ack_loss.capture_calls,0);
+ await lost.screenshot({path:screenshot.replace(".png","-ack-loss.png")});
  if(result.stress) {
   const recovery=await open("broker-recovery");
   const sdk=recovery.workers().find(worker=>worker.url().includes("sdk.worker-"));assert.ok(sdk);
@@ -299,19 +366,41 @@ try {
    }
    result.throughput.push(await recovery.evaluate(({channel,metric})=>({channel,messages:brokerFixture.last.timeline.messages.length,milliseconds:performance.now()-metric.at,snapshots:brokerFixture.snapshots-metric.snapshots,snapshot_bytes:brokerFixture.snapshot_bytes-metric.bytes}),{channel,metric}));
   }
+  // Switching back to a busy conversation remounts ~900 rows. Hold every
+  // rehydration result 2s at the App boundary while recovery codec work
+  // completes: those RPCs stay few, and every content ACK still reaches the SDK.
+  const pressureErrors=await recovery.evaluate(()=>{brokerFixture.delayRequestResults=2000;brokerFixture.requestsPeak=brokerFixture.requestsOutstanding;return brokerFixture.errors.length;});
+  const pressureStart=await recovery.evaluate(()=>({at:performance.now(),completions:brokerFixture.completions.length}));
+  await rpc(recovery,"open",0,0);
+  await recovery.waitForFunction(()=>brokerFixture.last?.timeline?.channel===0&&!brokerFixture.last.timeline.loading&&brokerFixture.last.timeline.messages.length>=900);
+  try { await recovery.waitForFunction(()=>brokerFixture.last.timeline.messages.every(message=>!message.content_failed&&!message.document.blocks.some(block=>block.kind==="text"&&block.text.startsWith("["))),null,{timeout:60000}); }
+  catch(error) {
+   const diagnostic=await recovery.evaluate(()=>({count:brokerFixture.last?.timeline?.messages.length,missing:brokerFixture.last?.timeline?.messages.filter(message=>!message.content_token).length,peak:brokerFixture.requestsPeak,errors:brokerFixture.errors.slice(-6),work:brokerFixture.work.slice(-10).map(({kind,request})=>({kind,request}))}));
+   console.error("pressure-diagnostic",JSON.stringify(diagnostic));result.pressure_failure=diagnostic;throw error;
+  }
+  result.pressure=await recovery.evaluate(({errors,start})=>({milliseconds:performance.now()-start.at,messages:brokerFixture.last.timeline.messages.length,delayed_request_ms:brokerFixture.delayRequestResults,peak_request_rpcs:brokerFixture.requestsPeak,acks_sent:brokerFixture.completions.length-start.completions,ack_errors:brokerFixture.errors.slice(errors).filter(error=>error.method==="content_complete").length,request_errors:brokerFixture.errors.slice(errors).filter(error=>error.method==="content_request").length}),{errors:pressureErrors,start:pressureStart});
+  await recovery.evaluate(()=>{brokerFixture.delayRequestResults=0;});
+  assert.ok(result.pressure.peak_request_rpcs<=8,`rehydration RPCs in flight ${result.pressure.peak_request_rpcs}`);
+  assert.equal(result.pressure.ack_errors,0);assert.ok(result.pressure.acks_sent>0,"codec ACKs completed during held rehydration");
+  // A verified rendered row keeps its exact derivative across a reconnect of
+  // the visible conversation, and across another while inactive.
+  const derivative=await recovery.evaluate(serial=>brokerFixture.last.timeline.messages.find(message=>message.serial===serial)?.content_token??null,original.serial);
+  assert.ok(derivative,"canary has a derivative before reconnect");
+  await rpc(recovery,"disconnect",0);await rpc(recovery,"connect",0);
+  await recovery.waitForFunction(()=>brokerFixture.last?.servers[0].status==="connected",null,{timeout:20000});
+  await recovery.waitForFunction(({serial,token})=>brokerFixture.last?.timeline?.channel===0&&brokerFixture.last.timeline.messages.find(message=>message.serial===serial)?.content_token===token,{serial:original.serial,token:derivative},{timeout:10000});
+  await rpc(recovery,"open",0,4);await recovery.waitForFunction(()=>brokerFixture.last?.timeline?.channel===4);
   // Inactive row survives another real connection/lifetime change; then an
-  // actual user reopen rebuilds its original-source lease, without IDB success.
+  // actual user reopen rebinds its verified derivative, without IDB success.
   await rpc(recovery,"disconnect",0);await rpc(recovery,"connect",0);
   await recovery.waitForFunction(()=>brokerFixture.last?.servers[0].status==="connected",null,{timeout:20000});
   await rpc(recovery,"open",0,0);
   await recovery.waitForFunction(serial=>brokerFixture.last?.timeline?.channel===0&&brokerFixture.last.timeline.messages.some(message=>message.serial===serial),original.serial);
-  let restored=recovery.locator("article").filter({hasText:canary});
-  if(!await restored.count()) {
-   const row=recovery.locator("article").filter({hasText:"broker-recovery"});
-   const retry=row.getByRole("button",{name:"Retry message preview",exact:true});
-   if(await retry.count())await retry.click();
+  const restored=recovery.locator("article").filter({hasText:canary});
+  try {
+   await recovery.waitForFunction(({serial,token})=>brokerFixture.last.timeline.messages.find(message=>message.serial===serial)?.content_token===token,{serial:original.serial,token:derivative},{timeout:10000});
+   await restored.waitFor({timeout:30000});
   }
-  try { await restored.waitFor({timeout:30000}); }
   catch(error) {
    const diagnostic=await recovery.evaluate(serial=>({canary:brokerFixture.last?.timeline?.messages.find(message=>message.serial===serial),count:brokerFixture.last?.timeline?.messages.length,unavailable:[...document.querySelectorAll("small")].filter(node=>node.textContent.includes("Preview unavailable")).length,retries:[...document.querySelectorAll("article button")].filter(node=>node.textContent==="Retry message preview").length,canary_work:brokerFixture.work.filter(operation=>operation.source?.includes("UNSAVED_RECOVERY_CANARY")),recent_replies:brokerFixture.replies.slice(-5),completions:brokerFixture.completions.slice(-8),codec:brokerFixture.codec.slice(-8)}),original.serial);
    console.error("canary-recovery-diagnostic",JSON.stringify(diagnostic));result.recovery_failure=diagnostic;await recovery.screenshot({path:screenshot.replace(".png","-recovery-failure.png")});throw error;
@@ -321,6 +410,8 @@ try {
    return {serial:message.serial,status:message.status,content_token:message.content_token,content_failed:message.content_failed,count:brokerFixture.last.timeline.messages.length,workers:brokerFixture.workers.filter(url=>url.includes("content-worker-")).length,capture_calls:captureCalls};
   },original.serial);
   assert.equal(after.serial,original.serial);assert.equal(after.status,original.status);assert.equal(after.count,901);assert.equal(after.workers,1);assert.equal(after.capture_calls,0);
+  assert.equal(after.content_token,derivative,"the same verified derivative, no re-render or retry");assert.equal(after.content_failed,false);
+  result.reconnect={selected_reconnect_token_kept:true,inactive_reconnect_token_kept:true,token:derivative};
   // Literal tags prove retained Plain mode, rather than guessed legacy HTML.
   assert.equal(await restored.locator("em").count(),0);
   const dbCount=await recovery.evaluate(()=>new Promise((resolve,reject)=>{const request=indexedDB.open("nuschl-observed-history-v1");request.onerror=()=>reject(request.error);request.onsuccess=()=>{const db=request.result,tx=db.transaction("messages"),count=tx.objectStore("messages").count();count.onsuccess=()=>resolve(count.result);tx.oncomplete=()=>db.close();};}));
