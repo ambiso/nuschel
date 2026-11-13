@@ -254,6 +254,9 @@ impl<T: Platform + ?Sized> Platform for std::sync::Arc<T> {
     ) -> Result<(), String> {
         (**self).server_history(server, conversation, ticket, cache, page)
     }
+    fn cancel_history(&self, server: &str, epoch: u64) {
+        (**self).cancel_history(server, epoch)
+    }
     fn change_message(&self, change: ChangeRequest) -> Result<(), String> {
         (**self).change_message(change)
     }

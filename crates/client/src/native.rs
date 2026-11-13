@@ -4673,6 +4673,141 @@ mod reply_owner_tests {
         assert!(matches!(sinks_two.event().await, Event::History { .. }));
     }
     #[test]
+    fn boxed_arc_driver_reconnect_retires_old_pages_and_admits_the_new_epoch() {
+        // Match the TUI/desktop's Box<Arc<Driver>> dispatch. Never drive this
+        // runtime: the lazy supervisors cannot start helpers or devices, and
+        // the synthetic connection only receives commands in this test.
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let entered = runtime.enter();
+        let directory = std::env::temp_dir().join(format!("nuschl-arc-history-{}", request_id()));
+        let profile = Profile::open(Some(directory.clone())).unwrap();
+        let (driver, _events) = Driver::new(runtime.handle().clone(), profile, Default::default());
+        let driver = std::sync::Arc::new(driver);
+        let bookmark = ServerBookmark::new("Fixture", "localhost", 64738, "Ada").unwrap();
+        let id = bookmark.id.clone();
+        let (commands, mut queued) = mpsc::channel(8);
+        let (sounds, _sounds) = mpsc::channel(1);
+        driver.connections().insert(
+            id.clone(),
+            Connection {
+                generation: 7,
+                voice_route: Default::default(),
+                commands,
+                sounds,
+                task: runtime.spawn(async {}),
+            },
+        );
+        let mut client =
+            crate::Client::new(Box::new(driver.clone()), vec![bookmark], Default::default());
+        let server = &mut client.servers[0];
+        server.generation = 7;
+        server.status = crate::server::Status::Connected;
+        server.deafened = true;
+        server.history_source = HistorySource::ServerArchive;
+        server
+            .channels
+            .push(crate::conversation::ConversationState::channel(
+                2,
+                Some(0),
+                "Lobby".into(),
+                0,
+            ));
+        server.channels[1].conversation = Some(ASKED);
+        server.seen_channels.extend([0, 2]);
+        client.open(0, 2).unwrap();
+        let Command::Nuschl(NuschlRequest::History(first)) = queued.try_recv().unwrap() else {
+            panic!("initial history request missing");
+        };
+        let owner = from(&id, 7);
+        let PageRoute::Render(initial) =
+            pending_replies(&driver.pending).page(owner, &page(first.request_id, &ASKED), false)
+        else {
+            panic!("initial page was not admitted");
+        };
+        client.handle(Input::History {
+            server: id.clone(),
+            ticket: initial.ticket,
+            before: None,
+            messages: vec![],
+            next_before: None,
+        });
+        // Discard the incidental permission query, then leave an older page
+        // outstanding when the transport ends.
+        while queued.try_recv().is_ok() {}
+        client.load_history(Some(1)).unwrap();
+        let Command::Nuschl(NuschlRequest::History(old)) = queued.try_recv().unwrap() else {
+            panic!("old history request missing");
+        };
+        let (retired_ticket, retired_page) = {
+            let replies = pending_replies(&driver.pending);
+            let retired = &replies.pages[&old.request_id];
+            (retired.ticket.clone(), retired.page)
+        };
+        let admission = PageAdmission {
+            pending: driver.pending.clone(),
+            server: id.clone(),
+            generation: 7,
+            epoch: 0,
+        };
+        assert!(admission.current());
+        client.handle(Input::Reconnecting {
+            server: id.clone(),
+            generation: 7,
+            attempt: 1,
+            delay_secs: 1,
+            reason: "synthetic transport loss".into(),
+        });
+        assert_eq!(client.servers[0].page_epoch, 1);
+        assert!(
+            !admission.current(),
+            "boxed Arc must forward retirement to the concrete driver's registry"
+        );
+        assert!(
+            !pending_replies(&driver.pending)
+                .pages
+                .contains_key(&old.request_id)
+        );
+        assert!(
+            driver
+                .server_history(id.clone(), ASKED, (retired_ticket, None), retired_page)
+                .is_err(),
+            "a retired ticket cannot be re-enqueued"
+        );
+        for event in [
+            ServerEvent::ChannelInfo {
+                channel: 2,
+                conversation: Some(ASKED),
+            },
+            ServerEvent::Connected { session: 1 },
+        ] {
+            client.handle(Input::Server {
+                server: id.clone(),
+                generation: 7,
+                event,
+            });
+        }
+        let Command::Nuschl(NuschlRequest::History(new)) = queued.try_recv().unwrap() else {
+            panic!("reconnected catch-up request missing");
+        };
+        assert_eq!(new.anchor, Some(v1::history_request::Anchor::After(0)));
+        let PageRoute::Render(current) =
+            pending_replies(&driver.pending).page(owner, &page(new.request_id, &ASKED), false)
+        else {
+            panic!("new-epoch page was not admitted");
+        };
+        assert_eq!(current.ticket.owner.unwrap().epoch, 1);
+        assert!(!admission.current(), "new admission never revives old work");
+        drop(client);
+        drop(driver);
+        drop(entered);
+        drop(runtime);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
     fn page_epoch_revokes_decryption_and_already_removed_render_admissions_only() {
         let pending: Pending = Default::default();
         let owner = Owner {
