@@ -1482,7 +1482,9 @@ mod tests {
         static ADMISSION: Semaphore = Semaphore::const_new(1);
         let (_directory, bot, token) = listening_bot();
         bot.players[0].set_paused(true);
-        let response = listen_response(bot.clone(), token, 0, &ADMISSION).unwrap();
+        let response = listen_response(bot.clone(), token, 0, &ADMISSION)
+            .ok()
+            .unwrap();
         let mut stream = response.into_body().into_data_stream();
         assert_eq!(stream.next().await.unwrap().unwrap().as_ref(), &[0]);
         for _ in 0..3 {
