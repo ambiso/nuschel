@@ -153,28 +153,6 @@ pub fn pasted_name(tray: &[Attachment]) -> String {
         .unwrap_or_default()
 }
 
-/// A file size as file managers show it.
-pub fn human_size(bytes: u64) -> String {
-    const UNITS: [&str; 5] = ["kB", "MB", "GB", "TB", "PB"];
-    if bytes < 1000 {
-        return format!("{bytes} bytes");
-    }
-    let mut value = bytes as f64;
-    let mut unit = "";
-    for next in UNITS {
-        if value < 999.95 {
-            break;
-        }
-        value /= 1000.0;
-        unit = next;
-    }
-    if value < 9.995 {
-        format!("{value:.1} {unit}")
-    } else {
-        format!("{value:.0} {unit}")
-    }
-}
-
 /// The messages that carry `caption` (Mumble HTML) and `images`. Stock Mumble
 /// shows any number of images in a message, but the whole message must fit
 /// the server's image limit: one image each keeps every image as large as
@@ -328,16 +306,5 @@ mod tests {
         let tray = [image("Pasted image 2"), image("Pasted image 1")];
         assert_eq!(pasted_name(&tray), "Pasted image 3");
         assert_eq!(pasted_name(&tray[..1]), "Pasted image 1");
-    }
-
-    #[test]
-    fn sizes_read_like_a_file_manager() {
-        assert_eq!(human_size(0), "0 bytes");
-        assert_eq!(human_size(999), "999 bytes");
-        assert_eq!(human_size(1000), "1.0 kB");
-        assert_eq!(human_size(2_460_000), "2.5 MB");
-        assert_eq!(human_size(13_400_000), "13 MB");
-        assert_eq!(human_size(999_960), "1.0 MB");
-        assert_eq!(human_size(4_700_000_000), "4.7 GB");
     }
 }
