@@ -24636,6 +24636,10 @@ rec {
             packageId = "nuschl-ipc";
           }
           {
+            name = "serde_json";
+            packageId = "serde_json";
+          }
+          {
             name = "sqlx";
             packageId = "sqlx";
             usesDefaultFeatures = false;

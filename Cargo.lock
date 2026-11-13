@@ -7459,6 +7459,7 @@ dependencies = [
  "base64 0.22.1",
  "nuschl-core",
  "nuschl-ipc",
+ "serde_json",
  "sqlx",
  "tempfile",
  "thiserror 2.0.21",
