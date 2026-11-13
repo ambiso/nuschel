@@ -23148,7 +23148,7 @@ rec {
           {
             name = "tokio";
             packageId = "tokio";
-            features = [ "rt" "process" "io-util" "time" "rt-multi-thread" "sync" "fs" ];
+            features = [ "rt" "process" "io-util" "time" "rt-multi-thread" "signal" "sync" "fs" ];
           }
           {
             name = "tracing";

@@ -1206,6 +1206,14 @@ impl Profile {
         let (places, migration) = crate::layout::migrate(&profile.layout, &profile);
         profile.places = places;
         profile.migration = Arc::new(migration);
+        let layout = &profile.layout;
+        remove_stale_temporaries(&[
+            &layout.config,
+            &layout.state,
+            &layout.cache,
+            &profile.places.identity,
+            &profile.places.policy,
+        ]);
         // The storage worker's sandbox binds it, so it must exist.
         crate::layout::create_private_dir(&profile.places.history)?;
         Ok(profile)
@@ -1865,7 +1873,44 @@ pub(crate) fn read_bounded(path: &Path, limit: u64) -> io::Result<Vec<u8>> {
     Ok(bytes)
 }
 
+/// Held while a private file is written, so the process can end between writes.
+static WRITES: Mutex<()> = Mutex::new(());
+
+/// Wait for a private file being written to be renamed into place, and keep
+/// later writes from starting. Call it just before the process exits: no
+/// temporary file is left behind.
+pub fn end_writes() {
+    std::mem::forget(WRITES.lock().unwrap_or_else(PoisonError::into_inner));
+}
+
+/// Remove `<name>.<UUID>.tmp` files that a killed process left in
+/// `directories` over a minute ago. Another process's write is younger.
+fn remove_stale_temporaries(directories: &[&Path]) {
+    let entries = directories
+        .iter()
+        .filter_map(|directory| fs::read_dir(directory).ok());
+    for entry in entries.flatten().flatten() {
+        let name = entry.file_name();
+        let temporary = name
+            .to_str()
+            .and_then(|name| name.strip_suffix(".tmp")?.rsplit_once('.'))
+            .is_some_and(|(_, id)| Uuid::parse_str(id).is_ok());
+        let stale = || {
+            entry.metadata().is_ok_and(|metadata| {
+                metadata.is_file()
+                    && metadata
+                        .modified()
+                        .is_ok_and(|time| time.elapsed().is_ok_and(|age| age.as_secs() > 60))
+            })
+        };
+        if temporary && stale() {
+            let _ = fs::remove_file(entry.path());
+        }
+    }
+}
+
 pub(crate) fn atomic_private_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    let _writing = WRITES.lock().unwrap_or_else(PoisonError::into_inner);
     let temporary = path.with_extension(format!("{}.tmp", Uuid::new_v4()));
     let result = (|| {
         let mut options = fs::OpenOptions::new();
@@ -1890,6 +1935,7 @@ pub(crate) fn atomic_private_write(path: &Path, bytes: &[u8]) -> io::Result<()> 
 /// Publish a complete private file only if its destination is still absent.
 /// Migration never replaces a sidecar another version or process created.
 fn atomic_private_create(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    let _writing = WRITES.lock().unwrap_or_else(PoisonError::into_inner);
     let temporary = path.with_extension(format!("{}.tmp", Uuid::new_v4()));
     let mut options = fs::OpenOptions::new();
     options.write(true).create_new(true);
@@ -2433,6 +2479,34 @@ mod tests {
             names(&layout.config),
             ["nuschl-namespace-v1", "servers.json"]
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    /// A write killed between creating its temporary file and the rename
+    /// leaves `<name>.<UUID>.tmp`; opening the profile removes it once it is
+    /// over a minute old, and keeps a younger one and the user's own files.
+    #[test]
+    fn opening_removes_what_a_killed_write_left() {
+        let (root, profile) = temporary_profile("killed-write");
+        let config = profile.layout().config.clone();
+        let temporary = |name: &str| {
+            config
+                .join(name)
+                .with_extension(format!("{}.tmp", Uuid::new_v4()))
+        };
+        let (killed, writing) = (temporary("servers.json"), temporary("settings.json"));
+        let notes = config.join("notes.tmp");
+        let minute_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(61);
+        for path in [&killed, &writing, &notes] {
+            let file = fs::File::create(path).unwrap();
+            if *path != writing {
+                file.set_modified(minute_ago).unwrap();
+            }
+        }
+        drop(profile);
+        Profile::open(Some(root.clone())).unwrap();
+        assert!(!killed.exists());
+        assert!(writing.exists() && notes.exists());
         fs::remove_dir_all(root).unwrap();
     }
 

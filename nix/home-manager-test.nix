@@ -392,9 +392,12 @@ assert lib.assertMsg (accepts {
           machine.wait_until_succeeds("journalctl -u murmur.service --grep 'New connection'")
           machine.succeed(f"systemctl {user} is-active {unit}")
           machine.succeed(f"systemctl {user} stop {unit}")
+          # SIGTERM quits it (status 0), after any configuration file being written.
+          machine.succeed(f"test \"$(systemctl {user} show -p ExecMainStatus --value {unit})\" = 0")
 
       with subtest("the identity and history are in the data folder, not with the dotfiles"):
-          machine.succeed(f"test \"$(ls {config})\" = \"$(printf 'managed.json\\nnuschl-namespace-v1\\nservers.json\\nsettings.json')\"")
+          files = machine.succeed(f"ls {config}")
+          assert files == "managed.json\nnuschl-namespace-v1\nservers.json\nsettings.json\n", machine.succeed(f"ls -la {config}")
           machine.succeed(f"test -s {data}/identity/identity.json")
           machine.succeed(f"test \"$(stat -c '%a %U' {data} {data}/identity {data}/history)\" = \"$(printf '700 alice\\n700 alice\\n700 alice')\"")
           machine.succeed(f"test \"$(stat -c %a {data}/identity/identity.json)\" = 600")

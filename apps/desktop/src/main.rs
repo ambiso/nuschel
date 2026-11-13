@@ -111,6 +111,13 @@ enum Action {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let result = run();
+    // A configuration file another thread is writing is renamed into place.
+    nuschl_session::config::end_writes();
+    result
+}
+
+fn run() -> Result<(), Box<dyn std::error::Error>> {
     let arguments = Arguments::parse();
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -188,6 +195,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             })
             .unwrap_or_default()
     });
+    // Logging out and `systemctl stop` send SIGTERM: Nuschl quits as when its window closes.
+    #[cfg(unix)]
+    let mut terminate = {
+        let _runtime = runtime.enter();
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?
+    };
     let runtime_handle = runtime.handle().clone();
     // GPUI owns the event loop; preserve startup errors until it returns so failed
     // launches also report failure to the invoking shell or process supervisor.
@@ -201,6 +214,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             shortcuts::bind_text_editing(cx);
             #[cfg(feature = "frame-timing")]
             frame_timing::init();
+            #[cfg(unix)]
+            cx.spawn(async move |cx| {
+                terminate.recv().await;
+                cx.update(|cx| cx.quit());
+            })
+            .detach();
             cx.on_window_closed(|cx, _| {
                 if cx.windows().is_empty() {
                     cx.quit();
