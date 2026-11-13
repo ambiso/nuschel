@@ -37,6 +37,110 @@ pub(crate) const MAX_VALUE_BYTES: usize = 4096;
 /// The tokenizer is fed this much at a time, so it stops soon after the
 /// sink has seen enough.
 const CHUNK_BYTES: usize = 4096;
+pub const MAX_SOURCE_IMAGE_BYTES: usize = 2 * 1024 * 1024;
+
+/// A canonical derivative and pixels decoded from those exact carried bytes.
+#[cfg(feature = "images")]
+pub struct PreparedImage {
+    pub image: nuschl_core::preview::EmbeddedImage,
+    pub rgba: Vec<u8>,
+}
+
+/// Decode only inside the content role; no page resource survives re-encoding.
+#[cfg(feature = "images")]
+pub fn prepare_image(bytes: &[u8], alt: &str) -> Result<PreparedImage, Unavailable> {
+    use nuschl_core::preview::{
+        EmbeddedImage, ImageMime, MAX_IMAGE_BYTES, MAX_IMAGE_HEIGHT, MAX_IMAGE_WIDTH,
+    };
+    if bytes.is_empty() || bytes.len() > MAX_SOURCE_IMAGE_BYTES || alt.len() > MAX_ALT_BYTES {
+        return Err(Unavailable::TooLarge);
+    }
+    let formats = [
+        image::ImageFormat::Png,
+        image::ImageFormat::Jpeg,
+        image::ImageFormat::Gif,
+        image::ImageFormat::WebP,
+    ];
+    let source = super::decode(
+        bytes,
+        &formats,
+        super::MAX_SOURCE_DIMENSION,
+        64 * 1024 * 1024,
+    )
+    .ok_or(Unavailable::Malformed)?;
+    let mut candidate = super::shrink(source, MAX_IMAGE_WIDTH, MAX_IMAGE_HEIGHT);
+    let alt = normalize(alt, MAX_ALT_BYTES);
+    // Each unsuccessful round strictly shrinks both dimensions. This bounds
+    // encoding work as well as the eventual encoded and decoded reply sizes.
+    for _ in 0..8 {
+        let png = super::encode_png(&candidate).map_err(|_| Unavailable::Malformed)?;
+        let chosen = if png.len() <= MAX_IMAGE_BYTES {
+            Some((ImageMime::Png, png))
+        } else {
+            let opaque = super::flatten(&candidate);
+            let mut chosen = None;
+            for quality in [85, 70, 55] {
+                let jpeg =
+                    super::encode_jpeg(&opaque, quality).map_err(|_| Unavailable::Malformed)?;
+                if jpeg.len() <= MAX_IMAGE_BYTES {
+                    chosen = Some((ImageMime::Jpeg, jpeg));
+                    break;
+                }
+            }
+            chosen
+        };
+        if let Some((mime, data)) = chosen {
+            let image = EmbeddedImage {
+                mime,
+                data,
+                width: candidate.width(),
+                height: candidate.height(),
+                alt,
+            };
+            // JPEG preparation can be lossy: the composer receives the exact
+            // carried derivative's pixels, rather than the pre-encode source.
+            let rgba = render_image(&image)?;
+            return Ok(PreparedImage { image, rgba });
+        }
+        let width = candidate.width() * 3 / 4;
+        let height = candidate.height() * 3 / 4;
+        if width == 0 || height == 0 {
+            break;
+        }
+        candidate = candidate.resize(width, height, image::imageops::FilterType::Triangle);
+    }
+    Err(Unavailable::TooLarge)
+}
+
+/// Decode a carried image without recompressing it. Header dimensions are
+/// checked before decoding and actual dimensions/byte count after decoding.
+#[cfg(feature = "images")]
+pub fn render_image(image: &nuschl_core::preview::EmbeddedImage) -> Result<Vec<u8>, Unavailable> {
+    use nuschl_core::preview::{ImageMime, MAX_IMAGE_WIDTH};
+    nuschl_link_preview::card::check_image(image).map_err(|_| Unavailable::Malformed)?;
+    let format = match image.mime {
+        ImageMime::Png => image::ImageFormat::Png,
+        ImageMime::Jpeg => image::ImageFormat::Jpeg,
+    };
+    let decoded = super::decode(&image.data, &[format], MAX_IMAGE_WIDTH, 64 * 1024 * 1024)
+        .ok_or(Unavailable::Malformed)?;
+    if decoded.width() != image.width || decoded.height() != image.height {
+        return Err(Unavailable::Malformed);
+    }
+    let rgba = decoded.to_rgba8().into_raw();
+    let expected = usize::try_from(
+        image
+            .width
+            .checked_mul(image.height)
+            .and_then(|n| n.checked_mul(4))
+            .ok_or(Unavailable::Malformed)?,
+    )
+    .map_err(|_| Unavailable::Malformed)?;
+    if rgba.len() != expected {
+        return Err(Unavailable::Malformed);
+    }
+    Ok(rgba)
+}
 
 /// Classify the HTTP `charset` parameter's label (`None` when absent).
 pub fn transport_charset(label: Option<&str>) -> TransportCharset {
@@ -427,6 +531,55 @@ mod tests {
 
     fn extract(html: &str) -> Result<ExtractedMetadata, Unavailable> {
         extract_open_graph(html.as_bytes(), TransportCharset::Unspecified)
+    }
+
+    #[test]
+    #[cfg(feature = "images")]
+    fn prepared_noisy_image_fits_the_carried_budget_and_pixels_match_exact_bytes() {
+        use nuschl_core::preview::{ImageMime, MAX_IMAGE_BYTES, MAX_IMAGE_HEIGHT, MAX_IMAGE_WIDTH};
+        let mut state = 0x2545_f491_u32;
+        let source = image::RgbImage::from_fn(512, 512, |_, _| {
+            let mut channels = [0; 3];
+            for channel in &mut channels {
+                state ^= state << 13;
+                state ^= state >> 17;
+                state ^= state << 5;
+                *channel = state.to_le_bytes()[0];
+            }
+            image::Rgb(channels)
+        });
+        let encoded = super::super::encode_png(&image::DynamicImage::ImageRgb8(source)).unwrap();
+        let prepared = prepare_image(&encoded, " Noisy\nimage ").unwrap();
+        assert!(prepared.image.data.len() <= MAX_IMAGE_BYTES);
+        assert!(
+            prepared.image.width <= MAX_IMAGE_WIDTH && prepared.image.height <= MAX_IMAGE_HEIGHT
+        );
+        assert_eq!(prepared.image.mime, ImageMime::Jpeg);
+        assert_eq!(prepared.image.alt, "Noisy image");
+        assert_eq!(render_image(&prepared.image).unwrap(), prepared.rgba);
+        assert_eq!(
+            prepared.rgba.len(),
+            usize::try_from(prepared.image.width * prepared.image.height * 4).unwrap()
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "images")]
+    fn source_image_caps_formats_and_dimensions_refuse_before_preparation() {
+        assert!(matches!(
+            prepare_image(&vec![0; MAX_SOURCE_IMAGE_BYTES + 1], ""),
+            Err(Unavailable::TooLarge)
+        ));
+        assert!(matches!(
+            prepare_image(b"<svg></svg>", ""),
+            Err(Unavailable::Malformed)
+        ));
+        use base64::Engine as _;
+        let oversized = base64::engine::general_purpose::STANDARD.decode("iVBORw0KGgoAAAANSUhEUgAAE4gAAAABCAIAAAC9c9PfAAAAJUlEQVR4nO3BgQAAAADDoPlTX+EAVQEAAAAAAAAAAAAAAAAAwGE6mQAB52yShgAAAABJRU5ErkJggg==").unwrap();
+        assert!(matches!(
+            prepare_image(&oversized, ""),
+            Err(Unavailable::Malformed)
+        ));
     }
 
     #[test]

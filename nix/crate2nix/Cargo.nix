@@ -23287,6 +23287,10 @@ rec {
             packageId = "nuschl-legacy-html";
           }
           {
+            name = "nuschl-link-preview";
+            packageId = "nuschl-link-preview";
+          }
+          {
             name = "nuschl-protocol";
             packageId = "nuschl-protocol";
           }
@@ -23578,6 +23582,12 @@ rec {
             name = "nuschl-sandbox-windows";
             packageId = "nuschl-sandbox-windows";
             target = { target, features }: (target."windows" or false);
+          }
+          {
+            name = "ureq-proto";
+            packageId = "ureq-proto";
+            usesDefaultFeatures = false;
+            features = [ "client" ];
           }
         ];
         devDependencies = [
@@ -24516,6 +24526,10 @@ rec {
           {
             name = "nuschl-legacy-html";
             packageId = "nuschl-legacy-html";
+          }
+          {
+            name = "nuschl-link-preview";
+            packageId = "nuschl-link-preview";
           }
           {
             name = "nuschl-protocol";

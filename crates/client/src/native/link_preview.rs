@@ -6,7 +6,10 @@ use crate::{input::Input, preview::FetchTicket};
 use nuschl_link_preview::{draft::RequestId, metadata::Unavailable, policy::Settings};
 use nuschl_session::workers;
 use std::path::PathBuf;
-use tokio::{runtime::Handle, sync::{mpsc, watch}};
+use tokio::{
+    runtime::Handle,
+    sync::{mpsc, watch},
+};
 
 #[derive(Clone)]
 struct Work {
@@ -32,9 +35,13 @@ impl Hub {
         if self.control.is_closed() {
             return Err(Unavailable::Network);
         }
-        let executable = workers::sibling("nuschl-content-worker")
-            .map_err(|_| Unavailable::Network)?;
-        self.control.send_replace(Some(Work { executable, settings, ticket }));
+        let executable =
+            workers::sibling("nuschl-content-worker").map_err(|_| Unavailable::Network)?;
+        self.control.send_replace(Some(Work {
+            executable,
+            settings,
+            ticket,
+        }));
         Ok(())
     }
 
@@ -80,7 +87,10 @@ async fn run(mut requests: watch::Receiver<Option<Work>>, events: mpsc::Sender<E
             }
             result = &mut fetch => result,
         };
-        let event = Event::Input(Input::LinkPreview { id: work.ticket.id, result });
+        let event = Event::Input(Input::LinkPreview {
+            id: work.ticket.id,
+            result,
+        });
         tokio::select! {
             biased;
             changed = requests.changed() => {

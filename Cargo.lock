@@ -7095,6 +7095,7 @@ dependencies = [
  "nuschl-core",
  "nuschl-ipc",
  "nuschl-legacy-html",
+ "nuschl-link-preview",
  "nuschl-protocol",
  "nuschl-session",
  "serde",
@@ -7168,6 +7169,7 @@ dependencies = [
  "nuschl-ipc",
  "nuschl-sandbox-windows",
  "tokio",
+ "ureq-proto",
 ]
 
 [[package]]
@@ -7431,6 +7433,7 @@ dependencies = [
  "nuschl-core",
  "nuschl-ipc",
  "nuschl-legacy-html",
+ "nuschl-link-preview",
  "nuschl-protocol",
  "p12-keystore",
  "prost",

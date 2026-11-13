@@ -31,40 +31,44 @@ let
     allow = "-A";
   };
   lints = lib.mapAttrsToList (
-    name: setting:
-    "${lintFlags.${if builtins.isAttrs setting then setting.level else setting}} ${name}"
+    name: setting: "${lintFlags.${if builtins.isAttrs setting then setting.level else setting}} ${name}"
   ) (workspace.lints.rust or { });
-  diagnostic = pkgs.runCommandCC "nuschl-preview-worker-diagnostic" {
-    nativeBuildInputs = [ toolchain ];
-  } ''
-    links=()
-    for dir in ${lib.concatStringsSep " " dirs}; do
-      if [ -s "$dir/link" ]; then
-        while read -r flag; do links+=($flag); done < "$dir/link"
-      fi
-    done
-    mkdir -p "$out/bin"
-    rustc --edition ${workspace.package.edition} --crate-name preview --crate-type bin \
-      ${fixture} -o "$out/bin/preview" \
-      -C opt-level=0 -C debug-assertions=on -C overflow-checks=on \
-      -C linker=${pkgs.stdenv.cc}/bin/${pkgs.stdenv.cc.targetPrefix}cc \
-      ${lib.concatStringsSep " " lints} \
-      ${lib.concatMapStringsSep " " (dep: "--extern ${extern dep}") dependencies} \
-      ${lib.concatMapStringsSep " " (dir: "-L dependency=${dir}") dirs} \
-      "''${links[@]}"
-  '';
+  diagnostic =
+    pkgs.runCommandCC "nuschl-preview-worker-diagnostic"
+      {
+        nativeBuildInputs = [ toolchain ];
+      }
+      ''
+        links=()
+        for dir in ${lib.concatStringsSep " " dirs}; do
+          if [ -s "$dir/link" ]; then
+            while read -r flag; do links+=($flag); done < "$dir/link"
+          fi
+        done
+        mkdir -p "$out/bin"
+        rustc --edition ${workspace.package.edition} --crate-name preview --crate-type bin \
+          ${fixture} -o "$out/bin/preview" \
+          -C opt-level=0 -C debug-assertions=on -C overflow-checks=on \
+          -C linker=${pkgs.stdenv.cc}/bin/${pkgs.stdenv.cc.targetPrefix}cc \
+          ${lib.concatStringsSep " " lints} \
+          ${lib.concatMapStringsSep " " (dep: "--extern ${extern dep}") dependencies} \
+          ${lib.concatMapStringsSep " " (dir: "-L dependency=${dir}") dirs} \
+          "''${links[@]}"
+      '';
 in
-pkgs.runCommand "nuschl-preview-worker-check" {
-  nativeBuildInputs = [
-    pkgs.bubblewrap
-    pkgs.util-linux
-    pkgs.coreutils
-  ];
-  passthru = { inherit diagnostic; };
-} ''
-  mkdir -p "$out"
-  timeout --kill-after=5 30 \
-    ${diagnostic}/bin/preview ${contentWorker}/bin/nuschl-content-worker \
-    > "$out/stdout" 2> "$out/stderr"
-  grep -qxF 'preview: bounded confined replies, cancellation retirement and recovery ... ok' "$out/stdout"
-''
+pkgs.runCommand "nuschl-preview-worker-check"
+  {
+    nativeBuildInputs = [
+      pkgs.bubblewrap
+      pkgs.util-linux
+      pkgs.coreutils
+    ];
+    passthru = { inherit diagnostic; };
+  }
+  ''
+    mkdir -p "$out"
+    timeout --kill-after=5 30 \
+      ${diagnostic}/bin/preview ${contentWorker}/bin/nuschl-content-worker \
+      > "$out/stdout" 2> "$out/stderr"
+    grep -qxF 'preview: bounded confined replies, cancellation retirement and recovery ... ok' "$out/stdout"
+  ''

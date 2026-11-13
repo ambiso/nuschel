@@ -712,11 +712,12 @@
             testInputs = [ pkgs.python3 ];
           };
           ${if pkgs.stdenv.hostPlatform.isLinux then "preview-worker" else null} =
-            import ./nix/preview-worker-check.nix {
-            inherit pkgs toolchain;
-            ipc = crates.project.workspaceMembers."nuschl-ipc".build;
-            contentWorker = crates.project.workspaceMembers."nuschl-content-worker".build;
-          };
+            import ./nix/preview-worker-check.nix
+              {
+                inherit pkgs toolchain;
+                ipc = crates.project.workspaceMembers."nuschl-ipc".build;
+                contentWorker = crates.project.workspaceMembers."nuschl-content-worker".build;
+              };
           media-unit = crates.project.workspaceMembers."nuschl-media-worker".build.override {
             runTests = true;
           };

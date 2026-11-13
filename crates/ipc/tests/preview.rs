@@ -29,7 +29,9 @@ fn fake_worker() {
     let ContentRequest::Preview(Request::Document { body, .. }) = request.payload else {
         panic!("unexpected operation");
     };
-    let body = base64::engine::general_purpose::STANDARD.decode(body).unwrap();
+    let body = base64::engine::general_purpose::STANDARD
+        .decode(body)
+        .unwrap();
     if body == b"hang" {
         std::thread::sleep(Duration::from_secs(60));
         return;
@@ -39,7 +41,8 @@ fn fake_worker() {
     }
     if body == b"oversize" {
         use io::Write as _;
-        output.write_all(&((preview::MAX_RESPONSE_FRAME_BYTES + 1) as u32).to_be_bytes()).unwrap();
+        let length = u32::try_from(preview::MAX_RESPONSE_FRAME_BYTES + 1).unwrap();
+        output.write_all(&length.to_be_bytes()).unwrap();
         output.flush().unwrap();
         return;
     }
@@ -71,7 +74,10 @@ fn children() -> Vec<u32> {
     let mut children = Vec::new();
     for task in std::fs::read_dir("/proc/self/task").unwrap() {
         let text = std::fs::read_to_string(task.unwrap().path().join("children")).unwrap();
-        children.extend(text.split_whitespace().map(|pid| pid.parse::<u32>().unwrap()));
+        children.extend(
+            text.split_whitespace()
+                .map(|pid| pid.parse::<u32>().unwrap()),
+        );
     }
     children.sort_unstable();
     children.dedup();
@@ -85,7 +91,10 @@ async fn check(worker: &Path) {
         let answer = host::preview(&fake, document(mode.as_bytes())).await;
         match mode {
             "wrong-id" | "wrong-version" => assert!(matches!(answer, Err(Error::InvalidResponse))),
-            "oversize" => assert!(matches!(answer, Err(Error::Frame(nuschl_ipc::Error::TooLarge)))),
+            "oversize" => assert!(matches!(
+                answer,
+                Err(Error::Frame(nuschl_ipc::Error::TooLarge))
+            )),
             "crash" => assert!(matches!(answer, Err(Error::Io(_)))),
             "linger" => assert!(matches!(answer, Err(Error::Timeout))),
             _ => unreachable!(),
@@ -100,11 +109,16 @@ async fn check(worker: &Path) {
         while children().is_empty() {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
-    }).await.unwrap();
+    })
+    .await
+    .unwrap();
     caller.abort();
     assert!(caller.await.unwrap_err().is_cancelled());
-    let started = tokio::time::Instant::now();
-    assert!(matches!(host::preview(worker, document(b"<title>ok</title>")).await, Err(Error::Busy)));
+    assert!(matches!(
+        host::preview(worker, document(b"<title>ok</title>")).await,
+        Err(Error::Busy)
+    ));
+    assert!(!children().is_empty(), "cancel dropped the live supervisor");
     let result = tokio::time::timeout(Duration::from_secs(8), async {
         loop {
             match host::preview(worker, document(b"<title>Recovered</title>")).await {
@@ -112,8 +126,10 @@ async fn check(worker: &Path) {
                 answer => break answer,
             }
         }
-    }).await.unwrap().unwrap();
-    assert!(started.elapsed() >= Duration::from_secs(4), "cancel released the process slot early");
+    })
+    .await
+    .unwrap()
+    .unwrap();
     assert!(matches!(result, Response::Metadata { metadata, .. } if metadata.title == "Recovered"));
     assert!(children().is_empty(), "unreaped child after recovery");
 
@@ -121,9 +137,15 @@ async fn check(worker: &Path) {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     listener.set_nonblocking(true).unwrap();
     let image = format!("http://{}/image.png", listener.local_addr().unwrap());
-    let html = format!("<meta property='og:title' content='Sender title'><meta property='og:image' content='{image}'>");
-    let result = host::preview(worker, document(html.as_bytes())).await.unwrap();
-    assert!(matches!(result, Response::Metadata { metadata, .. } if metadata.title == "Sender title" && metadata.image.as_deref() == Some(image.as_str())));
+    let html = format!(
+        "<meta property='og:title' content='Sender title'><meta property='og:image' content='{image}'>"
+    );
+    let result = host::preview(worker, document(html.as_bytes()))
+        .await
+        .unwrap();
+    assert!(
+        matches!(result, Response::Metadata { metadata, .. } if metadata.title == "Sender title" && metadata.image.as_deref() == Some(image.as_str()))
+    );
     assert!(matches!(listener.accept(), Err(e) if e.kind() == io::ErrorKind::WouldBlock));
     assert!(children().is_empty(), "unreaped actual content worker");
 }
@@ -133,9 +155,17 @@ fn main() {
         fake_worker();
         return;
     }
-    assert!(cfg!(target_os = "linux"), "this confinement fixture requires Linux");
-    let worker = std::env::args_os().nth(1).expect("actual content worker path");
-    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    assert!(
+        cfg!(target_os = "linux"),
+        "this confinement fixture requires Linux"
+    );
+    let worker = std::env::args_os()
+        .nth(1)
+        .expect("actual content worker path");
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
     runtime.block_on(check(Path::new(&worker)));
     println!("preview: bounded confined replies, cancellation retirement and recovery ... ok");
 }
