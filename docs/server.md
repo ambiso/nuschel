@@ -281,21 +281,21 @@ public issuance and challenge-provider behavior remain outside this test.
 
 Use an already built package containing `nuschld` and `nuschl-storage-worker`.
 Only the public fixture CA enters the store; keep its private key and VM runtime
-outside the checkout. Build the driver, not the VM test derivation, so the running
-VM and its sparse disk can use disk-backed scratch:
+outside the checkout. Build the driver, not the VM test derivation, and run it with
+`just vm-driver` (docs/development.md) so the VM state, its sparse disk and sockets
+are on disk. Setting only `TMPDIR` is not enough: the driver prefers an inherited
+`XDG_RUNTIME_DIR`. Outputs land in `$pkiWork/vm/out`:
 
 ```sh
 cachedPackage=/nix/store/your-already-built-nuschl-package
-pkiWork=$(mktemp -d "${XDG_CACHE_HOME:-$HOME/.cache}/nuschl-pki-vm.XXXXXXXX")
-mkdir -p "$pkiWork/tmp" "$pkiWork/work" "$pkiWork/output"
+pkiWork=$(mktemp -d "${XDG_CACHE_HOME:-$HOME/.cache}/nuschl-pki.XXXXXXXX")
 python3 tests/server_pki_vm.py prepare --directory "$pkiWork/fixture"
 driver=$(nix build --impure --file tests/server_pki_vm.nix driver \
   --argstr packagePath "$cachedPackage" \
   --argstr trustedCaFile "$pkiWork/fixture/root.pem" \
   --cores 2 --max-jobs 2 --no-link --print-out-paths)
-cd "$pkiWork/work"
-TMPDIR="$pkiWork/tmp" NUSCHL_PKI_FIXTURE_DIRECTORY="$pkiWork/fixture" \
-  "$driver/bin/nixos-test-driver" --output_directory "$pkiWork/output"
+just vm-driver --root "$pkiWork/vm" \
+  --env NUSCHL_PKI_FIXTURE_DIRECTORY="$pkiWork/fixture" "$driver"
 ```
 
 Client `TMPDIR` does not relocate Nix daemon build scratch. Inspect the driver

@@ -1,5 +1,5 @@
 # Standalone, private systemd lifecycle proof; no public ACME issuer is contacted.
-# Build only `.driver`, then execute it with a disk-backed TMPDIR/output directory.
+# Build only `.driver`, then run it with tests/vm_driver.py (docs/server.md).
 {
   projectRoot ? ../.,
   packagePath,

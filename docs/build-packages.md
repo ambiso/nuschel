@@ -92,8 +92,9 @@ cleanup and other platform/runtime validation remain in TODO.
 VM. With both variables pointing inside a fresh owned 0700 disk directory, it
 confirmed all six resolved state paths on btrfs. It rejects tmpfs/ramfs, unexpected
 ownership/modes/symlinks and escaped state paths before guest startup. This path
-probe does not retroactively change the functional suite's tmpfs location. Future
-full-suite runners still need to apply and assert that environment before boot.
+probe does not retroactively change the functional suite's tmpfs location. Later
+manual runs go through `just vm-driver` (docs/development.md), which applies that
+environment and asserts the actual paths inside the driver before boot.
 
 The actual probe used the frozen driver above with `--test-script` pointing to
 this repository's `tests/vm_driver_scratch.py`, and these environment values:
