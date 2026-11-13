@@ -208,8 +208,9 @@ pkgs.testers.runNixOSTest {
         machine.succeed("printf %s " + shlex.quote(json.dumps(peer_exit)) + f" > {native_directory}/peer-exit.json")
         native_complete = True
     finally:
-        if not native_complete:
-            snapshot_script = f"""
+        try:
+            if not native_complete:
+                snapshot_script = f"""
     import json
     import sys
     from pathlib import Path
@@ -219,26 +220,27 @@ pkgs.testers.runNixOSTest {
     assert len(data) <= 524288
     Path("{native_directory}/failure-peers.json").write_bytes(data)
     """
-            snapshot_status, snapshot_log = machine.execute("${python} -c " + shlex.quote(textwrap.dedent(snapshot_script)), timeout=timedelta(seconds=8))
-            assert len(snapshot_log) <= 16384, "bounded failure snapshot output exceeded"
-            machine.succeed("printf %s " + shlex.quote(json.dumps({"exit": snapshot_status, "log": snapshot_log[-2048:]})) + f" > {native_directory}/failure-snapshot-status.json")
-        # Requesting stop is insufficient: admission below also requires the
-        # original nondelegated kernel cgroups empty/removed and leaders gone.
-        stop_status, stop_log = machine.execute("systemctl stop " + " ".join(native_units), timeout=timedelta(seconds=60))
-        assert len(stop_log) <= 16384, "bounded native stop output exceeded"
-        machine.succeed("printf %s " + shlex.quote(stop_log) + f" > {native_directory}/stop.log")
-        machine.succeed(f"sha256sum ${nativeFetchTest}/bin/nuschl-preview-fetch-test ${contentWorker}/bin/nuschl-content-worker ${fixture} ${fixtureTests}/link_preview_fetch.py > {native_directory}/artifacts.sha256")
-        machine.succeed("printf %s " + shlex.quote("${sourceIdentity}") + f" > {native_directory}/source-identity.txt")
-        machine.succeed(f"(ip -4 route show table all; ip -6 route show table all; iptables-save; ip6tables-save) > {native_directory}/routes.txt")
-        machine.succeed("install -d /tmp/preview-native-evidence")
-        for name in ("launcher.log", "stop.log", "test.log", "peers.log", "fetch-result.json", "test-process-authority.json", "peers-ready.json", "peers.json", "peer-exit.json", "failure-peers.json", "failure-snapshot-status.json", "artifacts.sha256", "source-identity.txt", "routes.txt"):
-            machine.succeed(f"if test -f {native_directory}/{name}; then test $(stat -c%s {native_directory}/{name}) -le 1048576 && cp {native_directory}/{name} /tmp/preview-native-evidence/; fi")
-        machine.copy_from_machine("/tmp/preview-native-evidence", "native")
-        assert stop_status == 0, stop_log
-        for unit in native_units:
-            group = "/sys/fs/cgroup/system.slice/" + unit
-            pid = native_pids.get(unit)
-            retirement_check = f"""
+                snapshot_status, snapshot_log = machine.execute("${python} -c " + shlex.quote(textwrap.dedent(snapshot_script)), timeout=timedelta(seconds=8))
+                assert len(snapshot_log) <= 16384, "bounded failure snapshot output exceeded"
+                machine.succeed("printf %s " + shlex.quote(json.dumps({"exit": snapshot_status, "log": snapshot_log[-2048:]})) + f" > {native_directory}/failure-snapshot-status.json")
+        finally:
+            # Requesting stop is insufficient: admission below also requires the
+            # original nondelegated kernel cgroups empty/removed and leaders gone.
+            stop_status, stop_log = machine.execute("systemctl stop " + " ".join(native_units), timeout=timedelta(seconds=60))
+            assert len(stop_log) <= 16384, "bounded native stop output exceeded"
+            machine.succeed("printf %s " + shlex.quote(stop_log) + f" > {native_directory}/stop.log")
+            machine.succeed(f"sha256sum ${nativeFetchTest}/bin/nuschl-preview-fetch-test ${contentWorker}/bin/nuschl-content-worker ${fixture} ${fixtureTests}/link_preview_fetch.py > {native_directory}/artifacts.sha256")
+            machine.succeed("printf %s " + shlex.quote("${sourceIdentity}") + f" > {native_directory}/source-identity.txt")
+            machine.succeed(f"(ip -4 route show table all; ip -6 route show table all; iptables-save; ip6tables-save) > {native_directory}/routes.txt")
+            machine.succeed("install -d /tmp/preview-native-evidence")
+            for name in ("launcher.log", "stop.log", "test.log", "peers.log", "fetch-result.json", "test-process-authority.json", "peers-ready.json", "peers.json", "peer-exit.json", "failure-peers.json", "failure-snapshot-status.json", "artifacts.sha256", "source-identity.txt", "routes.txt"):
+                machine.succeed(f"if test -f {native_directory}/{name}; then test $(stat -c%s {native_directory}/{name}) -le 1048576 && cp {native_directory}/{name} /tmp/preview-native-evidence/; fi")
+            machine.copy_from_machine("/tmp/preview-native-evidence", "native")
+            assert stop_status == 0, stop_log
+            for unit in native_units:
+                group = "/sys/fs/cgroup/system.slice/" + unit
+                pid = native_pids.get(unit)
+                retirement_check = f"""
     from pathlib import Path
     Path('/proc/self/stat').read_text()
     Path('/sys/fs/cgroup/cgroup.controllers').read_text()
@@ -257,10 +259,10 @@ pkgs.testers.runNixOSTest {
         else:
             raise AssertionError('original service leader still exists')
     """
-            machine.wait_until_succeeds("${python} -c " + shlex.quote(textwrap.dedent(retirement_check)), timeout=timedelta(seconds=15))
-            native_retirement.append({"unit": unit, "original_group": native_groups.get(unit), "kernel_group": group, "leader_pid": pid, "kernel_empty_or_removed": True, "leader_absent": pid is not None})
-        machine.succeed("printf %s " + shlex.quote(json.dumps(native_retirement)) + f" > {native_directory}/retirement.json")
-        machine.copy_from_machine(f"{native_directory}/retirement.json", "native-retirement.json")
+                machine.wait_until_succeeds("${python} -c " + shlex.quote(textwrap.dedent(retirement_check)), timeout=timedelta(seconds=15))
+                native_retirement.append({"unit": unit, "original_group": native_groups.get(unit), "kernel_group": group, "leader_pid": pid, "kernel_empty_or_removed": True, "leader_absent": pid is not None})
+            machine.succeed("printf %s " + shlex.quote(json.dumps(native_retirement)) + f" > {native_directory}/retirement.json")
+            machine.copy_from_machine(f"{native_directory}/retirement.json", "native-retirement.json")
     assert all(item["leader_absent"] for item in native_retirement), native_retirement
     native_peers = json.loads(machine.succeed(f"test $(stat -c%s {native_directory}/peers.json) -le 524288 && cat {native_directory}/peers.json"))
     assert native_peers["overrun"] is False
