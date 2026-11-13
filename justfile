@@ -50,6 +50,18 @@ rtc:
 vm:
     nix build --cores 2 .#checks.x86_64-linux.vm-smoke --no-link -L
 
+# `just vm-driver --root ~/.cache/nuschl-vm-r1 [--probe] /nix/store/...-nixos-test-driver-...`
+# (tests/vm_driver.py) refuses to boot on RAM-backed or escaped state paths and
+# over-long socket paths, and runs outside the Nix daemon.
+# A built NixOS test driver with TMPDIR and XDG_RUNTIME_DIR in a fresh owned disk root.
+[positional-arguments]
+vm-driver *args:
+    python3 tests/vm_driver.py "$@"
+
+# The runner's and pre-boot guard's host-only tests; no VM boots.
+vm-driver-check:
+    python3 -m unittest discover -s tests -p vm_driver_test.py
+
 # Host checks only; a working macOS/SwiftUI/Simulator guest is a separate gate.
 ios-preflight:
     python3 tests/ios_vm.py preflight

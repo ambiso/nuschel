@@ -9,6 +9,20 @@ The test runs the actual GPUI client under Xvfb against a stock Mumble server,
 with synthetic audio on a private PulseAudio daemon. It never opens the host microphone.
 Screenshots are copied into the test result.
 
+Flake checks run their VMs inside the Nix daemon. Built drivers run by hand go
+through `tests/vm_driver.py` ([development.md](../docs/development.md#recipes)),
+which places all VM state in a fresh owned disk root and runs
+`vm_driver_scratch.py` inside the actual driver before boot. `vm_driver_test.py`
+(`just vm-driver-check`) needs no VM. It refuses a real tmpfs root, a reused
+root, symlinked or group-writable parents, roots outside the cache and other
+wrapper or configuration shapes, and accepts a disk root. With fake driver
+objects it refuses over-long socket paths,
+escaped, reused or booted state, an inherited runtime directory and
+unrecognized start-script socket forms. It also checks that a timed-out or
+orphaned process group is killed and reaped. `--probe` runs the guard in a real
+driver without a guest. Neither proves guest behaviour; a full run's
+`status.json` records the state paths and sockets actually observed.
+
 `nix build .#checks.x86_64-linux.vm-musicbot` exercises the packaged bot against
 stock Murmur and a local Subsonic fixture. `musicbot.py` checks shared/separate
 audio, channel-subscription playback, seeking, ducking, public comments, history pagination and restart recovery

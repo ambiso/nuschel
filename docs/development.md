@@ -28,6 +28,8 @@ the `stable` channel independently of `flake.lock`. Commits are made with `jj`.
 | `just check` | formatting, Clippy, the SDK for wasm32, tests, `cargo deny check` |
 | `just workers` | the worker executables against their protocol (`tests/workers.py`) |
 | `just vm` | the Linux integration tests in NixOS VMs: packaging, confinement, SQLx/PostgreSQL, service preflight, the desktop against stock Mumble servers |
+| `just vm-driver --root ROOT DRIVER` | a built NixOS test driver run by hand, with all VM state on disk (below) |
+| `just vm-driver-check` | the hand runner's and its pre-boot guard's tests, without a VM |
 | `just test-postgres` | the storage worker on a throwaway PostgreSQL |
 | `just fuzz <target> [seconds]` | a libFuzzer target from `fuzz/` (`just fuzz-list` lists them; SECURITY.md, "Fuzzing") |
 | `just miri` | the Windows sandbox adapter's unit tests under Miri |
@@ -40,6 +42,25 @@ Other VM checks run with `nix build --cores 2 .#checks.x86_64-linux.<name>`:
 `vm-server` (the server module), `vm-home-manager`, `home-manager`. UI scenes for
 looking at changes run in a private headless GNOME Shell (`tests/screenshots.py`,
 tests/README.md).
+
+A test's built `.driver` can also run outside the Nix daemon. The pinned driver
+keeps each machine's disk image, sockets and shared directory below an inherited
+`XDG_RUNTIME_DIR` (normally the tmpfs `/run/user/<uid>`) and uses `TMPDIR` only
+when that is unset, so setting `TMPDIR` alone leaves VM state in RAM. Run drivers
+through `just vm-driver --root ~/.cache/nuschl-vm-<run> DRIVER`
+(`tests/vm_driver.py`). It points both variables into a fresh mode-0700 root inside
+the cache directory, below an existing parent only you can write, with a clean
+environment; `--env` adds only `NUSCHL_*` fixture inputs. Node names such as
+`machine` then name state private to the run. Before the driver's own script,
+`tests/vm_driver_scratch.py` runs inside the actual driver. It refuses to boot if
+any machine's real state, shared or VLAN directory, or a socket its start script
+creates, is RAM-backed, outside `ROOT/run` or too long for a Unix socket. Keep the
+root short (about 50 bytes). `--probe` runs only that check and boots no guest.
+The runner stops its own process group below 8 GiB free `/tmp`, scratch space or
+available memory, or after `--timeout`. It leaves `driver.log`,
+`scratch-proof.json` and `status.json` in the root and deletes nothing. Flake
+checks such as `just vm` still run inside the Nix daemon; client variables do not
+move its build scratch.
 
 The worker exchange diagnostic has its own `main` (`harness = false`). Run:
 
