@@ -94,7 +94,14 @@ def actions(args, root, shell, application, bot, _murmur):
         assert rows, f"no visible native thumb: {name}, {crop}"
         # A border alone is not a thumb: require a bounded segment on a long list.
         assert len(rows) < height * .8, (name, rows, height)
-        return {"bounds": node.extents(), "painted_thumb": [min(rows), max(rows)], "png": shot.name}
+        middle = rows[len(rows) // 2]
+        columns = [col for col in range(gutter) if all(abs(a-b) <= 2 for a, b in zip(
+            raw[(middle * gutter + col) * 3:(middle * gutter + col + 1) * 3], thumb))]
+        # The kit insets its thumb from the track edge. A guessed right4px can
+        # hit the track outside the thumb and legitimately jump without dragging.
+        right = gutter - (min(columns) + max(columns)) / 2
+        return {"bounds": node.extents(), "painted_thumb": [min(rows), max(rows)],
+                "thumb_x_from_right": right, "png": shot.name}
 
     records = []
     for width, height, zoom, steps in [(1280, 800, 100, 0), (900, 700, 125, 2),
@@ -131,8 +138,8 @@ def actions(args, root, shell, application, bot, _murmur):
         shell.wheel(*point(owner), -1)
         end = record["rules_end"]["painted_thumb"]
         grab = (end[0] + end[1]) / 2 / owner.extents()[3]
-        shell.drag(point(owner, right=max(3, round(4 * zoom / 100)), fraction=grab),
-                   point(owner, right=max(3, round(4 * zoom / 100)), fraction=0.01))
+        shell.drag(point(owner, right=record["rules_end"]["thumb_x_from_right"], fraction=grab),
+                   point(owner, right=record["rules_end"]["thumb_x_from_right"], fraction=0.01))
         wait(first_rule, "push button")
         time.sleep(.3)
         assert named(first_rule, "push button"), "wheel easing resumed after a thumb grab"
