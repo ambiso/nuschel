@@ -24391,6 +24391,10 @@ rec {
             packageId = "bytes";
           }
           {
+            name = "nuschl-core";
+            packageId = "nuschl-core";
+          }
+          {
             name = "prost";
             packageId = "prost";
           }
