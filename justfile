@@ -7,11 +7,15 @@ default:
 release *args:
     python3 release/release.py "$@"
 
-# Open issues in AGENTS.md queue order (read-only GraphQL through `gh`); also
-# `why N`, `blocked-urgent` and local claims (`acquire-next --agent NAME`).
+# Open issues in AGENTS.md queue order (read-only GraphQL through `gh`), and
+# local claims: `just next acquire-next --agent NAME`, `claim`, `release`.
 [positional-arguments]
 next *args:
     python3 -I tools/next-issues.py "$@"
+
+# Ranking and claim rules of tools/next-issues.py; no network.
+next-check:
+    python3 -m unittest discover -s tests -p next_issues_test.py
 
 check:
     cargo fmt --all -- --check
