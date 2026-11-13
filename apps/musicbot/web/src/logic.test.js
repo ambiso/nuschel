@@ -221,16 +221,16 @@ test("sonic path starts only from another song in the same library", () => {
   assert.equal(sonicPathStart({ library: 1, id: "" }, { library: 1, id: "there" }), null);
 });
 
-test("library reordering follows only an unambiguous old name and drops detail IDs", () => {
-  const previous = ["Office", "Home"];
-  const current = ["Home", "Office"];
+test("library reordering follows only an unambiguous old library key and drops detail IDs", () => {
+  const previous = ["office", "home"];
+  const current = ["home", "office"];
   const library = libraryForNamespace(previous, current, 1);
   assert.equal(library, 0);
   assert.deepEqual(routeForNamespace({ view: "playlist", library: 1, id: "old", namespace: "before" }, library, "after"), { view: "playlists", library: 0 });
   assert.deepEqual(routeForNamespace({ view: "albums", library: 1, list: "starred" }, library, "after"), { view: "albums", library: 0, list: "starred" });
-  assert.equal(libraryForNamespace(["Office", "Home", "Home"], ["Office", "Home"], 2), 0);
-  assert.equal(libraryForNamespace(previous, ["Office", "Home", "Home"], 1), 0);
-  assert.equal(libraryForNamespace(previous, ["Office", "Replacement"], 1), 0);
+  assert.equal(libraryForNamespace(["office", "home", "home"], ["office", "home"], 2), 0);
+  assert.equal(libraryForNamespace(previous, ["office", "home", "home"], 1), 0);
+  assert.equal(libraryForNamespace(previous, ["office", "replacement"], 1), 0);
   assert.equal(libraryForNamespace([], current, 1), 0);
 });
 
@@ -354,26 +354,26 @@ function everyRoute(library, namespace) {
   return routes;
 }
 
-test("address and share hashes never carry the namespace; library routes name their library", () => {
-  const names = ["Main", "Kids & Co/€", "Jazz"];
+test("address and share hashes never carry the namespace; library routes carry their library key", () => {
+  const keys = ["a1b2c3", "k&c/€", "9f8e7d"];
   for (const route of everyRoute(1, "session:7")) {
-    for (const hash of [shareRoute(route, names), addressRoute(route, names)]) {
+    for (const hash of [shareRoute(route, keys), addressRoute(route, keys)]) {
       assert.ok(!hash.includes("namespace"), hash);
       const params = new URLSearchParams(hash.slice(hash.indexOf("?") + 1));
-      if (LIBRARY_VIEWS.has(route.view)) assert.equal(params.get("library_name"), "Kids & Co/€", hash);
-      else assert.ok(!hash.includes("library_name"), hash);
+      if (LIBRARY_VIEWS.has(route.view)) assert.equal(params.get("library_key"), "k&c/€", hash);
+      else assert.ok(!hash.includes("library_key"), hash);
     }
   }
-  // An ambiguous or invalid library cannot be shared; the address bar then shows the route without namespace.
+  // A duplicated or invalid library key cannot be shared; the address bar then shows the route without namespace.
   const album = { view: "album", library: 0, id: "x", namespace: "session:7" };
-  assert.equal(shareRoute(album, ["Same", "Same"]), null);
+  assert.equal(shareRoute(album, ["same", "same"]), null);
   assert.equal(shareRoute(album, []), null);
-  assert.equal(addressRoute(album, ["Same", "Same"]), "#/album/0/x");
-  assert.equal(addressRoute({ ...album, sharedLibrary: "Main" }, ["Main"]), "#/album/0/x?library_name=Main");
+  assert.equal(addressRoute(album, ["same", "same"]), "#/album/0/x");
+  assert.equal(addressRoute({ ...album, sharedLibrary: "a1b2c3" }, ["a1b2c3"]), "#/album/0/x?library_key=a1b2c3");
 });
 
 test("share URLs use the page root and never leak a token", () => {
-  const names = ["Main", "Jazz"];
+  const keys = ["a1b2c3", "9f8e7d"];
   for (const href of [
     `https://bot.example/prefix/#/album/0/x?namespace=s`,
     `https://bot.example/prefix/index.html?t=${TOKEN}#/queue`,
@@ -383,25 +383,28 @@ test("share URLs use the page root and never leak a token", () => {
   ]) {
     assert.equal(shareRoot(href), "https://bot.example/prefix/");
     for (const route of everyRoute(1, "s")) {
-      const url = shareUrl(href, route, names);
+      const url = shareUrl(href, route, keys);
       assert.ok(url.startsWith("https://bot.example/prefix/#/"), url);
       assert.ok(!url.includes(TOKEN), url);
     }
   }
   assert.equal(shareRoot("http://127.0.0.1:8474/"), "http://127.0.0.1:8474/");
-  assert.equal(shareUrl("http://h/", { view: "album", library: 0, id: "x" }, ["A", "A"]), null);
+  assert.equal(shareUrl("http://h/", { view: "album", library: 0, id: "x" }, ["k", "k"]), null);
 });
 
-test("shared hashes parse with their library name and without namespace", () => {
-  assert.deepEqual(parseRoute("#/album/3/a%2Fb?library_name=Jazz&namespace=old"), { view: "album", library: 3, id: "a/b", sharedLibrary: "Jazz" });
-  assert.deepEqual(parseRoute("#/albums?library=2&list=random&library_name=K%26C"), { view: "albums", library: 2, list: "random", sharedLibrary: "K&C" });
-  assert.deepEqual(parseRoute("#/search?q=x&library_name=Jazz"), { view: "search", q: "x" });
-  assert.deepEqual(parseRoute("#/queue?library_name=Jazz"), { view: "queue" });
+test("shared hashes parse with their library key and without namespace", () => {
+  assert.deepEqual(parseRoute("#/album/3/a%2Fb?library_key=9f8e7d&namespace=old"), { view: "album", library: 3, id: "a/b", sharedLibrary: "9f8e7d" });
+  assert.deepEqual(parseRoute("#/albums?library=2&list=random&library_key=k%26c"), { view: "albums", library: 2, list: "random", sharedLibrary: "k&c" });
+  assert.deepEqual(parseRoute("#/search?q=x&library_key=9f8e7d"), { view: "search", q: "x" });
+  assert.deepEqual(parseRoute("#/queue?library_key=9f8e7d"), { view: "queue" });
+  // Library names are no longer part of shared links.
+  assert.deepEqual(parseRoute("#/album/3/x?library_name=Jazz"), { view: "album", library: 3, id: "x" });
+  assert.deepEqual(parseRoute("#/artists?library=1&library_name=Jazz"), { view: "artists", library: 1 });
 });
 
-test("shared, reloaded and back/forward hashes are adopted by library name", () => {
-  const sender = ["Main", "Jazz", "Rock"];
-  const receiver = ["Rock", "Main", "Jazz"];
+test("shared, reloaded and back/forward hashes are adopted by library key", () => {
+  const sender = ["main01", "jazz02", "rock03"];
+  const receiver = ["rock03", "main01", "jazz02"];
   for (const route of everyRoute(1, "sender:0")) {
     const parsed = parseRoute(shareRoute(route, sender));
     const adopted = adoptSharedRoute(parsed, receiver, "receiver:4");
@@ -416,35 +419,37 @@ test("shared, reloaded and back/forward hashes are adopted by library name", () 
     // Reload/back/forward: the address bar hash adopts back to the same route.
     assert.deepEqual(adoptSharedRoute(parseRoute(addressRoute(adopted, receiver)), receiver, "receiver:4"), expected);
   }
-  const album = parseRoute("#/album/1/x?library_name=Jazz");
+  const album = parseRoute("#/album/1/x?library_key=jazz02");
   assert.deepEqual(adoptSharedRoute(album, receiver, ""), album, "pending until a namespace exists");
-  assert.deepEqual(adoptSharedRoute(album, ["Main"], "r:1"), { view: "albums", library: 0, list: "newest" });
-  assert.deepEqual(adoptSharedRoute(album, ["Jazz", "Jazz"], "r:1"), { view: "albums", library: 0, list: "newest" });
-  assert.deepEqual(adoptSharedRoute(parseRoute("#/similar/1/x?library_name=Nope"), receiver, "r:1"), { view: "queue" });
-  assert.deepEqual(adoptSharedRoute(parseRoute("#/artists?library=1&library_name=Nope"), receiver, "r:1"), { view: "artists", library: 0 });
-  assert.deepEqual(adoptSharedRoute(parseRoute("#/albums?library=0&list=starred&library_name=Jazz"), receiver, "r:1"), { view: "albums", library: 2, list: "starred" });
-  // Internal routes without a library name keep the stale-namespace protection.
+  assert.deepEqual(adoptSharedRoute(album, ["main01"], "r:1"), { view: "albums", library: 0, list: "newest" });
+  assert.deepEqual(adoptSharedRoute(album, ["jazz02", "jazz02"], "r:1"), { view: "albums", library: 0, list: "newest" });
+  // Same library name, new URL: the key differs, so the old item ID is not opened.
+  assert.deepEqual(adoptSharedRoute(album, ["main01", "jazz99"], "r:1"), { view: "albums", library: 0, list: "newest" });
+  assert.deepEqual(adoptSharedRoute(parseRoute("#/similar/1/x?library_key=nope"), receiver, "r:1"), { view: "queue" });
+  assert.deepEqual(adoptSharedRoute(parseRoute("#/artists?library=1&library_key=nope"), receiver, "r:1"), { view: "artists", library: 0 });
+  assert.deepEqual(adoptSharedRoute(parseRoute("#/albums?library=0&list=starred&library_key=jazz02"), receiver, "r:1"), { view: "albums", library: 2, list: "starred" });
+  // Internal routes without a library key keep the stale-namespace protection.
   assert.deepEqual(routeForNamespace(parseRoute("#/album/1/x?namespace=old"), 1, "r:1"), { view: "albums", library: 1, list: "newest" });
 });
 
-test("song routes keep the namespace in memory and the library name in the address bar", () => {
-  const sender = ["Main", "Jazz"];
-  const receiver = ["Jazz", "Main"];
+test("song routes keep the namespace in memory and the library key in the address bar", () => {
+  const sender = ["main01", "jazz02"];
+  const receiver = ["jazz02", "main01"];
   const song = { view: "song", library: 1, id: "s/1?", namespace: "sender:3" };
   assert.equal(buildRoute(song), "#/song/1/s%2F1%3F?namespace=sender%3A3");
   assert.deepEqual(parseRoute(buildRoute(song)), song);
   const shared = shareRoute(song, sender);
-  assert.equal(shared, "#/song/1/s%2F1%3F?library_name=Jazz");
+  assert.equal(shared, "#/song/1/s%2F1%3F?library_key=jazz02");
   assert.equal(addressRoute(song, sender), shared);
   assert.ok(!shareUrl("https://bot.example/", song, sender).includes("namespace"));
   const parsed = parseRoute(shared);
-  assert.deepEqual(parsed, { view: "song", library: 1, id: "s/1?", sharedLibrary: "Jazz" });
+  assert.deepEqual(parsed, { view: "song", library: 1, id: "s/1?", sharedLibrary: "jazz02" });
   const adopted = adoptSharedRoute(parsed, receiver, "receiver:0");
   assert.deepEqual(adopted, { view: "song", library: 0, id: "s/1?", namespace: "receiver:0" });
   assert.deepEqual(routeForNamespace(adopted, 0, "receiver:0"), adopted);
-  assert.equal(addressRoute(adopted, receiver), "#/song/0/s%2F1%3F?library_name=Jazz");
+  assert.equal(addressRoute(adopted, receiver), "#/song/0/s%2F1%3F?library_key=jazz02");
   // A missing library falls back to the album list; a stale namespace never opens the old song ID.
-  assert.deepEqual(adoptSharedRoute(parsed, ["Main"], "receiver:0"), { view: "albums", library: 0, list: "newest" });
+  assert.deepEqual(adoptSharedRoute(parsed, ["main01"], "receiver:0"), { view: "albums", library: 0, list: "newest" });
   assert.deepEqual(routeForNamespace(adopted, 0, "receiver:1"), { view: "albums", library: 0, list: "newest" });
   assert.deepEqual(routeForNamespace(parseRoute("#/song/0/s1"), 0, "receiver:0"), { view: "albums", library: 0, list: "newest" });
 });

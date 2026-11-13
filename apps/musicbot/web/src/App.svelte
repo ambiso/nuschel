@@ -2,6 +2,7 @@
 <script>
   import { onMount, tick } from "svelte";
   import { store } from "./store.svelte.js";
+  import { postJSON } from "./api.js";
   import { listening } from "./listening.svelte.js";
   import { buildRoute, handlesSpace, routeForLibrary } from "./logic.js";
   import Browse from "./components/Browse.svelte";
@@ -17,6 +18,9 @@
   let search = $state("");
   let bigScreen = $state(false);
   let bigScreenOpener = null;
+  let confirmForget = $state(false);
+  let forgetting = $state(false);
+  let forgetOpener = $state();
   const route = $derived(store.route);
   const browseRouteKey = $derived(`${store.browseEpoch}:${store.browseKey}:${buildRoute(route)}`);
   const libraries = $derived(store.snapshot?.libraries ?? []);
@@ -78,6 +82,29 @@
     event.preventDefault();
     store.togglePause(store.selected);
   }
+
+  // Clears the remembered link; the bot's root then asks for a new `!web` link.
+  async function forgetBrowser() {
+    if (forgetting) return;
+    forgetting = true;
+    try {
+      await postJSON("api/forget", {});
+      location.assign("./");
+    } catch (error) {
+      forgetting = false;
+      store.toast(`Could not forget this browser: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  async function cancelForget() {
+    confirmForget = false;
+    await tick();
+    forgetOpener?.focus();
+  }
+
+  function focusOnMount(node) {
+    node.focus();
+  }
 </script>
 
 <svelte:window onkeydown={keydown} />
@@ -121,6 +148,17 @@
         </nav>
         <p class="sidebar-help muted">Music plays in Mumble, or use the headphones button to hear it in this browser. Changes here are live for everyone sharing the queue.</p>
         <p class="sidebar-help"><a href="licenses">Licences</a></p>
+        <div class="forget sidebar-help">
+          {#if confirmForget}
+            <p class="muted" id="forget-explanation">This browser will drop its link to the bot. To come back, send <code>!web</code> again.</p>
+            <div class="forget-actions">
+              <button aria-describedby="forget-explanation" disabled={forgetting} onclick={forgetBrowser}>Forget</button>
+              <button disabled={forgetting} use:focusOnMount onclick={cancelForget}>Cancel</button>
+            </div>
+          {:else}
+            <button class="link-button" bind:this={forgetOpener} onclick={() => (confirmForget = true)}>Forget this browser</button>
+          {/if}
+        </div>
       </aside>
 
       <main id="main-content" class="main-content" tabindex="-1">
@@ -173,6 +211,11 @@
   nav a:hover, nav a.active { background: var(--surface-hover); color: var(--text); }
   nav a.active { color: var(--accent); }
   .sidebar-help { font-size: 0.75rem; line-height: 1.5; margin-top: 2rem; }
+  .forget { margin-top: 0.75rem; }
+  .forget p { margin: 0 0 0.5rem; }
+  .forget-actions { display: flex; gap: 0.5rem; }
+  .link-button { min-height: 0; padding: 0; border: 0; background: none; color: inherit; cursor: pointer; }
+  .link-button:hover:not(:disabled) { background: none; text-decoration: underline; }
   .main-content { flex: 1; min-width: 0; overflow: auto; padding: 1.5rem; scroll-behavior: smooth; }
   .queue-aside { width: 22rem; flex: none; overflow: auto; padding: 1rem; border-left: 1px solid var(--border); background: var(--surface); }
   .menu-toggle, .nav-backdrop { display: none; }
