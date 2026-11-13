@@ -195,11 +195,20 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             })
             .unwrap_or_default()
     });
-    // Logging out and `systemctl stop` send SIGTERM: Nuschl quits as when its window closes.
+    // Logging out and `systemctl stop` send SIGTERM, Ctrl+C SIGINT and closing
+    // the terminal SIGHUP: Nuschl quits as when its window closes.
     #[cfg(unix)]
-    let mut terminate = {
+    let signals = {
+        use tokio::signal::unix::{SignalKind, signal};
         let _runtime = runtime.enter();
-        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?
+        [
+            SignalKind::terminate(),
+            SignalKind::interrupt(),
+            SignalKind::hangup(),
+        ]
+        .map(signal)
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()?
     };
     let runtime_handle = runtime.handle().clone();
     // GPUI owns the event loop; preserve startup errors until it returns so failed
@@ -215,11 +224,13 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             #[cfg(feature = "frame-timing")]
             frame_timing::init();
             #[cfg(unix)]
-            cx.spawn(async move |cx| {
-                terminate.recv().await;
-                cx.update(|cx| cx.quit());
-            })
-            .detach();
+            for mut signal in signals {
+                cx.spawn(async move |cx| {
+                    signal.recv().await;
+                    cx.update(|cx| cx.quit());
+                })
+                .detach();
+            }
             cx.on_window_closed(|cx, _| {
                 if cx.windows().is_empty() {
                     cx.quit();
