@@ -63,17 +63,22 @@ jobs:
       # recompute stock Mumble's SHA-1 certificate digest and Subsonic's MD5
       # token. These rules are dropped only under the test trees below; the same
       # rules still report everywhere else, and every other rule reports in
-      # tests too. A result whose path is absent or not relative is kept.
+      # tests too. A result is dropped only if every rule id it names is listed
+      # and it has primary locations that ALL name a canonical repository-relative
+      # path inside a test tree: plain segments only (no scheme, absolute path,
+      # backslash, percent-escape, ".", ".." or empty segment), and a regular file
+      # in this checkout reached without any symlink. Anything else is kept.
       - name: Drop listed rules in test trees only
         env:
           SARIF_DIR: ${{ runner.temp }}/codeql-sarif
         run: |
-          python3 -I - "$SARIF_DIR" <<'EOF'
+          python3 -I - "$SARIF_DIR" "$GITHUB_WORKSPACE" <<'EOF'
           import collections, json, pathlib, re, sys
 
           TEST_TREES = re.compile(
-              r"^(tests/|apps/[^/]+/tests/|crates/[^/]+/tests/|crates/identity/src/tests/)"
+              r"(tests|apps/[^/]+/tests|crates/[^/]+/tests|crates/identity/src/tests)/.+"
           )
+          SEGMENTS = re.compile(r"[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*")
           RULES = {
               "js/disabling-certificate-validation",
               "py/clear-text-storage-sensitive-data",
@@ -82,6 +87,43 @@ jobs:
               "rust/cleartext-logging",
               "rust/hard-coded-cryptographic-value",
           }
+          root = pathlib.Path(sys.argv[2]).resolve(strict=True)
+
+
+          def in_test_tree(location):
+              try:
+                  artifact = location["physicalLocation"]["artifactLocation"]
+                  uri, base = artifact["uri"], artifact.get("uriBaseId", "%SRCROOT%")
+              except (KeyError, TypeError, AttributeError):
+                  return False
+              if not isinstance(uri, str) or base != "%SRCROOT%":
+                  return False
+              if not SEGMENTS.fullmatch(uri) or not TEST_TREES.fullmatch(uri):
+                  return False
+              parts = uri.split("/")
+              if any(part in (".", "..") for part in parts):
+                  return False
+              path = root.joinpath(*parts)
+              try:
+                  return path.resolve(strict=True) == path and path.is_file()
+              except (OSError, RuntimeError):
+                  return False
+
+
+          def droppable(result):
+              if not isinstance(result, dict):
+                  return False
+              ids = [result["ruleId"]] if "ruleId" in result else []
+              rule = result.get("rule")
+              if isinstance(rule, dict) and "id" in rule:
+                  ids.append(rule["id"])
+              if not ids or not all(isinstance(i, str) and i in RULES for i in ids):
+                  return False
+              locations = result.get("locations")
+              if not isinstance(locations, list) or not locations:
+                  return False
+              return all(in_test_tree(location) for location in locations)
+
 
           files = sorted(pathlib.Path(sys.argv[1]).glob("*.sarif"))
           if not files:
@@ -90,19 +132,17 @@ jobs:
               sarif = json.loads(file.read_text(encoding="utf-8"))
               dropped = collections.Counter()
               for run in sarif["runs"]:
+                  if "results" not in run:
+                      continue
+                  if not isinstance(run["results"], list):
+                      sys.exit(f"{file.name}: results is not a list")
                   kept = []
-                  for result in run.get("results", []):
-                      rule = result.get("ruleId") or result.get("rule", {}).get("id")
-                      try:
-                          uri = result["locations"][0]["physicalLocation"]["artifactLocation"]["uri"]
-                      except (KeyError, IndexError, TypeError):
-                          uri = ""
-                      if rule in RULES and TEST_TREES.match(uri):
-                          dropped[rule] += 1
+                  for result in run["results"]:
+                      if droppable(result):
+                          dropped[result.get("ruleId") or result["rule"]["id"]] += 1
                       else:
                           kept.append(result)
-                  if "results" in run:
-                      run["results"] = kept
+                  run["results"] = kept
               file.write_text(json.dumps(sarif), encoding="utf-8")
               print(f"{file.name}: dropped {sum(dropped.values())} test-tree results {dict(dropped)}")
           EOF
