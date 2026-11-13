@@ -563,7 +563,7 @@ fn audio_check(this: &Desktop, cx: &mut Context<Desktop>) -> Vec<AnyElement> {
         EchoTestState::Idle => None,
         EchoTestState::Running => Some((
             TEXT_MUTED,
-            "Playing the test sound through your speakers…".to_string(),
+            "Playing the test sound through your speakers for about 7 seconds…".to_string(),
         )),
         EchoTestState::Failed(message) => Some((WARNING, message.clone())),
         EchoTestState::Done(report) => {
@@ -619,7 +619,9 @@ fn audio_check(this: &Desktop, cx: &mut Context<Desktop>) -> Vec<AnyElement> {
             ))
             .into_any_element(),
     );
-    // Shown before anything plays, and kept in place while it does.
+    // Shown before anything plays, and kept in place while it does. "About
+    // 7 seconds" is checked against the worker's timeline by
+    // `settings_says_about_seven_seconds` in apps/media-worker/src/probe.rs.
     rows.push(
         div()
             .flex()
@@ -637,7 +639,7 @@ fn audio_check(this: &Desktop, cx: &mut Context<Desktop>) -> Vec<AnyElement> {
             )
             .child(
                 div().flex_1().min_w_0().child(
-                    text!("Turn your volume down first: the test plays a speech-like sound. Use your speakers to find out whether the microphone picks them up; with headphones it can only confirm that no sound leaks back.")
+                    text!("Turn your volume down first: the test plays a speech-like sound for about 7 seconds. Use your speakers to find out whether the microphone picks them up; with headphones it can only confirm that no sound leaks back.")
                         .with_id("echo-test-warning"),
                 ),
             )
