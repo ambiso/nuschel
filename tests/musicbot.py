@@ -36,7 +36,6 @@ import wave
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from fake_subsonic import API_KEY, COVER, COVER_PNG, PASSWORD, Library  # noqa: E402
 from mumble_client import Client, ReferenceOpus, certificate_pin  # noqa: E402
-import quarantine  # noqa: E402
 
 MUSIC, LOBBY = 6, 1  # local_murmur.py's channels
 
@@ -837,11 +836,10 @@ def main():
                 command(link, "skip")
                 audio_from(alice, dj, 15)
 
-                with quarantine.step("vm-musicbot/skipped-playback-retained"):
-                    skipped = eventually(lambda: api(link, "history", player=0),
-                        lambda page: page["items"][0]["outcome"] == "skipped",
-                        "skipped playback retained")["items"][0]
-                    assert skipped["started_at_ms"] is not None and skipped["played_ms"] > 0, skipped
+                skipped = eventually(lambda: api(link, "history", player=0),
+                    lambda page: page["items"][0]["outcome"] == "skipped",
+                    "skipped playback retained")["items"][0]
+                assert skipped["started_at_ms"] is not None and skipped["played_ms"] > 0, skipped
                 # Both channels receive identical encoded packets from one queue.
                 command(link, "attach", channel=1)
                 eventually(lambda: api(link), lambda state: state["players"][0]["listeners"] == 2,
