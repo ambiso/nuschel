@@ -1253,7 +1253,10 @@ mod tests {
         for (index, request) in ["1", "2", "3", "4"].into_iter().enumerate() {
             let now = (index as u64 + 1) * (EXECUTION_DEADLINE_MS - 1);
             let batch = jobs.take_with_failures(now - 1, |_, _| true);
-            assert!(batch.failures.is_empty(), "queue time is not execution time");
+            assert!(
+                batch.failures.is_empty(),
+                "queue time is not execution time"
+            );
             let done = jobs
                 .complete(request, Some(REPLY), now, |_, _| true)
                 .unwrap()
@@ -1321,9 +1324,11 @@ mod tests {
         let source = servers[0].channels[0].timeline.messages[4].source.clone();
         jobs.request(old, &source, SourceMode::Legacy, 2).unwrap();
         let work = jobs.take(2, |_, _| true);
-        let [Operation::Render {
-            request: obsolete, ..
-        }] = work.as_slice()
+        let [
+            Operation::Render {
+                request: obsolete, ..
+            },
+        ] = work.as_slice()
         else {
             panic!()
         };
@@ -1438,7 +1443,11 @@ mod tests {
             jobs.request(origin(9), "new", SourceMode::Plain, deadline),
             Err(RequestError::Retired)
         );
-        assert!(RequestError::Retired.terminal().is_some_and(|document| is_terminal_document(&document)));
+        assert!(
+            RequestError::Retired
+                .terminal()
+                .is_some_and(|document| is_terminal_document(&document))
+        );
         assert_eq!(jobs.permanent_refusal("new"), Some(RequestError::Retired));
         assert_eq!(
             jobs.pending.len(),
@@ -1473,7 +1482,9 @@ mod tests {
         assert_eq!(jobs.take(0, |_, _| true).len(), 2);
         // The head's row changes; its worker may still be busy with it.
         let cancelled = jobs.take_with_failures(1, |lease, _| lease != &origin(0));
-        assert!(matches!(cancelled.operations.as_slice(), [Operation::Cancel { request }] if request == "1"));
+        assert!(
+            matches!(cancelled.operations.as_slice(), [Operation::Cancel { request }] if request == "1")
+        );
         // Past the follower's budget had it been armed at posting or at the
         // cancellation; it is still waiting behind the unacknowledged head.
         let waiting = jobs.take_with_failures(EXECUTION_DEADLINE_MS + 2, |_, _| true);
@@ -1490,7 +1501,12 @@ mod tests {
         assert!(!jobs.due(start + EXECUTION_DEADLINE_MS - 1));
         assert!(jobs.due(start + EXECUTION_DEADLINE_MS));
         let done = jobs
-            .complete("2", Some(REPLY), start + EXECUTION_DEADLINE_MS - 1, |_, _| true)
+            .complete(
+                "2",
+                Some(REPLY),
+                start + EXECUTION_DEADLINE_MS - 1,
+                |_, _| true,
+            )
             .unwrap()
             .unwrap();
         assert!(!done.failed);
