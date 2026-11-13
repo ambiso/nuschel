@@ -70,6 +70,35 @@ fn plain_source_newlines_and_actual_rust_highlighting_survive() {
 }
 
 #[test]
+fn nix_styles_cross_the_typed_content_boundary_without_source_changes() {
+    let codec = ContentProcessor::new();
+    let body = "# 🦀 comment\n{ pkgs, ... }: let greeting = \"hello ${pkgs.name}\"; in {\n\n  enabled = true;\n}\n";
+    let source = format!("before\n```nix\n{body}```\nafter");
+    let result = codec.render_message(&source, "plain").unwrap();
+    assert!(result.len() <= MAX_REPLY_BYTES);
+    let rendered: serde_json::Value = serde_json::from_str(&result).unwrap();
+    assert_eq!(rendered["marked_text"], source);
+    assert_eq!(rendered["plain_text"], source);
+    let document: MessageDocument = serde_json::from_value(rendered["document"].clone()).unwrap();
+    assert!(document.within_limits());
+    let runs = document
+        .blocks
+        .iter()
+        .find_map(|block| match block {
+            ContentBlock::Code { language, runs } if language.as_deref() == Some("nix") => {
+                Some(runs)
+            }
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(
+        runs.iter().map(|run| run.text.as_str()).collect::<String>(),
+        body
+    );
+    assert!(runs.iter().any(|run| run.foreground != runs[0].foreground));
+}
+
+#[test]
 fn invalid_or_unbounded_work_does_not_poison_the_next_job() {
     let codec = ContentProcessor::new();
     assert!(

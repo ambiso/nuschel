@@ -167,7 +167,25 @@
           "local": "ASSET-PROVENANCE.json",
           "url": "https://github.com/trishume/syntect/tree/e4670846ecf16d8832db6c43d531bec466214e27",
           "description": "Exact package asset hashes, default generation recipe and pinned submodule/source identities",
-          "sha256": "0a56883a92ca20d8634811541398196688e3e59b53de0217e91470f2e2116107"
+          "sha256": "8a0511077e49457d26d309a5d616de7a08321f7a4be1ae3c1e3c51ac2df78ace"
+        },
+        {
+          "local": "nix/Nix.sublime-syntax",
+          "url": "https://raw.githubusercontent.com/sharkdp/bat/25f4f96ea3afb6fe44552f3b38ed8b1540ffa1b3/assets/syntaxes/02_Extra/Nix.sublime-syntax",
+          "description": "Pinned bat conversion of the Nix grammar; generation input, never loaded as runtime YAML",
+          "sha256": "cc4eb1854a2a62e4fb3b931a2aa7e6f379cfa1d1fd3e1efaf60b3d77078e9889"
+        },
+        {
+          "local": "nix/LICENSE",
+          "url": "https://raw.githubusercontent.com/wmertens/sublime-nix/9032bd613746b9c135223fd6f26a5fa555f18946/LICENSE",
+          "description": "Original Nix syntax MIT grant, Copyright 2016 Wout Mertens",
+          "sha256": "1cb5064b01955e4c356b66ab02a410b250d86060ad8afc57cb1ee05d515c12ee"
+        },
+        {
+          "local": "nix/BAT-LICENSE-MIT",
+          "url": "https://raw.githubusercontent.com/sharkdp/bat/25f4f96ea3afb6fe44552f3b38ed8b1540ffa1b3/LICENSE-MIT",
+          "description": "Pinned bat conversion/curation MIT grant",
+          "sha256": "dccda9eb9533f5c65624a1106536c6cfde46008d58e60b3faf154e8b9fd5b46e"
         }
       ]
     }

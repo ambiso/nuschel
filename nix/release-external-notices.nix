@@ -45,6 +45,7 @@ let
     builtins.head
       (builtins.fromJSON (builtins.readFile (syntect + "/provenance.json"))).external_components;
   syntaxAssets = builtins.fromJSON (builtins.readFile (syntect + "/ASSET-PROVENANCE.json"));
+  customSyntax = syntaxAssets.custom_bundle;
   font =
     builtins.head
       (builtins.fromJSON (builtins.readFile (newcm + "/provenance.json"))).external_components;
@@ -55,6 +56,7 @@ in
     assert
       builtins.hashFile "sha256" (projectRoot + "/crates/math/fonts/NewCMMath-Regular.otf")
       == font.asset_sha256;
+    assert builtins.hashFile "sha256" (projectRoot + "/${customSyntax.path}") == customSyntax.sha256;
     [
       (runtime "rust-standard-library" toolchain.version [
         "NOTICES.txt"
@@ -90,12 +92,22 @@ in
           path = "${syntect}/${file.local}";
           sha256 = file.sha256;
         }) syntax.files;
-        assets = pkgs.lib.mapAttrsToList (name: sha256: {
-          package = "syntect";
-          version = syntax.version;
-          path = "assets/${name}";
-          inherit sha256;
-        }) syntaxAssets.packed_assets_sha256;
+        assets =
+          pkgs.lib.mapAttrsToList (name: sha256: {
+            package = "syntect";
+            version = syntax.version;
+            path = "assets/${name}";
+            inherit sha256;
+          }) syntaxAssets.packed_assets_sha256
+          ++ [
+            {
+              package = "nuschl-content";
+              version =
+                (builtins.fromTOML (builtins.readFile (projectRoot + "/Cargo.toml"))).workspace.package.version;
+              path = customSyntax.crate_relative_path;
+              sha256 = customSyntax.sha256;
+            }
+          ];
       }
     ]
     ++ pkgs.lib.optional (webRuntimeNotices != null) {
