@@ -864,6 +864,37 @@ def tui_html(rows, styles, path):
     Path(path).write_text("".join(parts))
 
 
+TERMINAL_QUERY = re.compile(r"\x1b\[(?:5n|6n|0?c)")
+
+
+def answer_terminal_queries(terminal, replies):
+    """Answer what a real terminal answers. nuschl-tui's ratatui-image probe
+    writes DA1 and DSR queries and reads stdin until the DSR reply; left
+    unanswered, its abandoned reader swallows the first key typed later."""
+    pump = terminal.pump
+    scanned = [0]
+
+    def answering(timeout=0.1):
+        result = pump(timeout)
+        text = terminal.output
+        for match in TERMINAL_QUERY.finditer(text, max(0, scanned[0] - 8)):
+            if match.end() <= scanned[0]:
+                continue
+            query = match.group(0)
+            if query.endswith("5n"):
+                reply = "\x1b[0n"
+            elif query.endswith("6n"):
+                reply = f"\x1b[{terminal.screen.y + 1};{terminal.screen.x + 1}R"
+            else:
+                # A VT100 with advanced video: no sixel or kitty pictures.
+                reply = "\x1b[?1;2c"
+            os.write(terminal.fd, reply.encode())
+            replies.append({"terminal": terminal.name, "query": query.encode().hex(), "reply": reply.encode().hex()})
+        scanned[0] = len(text)
+        return result
+    terminal.pump = answering
+
+
 def tui_plain(ctx, output, kind):
     lines = output.replace("\r\n", "\n").split("\n")
     header = f"{BOT}: {ctx.tag} {kind}:"
@@ -881,6 +912,7 @@ def scenario_tui(ctx):
     out, checks, tag = ctx.out, ctx.checks, ctx.tag
     rows, cols = 72, 200
     server = bot = plain = full = None
+    replies = []
     try:
         server = start_server(ctx)
         _, bot = connect_bot(ctx, server.port, DEVELOPMENT)
@@ -893,6 +925,8 @@ def scenario_tui(ctx):
         full = Terminal("full", [tui, *common, "--profile-dir", str(ctx.scratch / "full"), f"mumble://Ada@{url}"],
                         env, rows=rows, cols=cols)
         full.screen = styled_screen_class()(rows, cols)
+        for terminal in (plain, full):
+            answer_terminal_queries(terminal, replies)
         plain.wait_for("Trust it with /trust", timeout=60)
         plain.line("/trust")
         plain.wait_for(re.compile(r"Connected").search)
@@ -937,6 +971,7 @@ def scenario_tui(ctx):
             tui_plain(ctx, plain.output, kind)
     finally:
         statuses = {}
+        write_json(out / "tui-terminal-replies.json", replies)
         for name, terminal, keys in (("full", full, CTRL_Q), ("plain", plain, "/quit\r")):
             if terminal is None:
                 continue
@@ -1458,6 +1493,25 @@ def selftest():
     assert device_class("/dev/snd/pcmC0D0c") == "sound" and device_class("/dev/video0") == "camera"
     assert device_class("/dev/dri/renderD128") == "render" and device_class("/dev/dri/card0") == "drm-card"
     assert device_class("/dev/null") is None and device_class("/dev/input/event3") == "other"
+    class Fake:
+        name, output = "fake", ""
+        screen = styled_screen_class()(5, 20)
+
+        def pump(self, timeout=0.1):
+            self.output += chunks.pop(0) if chunks else ""
+            return True
+    read_end, write_end = os.pipe()
+    fake = Fake()
+    fake.fd = write_end
+    chunks = ["\x1b_Gi=31;AAAA\x1b\\\x1b[c\x1b[16t\x1b[5", "n", "\x1b[2;3H\x1b[6n"]
+    answered = []
+    answer_terminal_queries(fake, answered)
+    for _ in range(4):
+        fake.pump()
+    os.close(write_end)
+    assert os.read(read_end, 100) == b"\x1b[?1;2c\x1b[0n\x1b[1;1R", answered
+    os.close(read_end)
+    assert len(answered) == 3
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
         (root / "a.txt").write_text("a")
