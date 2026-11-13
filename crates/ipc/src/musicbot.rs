@@ -805,14 +805,15 @@ pub async fn decode(
     .await
 }
 
-/// Deliver the logical terminal result independently of retirement. Returning
-/// from this future still requires actual child exit and completion of the
-/// outstanding media read; that final result includes any late download error.
+/// One terminal observer paired with the existing decode limits. A notification
+/// never releases this job's process or pending media-read credit.
 pub struct DecodeCompletion {
     pub limits: DecodeLimits,
     pub terminal: Option<oneshot::Sender<Result<(), String>>>,
 }
 
+/// Report the logical terminal result before cleanup. The final return still
+/// requires actual exit and read completion and includes late download errors.
 pub async fn decode_notifying(
     executable: &Path,
     media: Media<impl Read + Send + 'static>,

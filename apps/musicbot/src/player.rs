@@ -983,6 +983,45 @@ mod tests {
         assert_eq!(player.state().history[0].outcome, HistoryOutcome::Failed);
     }
 
+    #[tokio::test]
+    async fn decoder_done_is_not_successful_history_before_the_final_read_result() {
+        let player = player();
+        player.enqueue(vec![track("a")], "ada", None);
+        let (entry, generation) = start_next(&player);
+        let decode::tests::Controlled {
+            mut decoding,
+            sender: _sender,
+            terminal,
+            finish,
+        } = decode::tests::controlled();
+        decoding.entry = entry;
+        decoding.generation = generation;
+        let mut slot = Some(decoding);
+        terminal.send(Ok(())).unwrap();
+        assert!(!player.poll_decoder(&mut slot, false).await);
+        assert!(player.state().history.is_empty());
+        assert!(player.state().current.is_some());
+        finish
+            .send(Err("late network read failure".into()))
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while slot.is_some() {
+                player.poll_decoder(&mut slot, false).await;
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(player.state().history[0].outcome, HistoryOutcome::Failed);
+        assert!(
+            player.state().history[0]
+                .error
+                .as_ref()
+                .unwrap()
+                .contains("late network")
+        );
+    }
+
     fn audio(player: &Player, entry: u64, generation: u64, now: impl FnOnce() -> i64) -> bool {
         let mut state = player.state();
         if state.paused || !state.matches(entry, generation) {

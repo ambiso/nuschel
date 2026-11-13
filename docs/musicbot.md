@@ -205,7 +205,8 @@ IPC frames are capped at 64 KiB before allocation. Encoder/duck exchanges have a
 2-second exchange deadline and a separate two-second retirement grace; an error
 returns when that grace expires, while the original child and containment remain
 owned. A canceled-request preflight has the same retirement bound and cannot
-reuse old pipes or start a replacement. A decode operation must produce its next reply within 35 seconds
+reuse old pipes or start a replacement. A decode operation must produce its next
+reply within 35 seconds
 (excluding consumer backpressure). Network reads have the existing 30-second bound.
 Before its first PCM, a decode child reports work that yields no audio in exact
 steps: each MiB of an MP4 file it reads whole, and each 250 frames (5 seconds) it
@@ -225,7 +226,8 @@ PCM; a provisional decoder Done is not recorded as successful history until the
 final network result and reaping are confirmed. Kill/reap failure retains the old
 process slot; no replacement is created. A retiring encoder or decoder suspends
 new playback jobs while pause/seek/queue controls remain responsive. A panicked
-decoder supervisor does not confirm reaping and permanently retains that slot. A song has no artificial total-duration limit: retained
+decoder supervisor does not confirm reaping and permanently retains that slot.
+A song has no artificial total-duration limit: retained
 queues and each operation are bounded. An HTTP sender can stream indefinitely only
 while bounded decoding continues and the configured queue retains that track.
 
@@ -317,6 +319,13 @@ capability checks and full standalone interoperability suite. An earlier run
 failed because its best-effort event drain raced the actor's subscription-switch
 end marker; the fixture now observes that specific bounded boundary before
 starting new music, retaining the original packet-count/end assertions.
+
+The bounded-retirement tests use test-only acknowledgement gates around real
+owned subprocesses and a controlled blocking Read. They verify prompt terminal
+notification, retained child/read slots, cancellation, buffered PCM ordering and
+late network failures without claiming to reproduce an unkillable kernel task.
+Those gates are absent from release code; ordinary real-worker confinement and
+service fault checks remain separate evidence.
 
 Rust tests cover queue ordering, seek boundaries, history lifecycle and retention,
 durable state, library identity across reordering/removal, gain ramps, and VAD.

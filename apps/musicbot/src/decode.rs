@@ -42,6 +42,10 @@ impl Decoding {
     /// retains the child and blocking HTTP read until poll_outcome confirms exit.
     pub fn request_cancel(&mut self) {
         self.retiring = true;
+        // Cancellation itself is not successful playback. In particular an
+        // encoder retirement can cancel this job while its song stays selected.
+        // Keep observing cleanup, without completing that song's history.
+        self.reported = true;
         self.cancelled.store(true, Ordering::Relaxed);
         self.wake.notify_one();
         self.frames.close();
@@ -305,6 +309,28 @@ pub(crate) mod tests {
         assert_eq!(decoding.poll_outcome(true).await, None);
         assert!(decoding.retired());
         assert_eq!(decoding.poll_outcome(false).await, Some(Ok(())));
+    }
+
+    #[tokio::test]
+    async fn cancelling_the_selected_song_never_becomes_completed_history() {
+        let Controlled {
+            mut decoding,
+            sender: _sender,
+            terminal,
+            finish,
+        } = controlled();
+        terminal.send(Ok(())).unwrap();
+        decoding.request_cancel();
+        finish.send(Ok(())).unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            while !decoding.retired() {
+                assert_eq!(decoding.poll_outcome(false).await, None);
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(decoding.poll_outcome(false).await, None);
     }
 
     #[tokio::test]
