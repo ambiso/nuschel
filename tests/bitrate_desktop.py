@@ -10,9 +10,10 @@ sink with a 440 Hz tone is the microphone; transmission is continuous; a
 audio device, profile or recording is used. Checks and screenshots:
 
 - a profile without the setting starts at 128 kb/s and writes no new file;
-- Settings → VOICE QUALITY names the requested rate and, per server, the
-  effective one and its reason; choosing 256 kb/s writes voice-quality.json
-  only (settings.json keeps the keys Nuschl 0.1.0 reads);
+- Settings → VOICE QUALITY names each server below the requested rate with
+  its effective rate and reason, and the rest in one line; choosing 256 kb/s
+  writes voice-quality.json only (settings.json keeps the keys Nuschl 0.1.0
+  reads);
 - the change reconfigures the encoder only: the same media worker and
   capture stream, frames up to the new per-frame allowance;
 - the voice card shows each server's rate; speaking on both lowers Wide to
@@ -669,14 +670,13 @@ class DesktopBitrate:
         self.check("Wide", "default request (128 kb/s)", 128_000)
         self.shot("1-voice-card-default")
 
-        # Settings: the requested rate and each server's effective one.
+        # Settings: the server below the requested rate, and the rest.
         self.press("push button", "Settings")
         self.find("dialog", "Settings")
         group = self.find("radio button", "128 kb/s")
         group.call("Component", "ScrollTo", "u", "0")
-        self.named("Wide: 128 kb/s, as requested.")
-        self.named("Narrow: 48 kb/s: this server allows 72 kb/s per user, 24 kb/s of which is kept for "
-                   "Mumble packet overhead.")
+        self.named("1 other server: 128 kb/s")
+        self.named("Narrow: 48 kb/s (server limit)")
         self.shot("2-settings-default")
         capture = self.capture_streams()
         assert len(capture) == 1, capture
@@ -687,9 +687,8 @@ class DesktopBitrate:
                                        "voice-quality.json was not written")
         assert sidecar == {"version": 1, "voice_bitrate": 256_000}, sidecar
         assert set(settings) <= RELEASED_KEYS and "voice_bitrate" not in settings, settings
-        self.named("Wide: 256 kb/s, as requested.")
-        self.named("Narrow: 48 kb/s: this server allows 72 kb/s per user, 24 kb/s of which is kept for "
-                   "Mumble packet overhead.")
+        self.named("1 other server: 256 kb/s")
+        self.named("Narrow: 48 kb/s (server limit)")
         self.find("radio button", "256 kb/s").call("Component", "ScrollTo", "u", "0")
         self.shot("3-settings-256")
         time.sleep(1.0)
