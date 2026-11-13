@@ -127,7 +127,9 @@ impl HistoryHealth {
                 );
             }
         }
-        let entry = self.entries.get_mut(server).expect("inserted entry");
+        let Some(entry) = self.entries.get_mut(server) else {
+            return false;
+        };
         let notice = match event {
             HealthEvent::Outcome(SaveOutcome::Saved) => {
                 entry.saving = SaveAvailability::Available;
