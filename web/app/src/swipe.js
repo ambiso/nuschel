@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: EUPL-1.2
 // Horizontal swipes for the mobile navigation drawer: a right swipe on the chat
 // opens it, a left swipe on the drawer closes it. Pure decisions over pointer
-// samples ({x, y, t}: CSS pixels and milliseconds); App.svelte owns the DOM.
+// samples ({x, y, t}: CSS pixels and milliseconds), and which targets keep their drags.
 export const SWIPE = Object.freeze({
   slop: 10, // travel before the axis is decided
   dominance: 1.5, // horizontal travel must exceed vertical travel this many times
@@ -19,7 +19,7 @@ export function startSwipe(point, direction) {
 }
 
 export function moveSwipe(swipe, point) {
-  if (!swipe || swipe.axis === "rejected") return swipe;
+  if (swipe.axis === "rejected") return swipe;
   const dx = point.x - swipe.start.x, dy = point.y - swipe.start.y;
   let axis = swipe.axis;
   if (axis === "pending") {
@@ -31,12 +31,6 @@ export function moveSwipe(swipe, point) {
   return {...swipe, last:point, samples, axis};
 }
 
-// How far the finger has gone in the swipe's direction, once it is a swipe.
-export function swipeTravel(swipe) {
-  if (swipe?.axis !== "horizontal") return 0;
-  return Math.max(0, (swipe.last.x - swipe.start.x) * swipe.direction);
-}
-
 // Velocity in the swipe's direction over the last SWIPE.window milliseconds.
 export function releaseVelocity(swipe) {
   const {samples, last, direction} = swipe;
@@ -45,24 +39,23 @@ export function releaseVelocity(swipe) {
   return (last.x - first.x) * direction / (last.t - first.t);
 }
 
-// Whether releasing at `point` completes the swipe.
-export function endSwipe(swipe, point) {
-  const done = point ? moveSwipe(swipe, point) : swipe;
-  if (done?.axis !== "horizontal") return false;
-  const travel = swipeTravel(done), velocity = releaseVelocity(done);
-  if (travel < Math.abs(done.last.y - done.start.y)) return false;
+// Whether releasing here completes the swipe.
+export function endSwipe(swipe) {
+  if (swipe.axis !== "horizontal") return false;
+  const travel = (swipe.last.x - swipe.start.x) * swipe.direction, velocity = releaseVelocity(swipe);
+  if (travel < Math.abs(swipe.last.y - swipe.start.y)) return false;
   if (velocity >= SWIPE.velocity && travel >= SWIPE.fling) return true;
   return travel >= SWIPE.distance && velocity > -SWIPE.velocity;
 }
 
 // Where a horizontal drag already means something, it keeps that meaning: text
 // fields, code, formulas and images, drag handles, and anything the browser can
-// pan sideways. `style` is getComputedStyle (a stand-in in tests).
-export const SWIPE_EXEMPT = "input,textarea,select,[contenteditable],pre,canvas,video,.code-block,.image-button,.math-scroll,.server-order-handle";
-export function swipeExempt(target, root, style) {
-  if (!target || typeof target.closest !== "function" || target.closest(SWIPE_EXEMPT)) return true;
+// pan sideways.
+const EXEMPT = "input,textarea,select,[contenteditable],pre,canvas,video,.code-block,.image-button,.math-scroll,.server-order-handle";
+export function swipeExempt(target, root) {
+  if (target.closest(EXEMPT)) return true;
   for (let node = target; node && node !== root; node = node.parentElement) {
-    const {overflowX, touchAction} = style(node);
+    const {overflowX, touchAction} = getComputedStyle(node);
     const pansX = touchAction === "auto" || touchAction === "manipulation" || /pan-(x|left|right)/.test(touchAction);
     if ((overflowX === "auto" || overflowX === "scroll") && pansX && node.scrollWidth > node.clientWidth + 1) return true;
   }

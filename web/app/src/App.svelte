@@ -5,7 +5,7 @@
   import { ContentBridge } from "./content-bridge.js";
   import { flip } from "svelte/animate";
   import { cubicOut } from "svelte/easing";
-  import { startSwipe, moveSwipe, swipeTravel, endSwipe, swipeExempt } from "./swipe.js";
+  import { startSwipe, moveSwipe, endSwipe, swipeExempt } from "./swipe.js";
   import { serverIndices, moveServer, sameOrder, edgeSpeed } from "./server-order.js";
   import { inviteFragment } from "./invite.js";
   import { channelRows, initials, avatarColor, conversationKey, filterMessages, appearance } from "./presentation.js";
@@ -43,7 +43,7 @@
   let welcomes = $state(new Map());
   const welcome = $derived(selected?.status === "connected" && selected.welcome_token ? welcomes.get(selected.id) : null);
   let membersOpen = $state(false), selectedFallback = $state(null);
-  let arrangeServers = $state(false), orderPending = $state(false), previewIds = $state(null), draggingId = $state(null), pointerGhost = $state(null), orderStatus = $state(""), reducedOrderMotion = $state(false);
+  let arrangeServers = $state(false), orderPending = $state(false), previewIds = $state(null), draggingId = $state(null), pointerGhost = $state(null), orderStatus = $state(""), reducedMotion = $state(false);
   let orderDrag = null, orderFrame = 0, orderTime = 0, suppressBrowseUntil = 0;
   const railServers = $derived.by(() => {
     if (!previewIds) return servers;
@@ -137,7 +137,7 @@
     const updateMobile = () => { mobile = media.matches; if (!mobile) drawer = false; };
     updateMobile(); media.addEventListener("change", updateMobile);
     const motion = matchMedia("(prefers-reduced-motion: reduce)");
-    const updateMotion = () => { reducedOrderMotion = motion.matches; };
+    const updateMotion = () => { reducedMotion = motion.matches; };
     updateMotion(); motion.addEventListener("change", updateMotion);
     const escapeOrder = event => {
       if (event.key === "Escape" && (orderDrag || arrangeServers)) {
@@ -307,79 +307,29 @@
   }
   function modal(node) { node.showModal(); return { destroy() { node.close(); } }; }
   // The mobile drawer slides in and out (instantly with reduced motion). A right
-  // swipe on the chat opens it; a left swipe on it closes it, following the finger.
-  let drawerFocusReturn = false, drawerFrom = 0, swipe = null, swipeId = null;
+  // swipe on the chat opens it; a left swipe on it closes it.
+  let drawerFocusReturn = false, swipe = null;
   function closeDrawer() { if (!drawer) return; drawerFocusReturn = true; drawer = false; }
   // Closed only after the slide-out; focus returns once the page is no longer inert.
   function drawerModal(node) {
     node.showModal();
     return { destroy() { node.close(); if (drawerFocusReturn) { drawerFocusReturn = false; navigationButton?.focus(); } } };
   }
-  function drawerSlide() {
-    // A drag-close continues from where the finger left the drawer.
-    const from = drawer ? 0 : drawerFrom; drawerFrom = 0;
-    const shown = t => t * (1 - from);
-    return { duration: reducedOrderMotion ? 0 : Math.round(220 * (1 - from)), easing: cubicOut,
-      css: t => `transform:translateX(${(shown(t) - 1) * 100}%);--drawer-shown:${shown(t)}` };
-  }
+  const drawerSlide = () => ({ duration: reducedMotion ? 0 : 220, easing: cubicOut,
+    css: t => `transform:translateX(${(t - 1) * 100}%);--drawer-shown:${t}` });
   const swipePoint = event => ({ x:event.clientX, y:event.clientY, t:event.timeStamp });
   function beginSwipe(event, direction) {
     const allowed = mobile && event.isPrimary && (event.pointerType === "touch" || event.pointerType === "pen")
-      && document.getSelection()?.isCollapsed !== false && !swipeExempt(event.target, event.currentTarget, getComputedStyle);
-    swipe = allowed ? startSwipe(swipePoint(event), direction) : null;
-    swipeId = allowed ? event.pointerId : null;
+      && document.getSelection()?.isCollapsed !== false && !swipeExempt(event.target, event.currentTarget);
+    swipe = allowed ? { pointer:event.pointerId, gesture:startSwipe(swipePoint(event), direction) } : null;
   }
-  function followSwipe(event) {
-    if (!swipe || event.pointerId !== swipeId) return null;
-    swipe = moveSwipe(swipe, swipePoint(event));
-    // Scrolling, a long press or a text selection keeps the gesture.
-    if (swipe.axis === "rejected" || document.getSelection()?.isCollapsed === false) { swipe = swipeId = null; return null; }
-    return swipe;
-  }
+  function followSwipe(event) { if (swipe?.pointer === event.pointerId) swipe.gesture = moveSwipe(swipe.gesture, swipePoint(event)); }
+  // Whether the touch ended a swipe. Scrolling, a long press or a text selection keeps the gesture.
   function finishSwipe(event) {
-    if (!swipe || event.pointerId !== swipeId) return null;
-    const ended = moveSwipe(swipe, swipePoint(event)), commit = endSwipe(ended);
-    swipe = swipeId = null;
-    if (commit) {
-      // A touch that moved does not click, but never let a lifted finger press what slid under it.
-      const until = performance.now() + 400, swallow = click => { if (performance.now() < until) { click.preventDefault(); click.stopPropagation(); } };
-      window.addEventListener("click", swallow, { capture:true, once:true });
-      setTimeout(() => window.removeEventListener("click", swallow, { capture:true }), 450);
-    }
-    return { commit, travel:swipeTravel(ended) };
-  }
-  function chatSwipeEnd(event) { if (finishSwipe(event)?.commit && mobile && !drawer) drawer = true; }
-  function drawerPointerDown(event) {
-    if (event.target === event.currentTarget) closeDrawer(); else beginSwipe(event, -1);
-  }
-  function drawerSwipeMove(event) {
-    const current = followSwipe(event), node = event.currentTarget;
-    if (!swipe && node.style.transform) settleDrawer(node);
-    if (current?.axis !== "horizontal" || reducedOrderMotion) return;
-    const width = node.offsetWidth || 1, travel = Math.min(swipeTravel(current), width);
-    node.style.transform = `translateX(${-travel}px)`;
-    node.style.setProperty("--drawer-shown", String(1 - travel / width));
-  }
-  function drawerSwipeEnd(event) {
-    const node = event.currentTarget, result = finishSwipe(event);
-    if (!result) return;
-    const width = node.offsetWidth || 1;
-    if (result.commit) { drawerFrom = reducedOrderMotion ? 0 : Math.min(1, result.travel / width); closeDrawer(); }
-    else settleDrawer(node);
-  }
-  function cancelSwipe(event) {
-    if (!swipe || event.pointerId !== swipeId) return false;
-    swipe = swipeId = null; return true;
-  }
-  function drawerSwipeCancel(event) { if (cancelSwipe(event)) settleDrawer(event.currentTarget); }
-  // A drag that did not close the drawer springs back.
-  function settleDrawer(node) {
-    const transform = node.style.transform, shown = node.style.getPropertyValue("--drawer-shown");
-    node.style.transform = ""; node.style.removeProperty("--drawer-shown");
-    if (!transform || reducedOrderMotion) return;
-    const fraction = Math.max(0, Math.min(1, 1 - Number(shown || 1)));
-    node.animate([{ transform, "--drawer-shown":shown || "1" }, { transform:"translateX(0)", "--drawer-shown":"1" }],
-      { duration:Math.round(220 * fraction), easing:"cubic-bezier(.33,1,.68,1)" });
+    const done = swipe?.pointer === event.pointerId && document.getSelection()?.isCollapsed !== false
+      && endSwipe(moveSwipe(swipe.gesture, swipePoint(event)));
+    swipe = null;
+    return done;
   }
   function unreadCount(item) { return Number(item?.unread_count || item?.unread || 0); }
   function unreadPosition(node) {
@@ -474,7 +424,7 @@
     cancelOrder(); await saveOrder(moveServer(current,id,from+delta));
     await tick();
     const slot = [...(serverScroll?.querySelectorAll(".server-order-slot") || [])].find(node=>node.dataset.serverId===id);
-    slot?.scrollIntoView({block:"nearest",behavior:reducedOrderMotion ? "instant" : "smooth"});
+    slot?.scrollIntoView({block:"nearest",behavior:reducedMotion ? "instant" : "smooth"});
   }
   function orderKey(event,id,handle = false) {
     if ((handle || event.ctrlKey && event.shiftKey) && (event.key === "ArrowUp" || event.key === "ArrowDown")) {
@@ -492,7 +442,7 @@
     <a class="brand" href="/" aria-label="Nuschl home"><img src="/nuschl.svg" alt="" width="38" height="38"></a>
     <div class="server-scroll" role="presentation" bind:this={serverScroll} use:observeScroll ondragover={event => moveOrder(event)} ondrop={event => dropOrder(event)} onpointermove={event=>moveOrder(event,true)} onpointerup={event=>dropOrder(event,true)} onpointercancel={cancelPointerOrder} onlostpointercapture={cancelPointerOrder}>
       {#each railServers as server (server.id)}
-        <div class="server-order-slot" data-server-id={server.id} class:server-order-source={draggingId === server.id} animate:flip={{duration:reducedOrderMotion ? 0 : 180}}>
+        <div class="server-order-slot" data-server-id={server.id} class:server-order-source={draggingId === server.id} animate:flip={{duration:reducedMotion ? 0 : 180}}>
           <button class:active={selected?.id === server.id} class="server-icon" data-unread={unreadCount(server) > 0} title={server.name} aria-label={`Browse ${server.name}`} aria-current={selected?.id === server.id ? "true" : undefined} draggable={capabilities.includes("server_order") && !arrangeServers && !orderPending} ondragstart={event => beginOrder(event,server.id)} ondragend={cancelOrder} onkeydown={event=>orderKey(event,server.id)} onclick={() => { if (performance.now() >= suppressBrowseUntil && !orderDrag) void act("browse_server",server.runtime_index); }}><span>{initials(server.name)}</span>{#if unreadCount(server)}<span class="badge">{Math.min(99, unreadCount(server))}</span>{/if}<i class:connected={server.status === "connected"} class="connection-dot" aria-label={labels[server.status]}></i></button>
           {#if arrangeServers}<button class="server-order-handle" aria-label={`Move ${server.name}; use arrow keys or drag`} title="Drag to move; arrow keys also work" disabled={orderPending} onpointerdown={event=>beginOrder(event,server.id,true)} onkeydown={event=>orderKey(event,server.id,true)} onclick={()=>orderStatus="Use Up and Down to move this server, or drag its handle."}>⋮</button>{/if}
         </div>
@@ -541,7 +491,7 @@
 
 <main>
   {#if !mobile}<div class="navigation" class:server-order-layout={capabilities.includes("server_order")}>{@render navigation()}</div>{/if}
-  <section class="chat" aria-label="Chat" onpointerdown={event => { if (!drawer) beginSwipe(event, 1); }} onpointermove={followSwipe} onpointerup={chatSwipeEnd} onpointercancel={cancelSwipe}>
+  <section class="chat" aria-label="Chat" onpointerdown={event => { if (!drawer) beginSwipe(event, 1); }} onpointermove={followSwipe} onpointerup={event => { if (finishSwipe(event)) drawer = true; }} onpointercancel={() => swipe = null}>
     <header class="chat-header">
       {#if mobile}<button class="icon-button menu-button" bind:this={navigationButton} aria-label="Open navigation" aria-expanded={drawer} onclick={() => drawer = true}>{@render icon("menu")}</button>{/if}
       <span class="header-hash" aria-hidden="true">{currentChannel?.direct ? "@" : "#"}</span><div class="channel-title"><h2>{timeline?.name || "Welcome to Nuschl"}</h2><span>{currentChannel?.direct ? "Private conversation" : selected?.name || "Your voice. Your space."}</span></div>
@@ -588,6 +538,6 @@
   </section>
 </main>
 
-{#if mobile && drawer}<dialog class="navigation-drawer" use:drawerModal transition:drawerSlide onclose={(event) => { if (event.currentTarget.isConnected) closeDrawer(); }} oncancel={(event) => { event.preventDefault(); closeDrawer(); }} aria-label="Server navigation" onpointerdown={drawerPointerDown} onpointermove={drawerSwipeMove} onpointerup={drawerSwipeEnd} onpointercancel={drawerSwipeCancel}><div class="navigation" class:server-order-layout={capabilities.includes("server_order")}>{@render navigation()}</div></dialog>{/if}
+{#if mobile && drawer}<dialog class="navigation-drawer" use:drawerModal transition:drawerSlide onclose={(event) => { if (event.currentTarget.isConnected) closeDrawer(); }} oncancel={(event) => { event.preventDefault(); closeDrawer(); }} aria-label="Server navigation" onpointerdown={event => { if (event.target === event.currentTarget) closeDrawer(); else beginSwipe(event, -1); }} onpointermove={followSwipe} onpointerup={event => { if (finishSwipe(event)) closeDrawer(); }} onpointercancel={() => swipe = null}><div class="navigation" class:server-order-layout={capabilities.includes("server_order")}>{@render navigation()}</div></dialog>{/if}
 {#if showAdd}<dialog class="modal server-modal" use:modal onclose={() => showAdd = false} oncancel={() => showAdd = false} aria-labelledby="server-form-title"><header class="modal-header"><div><p class="eyebrow">MAKE YOURSELF AT HOME</p><h2 id="server-form-title">{editingIndex === null ? "Add a server" : "Edit server"}</h2></div><button class="icon-button" aria-label="Close server form" onclick={() => showAdd = false}>{@render icon("close")}</button></header><form class="connection" onsubmit={connect}><p class="muted">Connect to your Mumble server. Your bookmarks and observed chat history are saved in this browser.</p><label>Display name <input bind:value={serverName} maxlength="128" autocomplete="off" placeholder="Friday night"></label><div class="form-row"><label>Server <input bind:value={host} required autocomplete="off" placeholder="voice.example.org"></label><label class="port-field">Port <input bind:value={port} type="number" min="1" max="65535" required></label></div><label>Your name <input bind:value={username} required maxlength="128" autocomplete="nickname" placeholder="How your friends know you"></label><label for="server-password">Server password (optional)</label><input id="server-password" type="password" bind:value={password} maxlength="1024" autocomplete="current-password"><details><summary>Certificate and connection</summary><label>Certificate SHA-256 (optional)<input bind:value={pin} autocomplete="off" spellcheck="false" placeholder="64 hexadecimal characters"></label><small class="relay">Relay: {relay}. TLS runs in this browser.</small></details><div class="modal-actions"><button type="button" onclick={() => showAdd = false}>Cancel</button><button class="primary" type="submit" disabled={!loaded || !!link.error}>Connect</button></div></form></dialog>{/if}
 {#if showSettings}<dialog class="modal settings-modal" use:modal onclose={() => showSettings = false} oncancel={() => showSettings = false} aria-labelledby="settings-title"><header class="modal-header"><div><p class="eyebrow">MAKE IT YOURS</p><h2 id="settings-title">Settings</h2></div><button class="icon-button" aria-label="Close settings" onclick={() => showSettings = false}>{@render icon("close")}</button></header><section class="settings-section"><h3>Appearance</h3><label for="theme-choice">Theme</label><select id="theme-choice" bind:value={settings.theme} onchange={persistSettings}><option value="system">Match device</option><option value="dark">Dark</option><option value="light">Light</option></select><label for="density-choice">Message spacing</label><select id="density-choice" bind:value={settings.density} onchange={persistSettings}><option value="comfortable">Comfortable</option><option value="compact">Compact</option></select><label for="size-choice">Text size</label><select id="size-choice" bind:value={settings.fontSize} onchange={persistSettings}><option value={14}>Small · 14px</option><option value={16}>Default · 16px</option><option value={18}>Large · 18px</option><option value={20}>Larger · 20px</option></select></section><section class="settings-section voice-quality"><h3>Voice quality</h3><label for="voice-bitrate-choice">Voice bitrate</label><select id="voice-bitrate-choice" bind:value={voiceBitrate} onchange={chooseVoiceBitrate}>{#each VOICE_BITRATES as choice (choice)}<option value={choice}>{kbps(choice)}{choice === 128000 ? " · default" : ""}</option>{/each}</select>{#if voice}<p class="voice-bitrate" role="status">{voiceServer?.name}: {voiceBitrateWhy}</p>{/if}</section><section class="settings-section"><h3>Privacy & storage</h3><p>Bookmarks, trusted certificates and observed chat history are stored locally in this browser. Legacy servers can read chat; the relay only forwards encrypted traffic.</p><p>Links and received images never cause automatic requests to another site.</p></section>{@render voiceProcessingSettings()}{#if selected}<section class="settings-section"><h3>{selected.name}</h3><p class="muted">{selected.host}:{selected.port} · {selected.username}</p><button onclick={() => { showSettings = false; editServer(); }}>Edit server bookmark</button>{#if capabilities.includes("server_order")}<div class="server-order-actions"><button disabled={orderPending || servers[0]?.id === selected.id} onclick={()=>moveOrderKey(selected.id,-1)}>Move server earlier</button><button disabled={orderPending || servers.at(-1)?.id === selected.id} onclick={()=>moveOrderKey(selected.id,1)}>Move server later</button></div>{/if}{#if capabilities.includes("remove_server")}<button class="danger" onclick={async () => { await act("remove_server",selectedIndex); showSettings = false; }}>Remove server</button>{/if}</section>{/if}<footer class="settings-footer"><span class="brand-word">nuschl<span>web</span></span><small>Built for conversations.</small></footer></dialog>{/if}

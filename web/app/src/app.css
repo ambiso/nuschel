@@ -47,8 +47,7 @@ dialog{color:var(--text);background:var(--surface);border:1px solid var(--border
 
 /* The mobile drawer: its backdrop fades with the slide (App.svelte drawerSlide),
    and vertical panning stays with the browser while sideways drags are swipes. */
-@property --drawer-shown{syntax:"<number>";inherits:true;initial-value:1}
-.navigation-drawer::backdrop{opacity:var(--drawer-shown)}
+.navigation-drawer::backdrop{opacity:var(--drawer-shown,1)}
 @media(max-width:760px){.chat,.messages,.navigation-drawer,.navigation-drawer .server-scroll,.navigation-drawer .channel-tree{touch-action:pan-y pinch-zoom}html{overscroll-behavior-x:none}}
 /* Sideways drags past the end of code, a formula or (on phones) any field never
    turn into the browser's history swipe, which would leave the client. */
