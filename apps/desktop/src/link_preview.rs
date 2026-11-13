@@ -205,11 +205,13 @@ pub fn composer(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement>
                 .child(
                     div()
                         .text_sm()
+                        .truncate()
                         .child(text!(title).with_id("link-preview-title")),
                 )
                 .child(
                     div()
                         .text_xs()
+                        .truncate()
                         .text_color(color(TEXT_MUTED))
                         .child(text!(detail).with_id("link-preview-detail")),
                 ),

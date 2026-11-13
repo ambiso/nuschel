@@ -537,6 +537,7 @@ impl Client {
             }
             Err(error) => server.set_notice(error),
         }
+        self.validate_link_preview(self.now_ms);
     }
 
     /// Trust the certificate server `index` presented (its
@@ -643,6 +644,7 @@ impl Client {
             .find(|server| server.id != id && server.status != Status::Disconnected)
             .map(|server| server.id.clone());
         self.voice.disconnected(&id, fallback.as_deref());
+        self.validate_link_preview(self.now_ms);
     }
 
     /// Toggle our mute (or deafen) on server `index`. Unmuting where your
@@ -850,6 +852,7 @@ impl Client {
             );
         }
         self.request_selected_description(index);
+        self.validate_link_preview(self.now_ms);
         result
     }
 
@@ -3396,7 +3399,6 @@ mod tests {
         let (mut client, recorder, _) = connected();
         let ticket = prepare_link(&mut client, &recorder);
         client.open(0, 3).unwrap();
-        client.settle();
         assert_eq!(
             *recorder.cancelled_previews.lock().unwrap(),
             vec![ticket.id]
