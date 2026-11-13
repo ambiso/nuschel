@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: EUPL-1.2
+# Configuration for .github/workflows/codeql.yml. It keeps the default query
+# suite of the former default setup and disables no rule: each rule can find
+# real defects somewhere in this tree. Rules that are noise only in test
+# fixtures are dropped there by the workflow's SARIF filter, by rule and path.
+name: Nuschl CodeQL
+
+paths-ignore:
+  # A standalone experiment with its own workspace, outside the default build,
+  # the crate2nix graph and every package (spikes/mls/Cargo.toml).
+  - spikes/**
+
+# vendor/ stays scanned on purpose. Nuschl's own patches live inside upstream
+# files there (most are described in vendor/*/NUSCH*-PATCH*.md), and
+# paths-ignore cannot exclude a directory but keep single files. Findings in
+# unpatched upstream code are triaged per alert instead.
