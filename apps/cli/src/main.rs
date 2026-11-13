@@ -959,6 +959,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 Err(error) => { output(json!({"kind":"disconnected", "message":error.to_string()}))?; return Err(error.into()); },
             },
             Some(event) = events.recv() => output(match event {
+                SessionEvent::LinkPreviewSendResult { id, result } => json!({"kind":"link_preview_send_result", "request_id":id, "sent":result.is_ok(), "reason":result.err()}),
                 SessionEvent::PeerCertificate(sha256) => json!({"kind":"peer_certificate", "sha256":sha256}),
                 SessionEvent::Negotiated(negotiated) => json!({"kind":"negotiated", "nuschl":negotiated.nuschl, "capabilities":negotiated.capabilities,
                     "policy":negotiated.policy.map(|policy| json!({"moderators_delete":policy.moderators_delete, "edit_limit":policy.edit_limit}))}),
