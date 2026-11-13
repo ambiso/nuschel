@@ -216,6 +216,52 @@ async fn actual_fetch_privacy() {
         PathBuf::from(std::env::var_os("NUSCHL_PREVIEW_WORKER").expect("actual content worker"));
     assert!(worker.is_absolute() && worker.is_file());
     assert!(directory.join("peers-ready.json").is_file());
+    assert!(
+        cfg!(target_os = "linux"),
+        "owned Linux namespace fixture required"
+    );
+    let mut status = String::new();
+    std::fs::File::open("/proc/self/status")
+        .unwrap()
+        .take(16 * 1024 + 1)
+        .read_to_string(&mut status)
+        .unwrap();
+    assert!(status.len() <= 16 * 1024);
+    let field = |name: &str| {
+        status
+            .lines()
+            .find_map(|line| line.strip_prefix(name)?.strip_prefix(':'))
+            .expect("required process status field")
+            .trim()
+    };
+    for name in ["CapEff", "CapPrm", "CapAmb"] {
+        assert_eq!(
+            field(name),
+            "0000000000000000",
+            "test actor retained {name}"
+        );
+    }
+    assert_eq!(field("NoNewPrivs"), "1");
+    for name in ["Uid", "Gid"] {
+        let ids: Vec<u32> = field(name)
+            .split_ascii_whitespace()
+            .map(|s| s.parse().unwrap())
+            .collect();
+        assert_eq!(ids.len(), 4);
+        assert!(
+            ids.iter().all(|id| *id != 0),
+            "test actor must have a nonroot {name}"
+        );
+    }
+    write_new(
+        &directory.join("test-process-authority.json"),
+        &serde_json::to_vec_pretty(&json!({
+            "CapEff": field("CapEff"), "CapPrm": field("CapPrm"), "CapAmb": field("CapAmb"),
+            "NoNewPrivs": field("NoNewPrivs"), "Uid": field("Uid"), "Gid": field("Gid"),
+            "scope": "Actual ignored test process before DNS/socket/worker admission"
+        }))
+        .unwrap(),
+    );
     let root = fixture_cert(&directory);
     let mut checks = Vec::new();
     macro_rules! checked {

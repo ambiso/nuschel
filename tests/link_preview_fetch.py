@@ -8,6 +8,8 @@ not a public-server test or permission to touch host network configuration.
 The coordinator supplies the reviewed namespace/resource wrapper and exact
 ignored Rust test binary. This process does not weaken production address/TLS
 policy. Certificates are ephemeral test inputs written by the Rust test.
+The peer namespace keeps its invoking nonroot UID; the test actor drops all
+inherited/ambient capabilities before starting its own nested content sandbox.
 
     link_preview_fetch.py serve --directory OWNED --ip PINNED_IP --net-inode HOST
 
@@ -277,7 +279,7 @@ def serve(args):
     assert directory.is_dir() and directory.stat().st_uid == os.getuid()
     assert os.stat("/proc/self/ns/net").st_ino != args.net_inode, "refusing host network namespace"
     assert os.readlink("/proc/self/ns/user") != args.user_namespace, "refusing host user namespace"
-    assert os.getuid() == 0, "fixture must be namespace root, not host root"
+    assert os.getuid() != 0 and os.getgid() != 0, "fixture requires its mapped nonroot identity"
     # Fixed argv only, and only after namespace identity validation.
     def ip(*arguments):
         subprocess.run([str(args.ip), *arguments], check=True, stdin=subprocess.DEVNULL, timeout=2)
@@ -298,8 +300,10 @@ def serve(args):
     result = None
     try:
         if args.test_binary:
+            assert args.setpriv and args.setpriv.is_file()
             environment = dict(os.environ, NUSCHL_PREVIEW_FIXTURE=str(directory), NUSCHL_PREVIEW_WORKER=str(args.worker))
-            command = [str(args.test_binary), "--ignored", "--exact", "link_preview::tests::actual_fetch_privacy", "--nocapture", "--test-threads=1"]
+            command = [str(args.setpriv), "--inh-caps=-all", "--ambient-caps=-all", "--no-new-privs",
+                       str(args.test_binary), "--ignored", "--exact", "link_preview::tests::actual_fetch_privacy", "--nocapture", "--test-threads=1"]
             (directory / "test-command.json").write_text(json.dumps(command) + "\n")
             with (directory / "test.log").open("xb") as output:
                 # The external reviewed subreaper guard owns ALL descendants,
@@ -330,12 +334,16 @@ def run(args):
     leftovers/failures. bwrap monitor exit alone is not a cleanup assertion.
     """
     config = json.loads(args.config.read_text())
-    assert set(config) == {"bwrap", "ip", "python", "prlimit", "test_binary", "worker", "path"}
-    for key in ("bwrap", "ip", "python", "prlimit", "worker"):
+    assert set(config) == {"bwrap", "ip", "python", "prlimit", "setpriv", "test_binary", "worker", "path"}
+    for key in ("bwrap", "ip", "python", "prlimit", "setpriv", "worker"):
         value = Path(config[key])
         assert str(value).startswith("/nix/store/") and value.is_file(), key
+    assert Path(config["setpriv"]).name == "setpriv"
+    assert Path(config["setpriv"]).parent == Path(config["prlimit"]).parent
     assert all(str(Path(path)).startswith("/nix/store/") for path in config["path"])
     assert Path(config["test_binary"]).is_file()
+    uid, gid = os.getuid(), os.getgid()
+    assert uid != 0 and gid != 0, "refusing a host-root fixture invocation"
     directory = args.directory.absolute()
     directory.mkdir(mode=0o700)  # Exclusive ownership; existing run is immutable.
     for name in ("etc", "home", "runtime"):
@@ -349,7 +357,7 @@ def run(args):
     script = Path(__file__).resolve()
     command = [config["bwrap"], "--unshare-user", "--unshare-pid", "--unshare-net", "--unshare-ipc", "--unshare-uts", "--unshare-cgroup-try",
                "--die-with-parent", "--new-session", "--clearenv", "--cap-drop", "ALL", "--cap-add", "CAP_NET_ADMIN", "--cap-add", "CAP_NET_BIND_SERVICE",
-               "--uid", "0", "--gid", "0", "--ro-bind", "/nix/store", "/nix/store", "--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp", "--tmpfs", "/run",
+               "--uid", str(uid), "--gid", str(gid), "--ro-bind", "/nix/store", "/nix/store", "--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp", "--tmpfs", "/run",
                "--ro-bind", str(directory / "etc"), "/etc", "--bind", str(directory), "/fixture", "--ro-bind", str(script), "/fixture-script.py", "--chdir", "/fixture"]
     environment = {"PATH": ":".join(config["path"]), "HOME": "/fixture/home", "XDG_RUNTIME_DIR": "/fixture/runtime", "TMPDIR": "/tmp", "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8",
                    "PYTHONDONTWRITEBYTECODE": "1", "DBUS_SESSION_BUS_ADDRESS": "unix:path=/no-host-session-bus", "DBUS_SYSTEM_BUS_ADDRESS": "unix:path=/no-host-system-bus",
@@ -358,7 +366,7 @@ def run(args):
         command += ["--setenv", name, value]
     command += [config["prlimit"], "--as=2147483648", "--cpu=150", "--nofile=256", "--fsize=1048576", "--", config["python"], "/fixture-script.py", "serve",
                 "--directory", "/fixture", "--ip", config["ip"], "--net-inode", str(os.stat("/proc/self/ns/net").st_ino), "--user-namespace", os.readlink("/proc/self/ns/user"),
-                "--test-binary", "/fixture/session-tests", "--worker", config["worker"]]
+                "--test-binary", "/fixture/session-tests", "--worker", config["worker"], "--setpriv", config["setpriv"]]
     (directory / "launch.json").write_text(json.dumps(dict(command=command, config=config, copied_test_sha256=binary_hash,
         source_sha256=hashlib.sha256(script.read_bytes()).hexdigest(), cleanup="external reviewed subreaper guard required; no wrapper-exit retirement claim"), indent=2) + "\n")
     os.execve(command[0], command, {})
@@ -374,6 +382,7 @@ def main():
     peer.add_argument("--user-namespace", required=True)
     peer.add_argument("--test-binary", type=Path)
     peer.add_argument("--worker", type=Path)
+    peer.add_argument("--setpriv", type=Path)
     launcher = sub.add_parser("run", help="must run under reviewed outer subreaper/device/resource guard")
     launcher.add_argument("--config", type=Path, required=True)
     launcher.add_argument("--directory", type=Path, required=True)
