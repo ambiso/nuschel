@@ -257,8 +257,8 @@ pub struct Media {
     task: tokio::task::JoinHandle<()>,
 }
 impl Media {
-    /// A worker reached in memory, a test double for the supervisor: the
-    /// requests it is sent, and where its events go. Nothing is started.
+    /// A worker reached in memory, a test double for the supervisor: two
+    /// channels carry the requests it is sent and the events it reports.
     #[doc(hidden)]
     pub fn in_memory() -> (
         Self,

@@ -20,6 +20,7 @@ use std::collections::{BTreeMap, BTreeSet};
 /// Why an Unmute stays muted (#199).
 pub(crate) const CANT_SPEAK_HERE: &str = "You can't speak here.";
 pub(crate) const NO_BANDWIDTH: &str = "No bandwidth for voice here.";
+pub(crate) const NOT_CONNECTED: &str = "Not connected.";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Status {
@@ -260,7 +261,7 @@ impl ServerState {
     /// Why the server stops us from speaking here, if it does: it
     /// suppressed us (no Speak permission in the channel), muted or deafened
     /// us, or its bandwidth limit leaves no room for voice.
-    pub fn speech_blocked(&self) -> Option<&'static str> {
+    pub(crate) fn speech_blocked(&self) -> Option<&'static str> {
         if self
             .own_session
             .and_then(|session| self.users.get(&session))

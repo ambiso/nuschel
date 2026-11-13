@@ -877,10 +877,12 @@ impl Client {
     /// says why.
     fn refuses_unmute(&mut self, index: usize) -> bool {
         let server = &mut self.servers[index];
-        if server.status != Status::Connected {
-            return true;
-        }
-        let Some(reason) = server.speech_blocked() else {
+        let reason = if server.status == Status::Connected {
+            server.speech_blocked()
+        } else {
+            Some(crate::server::NOT_CONNECTED)
+        };
+        let Some(reason) = reason else {
             return false;
         };
         server.set_notice(reason.into());
