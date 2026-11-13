@@ -3246,8 +3246,10 @@ version = "0.1.0"
 name = "nuschl-client"
 version = "0.1.0"
 dependencies = [
+ "hex",
  "nuschl-core",
  "nuschl-ipc",
+ "nuschl-legacy-html",
  "nuschl-protocol",
  "nuschl-session",
  "serde",
@@ -3259,6 +3261,7 @@ name = "nuschl-content"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "hex",
  "html5ever",
  "image",
  "markup5ever_rcdom",
@@ -3273,6 +3276,7 @@ name = "nuschl-core"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "hex",
  "serde",
  "sha2 0.11.1",
  "url",
@@ -3327,6 +3331,7 @@ version = "0.1.0"
 dependencies = [
  "curve25519-dalek 4.1.3",
  "getrandom 0.4.3",
+ "hex",
  "hpke-rs 0.8.0",
  "hpke-rs-libcrux 0.8.0",
  "libcrux-chacha20poly1305 0.0.10",
@@ -3366,6 +3371,7 @@ dependencies = [
  "blake3",
  "ed25519-dalek",
  "getrandom 0.4.3",
+ "hex",
  "libcrux-ml-dsa",
  "nuschl-identity",
  "sha2 0.10.9",
@@ -3409,6 +3415,7 @@ version = "0.1.0"
 dependencies = [
  "bytes",
  "directories",
+ "hex",
  "nuschl-core",
  "nuschl-ipc",
  "nuschl-legacy-html",
@@ -3437,6 +3444,7 @@ dependencies = [
  "base64 0.22.1",
  "bytes",
  "clap",
+ "hex",
  "nuschl-e2ee",
  "nuschl-identity",
  "nuschl-ipc",

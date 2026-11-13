@@ -33,17 +33,6 @@ fn seed(tag: u8) -> Secret32 {
     Secret32::from_slice(&seed_bytes(tag)).unwrap()
 }
 
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
-}
-
-fn unhex(text: &str) -> Vec<u8> {
-    (0..text.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(&text[i..i + 2], 16).unwrap())
-        .collect()
-}
-
 /// `name = hex` lines of a vector file.
 fn field<'a>(file: &'a str, name: &str) -> &'a str {
     file.lines()
@@ -84,29 +73,32 @@ fn generate() -> Vectors {
     let authority = DeviceSigningAuthority::new(dsk, dsk_cert.clone()).unwrap();
     line!();
     line!("[identity root]");
-    line!("mldsa65_seed = {}", hex(&seed_bytes(0x00)));
-    line!("ed25519_seed = {}", hex(&seed_bytes(0x20)));
-    line!("public_key = {}", hex(&root.public_key().encode()));
+    line!("mldsa65_seed = {}", hex::encode(seed_bytes(0x00)));
+    line!("ed25519_seed = {}", hex::encode(seed_bytes(0x20)));
+    line!("public_key = {}", hex::encode(root.public_key().encode()));
     line!("# SHA-256(0x1f || \"nuschl/identity-fingerprint/v1\" || public_key)");
-    line!("fingerprint = {}", hex(root.fingerprint().as_bytes()));
+    line!(
+        "fingerprint = {}",
+        hex::encode(root.fingerprint().as_bytes())
+    );
     seeds.push(("hybrid-public-key", root.public_key().encode()));
 
     line!();
     line!("[device-signing key, generation 1]");
-    line!("mldsa65_seed = {}", hex(&seed_bytes(0x40)));
-    line!("ed25519_seed = {}", hex(&seed_bytes(0x60)));
-    line!("credential_seed = {}", hex(&seed_bytes(0x80)));
+    line!("mldsa65_seed = {}", hex::encode(seed_bytes(0x40)));
+    line!("ed25519_seed = {}", hex::encode(seed_bytes(0x60)));
+    line!("credential_seed = {}", hex::encode(seed_bytes(0x80)));
     line!(
         "public_key = {}",
-        hex(&authority.certificate().device_signing_key().encode())
+        hex::encode(authority.certificate().device_signing_key().encode())
     );
     line!(
         "credential_key = {}",
-        hex(authority.certificate().credential_key().as_bytes())
+        hex::encode(authority.certificate().credential_key().as_bytes())
     );
     line!("created_at = {T0}");
     line!("# root signs, ctx \"nuschl/device-signing-certificate/v1\"");
-    line!("certificate = {}", hex(&dsk_cert.encode()));
+    line!("certificate = {}", hex::encode(dsk_cert.encode()));
     seeds.push(("device-signing-certificate", dsk_cert.encode()));
 
     // A device.
@@ -127,24 +119,24 @@ fn generate() -> Vectors {
         .unwrap();
     line!();
     line!("[device]");
-    line!("device_id = {}", hex(device.device_id().as_bytes()));
+    line!("device_id = {}", hex::encode(device.device_id().as_bytes()));
     line!("key_epoch = 1");
-    line!("leaf_seed = {}", hex(&seed_bytes(0xa0)));
-    line!("kem_seed = {}", hex(&seed_bytes(0xc0)));
-    line!("leaf_key = {}", hex(device.leaf_key().as_bytes()));
+    line!("leaf_seed = {}", hex::encode(seed_bytes(0xa0)));
+    line!("kem_seed = {}", hex::encode(seed_bytes(0xc0)));
+    line!("leaf_key = {}", hex::encode(device.leaf_key().as_bytes()));
     line!("# X-Wing (draft-connolly-cfrg-xwing-kem-06+, MLKEM768-X25519) from kem_seed");
-    line!("kem_key = {}", hex(device.kem_key().as_bytes()));
+    line!("kem_key = {}", hex::encode(device.kem_key().as_bytes()));
     line!("not_before = {}", validity.not_before());
     line!("not_after = {}", validity.not_after());
     line!("display_name = laptop");
     line!("# device-signing key signs, ctx \"nuschl/device-certificate/v1\"");
-    line!("certificate = {}", hex(&cert.encode()));
-    line!("certificate_sha256 = {}", hex(&cert.hash()));
+    line!("certificate = {}", hex::encode(cert.encode()));
+    line!("certificate_sha256 = {}", hex::encode(cert.hash()));
     line!("# credential key signs 0x1c || \"nuschl/device-credential/v1\" || body");
-    line!("credential = {}", hex(&credential.encode()));
+    line!("credential = {}", hex::encode(credential.encode()));
     line!("# revokes every key epoch; ctx \"nuschl/device-revocation/v1\"");
     line!("revoked_at = {}", T0 + 1);
-    line!("revocation = {}", hex(&revocation.encode()));
+    line!("revocation = {}", hex::encode(revocation.encode()));
     seeds.push(("device-certificate", cert.encode()));
     seeds.push(("device-credential", credential.encode()));
     seeds.push(("device-revocation", revocation.encode()));
@@ -163,14 +155,14 @@ fn generate() -> Vectors {
     let qr = SafetyQr::new(&root.fingerprint(), &other.fingerprint());
     line!();
     line!("[safety number]");
-    line!("other_mldsa65_seed = {}", hex(&seed_bytes(0xe0)));
-    line!("other_ed25519_seed = {}", hex(&seed_bytes(0xf0)));
+    line!("other_mldsa65_seed = {}", hex::encode(seed_bytes(0xe0)));
+    line!("other_ed25519_seed = {}", hex::encode(seed_bytes(0xf0)));
     line!(
         "other_fingerprint = {}",
-        hex(other.fingerprint().as_bytes())
+        hex::encode(other.fingerprint().as_bytes())
     );
     line!("digits = {number}");
-    line!("qr = {}", hex(qr.as_bytes()));
+    line!("qr = {}", hex::encode(qr.as_bytes()));
     seeds.push(("safety-qr", qr.as_bytes().to_vec()));
 
     // Recovery key and blob.
@@ -178,10 +170,10 @@ fn generate() -> Vectors {
     let blob = RecoveryBlob::seal_with_salt(&root, &recovery_key, [0x11; 32]).unwrap();
     line!();
     line!("[recovery]");
-    line!("recovery_key = {}", hex(&[0x55; 32]));
+    line!("recovery_key = {}", hex::encode([0x55; 32]));
     line!("recovery_key_display = {}", &*recovery_key.display());
-    line!("salt = {}", hex(&[0x11; 32]));
-    line!("recovery_blob = {}", hex(&blob.encode()));
+    line!("salt = {}", hex::encode([0x11; 32]));
+    line!("recovery_blob = {}", hex::encode(blob.encode()));
     seeds.push(("recovery-blob", blob.encode()));
     assert_eq!(
         blob.open(&recovery_key).unwrap().fingerprint(),
@@ -210,10 +202,10 @@ fn generate() -> Vectors {
     let sealed_store = store.seal_with_salt(&store_key, [0x33; 32]).unwrap();
     line!();
     line!("[device keystore]");
-    line!("store_key = {}", hex(&[0x22; 32]));
-    line!("salt = {}", hex(&[0x33; 32]));
+    line!("store_key = {}", hex::encode([0x22; 32]));
+    line!("salt = {}", hex::encode([0x33; 32]));
     line!("# device keystore with the device-signing secret and the recovery blob");
-    line!("sealed = {}", hex(&sealed_store));
+    line!("sealed = {}", hex::encode(&sealed_store));
     seeds.push(("sealed-keystore", sealed_store.clone()));
     let reopened = DeviceKeystore::open(&store_key, &sealed_store).unwrap();
     assert_eq!(reopened.device().public_keys(), device.public_keys());
@@ -232,12 +224,12 @@ fn generate() -> Vectors {
     line!("[device linking key schedule]");
     line!("# K from SPAKE2, both SPAKE2 messages as sent, the new device's keys (the [device]");
     line!("# above) named \"phone\"");
-    line!("spake2_key = {}", hex(&[0x44; 32]));
-    line!("pake_existing = {}", hex(&pake_existing));
-    line!("pake_new = {}", hex(&pake_new));
-    line!("transcript = {}", hex(&transcript));
-    line!("confirmation = {}", hex(&confirmation));
-    line!("psk = {}", hex(&psk));
+    line!("spake2_key = {}", hex::encode([0x44; 32]));
+    line!("pake_existing = {}", hex::encode(pake_existing));
+    line!("pake_new = {}", hex::encode(pake_new));
+    line!("transcript = {}", hex::encode(transcript));
+    line!("confirmation = {}", hex::encode(confirmation));
+    line!("psk = {}", hex::encode(psk));
 
     Vectors { text: t, seeds }
 }
@@ -263,18 +255,24 @@ fn identity_vectors_match_the_file() {
 
 #[test]
 fn identity_vectors_decode_and_verify() {
-    let root = HybridPublicKey::decode(&unhex(field(VECTORS, "public_key"))).unwrap();
+    let root =
+        HybridPublicKey::decode(&hex::decode(field(VECTORS, "public_key")).unwrap()).unwrap();
     assert_eq!(
-        hex(root.fingerprint().as_bytes()),
+        hex::encode(root.fingerprint().as_bytes()),
         field(VECTORS, "fingerprint")
     );
-    let dsk_cert = DeviceSigningCertificate::decode(&unhex(field(VECTORS, "certificate"))).unwrap();
+    let dsk_cert =
+        DeviceSigningCertificate::decode(&hex::decode(field(VECTORS, "certificate")).unwrap())
+            .unwrap();
     let identity = VerifiedIdentity::verify(root, dsk_cert).unwrap();
     let section = &VECTORS[VECTORS.find("[device]").unwrap()..];
-    let cert = DeviceCertificate::decode(&unhex(field(section, "certificate"))).unwrap();
-    let credential = DeviceCredential::decode(&unhex(field(section, "credential"))).unwrap();
-    let revocation = DeviceRevocation::decode(&unhex(field(section, "revocation"))).unwrap();
-    let leaf = unhex(field(section, "leaf_key"));
+    let cert =
+        DeviceCertificate::decode(&hex::decode(field(section, "certificate")).unwrap()).unwrap();
+    let credential =
+        DeviceCredential::decode(&hex::decode(field(section, "credential")).unwrap()).unwrap();
+    let revocation =
+        DeviceRevocation::decode(&hex::decode(field(section, "revocation")).unwrap()).unwrap();
+    let leaf = hex::decode(field(section, "leaf_key")).unwrap();
     let mut roster = DeviceRoster::new(identity);
     roster.add_certificate(cert).unwrap();
     roster.check_credential(&credential, &leaf, T0).unwrap();
@@ -286,18 +284,21 @@ fn identity_vectors_decode_and_verify() {
 
 #[test]
 fn rfc_10073_composite_vector() {
-    let pk = unhex(field(COMPOSITE, "pk"));
-    let sk = unhex(field(COMPOSITE, "sk"));
-    let m = unhex(field(COMPOSITE, "m"));
-    let ctx = unhex(field(COMPOSITE, "ctx"));
-    let s: Box<[u8; composite::SIGNATURE_LEN]> = unhex(field(COMPOSITE, "s"))
+    let pk = hex::decode(field(COMPOSITE, "pk")).unwrap();
+    let sk = hex::decode(field(COMPOSITE, "sk")).unwrap();
+    let m = hex::decode(field(COMPOSITE, "m")).unwrap();
+    let ctx = hex::decode(field(COMPOSITE, "ctx")).unwrap();
+    let s: Box<[u8; composite::SIGNATURE_LEN]> = hex::decode(field(COMPOSITE, "s"))
+        .unwrap()
         .into_boxed_slice()
         .try_into()
         .unwrap();
-    let s_ctx: Box<[u8; composite::SIGNATURE_LEN]> = unhex(field(COMPOSITE, "s_with_context"))
-        .into_boxed_slice()
-        .try_into()
-        .unwrap();
+    let s_ctx: Box<[u8; composite::SIGNATURE_LEN]> =
+        hex::decode(field(COMPOSITE, "s_with_context"))
+            .unwrap()
+            .into_boxed_slice()
+            .try_into()
+            .unwrap();
     let (mldsa_pk, ed_pk) = pk.split_at(mldsa65::PUBLIC_KEY_LEN);
     let mldsa_pk: &[u8; mldsa65::PUBLIC_KEY_LEN] = mldsa_pk.try_into().unwrap();
     let ed_pk: &[u8; 32] = ed_pk.try_into().unwrap();

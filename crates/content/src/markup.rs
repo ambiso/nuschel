@@ -1170,10 +1170,10 @@ impl Expand {
                 self.open(Open::Code);
             }
             "color" => {
-                let hex = |at: usize| u8::from_str_radix(argument.get(at..at + 2)?, 16).ok();
-                let color = (argument.len() == 6)
-                    .then(|| Some([hex(0)?, hex(2)?, hex(4)?]))
-                    .flatten();
+                let mut rgb = [0; 3];
+                let color = hex::decode_to_slice(argument, &mut rgb)
+                    .is_ok()
+                    .then_some(rgb);
                 self.open(Open::Color(color));
             }
             "link" => {

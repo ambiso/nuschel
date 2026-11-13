@@ -3412,7 +3412,7 @@ fn attachment_chip(
             format!("Image {name}, being prepared"),
         ),
         Attachment::File { size, .. } => {
-            let size = crate::attachments::human_size(*size);
+            let size = nuschl_core::transfer::format_size(*size);
             (
                 icon("file", 20., color(TEXT_MUTED)).into_any_element(),
                 Some(size.clone()),

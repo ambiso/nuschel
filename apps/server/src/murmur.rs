@@ -19,7 +19,6 @@
 use crate::{
     acl::{AclEntry, Group, perm},
     config::Settings,
-    conversations::hex,
     handlers::{MAX_STORED_NAME, truncate_bytes, truncate_chars},
     password,
     server::{self, StartError},
@@ -312,7 +311,7 @@ fn clear(state: &mut State) {
             state
                 .storage
                 .send(ServerStorageRequest::HistoryForgetAccount {
-                    account: hex(&removed.account),
+                    account: hex::encode(removed.account),
                 });
         }
     }
@@ -1135,20 +1134,6 @@ pub fn config_outputs(config: &[(String, String)], report: &mut Report) -> Outpu
     outputs
 }
 
-fn write_private(path: &Path, contents: &[u8], mode: u32) -> std::io::Result<()> {
-    let temporary = path.with_extension("tmp");
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
-    #[cfg(unix)]
-    std::os::unix::fs::OpenOptionsExt::mode(&mut options, mode);
-    #[cfg(not(unix))]
-    let _ = mode;
-    let mut file = options.open(&temporary)?;
-    std::io::Write::write_all(&mut file, contents)?;
-    file.sync_all()?;
-    std::fs::rename(&temporary, path)
-}
-
 /// Write the outputs next to the state and tell the operator what to do.
 pub fn write_outputs(
     outputs: &Outputs,
@@ -1164,7 +1149,7 @@ pub fn write_outputs(
              # from murmur.ini are not in the database and need to be carried over by hand.\n",
         );
         text.push_str(&outputs.toml);
-        write_private(&path, text.as_bytes(), 0o600)?;
+        crate::files::write_atomically(&path, text.as_bytes(), 0o600)?;
         report.advice.push(format!(
             "wrote Murmur's settings to {}; merge them into the configuration",
             path.display()
@@ -1172,7 +1157,7 @@ pub fn write_outputs(
     }
     if let Some(password) = &outputs.password {
         let path = directory.join("murmur-server-password");
-        write_private(&path, password.as_bytes(), 0o600)?;
+        crate::files::write_atomically(&path, password.as_bytes(), 0o600)?;
         report.advice.push(format!(
             "wrote the server password to {}; set password_file to it (or keep it elsewhere)",
             path.display()
@@ -1198,8 +1183,8 @@ pub fn write_outputs(
                             directory.join("murmur-private-key.pem"),
                         )
                     };
-                write_private(&key_path, key.as_bytes(), 0o600)?;
-                write_private(&certificate_path, certificate.as_bytes(), 0o644)?;
+                crate::files::write_atomically(&key_path, key.as_bytes(), 0o600)?;
+                crate::files::write_atomically(&certificate_path, certificate.as_bytes(), 0o644)?;
                 let fingerprint =
                     crate::tls::Identity::from_pem(certificate.as_bytes(), key.as_bytes())
                         .map(|identity| identity.fingerprint())

@@ -12,6 +12,7 @@ pub mod config;
 pub mod connection;
 pub mod conversations;
 pub mod extension;
+mod files;
 #[doc(hidden)]
 pub mod fuzzing;
 pub mod handlers;

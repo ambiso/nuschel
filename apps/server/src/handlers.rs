@@ -5,7 +5,7 @@
 use crate::{
     acl::{self, AclEntry, Group, perm},
     authz::Action,
-    conversations::{Scope, hex},
+    conversations::Scope,
     state::{Ban, Channel, Registered, State, WhisperTarget, mapped, now_unix, random},
     text,
 };
@@ -1164,7 +1164,7 @@ impl State {
             accounts.remove(&removed.account);
         }
         self.history.write(Storage::HistoryForgetAccount {
-            account: hex(&removed.account),
+            account: hex::encode(removed.account),
         });
         let mut changed = Vec::new();
         for channel in self.channels.0.values_mut() {
@@ -1751,7 +1751,7 @@ impl State {
             if temporary {
                 self.conversations.remove(&conversation);
                 self.history.write(Storage::HistoryPurge {
-                    conversation: hex(&conversation),
+                    conversation: hex::encode(conversation),
                 });
             } else {
                 self.conversations.archive(conversation);

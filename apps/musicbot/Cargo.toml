@@ -8,6 +8,7 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+hex = "0.4.3"
 nuschl-core.workspace = true
 nuschl-ipc.workspace = true
 nuschl-legacy-html.workspace = true

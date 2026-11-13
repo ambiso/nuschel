@@ -7,7 +7,7 @@
 //! server's handlers (validation, cascades, persistence).
 use crate::{
     config::Settings,
-    conversations::{self, Id, hex},
+    conversations::{self, Id},
     history,
     retention::wire,
     server::{self, StartError},
@@ -313,7 +313,7 @@ async fn users(opened: &mut Opened, settings: &Settings, command: Users) -> Resu
                     "{:>6}  {:<24} {:<32}  {:<8} {:<12} {}",
                     user.id,
                     user.name,
-                    hex(&user.account),
+                    hex::encode(user.account),
                     if user.password_hash.is_some() {
                         "yes"
                     } else {
@@ -331,7 +331,7 @@ async fn users(opened: &mut Opened, settings: &Settings, command: Users) -> Resu
             let user = state.registry.users[&id].clone();
             println!("id:           {}", user.id);
             println!("name:         {}", user.name);
-            println!("account:      {}", hex(&user.account));
+            println!("account:      {}", hex::encode(user.account));
             println!(
                 "password:     {}",
                 if user.password_hash.is_some() {
@@ -498,7 +498,7 @@ async fn channels(opened: &mut Opened, command: Channels) -> Result<()> {
                 let removed = match opened
                     .storage
                     .request(Request::HistoryCountExpirable {
-                        conversation: hex(&id),
+                        conversation: hex::encode(id),
                         before_ms: cutoff,
                     })
                     .await
@@ -652,11 +652,10 @@ async fn history_command(opened: &mut Opened, command: HistoryCommand) -> Result
             match output {
                 None => println!("{text}"),
                 Some(path) => {
-                    let mut options = std::fs::OpenOptions::new();
-                    options.write(true).create(true).truncate(true);
-                    #[cfg(unix)]
-                    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
-                    let mut file = options.open(&path)?;
+                    let mut file = crate::files::with_mode(0o600)
+                        .create(true)
+                        .truncate(true)
+                        .open(&path)?;
                     file.write_all(text.as_bytes())?;
                     file.write_all(b"\n")?;
                     eprintln!(
@@ -699,7 +698,7 @@ async fn export(opened: &Opened, id: Id, name: &str) -> Result<serde_json::Value
             .storage
             .request(Request::HistoryPage {
                 query: PageQuery {
-                    conversation: hex(&id),
+                    conversation: hex::encode(id),
                     anchor: Anchor::After(after),
                     limit: 100,
                     ranges: vec![(1, u64::MAX)],
@@ -758,7 +757,7 @@ async fn export(opened: &Opened, id: Id, name: &str) -> Result<serde_json::Value
     }
     let (days, live_only) = wire(retention);
     Ok(json!({
-        "conversation": hex(&id),
+        "conversation": hex::encode(id),
         "name": name,
         "exported_ms": now,
         "retention": { "days": days, "live_only": live_only },

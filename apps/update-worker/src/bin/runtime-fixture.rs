@@ -232,10 +232,7 @@ sys.stdout.buffer.write(b'NUSUVP2\0'+b[8:9]+hashlib.sha256(b'nuschl.update.verif
     use sha2::{Digest, Sha256};
     let body = b"new program";
     let base = format!("http://127.0.0.1:{port}/");
-    let hex: String = Sha256::digest(body)
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect();
+    let hex = hex::encode(Sha256::digest(body));
     let raw = manifest(&format!("{base}nuschl.exe"), &hex, now + 3600);
     let sig = secret.sign(&raw)?.as_bytes().to_vec();
     let server = std::thread::spawn(move || {

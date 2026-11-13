@@ -38,6 +38,7 @@
 use crate::state::{Contact, ServerState};
 use crate::store::Store;
 use crate::worker::Worker;
+use hex::FromHex as _;
 use nuschl_e2ee::client::{Client, Incoming, MemberInfo, ValidKeyPackage};
 use nuschl_e2ee::envelope::{self, Chain, Envelope, Kind};
 use nuschl_e2ee::history::{self, HistoryKey};
@@ -68,27 +69,6 @@ const MAX_OUTGOING: usize = 64;
 const MAX_NOTICES: usize = 32;
 /// Conversations per server.
 const MAX_CONVERSATIONS: usize = 4096;
-
-fn hex(bytes: &[u8]) -> String {
-    use std::fmt::Write as _;
-    bytes.iter().fold(String::new(), |mut out, byte| {
-        let _ = write!(out, "{byte:02x}");
-        out
-    })
-}
-
-fn unhex(text: &str) -> Option<Vec<u8>> {
-    if !text.len().is_multiple_of(2) {
-        return None;
-    }
-    text.as_bytes()
-        .chunks(2)
-        .map(|pair| {
-            let digit = |c: u8| (c as char).to_digit(16);
-            Some((digit(pair[0])? * 16 + digit(pair[1])?) as u8)
-        })
-        .collect()
-}
 
 fn array16(bytes: &[u8], what: &str) -> Result<[u8; 16], String> {
     bytes.try_into().map_err(|_| format!("{what} is 16 bytes"))
@@ -259,7 +239,7 @@ impl Conversation {
     }
 
     fn know(&mut self, hash: [u8; 32]) {
-        self.known.push_back(hex(&hash));
+        self.known.push_back(hex::encode(hash));
         while self.known.len() > MAX_KNOWN {
             self.known.pop_front();
         }
@@ -379,8 +359,9 @@ fn roster_from(contact: &Contact) -> Option<DeviceRoster> {
 }
 
 fn fingerprint_of(text: &str) -> Option<IdentityFingerprint> {
-    let bytes: [u8; 32] = unhex(text)?.try_into().ok()?;
-    Some(IdentityFingerprint::from_bytes(bytes))
+    <[u8; 32]>::from_hex(text)
+        .ok()
+        .map(IdentityFingerprint::from_bytes)
 }
 
 impl Rosters {
@@ -458,7 +439,7 @@ fn assess(rosters: &Rosters, members: &[MemberInfo], now_s: u64) -> Assessment {
         match rosters.check(member, now_s) {
             Verdict::Verified { device, own } => assessment.members.push(MemberView {
                 identity: device.identity.to_hex(),
-                device: hex(device.device_id.as_bytes()),
+                device: hex::encode(device.device_id.as_bytes()),
                 device_name: device.display_name.as_str().to_owned(),
                 own,
                 verified: true,
@@ -485,7 +466,7 @@ fn assess(rosters: &Rosters, members: &[MemberInfo], now_s: u64) -> Assessment {
                 });
                 assessment.members.push(MemberView {
                     identity: identity.to_hex(),
-                    device: hex(&device),
+                    device: hex::encode(device),
                     device_name: "unconfirmed device".into(),
                     own,
                     verified: false,
@@ -500,7 +481,7 @@ fn assess(rosters: &Rosters, members: &[MemberInfo], now_s: u64) -> Assessment {
 }
 
 fn key_of(bytes: &[u8]) -> Result<String, String> {
-    Ok(hex(&array16(bytes, "an idempotency key")?))
+    Ok(hex::encode(array16(bytes, "an idempotency key")?))
 }
 
 fn random_key() -> Result<Vec<u8>, String> {
@@ -646,7 +627,7 @@ impl Worker {
                                 && entry
                                     .history
                                     .archived
-                                    .get(&hex(&sent.archive_hash))
+                                    .get(&hex::encode(&sent.archive_hash))
                                     .is_some_and(|previous| *previous != seq))
                     })
                 {
@@ -665,7 +646,7 @@ impl Worker {
                         entry
                             .history
                             .archived
-                            .entry(hex(&sent.archive_hash))
+                            .entry(hex::encode(&sent.archive_hash))
                             .or_insert(seq);
                     }
                 }
@@ -739,7 +720,7 @@ impl Worker {
             .state
             .servers
             .get(server)
-            .and_then(|conversations| conversations.get(&hex(conversation)))
+            .and_then(|conversations| conversations.get(&hex::encode(conversation)))
     }
 
     fn conversation_mut(
@@ -748,7 +729,7 @@ impl Worker {
         conversation: &[u8; 16],
     ) -> Result<&mut Conversation, String> {
         let conversations = self.mls.state.servers.entry(server.to_owned()).or_default();
-        let key = hex(conversation);
+        let key = hex::encode(conversation);
         if !conversations.contains_key(&key) && conversations.len() >= MAX_CONVERSATIONS {
             return Err("too many end-to-end conversations on this server".into());
         }
@@ -798,7 +779,7 @@ impl Worker {
             .map_err(|error| error.to_string())?;
         let entry = self.server(server)?;
         // Our other devices: what a lookup of our own account confirmed.
-        if let Some(contact) = entry.contacts.get(&hex(&entry.account))
+        if let Some(contact) = entry.contacts.get(&hex::encode(&entry.account))
             && let Some(record) = roster_from(contact)
             && record.identity().fingerprint() == keystore.identity().fingerprint()
             && let Some(stored) = &contact.roster
@@ -819,7 +800,7 @@ impl Worker {
         }
         let others = entry
             .contacts
-            .get(&hex(peer))
+            .get(&hex::encode(peer))
             .and_then(|contact| {
                 let pinned = fingerprint_of(contact.pinned.as_deref()?)?;
                 Some((pinned, roster_from(contact)))
@@ -848,7 +829,7 @@ impl Worker {
         self.state
             .servers
             .get(server)
-            .and_then(|entry| entry.contacts.get(&hex(peer)))
+            .and_then(|entry| entry.contacts.get(&hex::encode(peer)))
     }
 
     /// Re-checks every member against the rosters (after a lookup refreshed them).
@@ -1035,7 +1016,7 @@ impl Worker {
             roster
                 .active_devices(now_s)
                 .iter()
-                .any(|device| !present.contains(hex(device.device_id.as_bytes()).as_str()))
+                .any(|device| !present.contains(hex::encode(device.device_id.as_bytes()).as_str()))
         };
         let mut missing = Vec::new();
         if let Some((_, Some(roster))) = rosters.others.first()
@@ -1665,7 +1646,7 @@ impl Worker {
                     && entry
                         .history
                         .archived
-                        .get(&hex(&sent.archive_hash))
+                        .get(&hex::encode(&sent.archive_hash))
                         .is_some_and(|previous| *previous != seq))
             {
                 return Ok(Received::Duplicate { seq });
@@ -1679,9 +1660,12 @@ impl Worker {
             {
                 own.seq = Some(seq);
             }
-            stored.outgoing.remove(&hex(&sent.idempotency_key));
+            stored.outgoing.remove(&hex::encode(&sent.idempotency_key));
             if !sent.archive_hash.is_empty() {
-                stored.history.archived.insert(hex(&sent.archive_hash), seq);
+                stored
+                    .history
+                    .archived
+                    .insert(hex::encode(&sent.archive_hash), seq);
             }
             self.mls.save(&self.store)?;
             if sent.control {
@@ -1847,7 +1831,7 @@ impl Worker {
             if entry
                 .history
                 .archived
-                .get(&hex(&envelope.archive_hash))
+                .get(&hex::encode(&envelope.archive_hash))
                 .is_some_and(|previous| *previous != seq)
             {
                 return Ok(Received::Duplicate { seq });
@@ -1923,9 +1907,9 @@ impl Worker {
             stored
                 .history
                 .archived
-                .insert(hex(&envelope.archive_hash), seq);
+                .insert(hex::encode(&envelope.archive_hash), seq);
         }
-        let device = hex(&envelope.device_id);
+        let device = hex::encode(envelope.device_id);
         let mut state = stored.chains.get(&device).cloned().unwrap_or_default();
         let mut chain = Chain {
             counter: state.counter,
@@ -1996,7 +1980,7 @@ impl Worker {
                 missing: state.missing,
             },
         );
-        if envelope.seen != [0; 32] && !stored.known.contains(&hex(&envelope.seen)) {
+        if envelope.seen != [0; 32] && !stored.known.contains(&hex::encode(envelope.seen)) {
             stored.notice(format!(
                 "{} saw a message this device never received; the server may be withholding \
                  it.",
@@ -2149,7 +2133,7 @@ impl Worker {
                 entry
                     .history
                     .archived
-                    .get(&hex(&hash))
+                    .get(&hex::encode(hash))
                     .is_some_and(|known| *known != seq)
             })
         {
@@ -2203,7 +2187,7 @@ impl Worker {
         self.conversation_mut(server, conversation)?
             .history
             .archived
-            .insert(hex(&hash), seq);
+            .insert(hex::encode(hash), seq);
         self.mls.save(&self.store)?;
         Ok(Received::Message {
             seq,

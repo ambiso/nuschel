@@ -29,17 +29,8 @@ import tempfile
 import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from local_murmur import eventually  # noqa: E402
 from mumble_client import Client, ReferenceOpus, certificate_pin, rms, tone  # noqa: E402
-
-
-def eventually(predicate, message, timeout=40):
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        result = predicate()
-        if result:
-            return result
-        time.sleep(0.25)
-    raise AssertionError(message)
 
 
 def drain(client):
@@ -141,7 +132,7 @@ def main():
                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
         mumble = peer = None
         try:
-            eventually(socket.exists, "private PulseAudio did not start")
+            eventually(socket.exists, "private PulseAudio did not start", timeout=40)
             # A certificate exported by Nuschl becomes the stock client's identity.
             exported = subprocess.run([str(args.binaries / "nuschl-cli"), "--host", "unused", "--username", "unused",
                                        "--profile-dir", str(root / "stock-identity"), "--export-certificate",

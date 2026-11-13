@@ -13,12 +13,12 @@
 //!   the frontend with [`IdentityEvent`]s.
 use crate::Error;
 use nuschl_ipc::{
-    Envelope, MAX_FRAME_BYTES, PROTOCOL_VERSION,
+    Envelope, MAX_FRAME_BYTES,
     crypto::{
         ContactView, CryptoRequest, CryptoResponse, CryptoServer, HeadOutcome, IdentityView,
         KeyTransparencySettings, KtRecordBytes, MonitorOutcome, RecoveryPolicy,
     },
-    write_frame,
+    read_frame_async, write_frame,
 };
 use nuschl_protocol::nuschl::{
     kind,
@@ -27,7 +27,7 @@ use nuschl_protocol::nuschl::{
 use prost::Message as _;
 use std::{path::PathBuf, process::Stdio, sync::Arc, time::Duration};
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
+    io::AsyncWriteExt,
     process::{Child, ChildStdin, ChildStdout, Command},
     sync::{mpsc, oneshot},
     time::timeout,
@@ -168,15 +168,13 @@ async fn exchange(
         .map_err(|e| Error::Worker(e.to_string()))?;
     worker.input.write_all(&bytes).await?;
     worker.input.flush().await?;
-    let size = worker.output.read_u32().await? as usize;
-    if size > MAX_FRAME_BYTES {
-        return Err(Error::Worker("oversized crypto worker response".into()));
-    }
-    let mut body = vec![0; size];
-    worker.output.read_exact(&mut body).await?;
-    let envelope: Envelope<CryptoResponse> =
-        serde_json::from_slice(&body).map_err(|e| Error::Worker(e.to_string()))?;
-    if envelope.version != PROTOCOL_VERSION || envelope.request_id != id {
+    let envelope: Envelope<CryptoResponse> = read_frame_async(&mut worker.output, MAX_FRAME_BYTES)
+        .await
+        .map_err(|error| match error {
+            nuschl_ipc::Error::Io(error) => Error::Io(error),
+            error => Error::Worker(error.to_string()),
+        })?;
+    if envelope.request_id != id {
         return Err(Error::Worker("crypto worker protocol mismatch".into()));
     }
     Ok(envelope.payload)

@@ -49,10 +49,6 @@ pub mod permission {
     ];
 }
 
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
-}
-
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct Channel {
     /// Process-local lifetime; changes after removal/recreation or reconnect.
@@ -109,14 +105,14 @@ impl User {
         self.comment.as_ref().map_or(0, String::len) + self.texture.as_ref().map_or(0, Vec::len)
     }
     pub fn set_comment_hash(&mut self, hash: &[u8]) {
-        let hash = hex(hash);
+        let hash = hex::encode(hash);
         if self.comment_hash.as_ref() != Some(&hash) {
             self.comment = None;
         }
         self.comment_hash = Some(hash);
     }
     pub fn set_texture_hash(&mut self, hash: &[u8]) {
-        let hash = hex(hash);
+        let hash = hex::encode(hash);
         if self.texture_hash.as_ref() != Some(&hash) {
             self.texture = None;
         }
@@ -126,7 +122,7 @@ impl User {
 
 impl Channel {
     pub fn set_description_hash(&mut self, hash: &[u8]) {
-        let hash = hex(hash);
+        let hash = hex::encode(hash);
         if self.description_hash.as_ref() != Some(&hash) {
             self.description.clear();
         }

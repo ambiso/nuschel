@@ -426,14 +426,6 @@ fn json_array(values: &[String]) -> String {
     json
 }
 
-fn now_ms() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |elapsed| {
-            i64::try_from(elapsed.as_millis()).unwrap_or(i64::MAX)
-        })
-}
-
 pub struct History {
     pool: Pool,
 }
@@ -866,7 +858,7 @@ impl History {
             });
         }
         let limit = limit.clamp(1, MAX_PAGE_MESSAGES);
-        let now_ms = after.map_or_else(now_ms, |cursor| cursor.now_ms);
+        let now_ms = after.map_or_else(nuschl_core::now_ms, |cursor| cursor.now_ms);
         let (score, id) = after.map_or((i64::MAX, i64::MAX), |cursor| (cursor.score, cursor.id));
         let author = query
             .from
@@ -1507,7 +1499,7 @@ mod tests {
 
     async fn results_rank_relevance_and_recency(history: &History) -> Result<(), Error> {
         const DAY_MS: i64 = 24 * 60 * 60 * 1000;
-        let now = now_ms();
+        let now = nuschl_core::now_ms();
         for (age_days, body) in [
             (400, "old launch"),
             (1, "new launch"),

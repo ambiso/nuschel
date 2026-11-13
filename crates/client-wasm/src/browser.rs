@@ -588,7 +588,7 @@ impl WebClient {
             inputs: RefCell::new(VecDeque::new()),
             connections: RefCell::new(HashMap::new()),
             generation: Cell::new(0),
-            anonymous_namespace: crate::session::hex(&namespace),
+            anonymous_namespace: hex::encode(&namespace),
             wake: RefCell::new(None),
             audio_wake: RefCell::new(None),
             talking: RefCell::new(HashMap::new()),

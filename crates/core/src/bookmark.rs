@@ -159,10 +159,7 @@ pub fn webpki_history_identity(host: &str, port: u16) -> String {
 
 /// Lowercase hex SHA-256.
 pub fn fingerprint(bytes: &[u8]) -> String {
-    Sha256::digest(bytes)
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
+    hex::encode(Sha256::digest(bytes))
 }
 
 #[cfg(test)]

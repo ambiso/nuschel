@@ -170,23 +170,8 @@ impl MumbleUrl {
 }
 
 fn percent_decode(text: &str) -> Result<String, String> {
-    let bytes = text.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut index = 0;
-    while index < bytes.len() {
-        if bytes[index] == b'%' {
-            let hex = bytes
-                .get(index + 1..index + 3)
-                .and_then(|pair| std::str::from_utf8(pair).ok())
-                .and_then(|pair| u8::from_str_radix(pair, 16).ok())
-                .ok_or("invalid percent-encoding in mumble:// URL")?;
-            out.push(hex);
-            index += 3;
-        } else {
-            out.push(bytes[index]);
-            index += 1;
-        }
-    }
+    let out = nuschl_core::percent::decode(text.as_bytes(), false)
+        .ok_or("invalid percent-encoding in mumble:// URL")?;
     let decoded = String::from_utf8(out).map_err(|_| "mumble:// URL is not valid UTF-8")?;
     if decoded.chars().any(char::is_control) {
         return Err("mumble:// URL contains control characters".into());
@@ -1696,10 +1681,7 @@ impl Profile {
         if current.exists() {
             let backup = self.places.identity.join(format!(
                 "identity.{}.json.bak",
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|elapsed| elapsed.as_secs())
-                    .unwrap_or(0)
+                nuschl_core::now_ms() / 1000
             ));
             fs::copy(&current, backup).map_err(|error| error.to_string())?;
         }
@@ -1778,10 +1760,7 @@ impl ClientIdentity {
     /// SHA-1 of the certificate, the hash Mumble servers show and register.
     pub fn mumble_hash(&self) -> String {
         use sha1::Digest as _;
-        sha1::Sha1::digest(&self.certificate)
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect()
+        hex::encode(sha1::Sha1::digest(&self.certificate))
     }
 
     pub fn from_pkcs12(pkcs12: &[u8], password: &str) -> Result<Self, String> {

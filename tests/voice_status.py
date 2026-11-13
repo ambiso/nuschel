@@ -10,6 +10,7 @@ from pathlib import Path
 import signal
 import time
 from accessibility import items
+from layout_regression import inside
 from local_murmur import eventually
 from mumble_client import Client
 from web_live_welcome import Server as FramingServer, integer
@@ -192,9 +193,6 @@ def run(args, root, shell, registry, bots, profile, second_port, second_pin, sho
     select("alpha"); find("Go to " + names["beta"], prefix=True).press()
     eventually(lambda: find(names["beta"] + ";", prefix=True).call("Accessible", "GetState")[0][0] & (1 << 23), "voice row navigated through stale runtime index")
     record("earlier-server-removed")
-    def inside(box, outer):
-        x,y,w,h=box;ox,oy,ow,oh=outer
-        return w > 0 and h > 0 and x >= ox-1 and y >= oy-1 and x+w <= ox+ow+1 and y+h <= oy+oh+1
     select("beta"); edit("beta")
     entry=find("Server name","entry"); entry.call("Component","GrabFocus")
     before_name_edit=json.loads((profile/"config/servers.json").read_text())

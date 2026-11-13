@@ -69,7 +69,7 @@
 use crate::{
     authz::Action,
     config::Mls as MlsConfig,
-    conversations::{Id, Kind, hex},
+    conversations::{Id, Kind},
     history::{Delivery, Done},
     kt::StorageKt,
     limits::LeakyBucket,
@@ -176,10 +176,6 @@ fn sha256(parts: &[&[u8]]) -> [u8; 32] {
     out
 }
 
-fn now_ms() -> u64 {
-    crate::kt::now_ms()
-}
-
 fn key(prefix: u8, parts: &[&[u8]]) -> Vec<u8> {
     let mut out = vec![prefix];
     for part in parts {
@@ -271,7 +267,7 @@ impl MlsHandle {
 
     /// The delivery service's clock (Unix ms).
     pub fn now_ms(&self) -> u64 {
-        now_ms().saturating_add_signed(self.clock_offset.load(Ordering::Relaxed))
+        crate::kt::now_ms().saturating_add_signed(self.clock_offset.load(Ordering::Relaxed))
     }
 
     /// Moves the service's clock (tests: a device inactive for 90 days).
@@ -885,7 +881,7 @@ fn promote(
     let mut pushes = Vec::new();
     if let Some(welcome) = welcome {
         for (account, device, last_resort, reference) in recipients {
-            let mut id = now_ms().to_be_bytes().to_vec();
+            let mut id = crate::kt::now_ms().to_be_bytes().to_vec();
             id.extend_from_slice(&crate::state::random::<8>());
             let entry = v1::MlsWelcome {
                 id: id.clone(),
@@ -918,7 +914,7 @@ async fn find_commit_row(
     let mut anchor = after;
     for _ in 0..MAX_RESOLVE_PAGES {
         let query = PageQuery {
-            conversation: hex(conversation),
+            conversation: hex::encode(conversation),
             anchor: Anchor::After(anchor),
             limit: nuschl::MAX_PAGE_MESSAGES as u32,
             ranges: vec![(1, u64::MAX)],
@@ -1202,7 +1198,7 @@ impl Service {
         }
         let mut device: Option<Device> = None;
         let mut records = Vec::new();
-        let now = now_ms();
+        let now = crate::kt::now_ms();
         for (index, (bytes, last_resort)) in packages.into_iter().enumerate() {
             let info = check_key_package(&bytes).map_err(|error| {
                 tracing::info!(%error, "refused a key package");
@@ -1667,7 +1663,8 @@ impl Service {
             .scan_prefix(&key(PREFIX_WELCOME, &[&account, &device]))
             .await
             .map_err(store_failure)?;
-        let horizon = now_ms().saturating_sub(u64::from(self.config.welcome_days) * 86_400_000);
+        let horizon =
+            crate::kt::now_ms().saturating_sub(u64::from(self.config.welcome_days) * 86_400_000);
         let mut expired = Vec::new();
         let mut welcomes = Vec::new();
         for (key, value) in entries {
@@ -2045,19 +2042,19 @@ impl State {
             content.push_str(&base64(&message.archive));
         }
         let row = StoredMessage {
-            conversation: hex(&conversation),
+            conversation: hex::encode(conversation),
             seq,
             kind: MessageKind::Message,
-            author_account: Some(hex(&account)),
+            author_account: Some(hex::encode(account)),
             author_user_id: user_id,
             author_name: name,
             format,
             content,
             sent_ms: crate::chat::now_ms(),
-            idempotency_key: Some(crate::tls::hex(&key)),
+            idempotency_key: Some(hex::encode(key)),
             // The key names the message: a resend after STALE_EPOCH re-encrypts the
             // same envelope and gets the original seq back.
-            body_hash: Some(crate::tls::hex(&sha256(&[&conversation, &[format], &key]))),
+            body_hash: Some(hex::encode(sha256(&[&conversation, &[format], &key]))),
             ..StoredMessage::default()
         };
         let wire = self.wire_message(row.clone());
@@ -2183,7 +2180,7 @@ impl State {
         for row in rows {
             let seq = self.conversations.next_seq(conversation);
             let stored = StoredMessage {
-                conversation: hex(&conversation),
+                conversation: hex::encode(conversation),
                 seq,
                 kind: MessageKind::Message,
                 author_account: None,
@@ -2193,7 +2190,7 @@ impl State {
                 content: base64(&row),
                 sent_ms: crate::chat::now_ms(),
                 idempotency_key: None,
-                body_hash: Some(crate::tls::hex(&sha256(&[&row]))),
+                body_hash: Some(hex::encode(sha256(&[&row]))),
                 ..StoredMessage::default()
             };
             let wire = self.wire_message(stored.clone());
@@ -2440,17 +2437,17 @@ impl State {
         cache.established = true;
         let (_, user_id, name) = self.mls_author(session);
         let row = StoredMessage {
-            conversation: hex(&conversation),
+            conversation: hex::encode(conversation),
             seq,
             kind: MessageKind::Message,
-            author_account: Some(hex(&account)),
+            author_account: Some(hex::encode(account)),
             author_user_id: user_id,
             author_name: name,
             format: v1::Format::MlsHandshake as u8,
             content: base64(&commit),
             sent_ms: crate::chat::now_ms(),
-            idempotency_key: Some(crate::tls::hex(&key)),
-            body_hash: Some(crate::tls::hex(&hash)),
+            idempotency_key: Some(hex::encode(key)),
+            body_hash: Some(hex::encode(hash)),
             ..StoredMessage::default()
         };
         let wire = self.wire_message(row.clone());

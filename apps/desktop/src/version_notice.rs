@@ -27,7 +27,7 @@ impl VersionNotice {
     /// From the server's hello (its policy); a server without the
     /// extension asks nothing.
     pub fn negotiated(&mut self, policy: Option<&Policy>) {
-        let now_ms = nuschl_session::connection::now_ms();
+        let now_ms = nuschl_core::now_ms();
         let current = nuschl_session::connection::client_version();
         self.standing = Some(policy.map_or(Standing::Current, |policy| {
             Standing::of(policy, Some(&current), now_ms.div_euclid(1000))

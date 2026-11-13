@@ -420,7 +420,7 @@ impl Channel {
             position: self.position,
             max_users: self.max_users,
             inherit_acl: self.node.inherit_acl,
-            conversation_id: conversations::hex(&self.conversation_id),
+            conversation_id: hex::encode(self.conversation_id),
             history_visibility: self.history_visibility,
             acls: self
                 .node
@@ -599,7 +599,7 @@ impl Registered {
     pub fn to_stored(&self) -> StoredUser {
         StoredUser {
             id: self.id,
-            account: Some(conversations::hex(&self.account)),
+            account: Some(hex::encode(self.account)),
             name: self.name.clone(),
             password_hash: self.password_hash.clone(),
             certificate_hash: self.certificate_hash.clone(),

@@ -154,7 +154,7 @@ pub async fn authenticate(
             account,
             server
                 .history_reads
-                .history_read_markers(crate::conversations::hex(&account))
+                .history_read_markers(hex::encode(account))
                 .await,
         )),
         None => None,

@@ -15,6 +15,7 @@ name = "nuschl-crypto-worker"
 path = "src/main.rs"
 
 [dependencies]
+hex = "0.4.3"
 nuschl-identity.workspace = true
 nuschl-ipc.workspace = true
 nuschl-kt.workspace = true

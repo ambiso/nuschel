@@ -284,7 +284,7 @@ impl Library {
             Credentials::ApiKey(key) => request.query("apiKey", key),
             Credentials::Password { username, password } => {
                 let salt = uuid::Uuid::new_v4().simple().to_string();
-                let token = hex(&Md5::digest(format!("{password}{salt}")));
+                let token = hex::encode(Md5::digest(format!("{password}{salt}")));
                 request
                     .query("u", username)
                     .query("t", token)
@@ -790,10 +790,6 @@ fn missing(what: &str) -> Error {
         code: 70,
         message: format!("the reply has no {what}"),
     }
-}
-
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 fn parse_reply(body: &[u8]) -> Result<Reply, Error> {

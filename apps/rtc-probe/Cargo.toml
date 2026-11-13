@@ -8,6 +8,7 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+hex = "0.4.3"
 nuschl-rtc = { path = "../../crates/rtc", version = "0.1.0" }
 
 [lints]

@@ -19,6 +19,7 @@ jiff = { version = "0.2", default-features = false, features = ["std", "tz-syste
 nuschl-client.workspace = true
 nuschl-core.workspace = true
 nuschl-ipc.workspace = true
+nuschl-legacy-html.workspace = true
 nuschl-protocol.workspace = true
 nuschl-session.workspace = true
 nuschl-update.workspace = true

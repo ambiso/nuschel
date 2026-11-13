@@ -94,10 +94,6 @@ impl KemAlgorithm {
     }
 }
 
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
-}
-
 /// The identity: SHA-256 over a label and the identity root's [`HybridPublicKey`]
 /// encoding. Pins, safety numbers, credentials and key transparency name it.
 ///
@@ -117,7 +113,7 @@ impl IdentityFingerprint {
     }
 
     pub fn to_hex(&self) -> String {
-        hex(&self.0)
+        hex::encode(self.0)
     }
 }
 
@@ -154,7 +150,7 @@ impl DeviceId {
 
 impl fmt::Debug for DeviceId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "DeviceId({})", hex(&self.0))
+        write!(f, "DeviceId({})", hex::encode(self.0))
     }
 }
 
@@ -183,7 +179,7 @@ impl Ed25519PublicKey {
 
 impl fmt::Debug for Ed25519PublicKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Ed25519PublicKey({})", hex(&self.0))
+        write!(f, "Ed25519PublicKey({})", hex::encode(self.0))
     }
 }
 
@@ -216,7 +212,7 @@ impl XWingPublicKey {
 impl fmt::Debug for XWingPublicKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let digest = crypto::sha256(&[&self.0[..]]);
-        write!(f, "XWingPublicKey(sha256:{})", hex(&digest[..8]))
+        write!(f, "XWingPublicKey(sha256:{})", hex::encode(&digest[..8]))
     }
 }
 
@@ -757,10 +753,10 @@ mod tests {
     fn debug_output_never_contains_secrets() {
         let keys = DeviceKeys::generate().unwrap();
         let printed = format!("{keys:?}");
-        let seed_hex = hex(keys.leaf_seed.expose());
+        let seed_hex = hex::encode(keys.leaf_seed.expose());
         assert!(!printed.contains(&seed_hex));
         assert!(format!("{:?}", keys.kem_seed).contains("redacted"));
         let root = IdentityRoot::generate().unwrap();
-        assert!(!format!("{root:?}").contains(&hex(root.secret.mldsa65.expose())));
+        assert!(!format!("{root:?}").contains(&hex::encode(root.secret.mldsa65.expose())));
     }
 }

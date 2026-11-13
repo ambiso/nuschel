@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! Portable domain types. This crate must not depend on a UI, native FFI, or I/O.
 
+use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 
 pub mod admin;
@@ -9,6 +10,7 @@ pub mod bitrate;
 pub mod bookmark;
 pub mod model;
 pub mod network;
+pub mod percent;
 pub mod preview;
 pub mod search;
 pub mod share;
@@ -319,9 +321,61 @@ impl PreviewPolicy {
     }
 }
 
+/// The image in an inline `data:image/<png|jpeg|jpg|gif|webp>;base64,` URI and
+/// the file extension for its type, from at most [`MAX_CONTENT_BYTES`] of
+/// payload. Stock Mumble percent-encodes the base64 text (`+` as %2B, `/` as
+/// %2F, `=` as %3D) and wraps it every 72 characters (Log::imageToImg). The
+/// image format itself is not parsed here.
+pub fn data_uri_image(uri: &str) -> Option<(Vec<u8>, &'static str)> {
+    let rest = uri.trim().strip_prefix("data:image/")?;
+    let (kind, payload) = rest.split_once(";base64,")?;
+    let extension = match kind.to_ascii_lowercase().as_str() {
+        "png" => "png",
+        "jpeg" | "jpg" => "jpg",
+        "gif" => "gif",
+        "webp" => "webp",
+        _ => return None,
+    };
+    let payload: String = payload.chars().filter(|c| !c.is_whitespace()).collect();
+    if payload.len() > MAX_CONTENT_BYTES {
+        return None;
+    }
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(percent::decode(payload.as_bytes(), false)?)
+        .ok()?;
+    Some((bytes, extension))
+}
+
+/// Wall-clock Unix time in milliseconds: 0 before 1970, saturating far in the
+/// future. Not in browsers, where the system clock is unavailable.
+#[cfg(not(target_family = "wasm"))]
+pub fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| {
+            i64::try_from(elapsed.as_millis()).unwrap_or(i64::MAX)
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn data_uri_images_keep_their_bytes_and_type() {
+        // Mumble percent-encodes the base64 text: [0xfb, 0xff, 0x00] is "+/8A".
+        let (bytes, extension) = data_uri_image("data:image/PNG;base64,%2B%2F8\nA").unwrap();
+        assert_eq!(extension, "png");
+        assert_eq!(bytes, [0xfb, 0xff, 0x00]);
+        assert!(data_uri_image("data:image/png;base64,%+B").is_none());
+        assert!(data_uri_image("data:image/svg+xml;base64,PHN2Zz4=").is_none());
+        assert!(data_uri_image("https://example.invalid/a.png").is_none());
+        let long = format!(
+            "data:image/png;base64,{}",
+            "A".repeat(MAX_CONTENT_BYTES + 4)
+        );
+        assert!(data_uri_image(&long).is_none());
+    }
 
     #[test]
     fn preview_preserves_newlines_and_expansion_restores_the_original() {

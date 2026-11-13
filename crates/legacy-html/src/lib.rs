@@ -3,6 +3,7 @@
 //! kept, web links made clickable as Mumble's own chat bar does it. The client
 //! uses these on stock servers and the server for its stock users (the copy is
 //! always made from the same text, so nobody sees something different).
+//! [`html_text`] goes the other way, for editing or reading Mumble HTML.
 
 /// The text stock Mumble clients receive. They print "Name: " before the
 /// first line, so a message that opens with a code fence gets a leading line
@@ -120,9 +121,53 @@ pub fn escape_html(body: &str) -> String {
     out
 }
 
+/// The text of Mumble HTML: tags dropped, `<br>`, `<p>` and `<div>` (opening
+/// or closing) as `block_break`, and the entities Mumble writes decoded.
+pub fn html_text(html: &str, block_break: char) -> String {
+    let mut out = String::with_capacity(html.len());
+    let mut tag: Option<String> = None;
+    for c in html.chars() {
+        match (c, &mut tag) {
+            ('<', _) => tag = Some(String::new()),
+            ('>', Some(name)) => {
+                let name = name
+                    .trim_start_matches('/')
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or("")
+                    .trim_end_matches('/');
+                if ["br", "p", "div"]
+                    .iter()
+                    .any(|block| name.eq_ignore_ascii_case(block))
+                {
+                    out.push(block_break);
+                }
+                tag = None;
+            }
+            (_, Some(name)) => name.push(c),
+            (_, None) => out.push(c),
+        }
+    }
+    out.replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&nbsp;", " ")
+        .replace("&amp;", "&")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mumble_html_reads_as_text() {
+        let html = "<p>Hi <b>there</b><br/>line&amp;more&#39;s</P><div>a&nbsp;&lt;b&gt;</div>";
+        assert_eq!(html_text(html, '\n'), "\nHi there\nline&more's\n\na <b>\n");
+        assert_eq!(html_text(html, ' '), " Hi there line&more's  a <b> ");
+        // Entities are decoded once.
+        assert_eq!(html_text("&amp;lt;", ' '), "&lt;");
+    }
 
     #[test]
     fn links_are_clickable_for_stock_mumble() {

@@ -124,11 +124,7 @@ fn main() -> Result<()> {
             {
                 return Err("invalid Opus hex length".into());
             }
-            (0..hex.len())
-                .step_by(2)
-                .map(|i| u8::from_str_radix(&hex[i..i + 2], 16))
-                .collect::<std::result::Result<Vec<_>, _>>()?
-                .into()
+            hex::decode(hex)?.into()
         }
         Some("--help" | "-h") => {
             println!(
@@ -219,12 +215,7 @@ fn run(opus: Arc<[u8]>) -> Result<()> {
     if delay > Duration::from_millis(500) {
         return Err("encoded media accumulated over 500 ms of delay".into());
     }
-    let received_hex: String = left
-        .first_opus
-        .ok_or("no received Opus packet")?
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect();
+    let received_hex = hex::encode(left.first_opus.ok_or("no received Opus packet")?);
     println!(
         "{{\"audio_frames_each_way\":50,\"video_frames_received\":[{},{}],\"video_frames_dropped\":{},\"video_frame_bytes\":{},\"max_encoded_delivery_ms\":{},\"bandwidth_events\":{},\"received_opus_hex\":\"{}\"}}",
         left.video,

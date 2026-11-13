@@ -1480,7 +1480,7 @@ impl Desktop {
         if !self.settings.server_icons {
             return;
         }
-        let now = nuschl_session::connection::now_ms();
+        let now = nuschl_core::now_ms();
         for server in &self.client.servers {
             let bookmark = &server.bookmark;
             let wait = if bookmark.icon.is_some() { 30 } else { 7 } * DAY_MS;
@@ -2653,7 +2653,7 @@ impl Desktop {
                     .iter_mut()
                     .find(|entry| entry.id == server)
                 {
-                    server.bookmark.icon_checked_ms = nuschl_session::connection::now_ms();
+                    server.bookmark.icon_checked_ms = nuschl_core::now_ms();
                     if let Some(nuschl_core::ContentBlock::Image {
                         width,
                         height,

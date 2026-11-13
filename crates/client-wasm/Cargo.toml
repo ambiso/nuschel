@@ -14,6 +14,7 @@ crate-type = ["cdylib", "rlib"]
 workspace = true
 
 [dependencies]
+hex = "0.4.3"
 nuschl-client = { workspace = true, default-features = false }
 nuschl-core.workspace = true
 nuschl-protocol.workspace = true

@@ -48,7 +48,7 @@ impl Addresses {
             None => ip.to_string(),
             Some(key) => {
                 let tag = hmac::sign(key, &crate::state::mapped(ip).octets());
-                format!("<<{}>>", crate::tls::hex(&tag.as_ref()[..8]))
+                format!("<<{}>>", hex::encode(&tag.as_ref()[..8]))
             }
         }
     }

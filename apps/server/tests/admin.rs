@@ -7,7 +7,6 @@ use nuschl_ipc::server::{MessageKind, Retention, StoredMessage};
 use nuschld::{
     admin::{self, Admin},
     config::{Config, Settings},
-    conversations::hex,
     server::start,
     state::Registered,
     storage::{Backend, MemoryStore},
@@ -97,12 +96,12 @@ async fn prepared() -> (
         (3, 1, 0, "recent from Alice"),
     ] {
         memory.history.messages.insert(
-            (hex(&conversation), seq),
+            (hex::encode(conversation), seq),
             StoredMessage {
-                conversation: hex(&conversation),
+                conversation: hex::encode(conversation),
                 seq,
                 kind: MessageKind::Message,
-                author_account: Some(hex(&[author; 16])),
+                author_account: Some(hex::encode([author; 16])),
                 author_user_id: Some(u32::from(author)),
                 author_name: if author == 1 { "Alice" } else { "Bob" }.into(),
                 format: 1,
@@ -342,8 +341,11 @@ async fn bans_and_erasure() {
     .unwrap();
     let memory = store.lock().unwrap();
     let rows = &memory.history.messages;
-    assert_eq!(rows[&(hex(&conversation), 1)].content, "");
-    assert_eq!(rows[&(hex(&conversation), 1)].delete_reason, Some(3));
-    assert_eq!(rows[&(hex(&conversation), 2)].content, "old from Bob");
-    assert_eq!(rows[&(hex(&conversation), 3)].content, "");
+    assert_eq!(rows[&(hex::encode(conversation), 1)].content, "");
+    assert_eq!(rows[&(hex::encode(conversation), 1)].delete_reason, Some(3));
+    assert_eq!(
+        rows[&(hex::encode(conversation), 2)].content,
+        "old from Bob"
+    );
+    assert_eq!(rows[&(hex::encode(conversation), 3)].content, "");
 }

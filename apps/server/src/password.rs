@@ -101,22 +101,12 @@ pub const MURMUR_SHA1: &str = "$murmur-sha1$";
 pub const MAX_MURMUR_ITERATIONS: u32 = 2_000_000;
 const MURMUR_SALT_BYTES: usize = 64;
 
-fn unhex(text: &str) -> Option<Vec<u8>> {
-    if !text.len().is_multiple_of(2) || !text.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return None;
-    }
-    (0..text.len())
-        .step_by(2)
-        .map(|at| u8::from_str_radix(text.get(at..at + 2)?, 16).ok())
-        .collect()
-}
-
 /// A stored hash for Murmur's PBKDF2 columns (`pw`, `salt`, `kdfiterations`),
 /// or `None` if they are malformed or too expensive.
 pub fn murmur_pbkdf2(iterations: i64, salt: &str, hash: &str) -> Option<String> {
     let iterations = u32::try_from(iterations).ok()?;
-    let salt_bytes = unhex(salt.trim())?;
-    let hash_bytes = unhex(hash.trim())?;
+    let salt_bytes = hex::decode(salt.trim()).ok()?;
+    let hash_bytes = hex::decode(hash.trim()).ok()?;
     if !(1..=MAX_MURMUR_ITERATIONS).contains(&iterations)
         || salt_bytes.is_empty()
         || salt_bytes.len() > MURMUR_SALT_BYTES
@@ -126,15 +116,15 @@ pub fn murmur_pbkdf2(iterations: i64, salt: &str, hash: &str) -> Option<String> 
     }
     Some(format!(
         "{MURMUR_PBKDF2}i={iterations}${}${}",
-        crate::tls::hex(&salt_bytes),
-        crate::tls::hex(&hash_bytes)
+        hex::encode(&salt_bytes),
+        hex::encode(&hash_bytes)
     ))
 }
 
 /// A stored hash for Murmur's legacy SHA-1 `pw` column.
 pub fn murmur_sha1(hash: &str) -> Option<String> {
-    let bytes = unhex(hash.trim())?;
-    (bytes.len() == 20).then(|| format!("{MURMUR_SHA1}{}", crate::tls::hex(&bytes)))
+    let bytes = hex::decode(hash.trim()).ok()?;
+    (bytes.len() == 20).then(|| format!("{MURMUR_SHA1}{}", hex::encode(&bytes)))
 }
 
 /// A hash imported from Murmur, replaced with argon2id after the next login.
@@ -146,7 +136,10 @@ fn verify_murmur(password: &str, stored: &str) -> Option<bool> {
     if let Some(rest) = stored.strip_prefix(MURMUR_PBKDF2) {
         let mut parts = rest.split('$');
         let iterations = parts.next()?.strip_prefix("i=")?.parse::<u32>().ok()?;
-        let (salt, hash) = (unhex(parts.next()?)?, unhex(parts.next()?)?);
+        let (salt, hash) = (
+            hex::decode(parts.next()?).ok()?,
+            hex::decode(parts.next()?).ok()?,
+        );
         if parts.next().is_some() || iterations > MAX_MURMUR_ITERATIONS {
             return Some(false);
         }
@@ -163,7 +156,7 @@ fn verify_murmur(password: &str, stored: &str) -> Option<bool> {
             .is_ok(),
         );
     }
-    let expected = unhex(stored.strip_prefix(MURMUR_SHA1)?)?;
+    let expected = hex::decode(stored.strip_prefix(MURMUR_SHA1)?).ok()?;
     let digest = ring::digest::digest(&ring::digest::SHA1_FOR_LEGACY_USE_ONLY, password.as_bytes());
     Some(equal_constant_time(digest.as_ref(), &expected))
 }
@@ -252,16 +245,16 @@ mod tests {
         assert!(!verify_now("Password", &legacy));
         // Malformed or too expensive rows are refused at import.
         assert!(murmur_sha1("5baa61e4").is_none());
-        assert!(murmur_pbkdf2(0, "00", &crate::tls::hex(&derived)).is_none());
+        assert!(murmur_pbkdf2(0, "00", &hex::encode(derived)).is_none());
         assert!(
             murmur_pbkdf2(
                 i64::from(MAX_MURMUR_ITERATIONS) + 1,
                 "00",
-                &crate::tls::hex(&derived)
+                &hex::encode(derived)
             )
             .is_none()
         );
-        assert!(murmur_pbkdf2(1000, "zz", &crate::tls::hex(&derived)).is_none());
+        assert!(murmur_pbkdf2(1000, "zz", &hex::encode(derived)).is_none());
         assert!(!verify_now("x", "$murmur-pbkdf2-sha384$i=1$00"));
     }
 

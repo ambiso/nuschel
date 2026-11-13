@@ -818,34 +818,39 @@ impl<R: Read> Read for Unshared<R> {
     }
 }
 
+/// A 16-bit PCM stereo WAV file of interleaved `samples`.
+#[cfg(test)]
+pub(crate) fn stereo_wav(rate: u32, samples: impl IntoIterator<Item = i16>) -> Vec<u8> {
+    let data: Vec<u8> = samples.into_iter().flat_map(i16::to_le_bytes).collect();
+    let mut file = Vec::with_capacity(44 + data.len());
+    file.extend_from_slice(b"RIFF");
+    file.extend_from_slice(&(36 + data.len() as u32).to_le_bytes());
+    file.extend_from_slice(b"WAVEfmt ");
+    file.extend_from_slice(&16u32.to_le_bytes());
+    file.extend_from_slice(&1u16.to_le_bytes());
+    file.extend_from_slice(&2u16.to_le_bytes());
+    file.extend_from_slice(&rate.to_le_bytes());
+    file.extend_from_slice(&(rate * 4).to_le_bytes());
+    file.extend_from_slice(&4u16.to_le_bytes());
+    file.extend_from_slice(&16u16.to_le_bytes());
+    file.extend_from_slice(b"data");
+    file.extend_from_slice(&(data.len() as u32).to_le_bytes());
+    file.extend(data);
+    file
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// A 16-bit PCM WAV file with a sine on the left and silence on the right.
+    /// A WAV file with a sine on the left and silence on the right.
     fn wav(rate: u32, seconds: f32) -> Vec<u8> {
         let frames = (rate as f32 * seconds) as u32;
-        let mut data = Vec::new();
-        for n in 0..frames {
+        let samples = (0..frames).flat_map(|n| {
             let left = (n as f32 / rate as f32 * 440.0 * std::f32::consts::TAU).sin() * 0.5;
-            data.extend_from_slice(&((left * i16::MAX as f32) as i16).to_le_bytes());
-            data.extend_from_slice(&0i16.to_le_bytes());
-        }
-        let mut file = Vec::new();
-        file.extend_from_slice(b"RIFF");
-        file.extend_from_slice(&(36 + data.len() as u32).to_le_bytes());
-        file.extend_from_slice(b"WAVEfmt ");
-        file.extend_from_slice(&16u32.to_le_bytes());
-        file.extend_from_slice(&1u16.to_le_bytes());
-        file.extend_from_slice(&2u16.to_le_bytes());
-        file.extend_from_slice(&rate.to_le_bytes());
-        file.extend_from_slice(&(rate * 4).to_le_bytes());
-        file.extend_from_slice(&4u16.to_le_bytes());
-        file.extend_from_slice(&16u16.to_le_bytes());
-        file.extend_from_slice(b"data");
-        file.extend_from_slice(&(data.len() as u32).to_le_bytes());
-        file.extend_from_slice(&data);
-        file
+            [(left * i16::MAX as f32) as i16, 0]
+        });
+        stereo_wav(rate, samples)
     }
 
     fn frames_of(file: Vec<u8>) -> Vec<Vec<f32>> {

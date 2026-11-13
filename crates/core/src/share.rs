@@ -18,6 +18,10 @@
 //!
 //! The landing page (web/site/join.js) reads the same format.
 
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+
+use crate::percent;
+
 /// The scheme the desktop registers next to `mumble://`.
 pub const SCHEME: &str = "nuschl";
 /// The default Mumble port, left out of links.
@@ -170,9 +174,13 @@ impl ShareLink {
         } else {
             format!("{host}:{}", self.port)
         };
-        let mut parts = vec![format!("s={}", encode(&server, ":[]"))];
+        let mut parts = vec![format!("s={}", percent::encode(&server, ":[]"))];
         if !self.channel.is_empty() {
-            let path: Vec<String> = self.channel.iter().map(|part| encode(part, "")).collect();
+            let path: Vec<String> = self
+                .channel
+                .iter()
+                .map(|part| percent::encode(part, ""))
+                .collect();
             parts.push(format!("c={}", path.join("/")));
         }
         if let Some(pin) = &self.certificate_sha256 {
@@ -182,7 +190,7 @@ impl ShareLink {
             parts.push("policy=nuschl".into());
         }
         if let Some(name) = &self.name {
-            parts.push(format!("n={}", encode(name, "")));
+            parts.push(format!("n={}", percent::encode(name, "")));
         }
         parts.join("&")
     }
@@ -216,49 +224,16 @@ pub fn valid_token(token: &str) -> bool {
 
 /// A token's 16 bytes as base64url without padding.
 pub fn encode_token(bytes: &[u8; TOKEN_BYTES]) -> String {
-    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-    let mut out = String::with_capacity(22);
-    for chunk in bytes.chunks(3) {
-        let n = chunk.iter().enumerate().fold(0_u32, |n, (index, byte)| {
-            n | u32::from(*byte) << (16 - 8 * index)
-        });
-        for index in 0..=chunk.len() {
-            out.push(char::from(ALPHABET[(n >> (18 - 6 * index) & 63) as usize]));
-        }
-    }
-    out
+    URL_SAFE_NO_PAD.encode(bytes)
 }
 
-/// The 16 bytes of a token [`encode_token`] wrote.
+/// The 16 bytes of a token [`encode_token`] wrote. The last character's two
+/// spare bits must be zero (one spelling per token).
 pub fn decode_token(token: &str) -> Option<[u8; TOKEN_BYTES]> {
     if token.len() != 22 {
         return None;
     }
-    let mut bits = 0_u32;
-    let mut count = 0;
-    let mut out = Vec::with_capacity(TOKEN_BYTES);
-    for byte in token.bytes() {
-        let value = match byte {
-            b'A'..=b'Z' => byte - b'A',
-            b'a'..=b'z' => byte - b'a' + 26,
-            b'0'..=b'9' => byte - b'0' + 52,
-            b'-' => 62,
-            b'_' => 63,
-            _ => return None,
-        };
-        bits = bits << 6 | u32::from(value);
-        count += 6;
-        if count >= 8 {
-            count -= 8;
-            out.push((bits >> count) as u8);
-            bits &= (1 << count) - 1;
-        }
-    }
-    // The last character's two spare bits must be zero (one spelling per token).
-    if bits != 0 {
-        return None;
-    }
-    out.try_into().ok()
+    URL_SAFE_NO_PAD.decode(token).ok()?.try_into().ok()
 }
 
 fn split_server(text: &str) -> Option<(String, u16)> {
@@ -284,46 +259,9 @@ fn split_server(text: &str) -> Option<(String, u16)> {
     valid.then(|| (host.to_ascii_lowercase(), port))
 }
 
-fn encode(text: &str, keep: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    for byte in text.bytes() {
-        if byte.is_ascii_alphanumeric()
-            || b"-._~".contains(&byte)
-            || keep.as_bytes().contains(&byte)
-        {
-            out.push(char::from(byte));
-        } else {
-            out.push_str(&format!("%{byte:02X}"));
-        }
-    }
-    out
-}
-
 fn decode(text: &str) -> Result<String, String> {
-    let bytes = text.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut index = 0;
-    while index < bytes.len() {
-        match bytes[index] {
-            b'%' => {
-                let hex = bytes
-                    .get(index + 1..index + 3)
-                    .and_then(|pair| std::str::from_utf8(pair).ok())
-                    .and_then(|pair| u8::from_str_radix(pair, 16).ok())
-                    .ok_or("invalid percent-encoding in the share link")?;
-                out.push(hex);
-                index += 3;
-            }
-            b'+' => {
-                out.push(b' ');
-                index += 1;
-            }
-            byte => {
-                out.push(byte);
-                index += 1;
-            }
-        }
-    }
+    let out = percent::decode(text.as_bytes(), true)
+        .ok_or("invalid percent-encoding in the share link")?;
     let decoded = String::from_utf8(out).map_err(|_| "the share link is not valid UTF-8")?;
     if decoded.chars().any(char::is_control) {
         return Err("the share link contains control characters".into());
@@ -452,6 +390,7 @@ mod tests {
         assert!(ShareLink::parse(&long).is_err());
         assert_eq!(decode_token("AAAAAAAAAAAAAAAAAAAAAB"), None);
         assert_eq!(decode_token("AAAAAAAAAAAAAAAAAAAAA"), None);
+        assert_eq!(decode_token("AAAAAAAAAAAAAAAAAAAA+A"), None);
         assert!(!valid_token("a b"));
     }
 }

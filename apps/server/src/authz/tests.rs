@@ -254,7 +254,7 @@ fn admission_fences_pending_pages_and_live_edits_of_old_messages() {
             request_id: 44,
             conversation,
             query: PageQuery {
-                conversation: crate::conversations::hex(&conversation),
+                conversation: hex::encode(conversation),
                 anchor: Anchor::Latest,
                 limit: 10,
                 ranges: vec![(1, u64::MAX)],

@@ -16,6 +16,7 @@ name = "nuschl-witness"
 path = "src/main.rs"
 
 [dependencies]
+hex = "0.4.3"
 nuschl-kt.workspace = true
 # The enrolment check reads a server's hello (its key-transparency log).
 nuschl-protocol.workspace = true
