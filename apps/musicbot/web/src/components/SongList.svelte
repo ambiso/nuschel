@@ -40,7 +40,7 @@
           {@const from = sonicPathStart(playing, song)}
           <a class="icon-button" draggable="false" href={buildRoute({ view: "similar", library: song.library, id: song.id, namespace })} aria-label="Songs similar to {song.title}" title="Similar songs"><Icon name="similar" /></a>
           {#if from !== null}
-            <a class="icon-button" draggable="false" href={buildRoute({ view: "path", library: song.library, from, to: song.id, namespace })} aria-label="Sonic path from now playing to {song.title}" title="Sonic path from now playing"><Icon name="path" /></a>
+            <a class="icon-button" draggable="false" href={buildRoute({ view: "path", library: song.library, from, to: song.id, namespace })} aria-label="Blend from now playing into {song.title}" title="Blend into this song"><Icon name="path" /></a>
           {/if}
         {/if}
         <button class="icon-button" disabled={!store.player || !current} aria-label="Add {song.title} to queue" title="Add to queue" onclick={() => store.add(store.selected, { kind: "song", library: song.library, id: song.id, namespace })}><Icon name="add" /></button>

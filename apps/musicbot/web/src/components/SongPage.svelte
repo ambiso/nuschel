@@ -53,7 +53,7 @@
       <button class="primary" disabled={!current || !store.player} onclick={() => store.add(store.selected, item)}><Icon name="add" /> Add to queue</button>
       <button disabled={!current || !store.player} onclick={() => store.add(store.selected, item, 0)}><Icon name="next" /> Play next</button>
       {#if sonic && pathFrom !== null}
-        <a class="action-link" draggable="false" href={buildRoute({ view: "path", library: song.library, from: pathFrom, to: song.id, namespace })} title="A sonic path from the song playing now to this one"><Icon name="path" size={18} /> Sonic path from now playing</a>
+        <a class="action-link" draggable="false" href={buildRoute({ view: "path", library: song.library, from: pathFrom, to: song.id, namespace })} title="Songs that lead from the one playing now to this one, picked by how they sound"><Icon name="path" size={18} /> Blend into this song</a>
       {/if}
     </div>
   </div>
