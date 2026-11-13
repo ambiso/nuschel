@@ -596,6 +596,7 @@ def desktop(args):
             assert timeline.extents()[3] >= wait("Message").extents()[3], "timeline lost its usable text line"
             details = wait("Message details and controls", "panel")
             assert details.call("Component", "GrabFocus")[0]
+            eventually(lambda: details.focused, "message details did not acquire keyboard focus")
             shell.key("Home")
             channels_top = wait("Channels", "push button").extents()
             ox, oy, _, _ = compact_rect
@@ -639,6 +640,7 @@ def desktop(args):
             eventually(ready_card, "returning to Root did not restore the ready preview")
             timeline = wait("Messages in #Root", "list")
             assert timeline.call("Component", "GrabFocus")[0]
+            eventually(lambda: timeline.focused, "compact timeline did not acquire keyboard focus")
             shell.key("Home")
             shell.key("End")
             def latest():
