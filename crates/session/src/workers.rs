@@ -255,6 +255,8 @@ pub struct Media {
     pub commands: mpsc::Sender<LiveMediaRequest>,
     pub events: mpsc::Receiver<LiveMediaEvent>,
     task: tokio::task::JoinHandle<()>,
+    /// Dropped with this handle: the worker is killed at once (see `stop`).
+    _stop: tokio::sync::oneshot::Sender<()>,
 }
 /// Requests queued for one media worker. One worker plays every server's
 /// voice: room for a burst of packets from several talkers.
@@ -263,25 +265,39 @@ const MEDIA_EVENTS: usize = 32;
 impl Media {
     /// A worker reached in memory, with a real worker's queue sizes, instead
     /// of a sandboxed process (a test double for the supervisor): the
-    /// requests it is sent, and where its events go. Nothing is started.
+    /// requests it is sent, and where its events go. Nothing is started;
+    /// once stopped, it has exited when `exit` completes.
     #[doc(hidden)]
-    pub fn in_memory() -> (
+    pub fn in_memory(
+        exit: impl Future<Output = ()> + Send + 'static,
+    ) -> (
         Self,
         mpsc::Receiver<LiveMediaRequest>,
         mpsc::Sender<LiveMediaEvent>,
     ) {
         let (commands, requests) = mpsc::channel(MEDIA_REQUESTS);
         let (replies, events) = mpsc::channel(MEDIA_EVENTS);
-        let task = tokio::spawn(async {});
+        let (stop, stopped) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(async move {
+            let _ = stopped.await;
+            exit.await;
+        });
         (
             Self {
                 commands,
                 events,
                 task,
+                _stop: stop,
             },
             requests,
             replies,
         )
+    }
+
+    /// Kill the worker at once; the handle completes once it has exited and
+    /// been reaped.
+    pub fn stop(self) -> tokio::task::JoinHandle<()> {
+        self.task
     }
 
     pub fn start() -> Result<Self, Error> {
@@ -306,6 +322,7 @@ impl Media {
             .ok_or_else(|| Error::Worker("media stdout missing".into()))?;
         let (tx, mut rx) = mpsc::channel(MEDIA_REQUESTS);
         let (events_tx, events) = mpsc::channel(MEDIA_EVENTS);
+        let (stop, stopped) = tokio::sync::oneshot::channel();
         let task = tokio::spawn(async move {
             // The worker lives exactly as long as this task holds its containment.
             let _containment = containment;
@@ -317,15 +334,22 @@ impl Media {
                 }
             });
             let mut reader_finished = false;
-            loop {
-                tokio::select! {
-                    _ = &mut reader => { reader_finished = true; break; },
-                    payload = rx.recv() => {
-                        let Some(payload) = payload else { break; };
-                        let shutdown = matches!(payload, LiveMediaRequest::Shutdown);
-                        if send(&mut input, &Envelope::new(0, payload)).await.is_err() || shutdown { break; }
-                    },
+            let exchange = async {
+                loop {
+                    tokio::select! {
+                        _ = &mut reader => { reader_finished = true; break; },
+                        payload = rx.recv() => {
+                            let Some(payload) = payload else { break; };
+                            let shutdown = matches!(payload, LiveMediaRequest::Shutdown);
+                            if send(&mut input, &Envelope::new(0, payload)).await.is_err() || shutdown { break; }
+                        },
+                    }
                 }
+            };
+            // Stopped, it is killed at once, even during a write.
+            tokio::select! {
+                () = exchange => {},
+                _ = stopped => {},
             }
             if !reader_finished {
                 reader.abort();
@@ -337,12 +361,8 @@ impl Media {
             commands: tx,
             events,
             task,
+            _stop: stop,
         })
-    }
-}
-impl Drop for Media {
-    fn drop(&mut self) {
-        self.task.abort();
     }
 }
 

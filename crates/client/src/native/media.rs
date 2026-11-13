@@ -18,6 +18,7 @@ use nuschl_session::{config::ClientSettings, workers::Media};
 use std::collections::BTreeMap;
 use tokio::{
     sync::{mpsc, watch},
+    task::JoinHandle,
     time::Instant,
 };
 
@@ -200,6 +201,7 @@ pub(super) fn admits_voice(media: &Media) -> bool {
 /// that exited is restarted when its events end.
 fn send_control(
     media: &mut Option<Media>,
+    stopping: &mut Option<JoinHandle<()>>,
     epoch: &mut u64,
     retry: &mut Instant,
     request: LiveMediaRequest,
@@ -211,15 +213,29 @@ fn send_control(
         )
     });
     if full {
-        replace(media, epoch, retry);
+        replace(media, stopping, epoch, retry);
     }
 }
 
-/// Stop the worker; packets it sent leave no more, and the next one starts.
-fn replace(media: &mut Option<Media>, epoch: &mut u64, retry: &mut Instant) {
-    media.take();
+/// Stop the worker; packets it sent leave no more, and the next one starts
+/// once it has exited.
+fn replace(
+    media: &mut Option<Media>,
+    stopping: &mut Option<JoinHandle<()>>,
+    epoch: &mut u64,
+    retry: &mut Instant,
+) {
+    retire(media, stopping);
     *epoch += 1;
     *retry = Instant::now();
+}
+
+/// Stop the worker, keeping what confirms that it has exited and been
+/// reaped: until then no other worker starts (a kill is not yet an exit).
+fn retire(media: &mut Option<Media>, stopping: &mut Option<JoinHandle<()>>) {
+    if let Some(worker) = media.take() {
+        *stopping = Some(worker.stop());
+    }
 }
 
 /// Beyond the release tail, how long a worker's voice may still arrive after
@@ -257,6 +273,7 @@ async fn run_with_start(
     let mut streams = BTreeMap::<String, Stream>::new();
     let mut numbers = 0_u32;
     let mut media: Option<Media> = None;
+    let mut stopping: Option<JoinHandle<()>> = None;
     let mut retry = Instant::now();
     // Packets from an earlier worker, or from before the microphone's state
     // changed, never leave.
@@ -309,13 +326,13 @@ async fn run_with_start(
                     // Invalidate even a packet already in the worker's IPC
                     // queue before admitting another speaking destination.
                     // Replacing the process also discards its queued PCM.
-                    replace(&mut media, &mut epoch, &mut retry);
+                    replace(&mut media, &mut stopping, &mut epoch, &mut retry);
                 }
                 match message {
                     Control::Attach { server, generation, link, voice } => {
                         numbers = numbers.wrapping_add(1);
                         if let Some(old) = streams.insert(server, Stream { generation, number: numbers, link, voice }) {
-                            send_control(&mut media, &mut epoch, &mut retry, LiveMediaRequest::EndStream { stream: old.number });
+                            send_control(&mut media, &mut stopping, &mut epoch, &mut retry, LiveMediaRequest::EndStream { stream: old.number });
                         }
                     }
                     Control::Update { server, generation, link, cue } => {
@@ -323,7 +340,7 @@ async fn run_with_start(
                         if let Some(stream) = streams.get_mut(&server).filter(|stream| stream.generation == generation) {
                             if link.deafened && !stream.link.deafened {
                                 // What it had buffered is not played.
-                                send_control(&mut media, &mut epoch, &mut retry, LiveMediaRequest::EndStream { stream: stream.number });
+                                send_control(&mut media, &mut stopping, &mut epoch, &mut retry, LiveMediaRequest::EndStream { stream: stream.number });
                             }
                             stream.link = link;
                         }
@@ -332,7 +349,7 @@ async fn run_with_start(
                     Control::Detach { server, generation } => {
                         if streams.get(&server).is_some_and(|stream| stream.generation == generation)
                             && let Some(stream) = streams.remove(&server) {
-                            send_control(&mut media, &mut epoch, &mut retry, LiveMediaRequest::EndStream { stream: stream.number });
+                            send_control(&mut media, &mut stopping, &mut epoch, &mut retry, LiveMediaRequest::EndStream { stream: stream.number });
                         }
                     }
                     Control::Sound(sound) => cues.push((sound, false)),
@@ -362,9 +379,9 @@ async fn run_with_start(
                 if opened || closed || !next.listen {
                     // The microphone opens or closes with a new process; with
                     // nothing to listen to, none runs.
-                    replace(&mut media, &mut epoch, &mut retry);
+                    replace(&mut media, &mut stopping, &mut epoch, &mut retry);
                 } else if (next.bitrate, next.loss_percent) != (planned.bitrate, planned.loss_percent) {
-                    send_control(&mut media, &mut epoch, &mut retry, configure(&applied, (next.bitrate, next.loss_percent), pinned_host(&audio_host)));
+                    send_control(&mut media, &mut stopping, &mut epoch, &mut retry, configure(&applied, (next.bitrate, next.loss_percent), pinned_host(&audio_host)));
                 }
                 planned = next;
                 let current = settings.borrow();
@@ -402,9 +419,9 @@ async fn run_with_start(
                 let audio = settings.borrow_and_update().audio.clone();
                 if !audio.same_route(&applied) {
                     // New devices need new native streams: replace the worker.
-                    replace(&mut media, &mut epoch, &mut retry);
+                    replace(&mut media, &mut stopping, &mut epoch, &mut retry);
                 } else if audio != applied {
-                    send_control(&mut media, &mut epoch, &mut retry, configure(&audio, (planned.bitrate, planned.loss_percent), pinned_host(&audio_host)));
+                    send_control(&mut media, &mut stopping, &mut epoch, &mut retry, configure(&audio, (planned.bitrate, planned.loss_percent), pinned_host(&audio_host)));
                 }
                 applied = audio;
             },
@@ -413,14 +430,15 @@ async fn run_with_start(
                 let keys = *voice_keys.borrow_and_update();
                 // The talk key's own changes reach the worker, with their sound.
                 if std::mem::replace(&mut talk_key, keys.talk) != keys.talk {
-                    send_control(&mut media, &mut epoch, &mut retry, LiveMediaRequest::PushToTalk { active: keys.talk });
+                    send_control(&mut media, &mut stopping, &mut epoch, &mut retry, LiveMediaRequest::PushToTalk { active: keys.talk });
                     let current = settings.borrow();
                     if let Some(media) = &media && planned.capture && current.audio.transmit == TransmitMode::PushToTalk {
                         play(media, &current, if keys.talk { Sound::TalkOn } else { Sound::TalkOff });
                     }
                 }
             },
-            _ = tokio::time::sleep_until(retry), if settle.is_none() && planned.listen && media.is_none() => {
+            _ = async { stopping.as_mut().unwrap().await }, if stopping.is_some() => stopping = None,
+            _ = tokio::time::sleep_until(retry), if settle.is_none() && planned.listen && media.is_none() && stopping.is_none() => {
                 epoch += 1;
                 // Until the devices are open, nobody hears you yet.
                 broadcast(&streams, &events, |server, generation| Event::AudioStatus { server, generation, message: "Starting audio…".into() }).await;
@@ -434,7 +452,10 @@ async fn run_with_start(
                         }
                         media = Some(worker);
                     },
-                    Ok(_) => retry = Instant::now() + std::time::Duration::from_secs(2),
+                    Ok(worker) => {
+                        stopping = Some(worker.stop());
+                        retry = Instant::now() + std::time::Duration::from_secs(2);
+                    },
                     Err(error) => {
                         retry = Instant::now() + std::time::Duration::from_secs(3);
                         broadcast(&streams, &events, |server, generation| Event::AudioStatus { server, generation, message: error.to_string() }).await;
@@ -481,7 +502,7 @@ async fn run_with_start(
                 Some(LiveMediaEvent::Status { ready, message }) => {
                     if !ready {
                         audio_host.1 = Instant::now() + HOST_PIN;
-                        media.take();
+                        retire(&mut media, &mut stopping);
                         epoch += 1;
                         retry = Instant::now() + std::time::Duration::from_millis(if message.starts_with("Audio reconnecting") { 2000 } else { 200 });
                     }
@@ -492,7 +513,7 @@ async fn run_with_start(
                 // The meter and the echo test are the Settings check's (preview.rs).
                 Some(LiveMediaEvent::Level { .. } | LiveMediaEvent::EchoTest { .. }) => {},
                 None => {
-                    media.take();
+                    retire(&mut media, &mut stopping);
                     epoch += 1;
                     retry = Instant::now() + std::time::Duration::from_secs(2);
                     broadcast(&streams, &events, |server, generation| Event::AudioStatus { server, generation, message: "Audio worker restarting…".into() }).await;
@@ -564,6 +585,10 @@ pub fn start(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
 
     fn link(muted: bool, deafened: bool, bitrate: u32, loss_percent: u8) -> Link {
         Link {
@@ -825,7 +850,9 @@ mod tests {
     }
 
     /// The real supervisor in push-to-talk mode with a release tail of
-    /// `TAIL_MS`, whose workers are in-memory doubles handed to the test.
+    /// `TAIL_MS`, whose workers are in-memory doubles handed to the test,
+    /// each with whether the one before had exited. A stopped double takes
+    /// a moment to exit.
     struct Rig {
         control: mpsc::UnboundedSender<Control>,
         playback: mpsc::Sender<Playback>,
@@ -833,6 +860,7 @@ mod tests {
         workers: mpsc::UnboundedReceiver<(
             mpsc::Receiver<LiveMediaRequest>,
             mpsc::Sender<LiveMediaEvent>,
+            bool,
         )>,
         _events: mpsc::Receiver<Event>,
         _settings: watch::Sender<ClientSettings>,
@@ -852,13 +880,20 @@ mod tests {
         let (_settings, settings) = watch::channel(current);
         let (keys, keys_rx) = watch::channel(VoiceKeys::default());
         let (started, workers) = mpsc::unbounded_channel();
+        let mut exited = Arc::new(AtomicBool::new(true));
         let task = tokio::spawn(run_with_start(
             (input, playback_rx),
             events,
             (settings, keys_rx),
             move || {
-                let (media, requests, replies) = Media::in_memory();
-                let _ = started.send((requests, replies));
+                let after_exit = exited.load(Ordering::SeqCst);
+                exited = Arc::new(AtomicBool::new(false));
+                let exit = exited.clone();
+                let (media, requests, replies) = Media::in_memory(async move {
+                    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                    exit.store(true, Ordering::SeqCst);
+                });
+                let _ = started.send((requests, replies, after_exit));
                 Ok(media)
             },
         ));
@@ -917,7 +952,7 @@ mod tests {
                 voice,
             })
             .unwrap();
-        let (mut requests, replies) = tokio::time::timeout(WAIT, rig.workers.recv())
+        let (mut requests, replies, _) = tokio::time::timeout(WAIT, rig.workers.recv())
             .await
             .unwrap()
             .unwrap();
@@ -1035,11 +1070,15 @@ mod tests {
             tokio::task::yield_now().await;
         }
         let replacement = tokio::time::timeout(WAIT, rig.workers.recv()).await;
-        let (mut next, _) = replacement
+        let (mut next, _, after_exit) = replacement
             .expect("a control request was dropped and the stalled worker kept")
             .unwrap();
         let _ = queued(&mut requests);
-        assert!(requests.is_closed(), "the stalled worker is gone");
+        assert!(requests.is_closed(), "the stalled worker is stopped");
+        assert!(
+            after_exit,
+            "the replacement starts once that one has exited"
+        );
         // The replacement starts from the current state, never a replayed
         // press: the key is up.
         let start = until(&mut next, |request| {
