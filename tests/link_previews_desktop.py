@@ -775,8 +775,37 @@ def desktop(args):
             assert copied_input(select_all=True) == compact_body, "returning to Root changed the retained draft"
             eventually(ready_card, "returning to Root did not restore the ready preview")
             timeline = wait("Messages in #Root", "list")
+            timeline_identity = (timeline.destination, timeline.path)
+            assert timeline.destination == application.destination
+            def timeline_focused():
+                current = named("Messages in #Root", "list")
+                if (focused_window_pid() != sender_pid or current is None
+                    or (current.destination, current.path) != timeline_identity):
+                    return False
+                pending = [(timeline, 0, [timeline_identity])]
+                visited = set()
+                while pending:
+                    node, depth, ancestry = pending.pop()
+                    identity = (node.destination, node.path)
+                    assert identity not in visited, "timeline focus traversal repeated a node"
+                    visited.add(identity)
+                    assert len(visited) <= 1024 and depth <= 32, "timeline focus traversal exceeded its bounds"
+                    assert node.destination == application.destination, "timeline focus left the sender application"
+                    if node.focused:
+                        current = named("Messages in #Root", "list")
+                        if (current is None or (current.destination, current.path) != timeline_identity
+                            or focused_window_pid() != sender_pid):
+                            return False
+                        observation["timeline_focus"] = dict(root=timeline_identity, leaf=identity,
+                            ancestry=ancestry, role=node.role, name=node.name[:256])
+                        return True
+                    children = node.children()
+                    assert len(visited) + len(pending) + len(children) <= 1024, "timeline focus traversal exceeded its node budget"
+                    pending.extend((child, depth + 1, ancestry + [(child.destination, child.path)])
+                        for child in children)
+                return False
             assert timeline.call("Component", "GrabFocus")[0]
-            eventually(lambda: timeline.focused, "compact timeline did not acquire keyboard focus")
+            eventually(timeline_focused, "compact timeline subtree did not acquire keyboard focus")
             shell.key("Home")
             shell.key("End")
             def latest():
