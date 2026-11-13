@@ -1,0 +1,57 @@
+[package]
+name = "nuschl-musicbot"
+description = "Mumble music bot that streams from Subsonic servers, controlled from a web page"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+nuschl-core.workspace = true
+nuschl-ipc.workspace = true
+nuschl-legacy-html.workspace = true
+nuschl-session.workspace = true
+nuschl-protocol.workspace = true
+axum = { version = "0.8.9", default-features = false, features = [
+  "http1",
+  "json",
+  "query",
+  "tokio",
+] }
+clap = { version = "4.6.7", features = ["derive", "env"] }
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+md-5 = "0.11.0"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+thiserror = "2.0.21"
+tokio = { version = "1.54.1", features = [
+  "fs",
+  "io-util",
+  "macros",
+  "rt-multi-thread",
+  "net",
+  "signal",
+  "sync",
+  "time",
+] }
+toml = { version = "1.2.1", default-features = false, features = [
+  "std",
+  "parse",
+  "serde",
+] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+ureq = { version = "3", default-features = false, features = [
+  "rustls",
+  "json",
+] }
+uuid = { version = "1.29.1", features = ["v4", "serde"] }
+
+[dev-dependencies]
+tempfile = "3.27.0"
+# Paused-clock tests of the ducking hold time.
+tokio = { version = "1.54.1", features = ["test-util"] }
+
+[lints]
+workspace = true

@@ -120,6 +120,11 @@ Read [SECURITY.md](SECURITY.md), [architecture](docs/architecture.md) and
   or thumbs-up reactions do not establish approval. Necessary implementation
   details and tests stay within the approved scope; independent features need
   their own approval.
+- Keep potential security findings and the existence of unpublished reports out
+  of public issues, pull requests, documentation and commit messages. Track them
+  through private vulnerability reports, draft repository security advisories,
+  CodeQL alerts or the owned private cache. Obtain owner approval privately;
+  approval to investigate or fix is not approval to publish an advisory or CVE.
 - Historical TODO snapshots under `docs/history/` preserve evidence and old status.
   Do not recreate issues from their checkboxes or rewrite these frozen snapshots.
 - Do not mark a broad feature complete from one green suite. Existing gaps are work

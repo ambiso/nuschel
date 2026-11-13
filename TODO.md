@@ -29,7 +29,7 @@ Only explicit user requests or user-approved issues are eligible for implementat
 
 For eligible work, set the issue's **Priority** field to Urgent, High, Medium or Low. Work is selected by that priority first, then by the number of 👍 reactions on the original issue post within the same priority; necessary prerequisites may run first. See [GitHub's issue-field instructions](https://docs.github.com/en/issues/tracking-your-work-with-issues/using-issues/adding-and-managing-issue-fields). To browse a priority by votes, filter with `field.priority:high sort:reactions-+1-desc`.
 
-Private security reports, credentials, recordings and profiles belong outside Git and public issues. Keep public task descriptions separate from private evidence.
+Private security reports, credentials, recordings and profiles belong outside Git and public issues. Security findings and even the existence of unpublished reports stay in private vulnerability reports, draft security advisories, CodeQL alerts or the owned private cache. Obtain approval privately; do not create public security approval trackers or publish advisories without explicit owner instruction.
 
 ## Historical evidence
 
