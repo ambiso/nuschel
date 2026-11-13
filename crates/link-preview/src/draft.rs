@@ -36,6 +36,14 @@ pub const FAILURE_TTL_MS: u64 = 2 * 60 * 1000;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RequestId(u64);
 
+/// The exact composer intent consumed by a successful send. Opaque and local;
+/// neither identical later text nor an old acknowledgement can recreate it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SubmissionToken {
+    revision: u64,
+    policy: u64,
+}
+
 impl RequestId {
     pub fn get(self) -> u64 {
         self.0
@@ -126,11 +134,13 @@ enum Phase {
 
 #[derive(Clone, Debug)]
 struct State {
+    revision: u64,
     connection: u64,
     text: String,
     target: Option<Target>,
     suppressed: Option<String>,
     phase: Phase,
+    carry: Result<(), Ineligible>,
 }
 
 #[derive(Clone, Debug)]
@@ -151,6 +161,8 @@ pub struct DraftPreviews<K> {
     enabled: bool,
     policy: u64,
     next_request: u64,
+    next_revision: u64,
+    exhausted: bool,
     in_flight: Option<RequestId>,
     /// Least recently used first.
     drafts: VecDeque<(K, State)>,
@@ -171,6 +183,8 @@ impl<K: Clone + Eq> DraftPreviews<K> {
             enabled: false,
             policy: 0,
             next_request: 0,
+            next_revision: 0,
+            exhausted: false,
             in_flight: None,
             drafts: VecDeque::new(),
             cache: VecDeque::new(),
@@ -185,7 +199,14 @@ impl<K: Clone + Eq> DraftPreviews<K> {
     /// (Off and incomplete proxy settings do not). The request in flight is
     /// cancelled, results and cards are dropped, removals are kept.
     pub fn set_policy(&mut self, settings: &Settings) -> Vec<Effect<K>> {
-        self.policy += 1;
+        if self.exhausted {
+            return Vec::new();
+        }
+        let Some(next) = self.policy.checked_add(1) else {
+            self.refuse_exhaustion();
+            return Vec::new();
+        };
+        self.policy = next;
         self.enabled = settings.route().is_ok();
         self.cache.clear();
         let effects = self.cancel_in_flight();
@@ -199,10 +220,30 @@ impl<K: Clone + Eq> DraftPreviews<K> {
     /// which fetch to start or cancel.
     pub fn update(&mut self, draft: Draft<'_, K>, now: u64) -> Vec<Effect<K>> {
         let mut effects = Vec::new();
+        if self.exhausted {
+            return effects;
+        }
         let target = candidate(draft.text, draft.candidate);
-        self.touch(draft.conversation, draft.connection, &mut effects);
+        if !self.touch(draft.conversation, draft.connection, &mut effects) {
+            return effects;
+        }
         // Taken out while deciding; nothing below cancels it implicitly.
         let (key, mut state) = self.drafts.pop_back().expect("touched");
+        if state.connection != draft.connection
+            || state.text != draft.text
+            || state.target != target
+            || state.carry != draft.carry
+        {
+            let Some(revision) = self.new_revision() else {
+                if !matches!(state.phase, Phase::Removed) {
+                    state.phase = Phase::Disabled;
+                }
+                self.drafts.push_back((key, state));
+                return Vec::new();
+            };
+            state.revision = revision;
+        }
+        state.carry = draft.carry;
         if state.connection != draft.connection {
             effects.extend(self.cancel_phase(&state.phase));
             state.connection = draft.connection;
@@ -320,6 +361,39 @@ impl<K: Clone + Eq> DraftPreviews<K> {
         self.forget(conversation)
     }
 
+    pub fn submission_token(
+        &self,
+        conversation: &K,
+        connection: u64,
+        text: &str,
+    ) -> Option<SubmissionToken> {
+        if self.exhausted {
+            return None;
+        }
+        let (_, state) = self.drafts.iter().find(|(key, state)| {
+            key == conversation && state.connection == connection && state.text == text
+        })?;
+        Some(SubmissionToken {
+            revision: state.revision,
+            policy: self.policy,
+        })
+    }
+
+    /// Only an acknowledged successful send consumes the original intent.
+    /// Capturing a token or a failed submission changes nothing by itself.
+    pub fn sent_if_current(&mut self, conversation: &K, token: SubmissionToken) -> Vec<Effect<K>> {
+        if self.exhausted
+            || token.policy != self.policy
+            || !self
+                .drafts
+                .iter()
+                .any(|(key, state)| key == conversation && state.revision == token.revision)
+        {
+            return Vec::new();
+        }
+        self.forget(conversation)
+    }
+
     /// Navigation suspends pending work without forgetting a removed URL or
     /// a completed card. The platform still retains physical worker credit.
     pub fn pause(&mut self) -> Vec<Effect<K>> {
@@ -330,14 +404,18 @@ impl<K: Clone + Eq> DraftPreviews<K> {
     /// removed card. Only `restore` undoes the sender's Remove decision.
     pub fn retry(&mut self, draft: Draft<'_, K>, now: u64) -> Vec<Effect<K>> {
         if let Some(target) = candidate(draft.text, draft.candidate)
-            && let Some((_, state)) = self.drafts.iter_mut().find(|(key, state)| {
+            && let Some(index) = self.drafts.iter().position(|(key, state)| {
                 key == draft.conversation
                     && state.connection == draft.connection
                     && state.target.as_ref() == Some(&target)
                     && matches!(state.phase, Phase::Unavailable(_))
             })
         {
-            state.phase = Phase::Idle;
+            let Some(revision) = self.new_revision() else {
+                return Vec::new();
+            };
+            self.drafts[index].1.revision = revision;
+            self.drafts[index].1.phase = Phase::Idle;
             self.cache
                 .retain(|entry| entry.url != target.as_str() || entry.outcome.is_ok());
         }
@@ -360,6 +438,13 @@ impl<K: Clone + Eq> DraftPreviews<K> {
         let Some(index) = self.drafts.iter().position(|(key, _)| key == conversation) else {
             return Vec::new();
         };
+        if self.drafts[index].1.target.is_none() {
+            return Vec::new();
+        }
+        let Some(revision) = self.new_revision() else {
+            return Vec::new();
+        };
+        self.drafts[index].1.revision = revision;
         let phase = std::mem::replace(&mut self.drafts[index].1.phase, Phase::Idle);
         let effects = self.cancel_phase(&phase);
         let state = &mut self.drafts[index].1;
@@ -375,11 +460,16 @@ impl<K: Clone + Eq> DraftPreviews<K> {
 
     /// The sender explicitly asked for the removed preview again.
     pub fn restore(&mut self, draft: Draft<'_, K>, now: u64) -> Vec<Effect<K>> {
-        if let Some((_, state)) = self
+        if let Some(index) = self
             .drafts
-            .iter_mut()
-            .find(|(key, _)| key == draft.conversation)
+            .iter()
+            .position(|(key, state)| key == draft.conversation && state.suppressed.is_some())
         {
+            let Some(revision) = self.new_revision() else {
+                return Vec::new();
+            };
+            let state = &mut self.drafts[index].1;
+            state.revision = revision;
             state.suppressed = None;
             if matches!(state.phase, Phase::Removed) {
                 state.phase = Phase::Idle;
@@ -409,11 +499,14 @@ impl<K: Clone + Eq> DraftPreviews<K> {
 
     /// Make the draft for `conversation` the last, most recently used one; a
     /// new one evicts the least recently used beyond [`MAX_CONVERSATIONS`].
-    fn touch(&mut self, conversation: &K, connection: u64, effects: &mut Vec<Effect<K>>) {
+    fn touch(&mut self, conversation: &K, connection: u64, effects: &mut Vec<Effect<K>>) -> bool {
         if let Some(index) = self.drafts.iter().position(|(key, _)| key == conversation) {
             let entry = self.drafts.remove(index).expect("found");
             self.drafts.push_back(entry);
         } else {
+            let Some(revision) = self.new_revision() else {
+                return false;
+            };
             if self.drafts.len() == MAX_CONVERSATIONS
                 && let Some((_, evicted)) = self.drafts.pop_front()
             {
@@ -422,14 +515,41 @@ impl<K: Clone + Eq> DraftPreviews<K> {
             self.drafts.push_back((
                 conversation.clone(),
                 State {
+                    revision,
                     connection,
                     text: String::new(),
                     target: None,
                     suppressed: None,
                     phase: Phase::Idle,
+                    carry: Ok(()),
                 },
             ));
         }
+        true
+    }
+
+    fn refuse_exhaustion(&mut self) {
+        self.exhausted = true;
+        self.enabled = false;
+        self.in_flight = None;
+        self.cache.clear();
+        for (_, state) in &mut self.drafts {
+            if !matches!(state.phase, Phase::Removed) {
+                state.phase = Phase::Disabled;
+            }
+        }
+    }
+
+    fn new_revision(&mut self) -> Option<u64> {
+        if self.exhausted {
+            return None;
+        }
+        let Some(next) = self.next_revision.checked_add(1) else {
+            self.refuse_exhaustion();
+            return None;
+        };
+        self.next_revision = next;
+        Some(next)
     }
 
     /// Forget the least recently used drafts while their kept text exceeds
@@ -459,7 +579,11 @@ impl<K: Clone + Eq> DraftPreviews<K> {
             };
         }
         effects.extend(self.cancel_in_flight());
-        self.next_request += 1;
+        let Some(next) = self.next_request.checked_add(1) else {
+            self.refuse_exhaustion();
+            return Phase::Unavailable(Unavailable::Malformed);
+        };
+        self.next_request = next;
         let id = RequestId(self.next_request);
         self.in_flight = Some(id);
         effects.push(Effect::Fetch(Ticket {
@@ -576,6 +700,81 @@ mod tests {
 
     const URL: &str = "https://example.org/a";
     const OTHER: &str = "https://example.net/b";
+
+    #[test]
+    fn old_send_ack_cannot_erase_a_new_remove_or_identical_retyped_text() {
+        let mut previews = enabled();
+        previews.update(draft(&1, URL, Some(URL)), 0);
+        let original = previews.submission_token(&1, 1, URL).unwrap();
+        previews.remove(&1);
+        assert!(previews.sent_if_current(&1, original).is_empty());
+        assert_eq!(previews.status(&1), Status::Removed);
+        let removed = previews.submission_token(&1, 1, URL).unwrap();
+        assert_ne!(original, removed);
+        previews.update(draft(&1, "changed", None), 1);
+        previews.update(draft(&1, URL, Some(URL)), 2);
+        let retyped = previews.submission_token(&1, 1, URL).unwrap();
+        assert_ne!(original, retyped);
+        assert_ne!(removed, retyped);
+        assert!(previews.sent_if_current(&1, removed).is_empty());
+        assert!(previews.submission_token(&1, 1, URL).is_some());
+    }
+
+    #[test]
+    fn submission_capture_is_inert_pause_preserves_it_and_only_current_success_consumes() {
+        let mut previews = enabled();
+        let pending = fetched(&previews.update(draft(&1, URL, Some(URL)), 0))[0].id;
+        let token = previews.submission_token(&1, 1, URL).unwrap();
+        // A failed submission makes no cleanup call; capturing alone changes nothing.
+        assert_eq!(previews.status(&1), Status::Fetching);
+        assert_eq!(previews.submission_token(&1, 1, URL), Some(token));
+        assert_eq!(cancelled(&previews.pause()), [pending]);
+        assert_eq!(previews.submission_token(&1, 1, URL), Some(token));
+        previews.sent_if_current(&1, token);
+        assert!(previews.submission_token(&1, 1, URL).is_none());
+        // A text-only send can consume a pending preview without requiring Ready.
+        let pending = fetched(&previews.update(draft(&1, URL, Some(URL)), 1))[0].id;
+        let token = previews.submission_token(&1, 1, URL).unwrap();
+        assert_eq!(cancelled(&previews.sent_if_current(&1, token)), [pending]);
+        assert!(previews.submission_token(&1, 1, URL).is_none());
+        // A reused conversation/text gets a fresh token, and policy changes invalidate it.
+        previews.update(draft(&1, URL, Some(URL)), 2);
+        let token = previews.submission_token(&1, 1, URL).unwrap();
+        previews.set_policy(&direct());
+        assert!(previews.sent_if_current(&1, token).is_empty());
+        assert!(previews.submission_token(&1, 1, URL).is_some());
+    }
+
+    #[test]
+    fn counter_exhaustion_refuses_work_and_never_reuses_ids_or_tokens() {
+        for counter in 0..3 {
+            let mut previews = enabled();
+            let old = fetched(&previews.update(draft(&1, URL, Some(URL)), 0))[0].id;
+            let token = previews.submission_token(&1, 1, URL).unwrap();
+            match counter {
+                0 => {
+                    previews.policy = u64::MAX;
+                    assert!(previews.set_policy(&direct()).is_empty());
+                }
+                1 => {
+                    previews.next_request = u64::MAX;
+                    assert!(fetched(&previews.update(draft(&2, OTHER, Some(OTHER)), 1)).is_empty());
+                }
+                _ => {
+                    previews.next_revision = u64::MAX;
+                    assert!(previews.update(draft(&2, OTHER, Some(OTHER)), 1).is_empty());
+                }
+            }
+            assert!(previews.exhausted);
+            assert!(previews.submission_token(&1, 1, URL).is_none());
+            assert!(previews.sent_if_current(&1, token).is_empty());
+            assert_eq!(
+                previews.deliver(old, Ok(card(URL, "late", "")), 2),
+                Delivery::Stale
+            );
+            assert!(previews.update(draft(&1, URL, Some(URL)), 3).is_empty());
+        }
+    }
 
     #[test]
     fn navigation_pauses_pending_work_without_reviving_removed_urls() {
