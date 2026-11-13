@@ -26,6 +26,8 @@ pub enum Error {
     Json(#[from] serde_json::Error),
     #[error("content worker exceeded its deadline")]
     Timeout,
+    #[error("the link preview worker is busy")]
+    Busy,
     #[error("content worker returned an invalid response or exited unsuccessfully")]
     InvalidResponse,
     #[error("content processing rejected: {0}")]
@@ -222,13 +224,59 @@ pub async fn thumbnail(
         max_width,
         max_height,
     };
+    let maximum = (max_width as usize * max_height as usize * 4).div_ceil(3) * 4 + 4096;
+    validated_thumbnail(
+        bounded_content_request(executable, request, maximum).await?,
+        max_width,
+        max_height,
+    )
+}
+
+/// Process one preview operation without queueing another worker. Cancellation
+/// drops only the caller's interest: the owned task keeps the process slot until
+/// its child has exited and been reaped.
+pub async fn preview(
+    executable: &Path,
+    request: crate::preview::Request,
+) -> Result<crate::preview::Response, Error> {
+    static SLOT: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
+    if !request.is_bounded() {
+        return Err(Error::InvalidResponse);
+    }
+    let permit = SLOT.try_acquire().map_err(|_| Error::Busy)?;
+    let executable = executable.to_owned();
+    tokio::spawn(async move {
+        let _permit = permit;
+        let response = bounded_content_request(
+            &executable,
+            ContentRequest::Preview(request),
+            crate::preview::MAX_RESPONSE_FRAME_BYTES,
+        )
+        .await?;
+        match response {
+            ContentResponse::Preview(response) if response.is_bounded() => Ok(response),
+            _ => Err(Error::InvalidResponse),
+        }
+    })
+    .await
+    .map_err(|_| Error::InvalidResponse)?
+}
+
+async fn bounded_content_request(
+    executable: &Path,
+    request: ContentRequest,
+    maximum: usize,
+) -> Result<ContentResponse, Error> {
+    if maximum == 0 || maximum > MAX_FRAME_BYTES {
+        return Err(Error::InvalidResponse);
+    }
     let mut frame = Vec::new();
     write_frame(&mut frame, &Envelope::new(1, request))?;
     let mut child = spawn(executable, &[5])?;
     let _containment = match contain(&child) {
         Ok(guard) => guard,
         Err(error) => {
-            reap_thumbnail(&mut child).await;
+            reap_content(&mut child).await;
             return Err(error);
         }
     };
@@ -241,9 +289,7 @@ pub async fn thumbnail(
                     io::Result::Ok(())
                 };
                 let read = async {
-                    let maximum =
-                        (max_width as usize * max_height as usize * 4).div_ceil(3) * 4 + 4096;
-                    let reply = read_thumbnail_reply(&mut output, maximum).await?;
+                    let reply = read_bounded_reply(&mut output, maximum).await?;
                     if reply.request_id != 1 {
                         return Err(Error::InvalidResponse);
                     }
@@ -281,11 +327,11 @@ pub async fn thumbnail(
     };
     // A failed wait/kill must not release a caller's process credit. Never
     // replace this owner; a supervising HTTP task can time out independently.
-    reap_thumbnail(&mut child).await;
-    validated_thumbnail(reply?, max_width, max_height)
+    reap_content(&mut child).await;
+    reply
 }
 
-async fn read_thumbnail_reply(
+async fn read_bounded_reply(
     output: &mut tokio::process::ChildStdout,
     maximum: usize,
 ) -> Result<Envelope<ContentResponse>, Error> {
@@ -302,7 +348,7 @@ async fn read_thumbnail_reply(
     Ok(response)
 }
 
-async fn reap_thumbnail(child: &mut Child) {
+async fn reap_content(child: &mut Child) {
     loop {
         if matches!(child.try_wait(), Ok(Some(_))) {
             return;

@@ -11,6 +11,7 @@ publish.workspace = true
 nuschl-core = { workspace = true, features = ["uuid"] }
 nuschl-ipc.workspace = true
 nuschl-legacy-html.workspace = true
+nuschl-link-preview.workspace = true
 nuschl-protocol.workspace = true
 bytes = "1.12.1"
 prost = "0.14.4"

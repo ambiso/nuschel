@@ -9,6 +9,8 @@ use nuschl_ipc::{
     write_frame,
 };
 
+mod preview;
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // On Windows, the launch stage starts this worker again in its AppContainer.
     #[cfg(windows)]
@@ -39,6 +41,7 @@ fn answer(renderer: &ContentRenderer, request: ContentRequest) -> Result<Content
             .map_err(|_| "invalid base64".to_owned())
     };
     match request {
+        ContentRequest::Preview(request) => Ok(ContentResponse::Preview(preview::answer(request))),
         ContentRequest::Render { text } => renderer
             .render(&text)
             .map(ContentResponse::Rendered)

@@ -12,6 +12,7 @@ base64 = "0.22"
 nuschl-content.workspace = true
 nuschl-core.workspace = true
 nuschl-ipc.workspace = true
+ureq-proto = { version = "0.7.1", default-features = false, features = ["client"] }
 
 [dev-dependencies]
 tokio = { version = "1.54.1", features = ["macros", "rt"] }

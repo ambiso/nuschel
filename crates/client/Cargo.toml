@@ -14,6 +14,7 @@ default = ["native"]
 native = ["dep:nuschl-ipc", "dep:nuschl-session", "dep:tokio", "nuschl-core/uuid"]
 
 [dependencies]
+nuschl-link-preview.workspace = true
 nuschl-core.workspace = true
 nuschl-ipc = { workspace = true, optional = true }
 nuschl-legacy-html.workspace = true

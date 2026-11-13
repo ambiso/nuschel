@@ -4,6 +4,7 @@ pub mod config;
 pub mod connection;
 pub mod identity;
 pub mod layout;
+pub mod link_preview;
 pub mod mls;
 pub mod model;
 mod rename;

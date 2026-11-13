@@ -20,6 +20,10 @@ tokio = { version = "1.54.1", features = ["io-util", "macros", "process", "time"
 name = "exchange"
 harness = false
 
+[[test]]
+name = "preview"
+harness = false
+
 [target.'cfg(windows)'.dependencies]
 # Safe wrapper for job objects (kill-on-close containment of workers).
 win32job = "2.0.3"
