@@ -24,6 +24,15 @@ SIGNER = None
 MACOS_APP = None
 
 
+def pinned_git_cliff():
+    """Selection substitute: the real git-cliff of the pinned development shell on PATH."""
+    found = shutil.which('git-cliff')
+    assert found, 'Run release fixtures in the pinned development shell (git-cliff required).'
+    output = Path(found).resolve(strict=True).parents[1]
+    assert str(output).startswith('/nix/store/') and output.name.split('-', 1)[1].startswith('git-cliff-')
+    return {'drv': '/nix/store/' + 'a' * 32 + '-git-cliff-fixture.drv', 'output': str(output)}
+
+
 class LocalRelease(unittest.TestCase):
     def setUp(self):
         self.addCleanup(patch.stopall)
@@ -37,7 +46,7 @@ class LocalRelease(unittest.TestCase):
         subprocess.run([SIGNER, 'keygen', '--secret-file', self.secret, '--public-file', self.public],
                        check=True, capture_output=True)
         for name in ('release/make-update.py', 'release/prepare-artifacts.py',
-                     'release/notice-roots.json', 'release/notice-scopes.json'):
+                     'release/notice-roots.json', 'release/notice-scopes.json', 'cliff.toml'):
             target = self.repo / name
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / name, target)
@@ -73,10 +82,12 @@ class LocalRelease(unittest.TestCase):
         (web / 'index.html').write_text('synthetic')
         (web / 'app/index.html').write_text('synthetic')
         self.stage = self.root / 'stage'
-        # Only notice/platform-header validation and Nix selection are substitutes.
+        # Only notice/platform-header validation and Nix selection (products and the
+        # devShell git-cliff) are substitutes.
         # All source/tag, product/tree/archive, signer and upload-boundary code is real.
         self.addCleanup(patch.stopall)
         patch.object(local, 'select_product', side_effect=lambda flake, name: self.products[name]).start()
+        patch.object(local, 'select_git_cliff', return_value=pinned_git_cliff()).start()
         patch.object(local, 'check_installs').start()
         patch.object(local, 'mac_integrity', return_value={'fixture': 'synthetic; not actual Mach-O proof'}).start()
         auth = local.module(self.repo / 'release/prepare-artifacts.py')

@@ -283,8 +283,9 @@ def repository_name(value):
         r'[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9][A-Za-z0-9_.-]{0,99}', value) is not None
 
 
-# Release notes: the pinned git-cliff renders the exact local range once, during
-# prepare. Publication verifies and reuses those frozen bytes; it never reruns it.
+# Release notes: the selected flake's git-cliff renders the exact local range once,
+# during prepare, with the tagged cliff.toml. The signed ledger binds the result;
+# publication verifies and reuses those frozen bytes and never reruns git-cliff.
 VERSION_TAG = r'v[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]+)?'
 NOTES = {'tags': 4096, 'commits': 20000, 'config': 64 * 1024, 'curated': 64 * 1024,
          'generated': 120_000, 'body': 125_000,  # GitHub stores at most 125,000 characters.
@@ -301,9 +302,9 @@ CLIFF_ITEMS = {'commit_parsers': {'message': str, 'body': str, 'group': str, 'sk
 # Remote metadata, environment, clock, randomness, local paths and diff statistics.
 CLIFF_TEMPLATE_DENIED = re.compile(r'\b(github|gitlab|gitea|bitbucket|azure_devops|remote|get_env|now|'
                                    r'get_random|repository|statistics|include|import|extends)\b')
-NOTES_RECORD = {'format', 'generator', 'generator_path', 'tag', 'commit', 'previous_tag',
-                'previous_commit', 'range', 'commit_count', 'config_sha256', 'curated',
-                'curated_sha256', 'generated_sha256', 'notes_sha256'}
+NOTES_LEDGER = {'format', 'generator', 'generator_path', 'previous_tag', 'previous_commit', 'range',
+                'commit_count', 'config_sha256', 'curated', 'curated_sha256', 'generated_sha256',
+                'notes_sha256'}
 
 
 def cliff_config(raw):
@@ -371,19 +372,35 @@ def commit_count(repository, commit, previous_commit):
     return count
 
 
-def git_cliff():
-    found = shutil.which('git-cliff')
-    require(found is not None, 'git-cliff is unavailable; enter the pinned Nix development shell')
-    path = Path(found).resolve(strict=True)
-    require(re.fullmatch(r'/nix/store/[0-9a-z]{32}-git-cliff-[0-9][A-Za-z0-9.+-]*/bin/git-cliff', str(path))
-            and os.access(path, os.X_OK), 'git-cliff must be the pinned Nix store executable')
-    with tempfile.TemporaryDirectory(prefix='release-git-cliff-') as home:
-        result = subprocess.run([str(path), '--version'], capture_output=True, text=True, timeout=30,
+def select_git_cliff(flake):
+    """The single git-cliff of the selected flake's development shell; PATH is never consulted."""
+    selected = json.loads(run(['nix', 'eval', '--json', flake + '#devShells.x86_64-linux.default.nativeBuildInputs',
+                               '--apply', 'ps: map (p: {drv = p.drvPath; output = p.outPath;}) (builtins.filter '
+                               '(p: builtins.isAttrs p && (p.pname or "") == "git-cliff") ps)']))
+    require(isinstance(selected, list) and len(selected) == 1 and isinstance(selected[0], dict) and
+            set(selected[0]) == {'drv', 'output'} and
+            re.fullmatch(r'/nix/store/[0-9a-z]{32}-git-cliff-[^/]+\.drv', selected[0]['drv']) and
+            re.fullmatch(r'/nix/store/[0-9a-z]{32}-git-cliff-[^/]+', selected[0]['output']),
+            "the selected flake's development shell must provide exactly one git-cliff")
+    return selected[0]
+
+
+def git_cliff_version(executable, scratch):
+    with tempfile.TemporaryDirectory(prefix='version-', dir=scratch) as home:
+        result = subprocess.run([str(executable), '--version'], capture_output=True, text=True, timeout=30,
                                 stdin=subprocess.DEVNULL, cwd=home, env={'HOME': home, 'TZ': 'UTC', 'LC_ALL': 'C'})
     version = result.stdout.strip()
     require(result.returncode == 0 and re.fullmatch(r'git-cliff [0-9]+\.[0-9]+\.[0-9]+', version),
             'unrecognized git-cliff version')
-    return path, version
+    return version
+
+
+def tagged_config(repository, commit):
+    """The selected commit's own cliff.toml blob (git archive attributes cannot alter it)."""
+    size = history(repository, 'cat-file', '-s', commit + ':cliff.toml').strip()
+    require(size.isdigit() and int(size) <= NOTES['config'], 'oversized tagged cliff.toml')
+    return subprocess.run(['git', '--no-replace-objects', '-C', str(repository), 'cat-file', 'blob',
+                           commit + ':cliff.toml'], check=True, capture_output=True, timeout=60).stdout
 
 
 def history_view(repository, refs, directory):
@@ -464,65 +481,80 @@ def curated_notes(stage, version):
     return relative, hashlib.sha256(raw).hexdigest(), notes_text(raw, 'tagged release notes')
 
 
-def stage_notes(repository, stage, tag, commit, version):
-    """Generate the release body once, before signing, and freeze it with its exact inputs."""
+def stage_notes(repository, stage, tag, commit, version, flake, build=False):
+    """Generate the release body once, before signing; returns its ledger entry."""
     repository, stage = Path(repository).resolve(strict=True), Path(stage).resolve(strict=True)
-    notes = stage / 'notes'
-    notes.mkdir()
-    raw = notes_bytes(ROOT / 'cliff.toml', NOTES['config'])
+    notes, source = stage / 'notes', stage / 'source/cliff.toml'
+    notes.mkdir(mode=0o700)
+    scratch = notes / 'tmp'  # Owned, disk-backed stage scratch; never the default /tmp.
+    scratch.mkdir(mode=0o700)
+    require(source.is_file() and not source.is_symlink(),
+            'the selected tag has no cliff.toml; tags before git-cliff release notes cannot be prepared')
+    raw = notes_bytes(source, NOTES['config'])
+    require(raw == tagged_config(repository, commit), 'exported cliff.toml differs from the selected tagged source')
     cliff_config(raw)
     (notes / 'cliff.toml').write_bytes(raw)
     previous, previous_commit = previous_tag(repository, commit, tag)
     count = commit_count(repository, commit, previous_commit)
-    executable, generator = git_cliff()
+    tool = select_git_cliff(flake)
+    executable = Path(tool['output']) / 'bin/git-cliff'
+    if build and not executable.exists():
+        guarded_build(['nix', 'build', '--cores', '2', '--max-jobs', '2', '--no-link', tool['drv'] + '^out'],
+                      stage / 'git-cliff-build.log')
+    require(executable.is_file() and os.access(executable, os.X_OK),
+            "the selected flake's git-cliff is not built; enter its development shell or prepare with --build")
+    generator = git_cliff_version(executable, scratch)
     refs = {'refs/heads/release': commit, 'refs/tags/' + tag: commit}
     if previous:
         refs['refs/tags/' + previous] = previous_commit
-    with tempfile.TemporaryDirectory(prefix='release-notes-') as temporary:
-        view = history_view(repository, refs, Path(temporary).resolve())
+    with tempfile.TemporaryDirectory(prefix='history-', dir=scratch) as temporary:
+        view = history_view(repository, refs, Path(temporary))
         run_git_cliff(executable, notes / 'cliff.toml', view, notes_range(commit, previous_commit),
                       notes / 'git-cliff.md', notes / 'git-cliff.log')
+    scratch.rmdir()
     generated = notes_bytes(notes / 'git-cliff.md', NOTES['generated'])
     relative, curated_sha, curated = curated_notes(stage, version)
     body = compose_notes(curated, notes_text(generated, 'git-cliff output'))
     (notes / 'RELEASE-NOTES.md').write_bytes(body)
-    write(notes / 'record.json', {
-        'format': 1, 'generator': generator, 'generator_path': str(executable), 'tag': tag,
-        'commit': commit, 'previous_tag': previous, 'previous_commit': previous_commit,
-        'range': notes_range(commit, previous_commit), 'commit_count': count,
-        'config_sha256': hashlib.sha256(raw).hexdigest(), 'curated': relative,
-        'curated_sha256': curated_sha, 'generated_sha256': hashlib.sha256(generated).hexdigest(),
-        'notes_sha256': hashlib.sha256(body).hexdigest()})
-    for name in ('cliff.toml', 'git-cliff.md', 'RELEASE-NOTES.md', 'record.json'):
+    for name in ('cliff.toml', 'git-cliff.md', 'RELEASE-NOTES.md'):
         (notes / name).chmod(0o444)
+    return {'format': 1, 'generator': generator, 'generator_path': str(executable),
+            'previous_tag': previous, 'previous_commit': previous_commit,
+            'range': notes_range(commit, previous_commit), 'commit_count': count,
+            'config_sha256': hashlib.sha256(raw).hexdigest(), 'curated': relative,
+            'curated_sha256': curated_sha, 'generated_sha256': hashlib.sha256(generated).hexdigest(),
+            'notes_sha256': hashlib.sha256(body).hexdigest()}
 
 
 def check_notes(stage, ledger):
-    """Verify, never regenerate, the frozen release body. Returns its path and exact text."""
-    notes = stage / 'notes'
-    record = load(notes / 'record.json')
-    require(isinstance(record, dict) and set(record) == NOTES_RECORD and type(record['format']) is int and
-            record['format'] == 1 and record['tag'] == ledger['tag'] and record['commit'] == ledger['commit'] and
-            type(record['commit_count']) is int and isinstance(record['generator'], str) and
-            re.fullmatch(r'git-cliff [0-9]+\.[0-9]+\.[0-9]+', record['generator']) and
-            isinstance(record['generator_path'], str) and record['generator_path'].startswith('/nix/store/'),
-            'frozen release notes are missing or belong to another source/tag; prepare again')
-    repository = Path(load(stage / 'local.json')['source_repository'])
+    """Verify, never regenerate, the signed ledger's frozen release body. Returns its path and text."""
+    notes, entry = stage / 'notes', ledger['release_notes']
+    require(isinstance(entry, dict) and set(entry) == NOTES_LEDGER and type(entry['format']) is int and
+            entry['format'] == 1 and type(entry['commit_count']) is int and isinstance(entry['generator'], str) and
+            re.fullmatch(r'git-cliff [0-9]+\.[0-9]+\.[0-9]+', entry['generator']) and
+            all(isinstance(entry[k], str) and re.fullmatch('[0-9a-f]{64}', entry[k])
+                for k in ('config_sha256', 'generated_sha256', 'notes_sha256')),
+            'invalid release notes ledger entry; prepare again')
+    repository = Path(load(stage / 'local.json')['source_repository']).resolve()
+    tool = select_git_cliff('git+' + repository.as_uri() + '?rev=' + ledger['commit'])
+    require(entry['generator_path'] == tool['output'] + '/bin/git-cliff',
+            "release notes were not generated by the selected flake's git-cliff")
     previous, previous_commit = previous_tag(repository, ledger['commit'], ledger['tag'])
-    require(record['previous_tag'] == previous and record['previous_commit'] == previous_commit and
-            record['range'] == notes_range(ledger['commit'], previous_commit) and
-            record['commit_count'] == commit_count(repository, ledger['commit'], previous_commit),
+    require(entry['previous_tag'] == previous and entry['previous_commit'] == previous_commit and
+            entry['range'] == notes_range(ledger['commit'], previous_commit) and
+            entry['commit_count'] == commit_count(repository, ledger['commit'], previous_commit),
             'release notes range changed since preparation; prepare again')
     raw = notes_bytes(notes / 'cliff.toml', NOTES['config'])
     cliff_config(raw)
     generated = notes_bytes(notes / 'git-cliff.md', NOTES['generated'])
     relative, curated_sha, curated = curated_notes(stage, ledger['version'])
     body = notes_bytes(notes / 'RELEASE-NOTES.md', NOTES['body'])
-    require(hashlib.sha256(raw).hexdigest() == record['config_sha256'] and
-            hashlib.sha256(generated).hexdigest() == record['generated_sha256'] and
-            (relative, curated_sha) == (record['curated'], record['curated_sha256']) and
+    require(raw == notes_bytes(stage / 'source/cliff.toml', NOTES['config']) and
+            hashlib.sha256(raw).hexdigest() == entry['config_sha256'] and
+            hashlib.sha256(generated).hexdigest() == entry['generated_sha256'] and
+            (relative, curated_sha) == (entry['curated'], entry['curated_sha256']) and
             body == compose_notes(curated, notes_text(generated, 'git-cliff output')) and
-            hashlib.sha256(body).hexdigest() == record['notes_sha256'],
+            hashlib.sha256(body).hexdigest() == entry['notes_sha256'],
             'frozen release notes or their configuration changed after preparation')
     return notes / 'RELEASE-NOTES.md', body.decode()
 
@@ -537,8 +569,8 @@ def prepare(args):
     export(repository, commit, source)
     version = tomllib.loads((source / 'Cargo.toml').read_text())['workspace']['package']['version']
     require(args.tag == 'v' + version, 'tag must match workspace version')
-    stage_notes(repository, stage, args.tag, commit, version)
     flake = 'git+' + repository.as_uri() + '?rev=' + commit
+    release_notes = stage_notes(repository, stage, args.tag, commit, version, flake, args.build)
     products = {}
     for name in PRODUCTS:
         if args.build:
@@ -578,11 +610,12 @@ def prepare(args):
          '--output', dist])
     payloads = tree(dist)
     del payloads['update.json']
-    ledger = {'format': 1, 'tag': args.tag, 'version': version, 'commit': commit,
+    ledger = {'format': 2, 'tag': args.tag, 'version': version, 'commit': commit,
               'repository': args.repository, 'source_kind_detail': 'exact local Git revision; no CI claim',
               'publisher_tool_sha256': sha(Path(__file__)), 'products': products,
               'source_tree': tree(source), 'installations': tree(install), 'macos_archive_sha256': sha(stage / 'macos-install.tar'),
-              'assets': payloads, 'source_kind': 'local-nix; not GitHub CI provenance'}
+              'assets': payloads, 'source_kind': 'local-nix; not GitHub CI provenance',
+              'release_notes': release_notes}
     write(stage / 'ledger.json', ledger)
     write(stage / 'local.json', {'source_repository': str(repository), 'flake': flake})
     write(dist / 'macos-verification.json', verification_record(stage, ledger))
@@ -597,8 +630,8 @@ def validate(stage):
     ledger = load(stage / 'ledger.json')
     require(set(ledger) == {'format', 'tag', 'version', 'commit', 'repository',
         'source_kind_detail', 'publisher_tool_sha256', 'products', 'source_tree',
-        'installations', 'macos_archive_sha256', 'assets', 'source_kind'} and
-        type(ledger['format']) is int and ledger['format'] == 1 and
+        'installations', 'macos_archive_sha256', 'assets', 'source_kind', 'release_notes'} and
+        type(ledger['format']) is int and ledger['format'] == 2 and
         isinstance(ledger['version'], str) and len(ledger['version']) <= 100 and
         repository_name(ledger['repository']) and
         ledger['tag'] == 'v' + ledger['version'], 'invalid ledger/source repository')
@@ -642,6 +675,7 @@ def validate(stage):
                 record['native_report_sha256'] is not None, 'unsupported native Mac claim')
     else:
         require(record['native_report_sha256'] is None, 'inconsistent native Mac status')
+    check_notes(stage, ledger)
     return ledger
 
 

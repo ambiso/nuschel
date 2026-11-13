@@ -236,16 +236,15 @@ def verify_stage(stage, signer):
     backend.verify_signature(stage, signer)
     require((stage / 'dist/SHA256SUMS').read_text() == backend.checksum_text(stage / 'dist'),
             'Signed release checksums changed.')
-    backend.check_notes(stage, ledger)  # Frozen at prepare; publication reuses, never regenerates.
-    return ledger
+    return ledger  # validate() also verified the frozen release notes bound by the signed ledger.
 
 
-def notes_summary(stage):
-    record = backend.load(stage / 'notes/record.json')
-    since = record['previous_tag'] or 'first release (full history)'
+def notes_summary(stage, ledger):
+    entry = ledger['release_notes']
+    since = entry['previous_tag'] or 'first release (full history)'
     return ['Release notes (frozen at prepare): ' + str(stage / 'notes/RELEASE-NOTES.md'),
-            'Notes range: ' + since + ' .. ' + record['commit'] + ' (' + str(record['commit_count']) +
-            ' commits), ' + record['generator'] + ', cliff.toml sha256 ' + record['config_sha256']]
+            'Notes range: ' + since + ' .. ' + ledger['commit'] + ' (' + str(entry['commit_count']) +
+            ' commits), ' + entry['generator'] + ', cliff.toml sha256 ' + entry['config_sha256']]
 
 
 def execute(publish=False, *, confirm=None):
@@ -279,7 +278,7 @@ def execute(publish=False, *, confirm=None):
                 require(all(ledger[k] == selection[k] for k in ('repository', 'tag', 'commit')),
                         'Remembered release belongs to another source/tag.')
                 details = summary(selection, stage, 'PUBLISH these already-signed bytes; no rebuild or signing.')
-                details.extend(notes_summary(stage))
+                details.extend(notes_summary(stage, ledger))
                 details.append('Push only this exact tag to origin without force, then publish; existing identical tags stay unchanged.')
                 require(confirm(details), 'Cancelled; signed artifacts kept and nothing published.')
                 require(infer(ROOT, publish=True) == selection, 'Source or origin changed during confirmation.')

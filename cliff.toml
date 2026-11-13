@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: EUPL-1.2
 # git-cliff configuration for Nuschl release notes (docs/local-release.md).
 #
-# release/local-release.py runs the pinned git-cliff with only this file, over
-# the exact range from the previous ancestor version tag to the prepared commit,
-# with --offline --no-exec and an empty environment. It refuses keys outside its
+# release/local-release.py runs the git-cliff of the selected tag's flake
+# development shell with only the tag's own copy of this file, over the exact
+# range from the previous ancestor version tag to the prepared commit, with
+# --offline --no-exec and an empty environment. It refuses keys outside its
 # whitelist: no replace_command, remotes, output paths, headers or footers, and no
 # remote, environment, clock or statistics variables in the template.
 

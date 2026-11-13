@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: EUPL-1.2
-"""Release notes: pinned git-cliff over owned synthetic repositories, frozen at prepare.
+"""Release notes: git-cliff over owned synthetic repositories, frozen and ledger-bound.
 
-The real git-cliff from PATH (the pinned development shell) renders synthetic Git
-history. Substitute executables check the fixed argv, empty environment and bounds;
-publication reuse runs on the temporary-key fixtures of tests/local_release.py and
-tests/release_command.py. No network, production keys or remote repositories: the
-one remote-metadata control runs only inside an unprivileged network namespace.
+The real git-cliff of the pinned development shell renders synthetic Git history;
+it substitutes only for the Nix devShell selection, which has its own argv test.
+Substitute executables check the fixed argv, empty environment and bounds.
+Publication reuse and the consistent-rewrite control use the temporary-key fixtures
+of tests/local_release.py and tests/release_command.py. No network, production
+keys or remote repositories: the one remote-metadata control runs only inside an
+unprivileged network namespace.
 """
 import argparse
 import contextlib
@@ -37,11 +39,17 @@ def module(name, path):
 commands = module('release_command_fixture', ROOT / 'tests/release_command.py')
 fixtures = commands.fixtures
 local, front = fixtures.local, commands.front
+SELECT_GIT_CLIFF = local.select_git_cliff  # The real selection, before any fixture substitutes it.
 SIGNER = None
+NEVER = AssertionError('publication must never regenerate notes')
 
 
 def setUpModule():
-    print('git-cliff under test:', *local.git_cliff(), file=sys.stderr)
+    print('git-cliff under test:', fixtures.pinned_git_cliff()['output'], file=sys.stderr)
+
+
+def sha256(data):
+    return hashlib.sha256(data).hexdigest()
 
 
 class Repo:
@@ -57,12 +65,18 @@ class Repo:
         return subprocess.run(['git', '-C', str(self.path), *args], check=True,
                               capture_output=True, text=True).stdout.strip()
 
-    def commit(self, message):
+    def commit(self, message, config=None):
         self.count += 1
         (self.path / ('file-' + str(self.count))).write_text(message + '\n')
+        if config is not None:
+            (self.path / 'cliff.toml').write_text(config)
         self.git('add', '.')
         self.git('commit', '-qm', message)
         return self.git('rev-parse', 'HEAD')
+
+    def blob(self, commit, name='cliff.toml'):
+        return subprocess.run(['git', '-C', str(self.path), 'show', commit + ':' + name],
+                              check=True, capture_output=True).stdout
 
 
 class History(unittest.TestCase):
@@ -73,8 +87,13 @@ class History(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory(prefix='release-notes-test-')
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
+        self.tool = fixtures.pinned_git_cliff()
+        selection = patch.object(local, 'select_git_cliff', return_value=self.tool)
+        self.selection = selection.start()
+        self.addCleanup(selection.stop)
+        self.config = (ROOT / 'cliff.toml').read_text()
         self.repo = repo = Repo(self.root / 'repo')
-        self.c = {1: repo.commit('feat: first feature')}
+        self.c = {1: repo.commit('feat: first feature', self.config)}
         repo.git('tag', '-a', 'v0.1.0', '-m', 'first')
         self.c[2] = repo.commit('fix(ui): repair before the previous release')
         self.c[3] = repo.commit('docs: internal notes are not release notes')
@@ -90,17 +109,33 @@ class History(unittest.TestCase):
         self.c[6] = repo.commit('test: hidden from release notes')
         self.c[7] = repo.commit('refactor!: drop the legacy protocol')
         repo.git('tag', 'unrelated')
+        self.flake = 'git+file:///synthetic-selection-is-substituted?rev=' + self.c[7]
 
-    def stage(self, name):
+    def stage(self, name, commit=None, config=True):
+        """A stage whose source/ holds the selected commit's cliff.toml, as export() would."""
         stage = self.root / name
         (stage / 'source').mkdir(parents=True)
+        if config:
+            (stage / 'source/cliff.toml').write_bytes(self.repo.blob(commit or self.c[7]))
         return stage
 
+    def notes(self, stage, commit=None, tag='v0.3.0', version='0.3.0', **kwargs):
+        return local.stage_notes(self.repo.path, stage, tag, commit or self.c[7], version, self.flake, **kwargs)
+
+    def ledger(self, stage, entry, commit=None, tag='v0.3.0', version='0.3.0'):
+        local.write(stage / 'local.json', {'source_repository': str(self.repo.path)})
+        return {'tag': tag, 'commit': commit or self.c[7], 'version': version, 'release_notes': entry}
+
     def fake(self, body, name='fake-git-cliff'):
-        path = self.root / name
-        path.write_text('#!' + sys.executable + ' -I\n' + body)
+        """A substitute devShell output whose bin/git-cliff reports a version, then runs body."""
+        output = self.root / name
+        (output / 'bin').mkdir(parents=True)
+        path = output / 'bin/git-cliff'
+        path.write_text('#!' + sys.executable + ' -I\nimport sys\n'
+                        'if sys.argv[1:] == ["--version"]:\n    print("git-cliff 9.9.9")\n    raise SystemExit\n'
+                        + body)
         path.chmod(0o700)
-        return path, 'git-cliff 9.9.9'
+        return {'drv': '/nix/store/' + 'b' * 32 + '-git-cliff-fake.drv', 'output': str(output)}
 
     def test_previous_tag_is_the_unique_newest_ancestor_version_tag(self):
         self.assertEqual(local.previous_tag(self.repo.path, self.c[7], 'v0.3.0'), ('v0.2.0', self.c[3]))
@@ -127,7 +162,9 @@ class History(unittest.TestCase):
         git_dir = self.repo.path / '.git'
         before = local.tree(git_dir), self.repo.git('for-each-ref')
         stage = self.stage('stage')
-        local.stage_notes(self.repo.path, stage, 'v0.3.0', self.c[7], '0.3.0')
+        # All scratch lives under the stage: a default TemporaryDirectory would fail here.
+        with patch.object(tempfile, 'tempdir', str(self.root / 'no-default-temporary-directory')):
+            entry = self.notes(stage)
         notes = stage / 'notes'
         body = (notes / 'RELEASE-NOTES.md').read_text()
         self.assertTrue(body.startswith('## Changes since v0.2.0\n'), body)
@@ -136,55 +173,78 @@ class History(unittest.TestCase):
             self.assertIn(expected, body)
         for absent in ('repair before', 'first feature', 'internal notes', 'hidden', 'side branch'):
             self.assertNotIn(absent, body)
-        record = local.load(notes / 'record.json')
-        config = (ROOT / 'cliff.toml').read_bytes()
-        self.assertEqual({k: record[k] for k in ('tag', 'commit', 'previous_tag', 'previous_commit', 'range',
-                                                 'commit_count', 'curated', 'config_sha256', 'generator_path')},
-                         {'tag': 'v0.3.0', 'commit': self.c[7], 'previous_tag': 'v0.2.0',
-                          'previous_commit': self.c[3], 'range': self.c[3] + '..' + self.c[7],
-                          'commit_count': 4, 'curated': None,
-                          'config_sha256': hashlib.sha256(config).hexdigest(),
-                          'generator_path': str(local.git_cliff()[0])})
+        config = self.repo.blob(self.c[7])
+        self.assertEqual(entry, {
+            'format': 1, 'generator': entry['generator'], 'generator_path': self.tool['output'] + '/bin/git-cliff',
+            'previous_tag': 'v0.2.0', 'previous_commit': self.c[3], 'range': self.c[3] + '..' + self.c[7],
+            'commit_count': 4, 'config_sha256': sha256(config), 'curated': None, 'curated_sha256': None,
+            'generated_sha256': sha256((notes / 'git-cliff.md').read_bytes()),
+            'notes_sha256': sha256(body.encode())})
+        self.assertRegex(entry['generator'], r'^git-cliff [0-9]+\.[0-9]+\.[0-9]+$')
         self.assertEqual((notes / 'cliff.toml').read_bytes(), config)
-        self.assertEqual(record['notes_sha256'], local.sha(notes / 'RELEASE-NOTES.md'))
+        self.assertEqual(sorted(p.name for p in notes.iterdir()),
+                         ['RELEASE-NOTES.md', 'cliff.toml', 'git-cliff.log', 'git-cliff.md'])  # No tmp/, no record.
         self.assertTrue(all((notes / n).stat().st_mode & 0o777 == 0o444 for n in
-                            ('cliff.toml', 'git-cliff.md', 'RELEASE-NOTES.md', 'record.json')))
+                            ('cliff.toml', 'git-cliff.md', 'RELEASE-NOTES.md')))
         self.assertEqual((local.tree(git_dir), self.repo.git('for-each-ref')), before)
         again = self.stage('again')
         # Relative operator paths must not let git-cliff fall back to its built-in template.
         with contextlib.chdir(self.root):
-            local.stage_notes(Path('repo'), Path('again'), 'v0.3.0', self.c[7], '0.3.0')
+            self.assertEqual(local.stage_notes(Path('repo'), Path('again'), 'v0.3.0', self.c[7], '0.3.0',
+                                               self.flake), entry)
         for name in ('git-cliff.md', 'RELEASE-NOTES.md'):
             self.assertEqual((again / 'notes' / name).read_bytes(), (notes / name).read_bytes())
         with self.assertRaisesRegex(ValueError, 'existing absolute paths'):
-            local.run_git_cliff(local.git_cliff()[0], Path('cliff.toml'), self.root, self.c[7],
-                                self.root / 'unused.md', self.root / 'unused.log')
+            local.run_git_cliff(Path(self.tool['output']) / 'bin/git-cliff', Path('cliff.toml'), self.root,
+                                self.c[7], self.root / 'unused.md', self.root / 'unused.log')
 
     def test_first_release_spans_full_history_after_tagged_curated_notes(self):
-        stage = self.stage('first')
+        stage = self.stage('first', self.c[1])
         (stage / 'source/release').mkdir()
         curated = '# Nuschl 0.1.0\n\nCurated, tagged text.\n'
         (stage / 'source/release/notes-0.1.0.md').write_text(curated)
-        local.stage_notes(self.repo.path, stage, 'v0.1.0', self.c[1], '0.1.0')
+        entry = self.notes(stage, self.c[1], 'v0.1.0', '0.1.0')
         body = (stage / 'notes/RELEASE-NOTES.md').read_text()
         self.assertTrue(body.startswith(curated + '\n## Changes\n'), body)
         self.assertIn('- First feature (' + self.c[1][:12] + ')', body)
-        record = local.load(stage / 'notes/record.json')
-        self.assertEqual((record['previous_tag'], record['range'], record['commit_count'], record['curated']),
-                         (None, self.c[1], 1, 'release/notes-0.1.0.md'))
+        self.assertEqual((entry['previous_tag'], entry['range'], entry['commit_count'], entry['curated'],
+                          entry['curated_sha256']),
+                         (None, self.c[1], 1, 'release/notes-0.1.0.md', sha256(curated.encode())))
 
-    def test_publication_check_reuses_bytes_and_refuses_changed_range_or_inputs(self):
+    def test_only_the_selected_tags_config_can_render_notes(self):
+        tool_checkout = self.root / 'tool-checkout'
+        tool_checkout.mkdir()
+        (tool_checkout / 'cliff.toml').write_text(self.config.replace('## Changes since', '## Tool checkout'))
+        later = self.repo.commit('chore: later config', self.config.replace('## Changes since', '## Later HEAD'))
+        stage = self.stage('selected', self.c[7])
+        with patch.object(local, 'ROOT', tool_checkout):  # A different current tool config is ignored.
+            entry = self.notes(stage)
+        self.assertTrue((stage / 'notes/RELEASE-NOTES.md').read_text().startswith('## Changes since v0.2.0'))
+        self.assertEqual(entry['config_sha256'], sha256(self.repo.blob(self.c[7])))
+        self.assertNotEqual(self.repo.blob(later), self.repo.blob(self.c[7]))
+        substituted = self.stage('substituted-export', self.c[7])
+        (substituted / 'source/cliff.toml').write_bytes(self.repo.blob(later))  # Valid, but not the tag's.
+        with self.assertRaisesRegex(ValueError, 'differs from the selected tagged source'):
+            self.notes(substituted)
+        with self.assertRaisesRegex(ValueError, 'no cliff.toml'):
+            self.notes(self.stage('pre-git-cliff', config=False))
+        unsafe = self.repo.commit('chore: unsafe config', self.config.replace(
+            'commit_preprocessors = []', 'commit_preprocessors = [{ pattern = ".*", replace_command = "sh" }]'))
+        self.repo.git('tag', 'v0.4.0')
+        with patch.object(local, 'select_git_cliff', side_effect=AssertionError('config is checked first')):
+            with self.assertRaisesRegex(ValueError, 'reviewed git-cliff subset'):
+                self.notes(self.stage('unsafe', unsafe), unsafe, 'v0.4.0', '0.4.0')
+
+    def test_publication_check_reuses_signed_entry_and_refuses_changed_range_or_inputs(self):
         stage = self.stage('stage')
-        local.stage_notes(self.repo.path, stage, 'v0.3.0', self.c[7], '0.3.0')
-        local.write(stage / 'local.json', {'source_repository': str(self.repo.path)})
-        ledger = {'tag': 'v0.3.0', 'commit': self.c[7], 'version': '0.3.0'}
-        never = AssertionError('publication must never regenerate notes')
-        with patch.object(local, 'run_git_cliff', side_effect=never), \
-                patch.object(local, 'git_cliff', side_effect=never):
+        ledger = self.ledger(stage, self.notes(stage))
+        with patch.object(local, 'run_git_cliff', side_effect=NEVER), \
+                patch.object(local, 'git_cliff_version', side_effect=NEVER), \
+                patch.object(local, 'stage_notes', side_effect=NEVER):
             path, text = local.check_notes(stage, ledger)
             self.assertEqual((path, text), (stage / 'notes/RELEASE-NOTES.md', path.read_text()))
-            with patch.object(local, 'ROOT', self.root):  # A later publisher config is irrelevant.
-                local.check_notes(stage, ledger)
+            self.assertEqual(self.selection.call_args.args, ('git+' + self.repo.path.resolve().as_uri() +
+                                                             '?rev=' + self.c[7],))
             self.repo.git('tag', 'v0.2.5', self.c[5])
             with self.assertRaisesRegex(ValueError, 'range changed'):
                 local.check_notes(stage, ledger)
@@ -198,17 +258,68 @@ class History(unittest.TestCase):
                     with self.assertRaisesRegex(ValueError, 'changed after preparation'):
                         local.check_notes(stage, ledger)
                     target.write_bytes(original)
-            with self.assertRaisesRegex(ValueError, 'another source/tag'):
-                local.check_notes(stage, {**ledger, 'commit': self.c[6]})
+            # A different valid config with a coherently updated entry still differs from the tagged export.
+            other = self.config.replace('## Changes since', '## Substituted').encode()
+            (stage / 'notes/cliff.toml').write_bytes(other)
+            with self.assertRaisesRegex(ValueError, 'changed after preparation'):
+                local.check_notes(stage, {**ledger, 'release_notes': {**ledger['release_notes'],
+                                                                      'config_sha256': sha256(other)}})
+            (stage / 'notes/cliff.toml').write_bytes(self.repo.blob(self.c[7]))
+            with self.assertRaisesRegex(ValueError, "not generated by the selected flake's git-cliff"):
+                local.check_notes(stage, {**ledger, 'release_notes': {**ledger['release_notes'],
+                                  'generator_path': '/nix/store/' + 'c' * 32 + '-git-cliff-0/bin/git-cliff'}})
+            with self.assertRaisesRegex(ValueError, 'invalid release notes ledger entry'):
+                local.check_notes(stage, {**ledger, 'release_notes': {**ledger['release_notes'], 'extra': 1}})
             target = stage / 'notes/RELEASE-NOTES.md'
             target.unlink()
             target.symlink_to(stage / 'notes/git-cliff.md')
             with self.assertRaises(OSError):
                 local.check_notes(stage, ledger)
 
+    def test_git_cliff_comes_only_from_the_selected_flake_devshell(self):
+        good = [{'drv': '/nix/store/' + 'd' * 32 + '-git-cliff-2.14.2.drv',
+                 'output': '/nix/store/' + 'e' * 32 + '-git-cliff-2.14.2'}]
+        calls = []
+        for reply, ok in ((good, True), ([], False), (good * 2, False),
+                          ([{'drv': good[0]['drv'], 'output': '/tmp/git-cliff-2.14.2'}], False)):
+            # The real selection with a substituted `nix eval` reply.
+            with self.subTest(reply=reply), patch.object(local, 'run', side_effect=lambda args, **kw:
+                                                         calls.append(list(map(str, args))) or json.dumps(reply)):
+                if ok:
+                    self.assertEqual(SELECT_GIT_CLIFF('git+file:///selected?rev=abc'), good[0])
+                else:
+                    with self.assertRaisesRegex(ValueError, 'exactly one git-cliff'):
+                        SELECT_GIT_CLIFF('git+file:///selected?rev=abc')
+        self.assertEqual(calls[0][:5], ['nix', 'eval', '--json',
+                                        'git+file:///selected?rev=abc#devShells.x86_64-linux.default.nativeBuildInputs',
+                                        '--apply'])
+        self.assertIn('(p.pname or "") == "git-cliff"', calls[0][5])
+        # PATH is never consulted: a decoy git-cliff first on PATH must not run.
+        decoy, sentinel = self.root / 'decoy', self.root / 'decoy-ran'
+        decoy.mkdir()
+        (decoy / 'git-cliff').write_text('#!/bin/sh\n: > ' + str(sentinel) + '\n')
+        (decoy / 'git-cliff').chmod(0o700)
+        builds = []
+        missing = {'drv': good[0]['drv'], 'output': str(self.root / 'not-built-git-cliff-2.14.2')}
+        with patch.dict(os.environ, {'PATH': str(decoy) + os.pathsep + os.environ['PATH']}), \
+                patch.object(local, 'select_git_cliff', return_value=missing), \
+                patch.object(local, 'guarded_build', side_effect=lambda args, log: builds.append(args)):
+            with self.assertRaisesRegex(ValueError, 'not built'):
+                self.notes(self.stage('unbuilt'))
+            self.assertEqual(builds, [])
+            with self.assertRaisesRegex(ValueError, 'not built'):
+                self.notes(self.stage('built'), build=True)  # Only that derivation, bounded like products.
+            self.assertEqual(builds, [['nix', 'build', '--cores', '2', '--max-jobs', '2', '--no-link',
+                                       good[0]['drv'] + '^out']])
+        with patch.dict(os.environ, {'PATH': str(decoy) + os.pathsep + os.environ['PATH']}), \
+                patch.object(local, 'select_git_cliff', return_value=self.tool):
+            self.assertEqual(self.notes(self.stage('selected'))['generator_path'],
+                             self.tool['output'] + '/bin/git-cliff')
+        self.assertFalse(sentinel.exists())
+
     def test_fixed_argv_empty_environment_and_private_history_view(self):
         record = self.root / 'invocation.json'
-        fake = self.fake('import json, os, pathlib, sys\n'
+        fake = self.fake('import json, os, pathlib\n'
                          'view = pathlib.Path(sys.argv[4])\n'
                          'refs = {str(p.relative_to(view)): p.read_text().strip()\n'
                          '        for p in (view / "refs").rglob("*") if p.is_file()}\n'
@@ -221,8 +332,8 @@ class History(unittest.TestCase):
         polluted = {'GITHUB_TOKEN': 'synthetic-not-a-token', 'GIT_CLIFF__CHANGELOG__FOOTER': 'injected',
                     'GIT_CLIFF_CONFIG_URL': 'https://example.invalid/cliff.toml', 'RUST_LOG': 'trace'}
         stage = self.stage('stage')
-        with patch.dict(os.environ, polluted), patch.object(local, 'git_cliff', return_value=fake):
-            local.stage_notes(self.repo.path, stage, 'v0.3.0', self.c[7], '0.3.0')
+        with patch.dict(os.environ, polluted), patch.object(local, 'select_git_cliff', return_value=fake):
+            entry = self.notes(stage)
         seen = json.loads(record.read_bytes())
         view = Path(seen['argv'][3])
         self.assertEqual(seen['argv'], ['--config', str(stage / 'notes/cliff.toml'), '--repository', str(view),
@@ -232,39 +343,40 @@ class History(unittest.TestCase):
         self.assertEqual(seen['refs'], {'refs/heads/release': self.c[7], 'refs/tags/v0.3.0': self.c[7],
                                         'refs/tags/v0.2.0': self.c[3]})
         self.assertEqual(seen['alternates'], str((self.repo.path / '.git/objects').resolve()) + '\n')
-        self.assertEqual(view.name, 'history.git')
-        self.assertFalse(view.is_relative_to(self.repo.path) or view.exists())
+        self.assertEqual((view.name, view.parent.parent), ('history.git', stage / 'notes/tmp'))
+        self.assertFalse(view.exists() or (stage / 'notes/tmp').exists())
+        self.assertEqual(entry['generator'], 'git-cliff 9.9.9')
         self.assertIn('- Substitute output', (stage / 'notes/RELEASE-NOTES.md').read_text())
 
     def test_output_time_and_range_bounds_fail_closed(self):
-        cases = (('oversized-file', 'import sys\nsys.stdout.write("x" * (2 * 1024 * 1024))\n', 'failed or exceeded'),
+        cases = (('oversized-file', 'sys.stdout.write("x" * (2 * 1024 * 1024))\n', 'failed or exceeded'),
                  ('oversized-notes', 'print("x" * 130000)\n', 'exceeds its release notes bound'),
                  ('control', 'print("- \\x1b[31mred")\n', 'control'),
-                 ('failure', 'import sys\nsys.exit(3)\n', 'failed or exceeded'))
+                 ('failure', 'sys.exit(3)\n', 'failed or exceeded'))
         for name, body, error in cases:
-            with self.subTest(name=name), patch.object(local, 'git_cliff', return_value=self.fake(body, name)):
+            with self.subTest(name=name), patch.object(local, 'select_git_cliff', return_value=self.fake(body, name)):
                 stage = self.stage('bound-' + name)
                 with self.assertRaisesRegex(ValueError, error):
-                    local.stage_notes(self.repo.path, stage, 'v0.3.0', self.c[7], '0.3.0')
+                    self.notes(stage)
                 self.assertLessEqual((stage / 'notes/git-cliff.md').stat().st_size, local.NOTES['file'])
                 self.assertFalse((stage / 'notes/RELEASE-NOTES.md').exists())
         pid = self.root / 'sleeper.pid'
         sleeper = self.fake('import os, time\nopen(' + repr(str(pid)) + ', "w").write(str(os.getpid()))\n'
                             'time.sleep(60)\n', 'sleeper')
         started = time.monotonic()
-        with patch.object(local, 'git_cliff', return_value=sleeper), patch.dict(local.NOTES, {'seconds': 1}):
+        with patch.object(local, 'select_git_cliff', return_value=sleeper), patch.dict(local.NOTES, {'seconds': 1}):
             with self.assertRaisesRegex(ValueError, 'wall-time'):
-                local.stage_notes(self.repo.path, self.stage('bound-time'), 'v0.3.0', self.c[7], '0.3.0')
+                self.notes(self.stage('bound-time'))
         self.assertLess(time.monotonic() - started, 20)
         with self.assertRaises(ProcessLookupError):  # Killed AND reaped before the refusal.
             os.kill(int(pid.read_text()), 0)
         with patch.dict(local.NOTES, {'commits': 3}), \
-                patch.object(local, 'git_cliff', side_effect=AssertionError('range bound comes first')):
+                patch.object(local, 'select_git_cliff', side_effect=AssertionError('range bound comes first')):
             with self.assertRaisesRegex(ValueError, 'exceeds its bound'):
-                local.stage_notes(self.repo.path, self.stage('bound-range'), 'v0.3.0', self.c[7], '0.3.0')
+                self.notes(self.stage('bound-range'))
 
     def test_config_whitelist_refuses_commands_remotes_outputs_and_dynamic_templates(self):
-        good = (ROOT / 'cliff.toml').read_text()
+        good = self.config
         local.cliff_config(good.encode())
         first = '## Changes since {{ previous.version }}\n'
         variants = {
@@ -294,18 +406,9 @@ class History(unittest.TestCase):
                 tomllib.loads(text)  # Valid TOML: the whitelist, not the parser, refuses it.
                 with self.assertRaises(ValueError):
                     local.cliff_config(text.encode())
-        publisher = self.root / 'publisher'
-        publisher.mkdir()
-        (publisher / 'cliff.toml').write_text(variants['preprocessor command'])
-        stage = self.stage('refused-config')
-        with patch.object(local, 'ROOT', publisher), \
-                patch.object(local, 'git_cliff', side_effect=AssertionError('config is checked first')):
-            with self.assertRaisesRegex(ValueError, 'reviewed git-cliff subset'):
-                local.stage_notes(self.repo.path, stage, 'v0.3.0', self.c[7], '0.3.0')
-        self.assertEqual(sorted(p.name for p in (stage / 'notes').iterdir()), [])
 
     def test_real_git_cliff_needs_no_exec_and_offline_flags(self):
-        executable, _ = local.git_cliff()
+        executable = Path(self.tool['output']) / 'bin/git-cliff'
         sentinel = self.root / 'command-ran'
         config = self.root / 'command.toml'
         config.write_text('[changelog]\nbody = "{% for commit in commits %}{{ commit.message }}{% endfor %}"\n'
@@ -352,15 +455,19 @@ class Publication(unittest.TestCase):
         self.fixture.sign()
         self.notes = self.stage / 'notes/RELEASE-NOTES.md'
 
-    def test_publish_uploads_the_frozen_notes_and_never_runs_git_cliff(self):
+    def test_signed_public_ledger_binds_the_frozen_notes_reused_by_publish(self):
         body = self.notes.read_text()
         self.assertTrue(body.startswith('Synthetic temporary-key fixture.\n\n## Changes\n'), body)
         self.assertIn('Synthetic release feature', body)
-        never = AssertionError('publication must never regenerate notes')
-        with patch.object(local, 'git_cliff', side_effect=never), \
-                patch.object(local, 'run_git_cliff', side_effect=never), \
-                patch.object(local, 'stage_notes', side_effect=never), \
-                patch.object(local, 'ROOT', self.fixture.root):  # No publisher cliff.toml at all.
+        ledger = local.load(self.stage / 'ledger.json')
+        self.assertEqual(ledger['format'], 2)
+        self.assertEqual(ledger['release_notes']['notes_sha256'], local.sha(self.notes))
+        self.assertEqual(local.load(self.stage / 'dist/release-ledger.json'), ledger)
+        self.assertFalse((self.stage / 'notes/record.json').exists())
+        with patch.object(local, 'git_cliff_version', side_effect=NEVER), \
+                patch.object(local, 'run_git_cliff', side_effect=NEVER), \
+                patch.object(local, 'stage_notes', side_effect=NEVER), \
+                patch.object(local, 'ROOT', self.fixture.root):  # No current-tool cliff.toml at all.
             calls, ok = self.fixture.publish()
         self.assertTrue(ok)
         create = next(c for c in calls if c[1:3] == ['release', 'create'])
@@ -379,6 +486,51 @@ class Publication(unittest.TestCase):
         self.assertFalse(ok)
         self.assertTrue(any(c[1:3] == ['release', 'create'] for c in calls))
         self.assertFalse(any(c[1:3] == ['release', 'edit'] for c in calls))
+
+    def forge(self, manifest):
+        """Coherently replace the notes, their ledger hashes and the public ledger copy."""
+        notes = self.stage / 'notes'
+        forged = '## Changes\n\n- Forged entry nobody reviewed\n'
+        curated = (self.stage / 'source/release/notes-0.1.0.md').read_text()
+        for name, data in (('git-cliff.md', forged.encode()), ('RELEASE-NOTES.md', local.compose_notes(curated, forged))):
+            (notes / name).chmod(0o644)
+            (notes / name).write_bytes(data)
+        path = self.stage / 'ledger.json'
+        ledger = local.load(path)
+        ledger['release_notes'].update(generated_sha256=local.sha(notes / 'git-cliff.md'),
+                                       notes_sha256=local.sha(notes / 'RELEASE-NOTES.md'))
+        path.write_text(json.dumps(ledger, indent=2, sort_keys=True) + '\n')
+        shutil.copyfile(path, self.stage / 'dist/release-ledger.json')
+        if manifest:
+            update = self.stage / 'dist/update.json'
+            raw = local.load(update)
+            raw['notes'] = '\n'.join('ledger-sha256=' + local.sha(path) if line.startswith('ledger-sha256=') else line
+                                     for line in raw['notes'].splitlines())
+            update.write_text(json.dumps(raw, indent=1) + '\n')
+
+    def test_consistent_notes_and_ledger_rewrite_is_refused_by_the_signed_binding(self):
+        local.check_notes(self.stage, local.validate(self.stage))  # Positive control first.
+        self.forge(manifest=False)
+        with self.assertRaisesRegex(ValueError, 'signed source ledger binding absent'):
+            local.validate(self.stage)
+        calls, ok = self.fixture.publish()
+        self.assertEqual((calls, ok), ([], False))
+        self.forge(manifest=True)
+        # Discriminating control: every local validator accepts this coherent forgery...
+        self.assertIn('Forged entry', local.check_notes(self.stage, local.validate(self.stage))[1])
+        remote = []
+        real = local.run
+
+        def no_remote(args, **kwargs):
+            if str(args[0]) == 'fixture-gh':
+                remote.append(args)
+                raise AssertionError('remote call after a forged release body')
+            return real(args, **kwargs)
+        # ...and only the hybrid signature over update.json refuses it, before any remote call.
+        with patch.object(local, 'run', side_effect=no_remote):
+            with self.assertRaises(subprocess.CalledProcessError) as refused:
+                local.publish(argparse.Namespace(stage=self.stage, signer=SIGNER, gh='fixture-gh'))
+        self.assertEqual((refused.exception.cmd[:2], remote), ([SIGNER, 'verify'], []))
 
 
 class Frontend(unittest.TestCase):
