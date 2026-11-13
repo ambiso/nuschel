@@ -13,6 +13,9 @@ use uuid::Uuid;
 
 pub use nuschl_core::bookmark::{CachedChannel, ServerBookmark, ServerIcon, fingerprint};
 
+mod link_previews;
+pub use link_previews::LinkPreviewSettings;
+
 fn connect_on_startup() -> bool {
     true
 }
@@ -846,6 +849,7 @@ pub struct Profile {
     places: Places,
     /// System-wide managed configuration, under the configuration folder's own.
     system_managed: Option<PathBuf>,
+    system_link_previews: Option<PathBuf>,
     /// Files that could be neither read nor renamed: never written over.
     kept: Arc<Mutex<BTreeSet<&'static str>>>,
     /// What [`Profile::open`] moved from earlier versions' places.
@@ -1170,6 +1174,7 @@ impl Profile {
     /// configuration is not read either, and the four folders are its
     /// `config`, `data`, `state` and `cache`.
     pub fn open(override_dir: Option<PathBuf>) -> io::Result<Self> {
+        let use_system = override_dir.is_none();
         let (layout, old, managed) = match override_dir {
             Some(root) => (Layout::under(&root), None, None),
             None => (
@@ -1181,6 +1186,9 @@ impl Profile {
         layout.check()?;
         let mut rename = crate::rename::migrate(old.as_ref(), &layout)?;
         let mut profile = Self::at(layout, managed)?;
+        if use_system {
+            profile.system_link_previews = link_previews::system_managed();
+        }
         rename.moved.extend(profile.migration.moved.iter().cloned());
         rename
             .problems
@@ -1199,6 +1207,7 @@ impl Profile {
             places: Places::new(&layout),
             layout,
             system_managed,
+            system_link_previews: None,
             kept: Default::default(),
             migration: Default::default(),
             voice_quality: Default::default(),

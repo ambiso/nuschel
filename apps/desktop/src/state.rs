@@ -213,6 +213,7 @@ pub struct Desktop {
     pub driver: Arc<Driver>,
     /// The desktop's own background work (services.rs).
     pub services: Services,
+    pub link_preview: crate::link_preview::ComposerPreview,
     pub profile: Profile,
     pub form: Option<ServerForm>,
     pub composer: Entity<TextareaState>,
@@ -511,6 +512,7 @@ impl Desktop {
             notes: crate::notify::start(&handle),
             driver,
             services,
+            link_preview: Default::default(),
             profile,
             form: None,
             composer,
@@ -860,6 +862,7 @@ impl Desktop {
             self.error = Some(error);
         }
         self.scroll.scroll_to_bottom();
+        self.sync_link_preview(cx);
     }
     /// What only drawing needs of the server at `index`.
     pub fn ui_of(&self, index: usize) -> Option<&ServerUi> {
@@ -2401,6 +2404,7 @@ impl Desktop {
         // that came before their message's page.
         self.client.settle();
         self.apply_updates(cx);
+        self.sync_link_preview(cx);
         self.expire_typing(cx);
         self.flush_outgoing(cx);
     }
@@ -2645,6 +2649,9 @@ impl Desktop {
     /// What the desktop's own services report (services.rs).
     fn apply_service_event(&mut self, event: ServiceEvent, cx: &mut Context<Self>) {
         match event {
+            ServiceEvent::LinkPreviewImage { ticket, pixels } => {
+                self.link_preview_pixels(ticket, pixels, cx)
+            }
             ServiceEvent::Prepared { id, result } => self.prepared(id, result, cx),
             ServiceEvent::ServerIcon { server, icon } => {
                 if let Some(server) = self

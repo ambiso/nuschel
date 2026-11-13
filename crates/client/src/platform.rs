@@ -136,6 +136,21 @@ pub trait Platform {
     ) -> Result<u64, String>;
     fn disconnect(&self, server: &str);
     fn request(&self, server: &str, request: Request) -> Result<(), String>;
+    /// Sender-only public-page work. Default adapters cannot fetch; failure
+    /// leaves the ordinary text-send path available.
+    fn link_preview(
+        &self,
+        settings: crate::preview::Settings,
+        ticket: crate::preview::FetchTicket,
+    ) -> Result<(), crate::preview::Unavailable> {
+        let _ = (settings, ticket);
+        Err(crate::preview::Unavailable::Network)
+    }
+    /// Revoke the result now; the adapter retains physical process credit
+    /// until actual retirement. This is not a request to abort its supervisor.
+    fn cancel_link_preview(&self, id: crate::preview::RequestId) {
+        let _ = id;
+    }
     /// Automatic metadata: native implementations bind at enqueue/consume;
     /// source-ticket-only platforms retain their existing rendering guards.
     fn request_metadata(
@@ -201,6 +216,16 @@ impl<T: Platform + ?Sized> Platform for std::sync::Arc<T> {
     }
     fn request(&self, server: &str, request: Request) -> Result<(), String> {
         (**self).request(server, request)
+    }
+    fn link_preview(
+        &self,
+        settings: crate::preview::Settings,
+        ticket: crate::preview::FetchTicket,
+    ) -> Result<(), crate::preview::Unavailable> {
+        (**self).link_preview(settings, ticket)
+    }
+    fn cancel_link_preview(&self, id: crate::preview::RequestId) {
+        (**self).cancel_link_preview(id)
     }
     fn request_metadata(
         &self,

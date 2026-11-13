@@ -3189,6 +3189,7 @@ fn composer(
                     return;
                 };
                 if item.text().is_some_and(|text| !text.is_empty()) {
+                    this.link_preview.pasted = true;
                     return;
                 }
                 let image = item.into_entries().find_map(|entry| match entry {
@@ -3200,6 +3201,10 @@ fn composer(
                     this.paste_image(image.id, image.bytes, cx);
                 }
             }),
+        )
+        .when_some(
+            crate::link_preview::composer(this, cx),
+            |composer, preview| composer.child(preview),
         )
         // Esc ends an edit, or in an empty composer lets go of its attachments.
         .capture_action(
