@@ -145,6 +145,10 @@ try {
  // Four genuine incoming messages reserve the SDK's complete posted-job window.
  // Hold ONE real codec reply before delivery; the serial production worker will
  // produce the other three after release. Never construct a content ACK here.
+ // Stock Murmur counts control messages, including the observer's login,
+ // channel moves and self-deaf, against its five-message burst/one-per-second
+ // bucket. Refill BEFORE holding the codec; never relax server admission.
+ await new Promise(resolve=>setTimeout(resolve,5500));
  await page.evaluate(()=>{__voiceProof.holdCodec=true;});
  const sources=Array.from({length:RPC_ACK_RESERVE},(_,index)=>`RPC_REAL_ACK_${index}`);
  for(const source of sources)observer.message(0,source);
