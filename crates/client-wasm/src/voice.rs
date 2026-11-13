@@ -149,9 +149,15 @@ impl Route {
 
     /// One observation of the selected destination: channel presence, whether
     /// an explicit self-state request is still unconfirmed, and the effective
-    /// mute/deafen gates.
-    pub fn observe(&mut self, present: bool, _settling: bool, muted: bool, deafened: bool) {
-        self.policy(present, muted, deafened);
+    /// mute/deafen gates. A newly selected route is joined only once the
+    /// self-state its Join requested is confirmed (or its retries ran out).
+    /// Otherwise that echo would replace the first joined generation, and
+    /// every action the page captured from it, moments after it was shown.
+    /// A joined route stays joined while a later change is pending; `muted`
+    /// gates capture meanwhile.
+    pub fn observe(&mut self, present: bool, settling: bool, muted: bool, deafened: bool) {
+        let joined = present && (!settling || self.view.as_ref().is_some_and(|v| v.joined));
+        self.policy(joined, muted, deafened);
     }
 
     /// Revoke queued work/readiness when the effective target changes (a
