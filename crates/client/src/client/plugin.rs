@@ -668,6 +668,9 @@ mod tests {
             }]
         );
         // One queue for every server: items and bytes are bounded together.
+        // Use connected servers: the reconnect above left server A connecting.
+        let (mut client, recorder) = connected();
+        client.accept_plugin_data(true);
         for index in 0..MAX_PLUGIN_QUEUE + 10 {
             client.handle(input(
                 &client,
