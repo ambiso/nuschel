@@ -25,17 +25,25 @@ fn activation(event: &KeyDownEvent) -> bool {
 
 /// Assistive technology activates a button by running its action. The
 /// built-in fallback clicks the node's centre instead, which misses (or hits
-/// another control) while a scroll region clips the button.
+/// another control) while a scroll region clips the button. As for keys
+/// (`keep_dialog_focus`) and the pointer (the backdrop), only controls inside
+/// an open dialog act.
 fn accessible_click<F>(
     action: Rc<F>,
     cx: &mut Context<Desktop>,
-) -> impl FnMut(Option<&accesskit::ActionData>, &mut Window, &mut App) + 'static
+) -> impl Fn(&FocusHandle, &mut Window, &mut App) + 'static
 where
     F: Fn(&mut Desktop, &mut Window, &mut Context<Desktop>) + 'static,
 {
     let entity = cx.entity().downgrade();
-    move |_, window, cx| {
-        entity.update(cx, |this, cx| action(this, window, cx)).ok();
+    move |control, window, cx| {
+        entity
+            .update(cx, |this, cx| {
+                if !this.dialog_open() || this.modal_focus.contains(control, window) {
+                    action(this, window, cx);
+                }
+            })
+            .ok();
     }
 }
 
@@ -65,6 +73,7 @@ pub fn named_button(
     let reveal_id = id.clone();
     let action = Rc::new(action);
     let click = action.clone();
+    let accessible = accessible_click(action.clone(), cx);
     let label = label.into();
     let (background, hover, foreground) = match tone {
         Tone::Primary => (ACCENT, ACCENT_HOVER, WHITE),
@@ -90,10 +99,6 @@ pub fn named_button(
         .font_weight(FontWeight::MEDIUM)
         .text_color(color(foreground))
         .on_click(cx.listener(move |this, _, window, cx| click(this, window, cx)))
-        .on_a11y_action(
-            AccessibleAction::Click,
-            accessible_click(action.clone(), cx),
-        )
         .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
             if activation(event) {
                 action(this, window, cx);
@@ -106,7 +111,7 @@ pub fn named_button(
                 .whitespace_normal()
                 .child(text!(label).with_id("button-label")),
         );
-    crate::layout::focusable(reveal_id, control)
+    crate::layout::focusable_button(reveal_id, control, accessible)
 }
 
 /// A square icon button; `label` is announced to assistive technology and shown as tooltip.
@@ -123,6 +128,7 @@ pub fn icon_button(
     let reveal_id = id.clone();
     let action = Rc::new(action);
     let click = action.clone();
+    let accessible = accessible_click(action.clone(), cx);
     let label = label.into();
     let tooltip = label.clone();
     let control = div()
@@ -144,10 +150,6 @@ pub fn icon_button(
         .hover(|style| style.bg(color(SELECTED)))
         .tooltip(move |_, cx| cx.new(|_| Tooltip(tooltip.clone())).into())
         .on_click(cx.listener(move |this, _, window, cx| click(this, window, cx)))
-        .on_a11y_action(
-            AccessibleAction::Click,
-            accessible_click(action.clone(), cx),
-        )
         .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
             if activation(event) {
                 action(this, window, cx);
@@ -155,7 +157,7 @@ pub fn icon_button(
             }
         }))
         .child(icon(name, 18., color(foreground)));
-    crate::layout::focusable(reveal_id, control)
+    crate::layout::focusable_button(reveal_id, control, accessible)
 }
 
 /// A voice toggle (mute, deafen): `on` from 0 to 1 eases the background to

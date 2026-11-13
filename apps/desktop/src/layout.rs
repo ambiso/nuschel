@@ -26,6 +26,7 @@ struct Focusable {
     child: Stateful<Div>,
     outset: Pixels,
     handle: Option<FocusHandle>,
+    click: Option<Rc<dyn Fn(&FocusHandle, &mut Window, &mut App)>>,
 }
 
 impl RenderOnce for Focusable {
@@ -61,7 +62,17 @@ impl RenderOnce for Focusable {
         let reveal = state.reveal.clone();
         let trace = self.id.clone();
         let outset = self.outset;
-        self.child.track_focus(&handle).relative().child(
+        let child = match self.click {
+            Some(click) => {
+                let control = handle.clone();
+                self.child
+                    .on_a11y_action(AccessibleAction::Click, move |_, window, cx| {
+                        click(&control, window, cx)
+                    })
+            }
+            None => self.child,
+        };
+        child.track_focus(&handle).relative().child(
             canvas(
                 move |bounds, window, _| {
                     if reveal.replace(false) && observed.is_focused(window) {
@@ -96,6 +107,24 @@ pub fn focusable_with_outset(
         child,
         outset,
         handle: None,
+        click: None,
+    }
+    .into_any_element()
+}
+
+/// A focusable control that assistive technology clicks with `click`, which
+/// gets the control's focus handle.
+pub fn focusable_button(
+    id: impl Into<ElementId>,
+    child: Stateful<Div>,
+    click: impl Fn(&FocusHandle, &mut Window, &mut App) + 'static,
+) -> AnyElement {
+    Focusable {
+        id: id.into(),
+        child,
+        outset: px(0.),
+        handle: None,
+        click: Some(Rc::new(click)),
     }
     .into_any_element()
 }
@@ -113,6 +142,7 @@ pub fn focusable_with_handle(
         child,
         outset: px(0.),
         handle: Some(handle),
+        click: None,
     }
     .into_any_element()
 }
