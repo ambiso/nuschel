@@ -272,10 +272,13 @@ def desktop(args):
             "independent recipient UI missing")
         receiver.wait(lambda event: event.get("kind") == "user" and event["user"]["name"] == "Preview recipient")
 
+        def focused_window_pid():
+            return json.loads(shell.eval("JSON.stringify(global.display.focus_window?.get_pid()??null)"))
         def focus_window(pid):
             shell.eval("(()=>{const w=global.get_window_actors().map(a=>a.meta_window)"
                 f".find(w=>w.get_pid()==={pid}); if(!w)throw Error('owned window missing');"
                 "w.activate(global.get_current_time());return true;})()")
+            eventually(lambda: focused_window_pid() == pid, "owned window did not acquire compositor focus")
         def window_rect(pid, frame=False):
             return json.loads(shell.eval("JSON.stringify((()=>{const w=global.get_window_actors().map(a=>a.meta_window)"
                 f".find(w=>w.get_pid()==={pid});const b=w.{'get_frame_rect' if frame else 'get_buffer_rect'}();"
@@ -324,12 +327,47 @@ def desktop(args):
             else:
                 node.press()
             return node
+        def copied_input(select_all=False):
+            # The dedicated guest GNOME clipboard observes real editor copy.
+            # A fresh sentinel binds each observation to its own Ctrl+C.
+            focus_window(sender_pid)
+            field = wait("Message")
+            assert field.call("Component", "GrabFocus")[0]
+            eventually(lambda: field.focused, "message editor did not acquire keyboard focus")
+            if select_all:
+                shell.chord("Control_L", "a")
+            sentinel = f"owned-preview-copy-{uuid.uuid4().hex}"
+            St = "imports.gi.St"
+            shell.eval(f"{St}.Clipboard.get_default().set_text({St}.ClipboardType.CLIPBOARD, {json.dumps(sentinel)}); 'ok'")
+            shell.chord("Control_L", "c")
+            def observed():
+                shell.eval(f"global._previewCopy = undefined; {St}.Clipboard.get_default().get_text("
+                    f"{St}.ClipboardType.CLIPBOARD, (c,t)=>{{global._previewCopy=t;}}); 'ok'")
+                value = eventually(lambda: (value if (value := json.loads(shell.eval(
+                    "JSON.stringify({done:global._previewCopy!==undefined,text:global._previewCopy??null})")))["done"] else None),
+                    "guest clipboard observation did not finish", timeout=10)
+                text = value["text"]
+                assert isinstance(text, str) and len(text) <= 4096
+                return None if text == sentinel else text
+            return eventually(observed, "editor copy did not replace the guest clipboard sentinel", timeout=10)
         def type_message(body):
+            assert isinstance(body, str) and len(body) <= 4096
+            observation.update(stage="type_message", last_typed_body=body,
+                actual_typed_body=None, typed_body_verified=False,
+                typing_editor_focused=None, typing_focused_window_pid=None)
+            focus_window(sender_pid)
             node = wait("Message")
             assert node.call("Component", "GrabFocus")[0]
+            eventually(lambda: node.focused, "message editor did not acquire keyboard focus before typing")
+            observation.update(typing_editor_focused=node.focused,
+                typing_focused_window_pid=focused_window_pid())
             shell.chord("Control_L", "a")
             shell.type(body)
-            observation["last_typed_body"] = body
+            actual = copied_input(select_all=True)
+            observation["actual_typed_body"] = actual
+            assert actual == body, "synthetic editor input must retain the complete intended draft"
+            observation["typed_body_verified"] = True
+            shell.chord("Control_L", "End")
             return node
         def choose(mode):
             observation.update(stage="choose", last_requested_mode=mode, requested_radio_focused_before_space=None)
@@ -463,6 +501,7 @@ def desktop(args):
 
         def capture_failure(failure):
             diagnostic = dict(observation, error_type=type(failure).__name__,
+                error=str(failure)[:2048],
                 last_observed_policy_labels=last_policy_labels[:], nodes=[], nodes_truncated=False)
             def expired(_signal, _frame):
                 raise TimeoutError("scene failure capture exceeded 12 seconds")
@@ -608,29 +647,6 @@ def desktop(args):
             compact_body = f"compact-{uuid.uuid4().hex[:8]} http://93.184.215.14/page " + "retained draft text " * 12
             type_message(compact_body)
             eventually(ready_card, "compact draft card did not reach Ready")
-            def copied_input(select_all=False):
-                # The dedicated guest GNOME clipboard observes real editor copy.
-                # A fresh sentinel binds each observation to its own Ctrl+C.
-                focus_window(sender_pid)
-                field = wait("Message")
-                assert field.call("Component", "GrabFocus")[0]
-                eventually(lambda: field.focused, "message editor did not acquire keyboard focus")
-                if select_all:
-                    shell.chord("Control_L", "a")
-                sentinel = f"owned-preview-copy-{uuid.uuid4().hex}"
-                St = "imports.gi.St"
-                shell.eval(f"{St}.Clipboard.get_default().set_text({St}.ClipboardType.CLIPBOARD, {json.dumps(sentinel)}); 'ok'")
-                shell.chord("Control_L", "c")
-                def observed():
-                    shell.eval(f"global._previewCopy = undefined; {St}.Clipboard.get_default().get_text("
-                        f"{St}.ClipboardType.CLIPBOARD, (c,t)=>{{global._previewCopy=t;}}); 'ok'")
-                    value = eventually(lambda: (value if (value := json.loads(shell.eval(
-                        "JSON.stringify({done:global._previewCopy!==undefined,text:global._previewCopy??null})")))["done"] else None),
-                        "guest clipboard observation did not finish", timeout=10)
-                    text = value["text"]
-                    assert isinstance(text, str) and len(text) <= 4096
-                    return None if text == sentinel else text
-                return eventually(observed, "editor copy did not replace the guest clipboard sentinel", timeout=10)
             assert copied_input(select_all=True) == compact_body
             shell.chord("Control_L", "Home")
             shell.press("Control_L", "Shift_L", "Right")
