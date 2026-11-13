@@ -63,6 +63,14 @@ impl Card {
         metadata: &ExtractedMetadata,
         image: Option<EmbeddedImage>,
     ) -> Result<Self, CardError> {
+        // Refuse oversized replies before copying even alternative text. The
+        // worker already returns these bounds; normalization is not admission.
+        if metadata.title.len() > MAX_TITLE_BYTES
+            || metadata.description.len() > MAX_DESCRIPTION_BYTES
+            || metadata.image_alt.len() > MAX_ALT_BYTES
+        {
+            return Err(CardError::Metadata);
+        }
         let url = model::canonical_url(target.as_str())?;
         let image = image.map(|image| EmbeddedImage {
             alt: metadata.image_alt.clone(),
@@ -157,11 +165,9 @@ impl Card {
     pub fn image(&self) -> Option<&EmbeddedImage> {
         self.image.as_ref()
     }
-    pub fn without_image(&self) -> Self {
-        Self {
-            image: None,
-            ..self.clone()
-        }
+    /// Remove the derivative only if the remaining metadata is still a card.
+    pub fn without_image(&self) -> Result<Self, CardError> {
+        Self::build(self.url.clone(), &self.title, &self.description, None)
     }
     /// Bytes this card holds, for cache budgets.
     pub fn weight(&self) -> usize {
@@ -248,10 +254,16 @@ pub fn image_dimensions(mime: ImageMime, data: &[u8]) -> Option<(u32, u32)> {
                         if length < 2 {
                             return None;
                         }
+                        let segment = data.get(at + 4..at + 2 + length)?;
                         // SOF0–SOF15, except DHT, JPG and DAC.
                         if (0xc0..=0xcf).contains(&marker) && !matches!(marker, 0xc4 | 0xc8 | 0xcc)
                         {
-                            let frame = data.get(at + 4..at + 9)?;
+                            // Precision, height, width and component count must
+                            // belong to this segment, not bytes following it.
+                            if length < 8 {
+                                return None;
+                            }
+                            let frame = segment.get(..5)?;
                             let height = u32::from(u16::from_be_bytes([frame[1], frame[2]]));
                             let width = u32::from(u16::from_be_bytes([frame[3], frame[4]]));
                             return Some((width, height));
@@ -358,7 +370,7 @@ pub(crate) mod tests {
             Card::from_preview(&pictured.to_preview()).unwrap(),
             pictured
         );
-        assert_eq!(pictured.without_image(), card);
+        assert_eq!(pictured.without_image().unwrap(), card);
         assert!(pictured.weight() > card.weight());
     }
 
@@ -389,6 +401,7 @@ pub(crate) mod tests {
         .unwrap();
         assert_eq!(image_only.display_title(), "example.org");
         assert_eq!(image_only.image().unwrap().alt, "A cat");
+        assert_eq!(image_only.without_image(), Err(CardError::Metadata));
     }
 
     #[test]
@@ -398,10 +411,26 @@ pub(crate) mod tests {
             Card::new(&target, &metadata(" \u{202e} ", "\n\u{1b}"), None),
             Err(CardError::Metadata)
         );
-        // Over-long worker strings are cut to the carried limits, not trusted.
+        // Over-long replies are refused before normalization or copying.
+        for metadata in [
+            metadata(&"t".repeat(MAX_TITLE_BYTES + 1), ""),
+            metadata("t", &"d".repeat(MAX_DESCRIPTION_BYTES + 1)),
+            ExtractedMetadata {
+                image_alt: "a".repeat(MAX_ALT_BYTES + 1),
+                ..metadata("t", "")
+            },
+        ] {
+            assert_eq!(
+                Card::new(&target, &metadata, None),
+                Err(CardError::Metadata)
+            );
+        }
         let card = Card::new(
             &target,
-            &metadata(&"t".repeat(10_000), &"d".repeat(10_000)),
+            &metadata(
+                &"t".repeat(MAX_TITLE_BYTES),
+                &"d".repeat(MAX_DESCRIPTION_BYTES),
+            ),
             None,
         )
         .unwrap();
@@ -496,6 +525,14 @@ pub(crate) mod tests {
         let mut zero_length = b"\xff\xd8\xff\xe1\x00\x00".to_vec();
         zero_length.resize(64, 0);
         assert_eq!(image_dimensions(ImageMime::Jpeg, &zero_length), None);
+        assert_eq!(
+            image_dimensions(
+                ImageMime::Jpeg,
+                b"\xff\xd8\xff\xc0\x00\x02\x08\x00\x04\x00\x04"
+            ),
+            None,
+            "a short frame segment cannot borrow dimensions from trailing bytes"
+        );
         // A segment length past the end stops the walk.
         assert_eq!(
             image_dimensions(ImageMime::Jpeg, b"\xff\xd8\xff\xe1\xff\xff\0\0"),

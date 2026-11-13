@@ -78,6 +78,9 @@ pub fn project(text: &str, card: &Card, limits: &ServerLimits) -> Projection {
     if !limits.allow_html {
         return Projection::TextOnly(TextOnly::HtmlDisabled);
     }
+    if text.len() > nuschl_core::MAX_CONTENT_BYTES {
+        return Projection::TextOnly(TextOnly::TextRefused);
+    }
     let text_html = legacy_body(text, true);
     if limits.check_text_wire(&text_html).is_err() {
         return Projection::TextOnly(TextOnly::TextRefused);

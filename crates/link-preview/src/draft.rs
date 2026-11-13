@@ -214,10 +214,13 @@ impl<K: Clone + Eq> DraftPreviews<K> {
             state.target = target;
             state.phase = Phase::Idle;
         }
-        state.text.clear();
-        if draft.text.len() <= MAX_DRAFT_BYTES {
-            state.text.push_str(draft.text);
-        }
+        // Do not retain the capacity of a formerly large draft after it is
+        // cleared: the aggregate kept-text budget applies to retained storage.
+        state.text = if draft.text.len() <= MAX_DRAFT_BYTES {
+            draft.text.to_owned()
+        } else {
+            String::new()
+        };
         state.phase = match (state.phase, &state.target) {
             (phase, _) if draft.carry.is_err() || !self.enabled || state.target.is_none() => {
                 effects.extend(self.cancel_phase(&phase));
@@ -315,6 +318,30 @@ impl<K: Clone + Eq> DraftPreviews<K> {
     /// The message was sent: removal ends and the draft starts over.
     pub fn sent(&mut self, conversation: &K) -> Vec<Effect<K>> {
         self.forget(conversation)
+    }
+
+    /// Navigation suspends pending work without forgetting a removed URL or
+    /// a completed card. The platform still retains physical worker credit.
+    pub fn pause(&mut self) -> Vec<Effect<K>> {
+        self.cancel_in_flight()
+    }
+
+    /// Explicitly retry this draft's unavailable target, without reviving a
+    /// removed card. Only `restore` undoes the sender's Remove decision.
+    pub fn retry(&mut self, draft: Draft<'_, K>, now: u64) -> Vec<Effect<K>> {
+        if let Some(target) = candidate(draft.text, draft.candidate)
+            && let Some((_, state)) = self.drafts.iter_mut().find(|(key, state)| {
+                key == draft.conversation
+                    && state.connection == draft.connection
+                    && state.target.as_ref() == Some(&target)
+                    && matches!(state.phase, Phase::Unavailable(_))
+            })
+        {
+            state.phase = Phase::Idle;
+            self.cache
+                .retain(|entry| entry.url != target.as_str() || entry.outcome.is_ok());
+        }
+        self.update(draft, now)
     }
 
     /// The conversation's composer is gone.
@@ -549,6 +576,58 @@ mod tests {
 
     const URL: &str = "https://example.org/a";
     const OTHER: &str = "https://example.net/b";
+
+    #[test]
+    fn navigation_pauses_pending_work_without_reviving_removed_urls() {
+        let mut previews = enabled();
+        let pending = fetched(&previews.update(draft(&1, URL, Some(URL)), 0))[0].id;
+        assert_eq!(cancelled(&previews.pause()), [pending]);
+        assert_eq!(
+            previews.deliver(pending, Ok(card(URL, "late", "")), 1),
+            Delivery::Stale
+        );
+        previews.update(draft(&1, URL, Some(URL)), 2);
+        previews.remove(&1);
+        previews.pause();
+        previews.update(draft(&2, "no URL", None), 3);
+        assert!(previews.update(draft(&1, URL, Some(URL)), 4).is_empty());
+        assert_eq!(previews.status(&1), Status::Removed);
+    }
+
+    #[test]
+    fn retry_only_resets_the_matching_failure_and_never_undoes_remove() {
+        let mut previews = enabled();
+        let pending = fetched(&previews.update(draft(&1, URL, Some(URL)), 0))[0].id;
+        assert_eq!(
+            previews.deliver(pending, Err(Unavailable::Network), 1),
+            Delivery::Accepted
+        );
+        assert!(previews.update(draft(&1, URL, Some(URL)), 2).is_empty());
+        let next = fetched(&previews.retry(draft(&1, URL, Some(URL)), 3));
+        assert_eq!(next.len(), 1);
+        assert_ne!(next[0].id, pending);
+        previews.remove(&1);
+        assert!(previews.retry(draft(&1, URL, Some(URL)), 4).is_empty());
+        assert_eq!(previews.status(&1), Status::Removed);
+    }
+
+    #[test]
+    fn cleared_drafts_do_not_retain_capacity_outside_the_text_budget() {
+        let mut previews = enabled();
+        let large = "x".repeat(MAX_DRAFT_BYTES);
+        for conversation in 0..MAX_CONVERSATIONS as u32 {
+            previews.update(draft(&conversation, &large, None), 0);
+            previews.update(draft(&conversation, "", None), 1);
+        }
+        assert!(
+            previews
+                .drafts
+                .iter()
+                .map(|(_, state)| state.text.capacity())
+                .sum::<usize>()
+                <= MAX_KEPT_TEXT_BYTES
+        );
+    }
 
     fn fetched(effects: &[Effect<u32>]) -> Vec<Ticket<u32>> {
         effects
