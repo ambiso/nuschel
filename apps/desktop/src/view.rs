@@ -2236,7 +2236,9 @@ fn timeline_intro(
 
 /// Where local history starts: nothing older was seen on this device.
 fn history_start(server: bool) -> AnyElement {
-    let rule = || div().flex_1().h(px(1.)).bg(color(BORDER));
+    // The rules keep a visible stub; the label wraps rather than overflowing
+    // a narrow timeline (GPUI text cannot shrink below its unwrapped width).
+    let rule = || div().flex_1().min_w(px(12.)).h(px(1.)).bg(color(BORDER));
     let label = if server {
         "Beginning of server history"
     } else {
@@ -2254,7 +2256,12 @@ fn history_start(server: bool) -> AnyElement {
         .text_xs()
         .text_color(color(TEXT_FAINT))
         .child(rule())
-        .child(text!(label).with_id("history-start-label"))
+        .child(
+            div()
+                .min_w_0()
+                .text_center()
+                .child(text!(label).with_id("history-start-label")),
+        )
         .child(rule())
         .into_any_element()
 }
@@ -2543,18 +2550,45 @@ fn activity_run(
             color(TEXT_FAINT),
         )))
         .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .truncate()
-                .child(text!(summary).with_id(("activity-run-text", first))),
-        )
-        .child(
-            div()
-                .text_xs()
-                .child(text!(times).with_id(("activity-run-time", first))),
+            trailing_lane()
+                .child(
+                    primary_lane()
+                        .truncate()
+                        .child(text!(summary).with_id(("activity-run-text", first))),
+                )
+                .child(
+                    trailing_detail()
+                        .text_xs()
+                        .child(text!(times).with_id(("activity-run-time", first))),
+                ),
         )
         .into_any_element()
+}
+
+/// A row's text lane with a trailing detail (a time, actions): beside the
+/// text while both fit, wrapped below it otherwise. GPUI text never shrinks
+/// below its unwrapped width, so a detail placed beside a flexible lane
+/// would squeeze that lane's text to one glyph per line.
+fn trailing_lane() -> Div {
+    layout::flexible()
+        .flex()
+        .flex_wrap()
+        .items_center()
+        .gap_x_3()
+        .gap_y(px(2.))
+}
+
+/// The text of a `trailing_lane`: it fills the line, and the detail moves
+/// below it once the line is narrower than this basis plus the detail.
+fn primary_lane() -> Div {
+    div().flex_grow(1.).flex_basis(px(120.)).min_w_0()
+}
+
+/// The detail of a `trailing_lane`, or any short label in a wrapping row:
+/// its natural width while it fits, and wrapped within the lane when the
+/// lane alone is narrower.
+fn trailing_detail() -> Div {
+    div().min_w_0().max_w_full()
 }
 
 fn activity_row(line: &crate::state::ActivityLine, index: usize) -> AnyElement {
@@ -2575,14 +2609,18 @@ fn activity_row(line: &crate::state::ActivityLine, index: usize) -> AnyElement {
             color(tone),
         )))
         .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .child(text!(line.text.clone()).with_id(("activity-text", index))),
+            trailing_lane()
+                .child(
+                    primary_lane()
+                        .child(text!(line.text.clone()).with_id(("activity-text", index))),
+                )
+                .child(
+                    trailing_detail().text_xs().child(
+                        text!(crate::state::local_time(line.observed_at_ms))
+                            .with_id(("activity-time", index)),
+                    ),
+                ),
         )
-        .child(div().text_xs().child(
-            text!(crate::state::local_time(line.observed_at_ms)).with_id(("activity-time", index)),
-        ))
         .into_any_element()
 }
 
@@ -2885,12 +2923,16 @@ fn message_row(
                 .gap_1()
                 .when(!grouped, |column| {
                     column.child(
+                        // The time wraps below a long name, and either wraps
+                        // within the column when it is narrower still.
                         div()
+                            .min_w_0()
                             .flex()
+                            .flex_wrap()
                             .items_baseline()
-                            .gap_2()
+                            .gap_x_2()
                             .child(
-                                div()
+                                trailing_detail()
                                     .id(("author-name", index))
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .text_color(theme::name_color(&name))
@@ -2902,13 +2944,16 @@ fn message_row(
                                     .child(text!(name.clone()).with_id(("author", index))),
                             )
                             .child(
-                                div().text_xs().text_color(color(TEXT_FAINT)).child(
-                                    text!(match message.status.label() {
-                                        Some(status) => format!("{} · {status}", ui.time),
-                                        None => ui.time.clone(),
-                                    })
-                                    .with_id(("time", index)),
-                                ),
+                                trailing_detail()
+                                    .text_xs()
+                                    .text_color(color(TEXT_FAINT))
+                                    .child(
+                                        text!(match message.status.label() {
+                                            Some(status) => format!("{} · {status}", ui.time),
+                                            None => ui.time.clone(),
+                                        })
+                                        .with_id(("time", index)),
+                                    ),
                             ),
                     )
                 })
@@ -3054,17 +3099,19 @@ fn tombstone_row(
                 .flex_1()
                 .min_w_0()
                 .flex()
+                .flex_wrap()
                 .items_center()
-                .gap_2()
+                .gap_x_2()
+                .gap_y(px(2.))
                 .text_sm()
                 .italic()
                 .text_color(color(TEXT_FAINT))
                 .tooltip(move |_, cx| cx.new(|_| Tooltip(when.clone().into())).into())
                 .child(icon("trash", 14., color(TEXT_FAINT)))
-                .child(text!(text).with_id(("tombstone-label", index)))
+                .child(trailing_detail().child(text!(text).with_id(("tombstone-label", index))))
                 .when(!grouped, |line| {
                     line.child(
-                        div()
+                        trailing_detail()
                             .text_xs()
                             .not_italic()
                             .child(text!(format!("· {name}")).with_id(("tombstone-author", index))),
@@ -3672,13 +3719,17 @@ fn blocks(
                     source: source.clone(),
                 };
                 let menu = shown.clone();
+                // At most its decoded size, never wider than the message; the
+                // inner box takes its height from that width.
+                let ratio = (*width).max(1) as f32 / (*height).max(1) as f32;
                 div()
                     .id(("image", index))
                     .role(Role::Image)
                     .aria_label("Image (click to enlarge)")
                     .tab_index(0)
                     .w(px(*width as f32))
-                    .h(px(*height as f32))
+                    .max_w_full()
+                    .flex_shrink_0()
                     .rounded(px(8.))
                     .overflow_hidden()
                     .border_1()
@@ -3697,7 +3748,12 @@ fn blocks(
                             cx.notify();
                         }),
                     )
-                    .child(img(image.clone()).size_full())
+                    .child(
+                        div()
+                            .w_full()
+                            .aspect_ratio(ratio)
+                            .child(img(image.clone()).size_full()),
+                    )
                     .into_any_element()
             }
             Block::Math { source, tex, .. } => {
@@ -3739,11 +3795,18 @@ fn blocks(
                             .border_b_1()
                             .border_color(color(BORDER))
                             .flex()
+                            .flex_wrap()
                             .items_center()
                             .justify_between()
+                            .gap_2()
                             .text_xs()
                             .text_color(color(TEXT_FAINT))
-                            .child(text!(language.clone()).with_id(("language", index)))
+                            .child(
+                                div()
+                                    .min_w_0()
+                                    .truncate()
+                                    .child(text!(language.clone()).with_id(("language", index))),
+                            )
                             .child(copy_code_button(index, text.clone(), copied, cx)),
                     )
                     .child(div().p_3().child(content))

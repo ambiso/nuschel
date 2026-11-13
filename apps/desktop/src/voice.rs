@@ -533,7 +533,11 @@ pub fn card(
                 .id(id.clone())
                 .role(Role_::Group)
                 .aria_label(format!("{}: {}", place.label, status))
-                .items_start()
+                // The controls sit at the row's bottom edge. Scrolled to the
+                // end, the last row's bottom meets the region's, so its
+                // hang-up is in view even when a narrow, zoomed row (wrapped
+                // status lines) is taller than the region.
+                .items_end()
                 .flex_shrink_0()
                 .child(
                     div()
