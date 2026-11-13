@@ -911,6 +911,48 @@ async fn statistics(server: Arc<Server>) {
     }
 }
 
+/// A rate limiter for unencrypted pings: per address prefix and global, and
+/// the amplification policy (replies no larger than requests unless allowed).
+pub struct PingLimiter {
+    global: LeakyBucket,
+    prefixes: HashMap<IpAddr, LeakyBucket>,
+    source: IpAddr,
+    allow_double: bool,
+}
+
+impl PingLimiter {
+    pub fn new(allow_double: bool) -> Self {
+        Self {
+            global: LeakyBucket::new(500, 1000, Instant::now()),
+            prefixes: HashMap::new(),
+            source: IpAddr::from([0, 0, 0, 0]),
+            allow_double,
+        }
+    }
+
+    pub fn from(&mut self, source: IpAddr) -> &mut Self {
+        self.source = source;
+        self
+    }
+}
+
+impl nuschl_protocol::relay::PingBudget for PingLimiter {
+    fn allow(&mut self, request_length: usize, reply_length: usize) -> bool {
+        if reply_length > request_length && !self.allow_double {
+            return false;
+        }
+        let now = Instant::now();
+        if self.prefixes.len() > 65_536 {
+            self.prefixes.clear();
+        }
+        let bucket = self
+            .prefixes
+            .entry(prefix(self.source))
+            .or_insert_with(|| LeakyBucket::new(4, 16, now));
+        !bucket.limited(now) && !self.global.limited(now)
+    }
+}
+
 #[cfg(test)]
 mod admission_tests {
     use super::*;
@@ -1007,47 +1049,5 @@ mod admission_tests {
         assert!(!running.tasks[0].is_finished(), "accept loop exited");
         assert!(!running.server.admission.is_poisoned());
         running.shutdown().await;
-    }
-}
-
-/// A rate limiter for unencrypted pings: per address prefix and global, and
-/// the amplification policy (replies no larger than requests unless allowed).
-pub struct PingLimiter {
-    global: LeakyBucket,
-    prefixes: HashMap<IpAddr, LeakyBucket>,
-    source: IpAddr,
-    allow_double: bool,
-}
-
-impl PingLimiter {
-    pub fn new(allow_double: bool) -> Self {
-        Self {
-            global: LeakyBucket::new(500, 1000, Instant::now()),
-            prefixes: HashMap::new(),
-            source: IpAddr::from([0, 0, 0, 0]),
-            allow_double,
-        }
-    }
-
-    pub fn from(&mut self, source: IpAddr) -> &mut Self {
-        self.source = source;
-        self
-    }
-}
-
-impl nuschl_protocol::relay::PingBudget for PingLimiter {
-    fn allow(&mut self, request_length: usize, reply_length: usize) -> bool {
-        if reply_length > request_length && !self.allow_double {
-            return false;
-        }
-        let now = Instant::now();
-        if self.prefixes.len() > 65_536 {
-            self.prefixes.clear();
-        }
-        let bucket = self
-            .prefixes
-            .entry(prefix(self.source))
-            .or_insert_with(|| LeakyBucket::new(4, 16, now));
-        !bucket.limited(now) && !self.global.limited(now)
     }
 }
