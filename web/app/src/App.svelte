@@ -6,6 +6,7 @@
   import { serverIndices, moveServer, sameOrder, edgeSpeed } from "./server-order.js";
   import { inviteFragment } from "./invite.js";
   import { channelRows, initials, avatarColor, conversationKey, filterMessages, appearance } from "./presentation.js";
+  import {observeMessageTimeLocale} from "./message-time.js";
   import Message from "./Message.svelte";
   import TypedDocument from "./TypedDocument.svelte";
   import { welcomeDocuments } from "./welcome.js";
@@ -96,6 +97,7 @@
     document.documentElement.style.setProperty("--font-size", `${settings.fontSize}px`);
   });
   onMount(() => {
+    const stopTimeLocale=observeMessageTimeLocale(window);
     let contentBridge;
     try { settings = appearance(JSON.parse(localStorage.getItem("nuschl.appearance.v1") || "null")); } catch { /* Defaults remain usable in private browsing. */ }
     const media = matchMedia("(max-width: 760px)");
@@ -114,7 +116,7 @@
     const viewport = window.visualViewport;
     const resizeViewport = () => { if (orderDrag) cancelOrder(); document.documentElement.style.setProperty("--app-height", `${viewport?.height || window.innerHeight}px`); };
     resizeViewport(); viewport?.addEventListener("resize", resizeViewport);
-    const cleanup = () => { contentBridge?.dispose(); cancelOrder(); window.removeEventListener("keydown", escapeOrder, true); window.removeEventListener("resize", cancelOrder); motion.removeEventListener("change", updateMotion); media.removeEventListener("change", updateMobile); viewport?.removeEventListener("resize", resizeViewport); rpc?.close("Client closed.",{notify:false}); worker = null; disposeAudio(); };
+    const cleanup = () => { stopTimeLocale(); contentBridge?.dispose(); cancelOrder(); window.removeEventListener("keydown", escapeOrder, true); window.removeEventListener("resize", cancelOrder); motion.removeEventListener("change", updateMotion); media.removeEventListener("change", updateMobile); viewport?.removeEventListener("resize", resizeViewport); rpc?.close("Client closed.",{notify:false}); worker = null; disposeAudio(); };
     const unavailable = reason => {
       contentBridge?.dispose();
       worker = null; clientUnavailable = true; loaded = false; cancelOrder(); arrangeServers = false;
