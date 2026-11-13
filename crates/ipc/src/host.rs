@@ -256,18 +256,25 @@ pub async fn thumbnail(
     )
 }
 
-/// Process one preview operation without queueing another worker. Cancellation
-/// drops only the caller's interest: the owned task keeps the process slot until
-/// its child has exited and been reaped.
+/// Admit at most one extraction/preparation and one render worker, with no
+/// queue. Cancellation drops only the caller's interest: the owned task keeps
+/// its selected slot until the confined role has actually retired.
 pub async fn preview(
     executable: &Path,
     request: crate::preview::Request,
 ) -> Result<crate::preview::Response, Error> {
-    static SLOT: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
+    static PREPARATION: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
+    static RENDER: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
     if !request.is_bounded() {
         return Err(Error::InvalidResponse);
     }
-    let permit = SLOT.try_acquire().map_err(|_| Error::Busy)?;
+    let slot = match &request {
+        crate::preview::Request::Document { .. } | crate::preview::Request::PrepareImage { .. } => {
+            &PREPARATION
+        }
+        crate::preview::Request::RenderImage { .. } => &RENDER,
+    };
+    let permit = slot.try_acquire().map_err(|_| Error::Busy)?;
     let executable = executable.to_owned();
     tokio::spawn(async move {
         let _permit = permit;

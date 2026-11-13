@@ -150,8 +150,23 @@ async fn check(worker: &Path) {
         assert!(children().is_empty(), "unreaped child after {mode}");
     }
 
+    // Prepare once; rendering those exact carried bytes must not compete with
+    // the extraction/preparation owner held by the next cancellation case.
+    let prepare = Request::PrepareImage {
+        schema: preview::SCHEMA,
+        image: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGM4EaABAAMkAUEdGZ/EAAAAAElFTkSuQmCC".into(),
+        alt: "known pixel".into(),
+    };
+    let Response::Image {
+        image: prepared_image,
+        ..
+    } = host::preview(worker, prepare.clone()).await.unwrap()
+    else {
+        panic!("expected a prepared carried image");
+    };
+
     // Cancel the caller after a real confined child has started. Its supervisor
-    // must keep the only process slot until timeout and actual retirement.
+    // must keep the preparation slot until timeout and actual retirement.
     let hanging = fake.clone();
     let caller = tokio::spawn(async move { host::preview(&hanging, document(b"hang")).await });
     tokio::time::timeout(Duration::from_secs(3), async {
@@ -168,6 +183,34 @@ async fn check(worker: &Path) {
         Err(Error::Busy)
     ));
     assert!(!children().is_empty(), "cancel dropped the live supervisor");
+    let preparation_busy = matches!(host::preview(worker, prepare).await, Err(Error::Busy));
+    let render_request = Request::RenderImage {
+        schema: preview::SCHEMA,
+        image: prepared_image.clone(),
+    };
+    let mut rendering = std::pin::pin!(host::preview(worker, render_request.clone()));
+    // Poll admission once on this current-thread runtime, before yielding to
+    // either supervisor. The old shared slot returns Ready(Busy) here; separate
+    // render admission is Pending and retains its own one-worker credit.
+    let first_poll = std::future::poll_fn(|cx| {
+        std::task::Poll::Ready(std::future::Future::poll(rendering.as_mut(), cx))
+    })
+    .await;
+    let render_admitted = first_poll.is_pending();
+    let document_still_busy = matches!(
+        host::preview(worker, document(b"<title>still held</title>")).await,
+        Err(Error::Busy)
+    );
+    let second_render_busy = matches!(
+        host::preview(worker, render_request).await,
+        Err(Error::Busy)
+    );
+    let rendered = match first_poll {
+        std::task::Poll::Ready(reply) => reply,
+        std::task::Poll::Pending => rendering.await,
+    };
+    // Retire the held Document before asserting the concurrency observations,
+    // so the shared-slot negative control also finishes with no live child.
     let result = tokio::time::timeout(Duration::from_secs(8), async {
         loop {
             match host::preview(worker, document(b"<title>Recovered</title>")).await {
@@ -181,6 +224,21 @@ async fn check(worker: &Path) {
     .unwrap();
     assert!(matches!(result, Response::Metadata { metadata, .. } if metadata.title == "Recovered"));
     assert!(children().is_empty(), "unreaped child after recovery");
+    assert!(preparation_busy, "PrepareImage escaped the Document slot");
+    assert!(
+        document_still_busy,
+        "render admission released Document credit"
+    );
+    assert!(render_admitted, "RenderImage competed for Document credit");
+    assert!(
+        second_render_busy,
+        "a second render escaped its one-worker cap"
+    );
+    let Response::Pixels { pixels, .. } = rendered.unwrap() else {
+        panic!("expected source-free pixels from the carried bytes");
+    };
+    assert_eq!((pixels.width, pixels.height), (1, 1));
+    assert_eq!(pixels.decode(), Some(vec![200, 80, 40, 255]));
 
     // Extraction returns an inert image reference; it must not retrieve it.
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -198,35 +256,7 @@ async fn check(worker: &Path) {
     assert!(matches!(listener.accept(), Err(e) if e.kind() == io::ErrorKind::WouldBlock));
     assert!(children().is_empty(), "unreaped actual content worker");
 
-    // Prepare returns only the carried derivative. A separate confined request
-    // decodes those exact bytes, with a known pixel oracle independent of the
-    // worker's preparation state or the original encoded input.
-    let Response::Image { image, .. } = host::preview(
-        worker,
-        Request::PrepareImage {
-            schema: preview::SCHEMA,
-            image: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGM4EaABAAMkAUEdGZ/EAAAAAElFTkSuQmCC".into(),
-            alt: "known pixel".into(),
-        },
-    )
-    .await
-    .unwrap() else {
-        panic!("expected a prepared carried image");
-    };
-    let Response::Pixels { pixels, .. } = host::preview(
-        worker,
-        Request::RenderImage {
-            schema: preview::SCHEMA,
-            image: image.clone(),
-        },
-    )
-    .await
-    .unwrap() else {
-        panic!("expected source-free pixels from the carried bytes");
-    };
-    assert_eq!((pixels.width, pixels.height), (1, 1));
-    assert_eq!(pixels.decode(), Some(vec![200, 80, 40, 255]));
-    let mut wrong = image;
+    let mut wrong = prepared_image;
     wrong.width = 2;
     assert_eq!(
         host::preview(
