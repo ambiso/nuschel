@@ -115,7 +115,6 @@ pub struct Report {
     pub notes: Vec<String>,
     /// Limits the imported data exceeds, and files written.
     pub advice: Vec<String>,
-    /// Imported password hashes, by Murmur scheme.
     pub sha1_hashes: usize,
     pub pbkdf2_hashes: usize,
 }

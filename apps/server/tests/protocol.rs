@@ -1356,47 +1356,6 @@ async fn import_murmur(
     report
 }
 
-/// A PBKDF2 row without its salt column is imported without a password.
-#[tokio::test]
-async fn a_murmur_pbkdf2_password_without_a_salt_is_not_imported() {
-    use nuschl_ipc::murmur::{MurmurChannel, MurmurDump, MurmurUser};
-    let user = |id, name: &str, salt: Option<&str>| MurmurUser {
-        id,
-        name: name.into(),
-        password: Some("ab".repeat(48)),
-        salt: salt.map(Into::into),
-        kdf_iterations: Some(1000),
-        ..Default::default()
-    };
-    let dump = MurmurDump {
-        channels: vec![MurmurChannel {
-            id: 0,
-            name: "Root".into(),
-            ..Default::default()
-        }],
-        users: vec![
-            user(1, "alice", Some("0011223344556677")),
-            user(2, "bob", None),
-        ],
-        ..Default::default()
-    };
-    let directory = tempfile::tempdir().unwrap();
-    let store = MemoryStore::shared();
-    let report = import_murmur(directory.path(), &store, dump, false)
-        .await
-        .unwrap();
-    assert_eq!(report.imported.get("registered users"), Some(&2));
-    assert_eq!((report.pbkdf2_hashes, report.sha1_hashes), (1, 0));
-    assert!(
-        report
-            .skipped
-            .iter()
-            .any(|line| line.starts_with("user 2: malformed PBKDF2 password")),
-        "{:?}",
-        report.skipped
-    );
-}
-
 #[tokio::test]
 async fn a_murmur_database_imports_with_its_passwords_and_acls() {
     let carol = identity();
@@ -1419,6 +1378,14 @@ async fn a_murmur_database_imports_with_its_passwords_and_acls() {
             ..Default::default()
         });
     }
+    // A PBKDF2 row without its salt column is imported without a password.
+    dump.users.push(nuschl_ipc::murmur::MurmurUser {
+        id: 8,
+        name: "frank".into(),
+        password: Some("ab".repeat(48)),
+        kdf_iterations: Some(1000),
+        ..Default::default()
+    });
     let directory = tempfile::tempdir().unwrap();
     let store = MemoryStore::shared();
     let report = import_murmur(directory.path(), &store, dump.clone(), false)
@@ -1426,7 +1393,7 @@ async fn a_murmur_database_imports_with_its_passwords_and_acls() {
         .unwrap();
     let rendered = report.render();
     for (what, count) in [
-        ("registered users", 5),
+        ("registered users", 6),
         ("channels", 3),
         ("ACL entries", 6),
         ("groups", 2),
@@ -1448,6 +1415,7 @@ async fn a_murmur_database_imports_with_its_passwords_and_acls() {
         "user 4: the name does not match",
         "user 5: another account has the same name",
         "user 6: malformed PBKDF2 password",
+        "user 8: malformed PBKDF2 password",
         "user 6: malformed certificate hash",
         "channel 4 and its subchannels",
         "channel 5: its parent 99",
@@ -1477,12 +1445,12 @@ async fn a_murmur_database_imports_with_its_passwords_and_acls() {
     let report = import_murmur(directory.path(), &store, dump, true)
         .await
         .unwrap();
-    assert_eq!(report.imported.get("registered users"), Some(&5));
+    assert_eq!(report.imported.get("registered users"), Some(&6));
     assert!(
         report
             .advice
             .iter()
-            .any(|line| line.contains("replaced 3 channels, 5 registered users"))
+            .any(|line| line.contains("replaced 3 channels, 6 registered users"))
     );
 
     let fixture = start_plain(directory, store, "").await;
