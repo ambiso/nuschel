@@ -61,9 +61,14 @@ def actions(args, root, shell, application, bot, _murmur):
         last_group = "@" + fields(checked[3][-1])[1][0].decode()
         for index in range(20):
             name = f"Scrollbar room {index:02}".encode()
-            admin.send(7, encode({2: [0], 3: [name]}))
-            while admin.wait(7).get(3) != [name]:
-                pass
+            admin.send(7, encode({2: [0], 3: [name], 8: [0]}))
+            for _ in range(200):
+                kind, value = admin.receive()
+                assert kind != 12, ("private channel create denied", value)
+                if kind == 7 and value.get(3) == [name]:
+                    break
+            else:
+                raise AssertionError("private channel create reply missing")
             time.sleep(.4)
     finally:
         admin.close()
