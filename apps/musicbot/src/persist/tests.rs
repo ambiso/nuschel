@@ -45,7 +45,14 @@ username = "DJ2"
             .libraries
             .iter()
             .enumerate()
-            .map(|(index, config)| Library::new(index, config, Credentials::ApiKey("test".into())))
+            .map(|(index, config)| {
+                Library::new(
+                    index,
+                    config,
+                    Credentials::ApiKey("test".into()),
+                    format!("key {index}"),
+                )
+            })
             .collect(),
     );
     let players = config
@@ -79,6 +86,7 @@ username = "DJ2"
         codec_worker: std::path::PathBuf::from("/nonexistent/nuschl-musicbot-codec-worker"),
         tokens: Tokens::load(directory.join("tokens.json")).unwrap(),
         persistence: Mutex::new(()),
+        covers: crate::covers::CoverCache::disabled(),
         rating_revision: std::sync::atomic::AtomicU64::new(0),
     }
 }

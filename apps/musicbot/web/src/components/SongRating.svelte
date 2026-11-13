@@ -6,7 +6,7 @@
   import { getRating } from "../rating.js";
   import { postJSON, query } from "../api.js";
 
-  let { library, songId, title, namespace, enabled = true } = $props();
+  let { library, songId, title, namespace, enabled = true, large = false } = $props();
   let root = $state();
   let visible = $state(false);
   let pending = $state(false);
@@ -94,7 +94,7 @@
   }
 </script>
 
-<div class="rating" bind:this={root} role="group" aria-label="Shared library rating for {title}" aria-busy={pending || result.loading} draggable="false">
+<div class="rating" class:large bind:this={root} role="group" aria-label="Shared library rating for {title}" aria-busy={pending || result.loading} draggable="false">
   <div class="stars" title={library == null ? "This track's library is unavailable" : "Shared library rating. Click the selected star again to clear."}>
     {#each [1, 2, 3, 4, 5] as star (star)}
       <button
@@ -123,6 +123,9 @@
   .star.filled { color: var(--warning); }
   .star svg { display: block; fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linejoin: round; }
   .star.filled svg { fill: currentColor; }
+  .large .star { width: 44px; height: 48px; padding: 4px; }
+  .large .star svg { width: 34px; height: 34px; }
+  .large .feedback { font-size: 0.9rem; }
   .star:hover:not(:disabled) { background: var(--surface-hover); }
   .feedback { display: block; max-width: 15rem; font-size: 0.75rem; overflow-wrap: anywhere; }
   .retry { padding: 0; border: none; background: transparent; color: inherit; text-decoration: underline; font-size: inherit; }
