@@ -92,10 +92,7 @@ GNOME Shell on the real GPU; it never touches the user's session) and
 `accessibility.py --gnome-shell` (the same check with Nuschl's own window controls,
 and the timeline walked with the keyboard: Shift+Tab, arrows, Home and End, Tab through
 a message's links, a letter typed into the composer; a prompt over Settings keeps the
-focus through Shift+Tab, and the run fails if GPUI logged its release-build warning for
-two focused nodes or two active descendants in one frame. That covers the warning path of
-a release build over AT-SPI in the private GNOME Shell only, not a debug build, where the
-same condition panics, nor a physical platform). `voice_servers.py` (voice on two
+focus, and no frame has two focused nodes). `voice_servers.py` (voice on two
 loopback Murmurs at once, operated over AT-SPI in the private GNOME Shell with a private
 PulseAudio: one media worker, both servers heard, push-to-talk only to the talk server,
 "Speak on two servers?", the mute shortcut, a crashed worker coming back; screenshots of

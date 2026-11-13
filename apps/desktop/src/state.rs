@@ -273,10 +273,7 @@ pub struct Desktop {
     pub emoji_focus: FocusHandle,
     /// The footer's mute and deafen animations (created on first render).
     pub mute_ease: Option<crate::motion::Ease>,
-    /// Each dialog's focus scope, by its id: focus stays inside the dialog
-    /// in front (see `keep_dialog_focus`). Dialogs can be stacked (a prompt
-    /// over Settings), and a handle that two of them tracked would be
-    /// focused in both, two focused nodes for assistive technology.
+    /// Each dialog's focus scope, by dialog id (see `Desktop::dialog_focus`).
     pub modal_focus: std::cell::RefCell<BTreeMap<&'static str, FocusHandle>>,
     pub deafen_ease: Option<crate::motion::Ease>,
     /// The rail's talk rings and listening badges (voice.rs).
