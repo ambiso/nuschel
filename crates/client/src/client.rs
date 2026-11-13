@@ -262,7 +262,12 @@ pub enum SendError {
     Refused(String),
 }
 
+mod plugin;
 mod share;
+pub use plugin::{
+    MAX_PLUGIN_QUEUE, MAX_PLUGIN_QUEUE_BYTES, MAX_PLUGIN_RECEIVERS, PluginDataEvent,
+    ReceivedPluginData,
+};
 
 /// Unmuting would make a second talk server: the user is asked "Speak on
 /// two servers?" first, and answers with [`Client::speak_here`].
@@ -368,6 +373,8 @@ pub struct Client {
     comment_interest: Option<CommentInterest>,
     pub(crate) updates: Vec<Update>,
     now_ms: u64,
+    /// Received plugin data and our sends' admissions, for all servers.
+    plugin_data: plugin::PluginQueue,
 }
 
 impl Client {
@@ -394,6 +401,7 @@ impl Client {
             comment_interest: None,
             updates: Vec::new(),
             now_ms: 0,
+            plugin_data: Default::default(),
         }
     }
 
@@ -478,6 +486,7 @@ impl Client {
         self.platform.disconnect(id);
         self.voice.disconnected(id, None);
         self.passwords.remove(id);
+        self.forget_plugin_data(id);
         self.servers.retain(|server| server.id != id);
         self.catalog.synchronize(&self.servers);
     }
@@ -517,6 +526,7 @@ impl Client {
                 server.dismiss_notice();
                 // It joins the channel you were last in there.
                 let id = server.id.clone();
+                self.forget_plugin_data(&id);
                 let seats = seats(&self.servers);
                 self.voice.connecting(&id, &seats);
             }
@@ -572,9 +582,11 @@ impl Client {
 
     pub fn disconnect(&mut self, index: usize) {
         self.forget_document_requests(index);
-        let Some(server) = self.servers.get_mut(index) else {
+        let Some(id) = self.servers.get(index).map(|server| server.id.clone()) else {
             return;
         };
+        self.forget_plugin_data(&id);
+        let server = &mut self.servers[index];
         self.platform.disconnect(&server.id);
         clear_welcome(server, &mut self.updates);
         if server.status == Status::Connected && !server.deafened {
@@ -1603,6 +1615,7 @@ impl Client {
             } => {
                 if let Some(index) = self.current(&server, generation) {
                     self.forget_document_requests(index);
+                    self.forget_plugin_data(&server);
                     let server = &mut self.servers[index];
                     server.status = Status::Disconnected;
                     clear_welcome(server, &mut self.updates);
@@ -1646,6 +1659,7 @@ impl Client {
             } => {
                 if let Some(index) = self.current(&server, generation) {
                     self.forget_document_requests(index);
+                    self.forget_plugin_data(&server);
                     let server = &mut self.servers[index];
                     if server.status == Status::Connected && !server.deafened {
                         self.platform.chime(Sound::Disconnected);
@@ -2069,6 +2083,12 @@ impl Client {
     }
 
     fn server_event(&mut self, index: usize, event: ServerEvent) {
+        if matches!(
+            event,
+            ServerEvent::PluginData(_) | ServerEvent::PluginDataAdmission { .. }
+        ) {
+            return self.plugin_event(index, event);
+        }
         let fetch_description = matches!(
             &event,
             ServerEvent::Connected { .. } | ServerEvent::Channel(_)
@@ -2618,6 +2638,8 @@ impl Client {
             }
             ServerEvent::Welcome { .. } => {}
             ServerEvent::Transport(stats) => server.transport = Some(stats),
+            // Handled above.
+            ServerEvent::PluginData(_) | ServerEvent::PluginDataAdmission { .. } => {}
         }
         if fetch_description {
             self.request_selected_description(index);

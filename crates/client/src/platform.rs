@@ -85,6 +85,16 @@ pub enum Request {
         request_id: u64,
         token: [u8; 16],
     },
+    /// Plugin data to these receivers, each a session and its presence
+    /// instance, answered by its admission
+    /// ([`ServerEvent::PluginDataAdmission`](crate::input::ServerEvent)). Only
+    /// through [`Platform::request_metadata`], whose authority names the same
+    /// presences ([`Client::send_plugin_data`](crate::Client::send_plugin_data)).
+    PluginData {
+        request: u64,
+        receivers: Vec<(u32, u64)>,
+        payload: nuschl_protocol::plugin::Payload,
+    },
 }
 
 /// Where a conversation of a Nuschl server is kept in local history: the
@@ -185,6 +195,11 @@ pub trait Platform {
         query: String,
         after: Option<SearchCursor>,
     ) -> Result<(), String>;
+    /// Whether every connection, now and after reconnects, decodes and
+    /// reports plugin data. A platform without plugin data ignores it.
+    fn accept_plugin_data(&self, accept: bool) {
+        let _ = accept;
+    }
 }
 
 impl<T: Platform + ?Sized> Platform for std::sync::Arc<T> {
@@ -201,6 +216,9 @@ impl<T: Platform + ?Sized> Platform for std::sync::Arc<T> {
     }
     fn request(&self, server: &str, request: Request) -> Result<(), String> {
         (**self).request(server, request)
+    }
+    fn accept_plugin_data(&self, accept: bool) {
+        (**self).accept_plugin_data(accept)
     }
     fn request_metadata(
         &self,

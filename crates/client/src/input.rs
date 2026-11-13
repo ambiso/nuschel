@@ -292,4 +292,11 @@ pub enum ServerEvent {
         document: MessageDocument,
     },
     Transport(TransportStats),
+    /// Plugin data another client sent us, with its sender as known when it arrived.
+    PluginData(crate::client::ReceivedPluginData),
+    /// Whether our plugin data `request` was admitted locally (not delivered).
+    PluginDataAdmission {
+        request: u64,
+        result: Result<(), nuschl_protocol::plugin::Refusal>,
+    },
 }

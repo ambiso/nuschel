@@ -440,8 +440,10 @@ fn metadata_command(
     request: Request,
 ) -> Result<(u64, Command), String> {
     use nuschl_session::connection::{CommandAuthority, MAX_ACTION_TARGETS};
-    if !matches!(request, Request::RequestBlobs { .. })
-        || metadata.users.len().saturating_add(metadata.channels.len()) > MAX_ACTION_TARGETS
+    if !matches!(
+        request,
+        Request::RequestBlobs { .. } | Request::PluginData { .. }
+    ) || metadata.users.len().saturating_add(metadata.channels.len()) > MAX_ACTION_TARGETS
     {
         return Err("Invalid metadata authority.".into());
     }
@@ -556,6 +558,8 @@ pub struct Driver {
     generation: std::sync::atomic::AtomicU64,
     settings: watch::Sender<ClientSettings>,
     voice_keys: watch::Sender<VoiceKeys>,
+    /// Whether connections decode and report plugin data (off by default).
+    plugin_data: watch::Sender<bool>,
     /// The media worker every connection shares.
     media: media::Hub,
     render_permits: std::sync::Arc<tokio::sync::Semaphore>,
@@ -679,6 +683,7 @@ impl Driver {
             generation: Default::default(),
             settings,
             voice_keys,
+            plugin_data: watch::Sender::new(false),
             media,
             render_permits: std::sync::Arc::new(tokio::sync::Semaphore::new(2)),
             storage_task,
@@ -722,7 +727,11 @@ impl Driver {
             (receiver, sound_requests),
             (self.sender.clone(), self.media.clone()),
             (self.content.clone(), self.storage.clone()),
-            (self.settings.subscribe(), self.voice_keys.subscribe()),
+            (
+                self.settings.subscribe(),
+                self.voice_keys.subscribe(),
+                self.plugin_data.subscribe(),
+            ),
         ));
         connections.insert(
             id,
@@ -843,6 +852,14 @@ impl Driver {
                 | Command::SelectVoiceTargetAt { .. }
         ) {
             return Err("Use an explicit generation-bound voice selection.".into());
+        }
+        if matches!(
+            command,
+            Command::PluginData { .. } | Command::AcceptPluginData(_)
+        ) {
+            return Err(
+                "Plugin data needs its receivers' authority (Client::send_plugin_data).".into(),
+            );
         }
 
         self.connections()
@@ -999,6 +1016,12 @@ impl Driver {
         self.voice_keys
             .send_if_modified(|keys| std::mem::replace(&mut keys.talk, active) != active);
     }
+    /// Whether every connection, now and after reconnects, decodes and
+    /// reports plugin data.
+    pub fn accept_plugin_data(&self, accept: bool) {
+        self.plugin_data
+            .send_if_modified(|current| std::mem::replace(current, accept) != accept);
+    }
     pub fn set_push_to_mute(&self, active: bool) {
         self.voice_keys
             .send_if_modified(|keys| std::mem::replace(&mut keys.mute, active) != active);
@@ -1124,6 +1147,15 @@ fn request_command(request: Request) -> Command {
                 token: token.to_vec(),
             }))
         }
+        Request::PluginData {
+            request,
+            receivers,
+            payload,
+        } => Command::PluginData {
+            request,
+            receivers,
+            payload,
+        },
     }
 }
 
@@ -1172,7 +1204,11 @@ async fn connection_loop(
     (mut commands, mut sounds): (mpsc::Receiver<Command>, mpsc::Receiver<Sound>),
     (events, hub): (mpsc::Sender<Event>, media::Hub),
     (content, storage): (mpsc::Sender<ContentWork>, mpsc::Sender<StorageCommand>),
-    (mut settings, mut voice_keys): (watch::Receiver<ClientSettings>, watch::Receiver<VoiceKeys>),
+    (mut settings, mut voice_keys, mut plugin_data): (
+        watch::Receiver<ClientSettings>,
+        watch::Receiver<VoiceKeys>,
+        watch::Receiver<bool>,
+    ),
 ) {
     let id = server.id.clone();
     // A fresh connection rejoins the channel you were last in, like a reconnect.
@@ -1194,7 +1230,7 @@ async fn connection_loop(
             (&mut commands, &mut sounds),
             (&events, &hub),
             (&content, &storage),
-            (&mut settings, &mut voice_keys),
+            (&mut settings, &mut voice_keys, &mut plugin_data),
             &mut restore,
         )
         .await;
@@ -1337,9 +1373,10 @@ async fn connect_once(
     (commands, sounds): (&mut mpsc::Receiver<Command>, &mut mpsc::Receiver<Sound>),
     (events, hub): (&mpsc::Sender<Event>, &media::Hub),
     (content, storage): (&mpsc::Sender<ContentWork>, &mpsc::Sender<StorageCommand>),
-    (settings, voice_keys): (
+    (settings, voice_keys, plugin_data): (
         &mut watch::Receiver<ClientSettings>,
         &mut watch::Receiver<VoiceKeys>,
+        &mut watch::Receiver<bool>,
     ),
     restore: &mut Restore,
 ) -> Outcome {
@@ -1388,6 +1425,8 @@ async fn connect_once(
     };
     let (session_commands, receiver) = mpsc::channel(32);
     let (session_events, mut incoming) = mpsc::channel(128);
+    // The fresh queue has room: every attempt starts with the current choice.
+    let _ = session_commands.try_send(Command::AcceptPluginData(*plugin_data.borrow_and_update()));
     let relay_only = options.relay_only;
     let mut session = tokio::spawn(connection::run(options, receiver, session_events));
     let mut peer: Option<String> = None;
@@ -1461,6 +1500,11 @@ async fn connect_once(
                         }
                     }
                 }
+            },
+            changed = plugin_data.changed() => {
+                if changed.is_err() { break; }
+                let accept = *plugin_data.borrow_and_update();
+                if session_commands.send(Command::AcceptPluginData(accept)).await.is_err() { break; }
             },
             changed = voice_keys.changed() => {
                 if changed.is_err() { break; }
@@ -1771,6 +1815,10 @@ async fn connect_once(
                         server: id.clone(), generation,
                         event: ServerEvent::Welcome { source: body, document },
                     })).await;
+                },
+                // Plugin data never waits for room: a full channel drops it.
+                event @ (SessionEvent::PluginData(_) | SessionEvent::PluginDataAdmission { .. }) => {
+                    let _ = events.try_send(Event::Protocol { server: id.clone(), generation, event });
                 },
                 event => { let _ = events.send(Event::Protocol { server: id.clone(), generation, event }).await; },
             },
@@ -2469,6 +2517,9 @@ impl Platform for Driver {
     fn request(&self, server: &str, request: Request) -> Result<(), String> {
         self.command(server, request_command(request))
     }
+    fn accept_plugin_data(&self, accept: bool) {
+        Driver::accept_plugin_data(self, accept)
+    }
     fn request_metadata(
         &self,
         server: &str,
@@ -2951,8 +3002,23 @@ fn server_event(event: SessionEvent) -> Result<ServerEvent, Option<Unmodelled>> 
             at_ms: connection::now_ms(),
         },
         SessionEvent::Outbox { sent, total } => ServerEvent::Outbox { sent, total },
+        SessionEvent::PluginData(data) => {
+            ServerEvent::PluginData(crate::client::ReceivedPluginData {
+                sender: data.sender,
+                sender_instance: data.sender_instance,
+                sender_user_id: data.sender_user_id,
+                sender_certificate_hash: data.sender_certificate_hash,
+                payload: data.payload,
+            })
+        }
+        SessionEvent::PluginDataAdmission { request, result } => {
+            ServerEvent::PluginDataAdmission { request, result }
+        }
     })
 }
+
+const _: () =
+    assert!(crate::client::MAX_PLUGIN_RECEIVERS == nuschl_session::connection::MAX_ACTION_TARGETS);
 
 /// Your nicknames and friends as the settings keep them.
 impl crate::names::Names for ClientSettings {
