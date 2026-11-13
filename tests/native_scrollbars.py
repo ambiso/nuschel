@@ -150,7 +150,7 @@ def actions(args, root, shell, application, bot, _murmur):
         target = wait("@scroll-rule-005", "push button")
         shell.click(*point(target))
         target_field = eventually(lambda: next((node for node, role, name, _ in items(application)
-            if name.startswith("Mumble group expression") and role == "entry"), None), "rule input absent")
+            if name == "ACL rule target" and role == "entry"), None), "rule input absent")
         eventually(lambda: target_field.call("Text", "GetText", "ii", "0", "-1")[0] == "scroll-rule-005",
                    "canvas intercepted a rule pointer selection")
         wait("Remove rule", "push button")
