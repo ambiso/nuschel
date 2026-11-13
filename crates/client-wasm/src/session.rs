@@ -1260,12 +1260,9 @@ impl Session {
     }
 }
 
-/// Reconcile the selected voice route with its live connection
-/// (browser.rs `reconcile_voice`, after it has matched the route's server,
-/// connection generation and channel): the encoder target, channel presence,
-/// whether an explicit self-state request is still settling, and the
-/// effective mute/deafen gates. Without a session nothing is confirmed, so
-/// the route is neither joined nor allowed to capture or play.
+/// browser.rs `reconcile_voice` once the route's server, generation and
+/// channel match; shared so native tests run it. Without a session every
+/// gate stays closed and a new route does not join.
 #[cfg(any(test, all(target_arch = "wasm32", target_os = "unknown")))]
 pub(crate) fn reconcile_voice_route(
     route: &mut crate::voice::Route,
