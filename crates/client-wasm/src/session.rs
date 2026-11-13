@@ -2109,6 +2109,15 @@ mod tests {
         chain: Vec<CertificateDer<'static>>,
         key: rustls::pki_types::PrivateKeyDer<'static>,
     ) -> (Session, Vec<u16>) {
+        let (client, _, frames) = pki_pair(pin, root, chain, key);
+        (client, frames)
+    }
+    fn pki_pair(
+        pin: Option<String>,
+        root: CertificateDer<'static>,
+        chain: Vec<CertificateDer<'static>>,
+        key: rustls::pki_types::PrivateKeyDer<'static>,
+    ) -> (Session, rustls::ServerConnection, Vec<u16>) {
         let mut roots = rustls::RootCertStore::empty();
         roots.add(root).unwrap();
         let mut client = Session::with_roots(
@@ -2167,8 +2176,219 @@ mod tests {
         while let Ok(Some(frame)) = decode_control(&mut application) {
             frames.push(frame.kind);
         }
-        (client, frames)
+        (client, server, frames)
     }
+
+    fn incoming_tls_peer() -> (Session, rustls::ServerConnection) {
+        let root = pki_authority();
+        let (leaf, key) = pki_leaf(&root, "localhost", false);
+        let (mut client, mut server, frames) = pki_pair(None, root.der().clone(), vec![leaf], key);
+        assert!(frames.contains(&kind::AUTHENTICATE));
+        let mut setup = Vec::new();
+        setup.extend_from_slice(
+            &encode_control(
+                kind::CHANNEL_STATE,
+                &proto::ChannelState {
+                    channel_id: Some(0),
+                    name: Some("Root".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap(),
+        );
+        for (session, name) in [(3, "fixture"), (5, "peer")] {
+            setup.extend_from_slice(
+                &encode_control(
+                    kind::USER_STATE,
+                    &proto::UserState {
+                        session: Some(session),
+                        name: Some(name.into()),
+                        channel_id: Some(0),
+                        ..Default::default()
+                    },
+                )
+                .unwrap(),
+            );
+        }
+        setup.extend_from_slice(
+            &encode_control(
+                kind::SERVER_SYNC,
+                &proto::ServerSync {
+                    session: Some(3),
+                    ..Default::default()
+                },
+            )
+            .unwrap(),
+        );
+        let encrypted = encrypt_incoming(&mut server, &setup, false);
+        deliver_incoming(&mut client, &encrypted, &[tunnel::MAX_STREAM]);
+        assert_eq!(client.phase, Phase::LoggedIn);
+        client.take_events();
+        (client, server)
+    }
+    fn encrypt_incoming(
+        server: &mut rustls::ServerConnection,
+        mut plain: &[u8],
+        close: bool,
+    ) -> Vec<u8> {
+        let mut encrypted = Vec::new();
+        while !plain.is_empty() {
+            let count = server.writer().write(plain).unwrap();
+            assert!(count > 0);
+            plain = &plain[count..];
+            while server.wants_write() {
+                assert!(server.write_tls(&mut encrypted).unwrap() > 0);
+            }
+        }
+        if close {
+            server.send_close_notify();
+            while server.wants_write() {
+                assert!(server.write_tls(&mut encrypted).unwrap() > 0);
+            }
+        }
+        encrypted
+    }
+    fn deliver_incoming(client: &mut Session, encrypted: &[u8], pattern: &[usize]) {
+        let mut at = 0;
+        for size in pattern.iter().cycle() {
+            assert!((1..=tunnel::MAX_STREAM).contains(size));
+            let end = at.saturating_add(*size).min(encrypted.len());
+            client.receive(&tunnel::encode(&Frame::Stream(&encrypted[at..end])).unwrap());
+            at = end;
+            if at == encrypted.len() {
+                break;
+            }
+        }
+    }
+    fn incoming_text(body: &str) -> Vec<u8> {
+        encode_control(
+            kind::TEXT_MESSAGE,
+            &proto::TextMessage {
+                actor: Some(5),
+                channel_id: vec![0],
+                message: body.into(),
+                ..Default::default()
+            },
+        )
+        .unwrap()
+        .to_vec()
+    }
+    #[test]
+    fn incoming_tls_original_read_order_hits_plaintext_backpressure() {
+        let (mut client, mut server) = incoming_tls_peer();
+        let encrypted =
+            encrypt_incoming(&mut server, &incoming_text(&"x".repeat(96 * 1024)), false);
+        let mut chunk = &encrypted[..tunnel::MAX_STREAM];
+        let error = loop {
+            match client.tls.read_tls(&mut chunk) {
+                Err(error) => break error,
+                Ok(count) => assert!(count > 0),
+            }
+            client.tls.process_new_packets().unwrap();
+            assert!(
+                !chunk.is_empty(),
+                "original order unexpectedly consumed the whole burst"
+            );
+        };
+        assert_eq!(error.kind(), std::io::ErrorKind::Other);
+        assert_eq!(error.to_string(), "received plaintext buffer full");
+        eprintln!("original incoming TLS order: {:?}: {}", error.kind(), error);
+    }
+    #[test]
+    fn incoming_tls_large_message_survives_coalescing_and_fragmentation() {
+        let body = "x".repeat(96 * 1024);
+        for pattern in [
+            vec![tunnel::MAX_STREAM],
+            vec![1, 3, 7, 4093, tunnel::MAX_STREAM],
+            vec![16_383, 2, 16_384, 127],
+        ] {
+            let (mut client, mut server) = incoming_tls_peer();
+            let mut plain = incoming_text(&body);
+            plain.extend(incoming_text("healthy tail"));
+            let encrypted = encrypt_incoming(&mut server, &plain, false);
+            assert!(encrypted.len() > tunnel::MAX_STREAM);
+            deliver_incoming(&mut client, &encrypted, &pattern);
+            let events = client.take_events();
+            assert!(!client.is_closed(), "pattern {pattern:?}: {events:?}");
+            let texts = events
+                .iter()
+                .filter_map(|event| match event {
+                    Event::Text { body, .. } => Some(body.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(texts, [body.as_str(), "healthy tail"]);
+        }
+    }
+    #[test]
+    fn incoming_tls_four_oversized_frames_do_not_hide_following_healthy_text() {
+        let (mut client, mut server) = incoming_tls_peer();
+        let mut plain = Vec::new();
+        let oversized = format!("<p>{}</p>", "x".repeat(MAX_CONTENT_BYTES));
+        for _ in 0..4 {
+            plain.extend(incoming_text(&oversized));
+        }
+        plain.extend(incoming_text("HEALTHY_AFTER_OVERSIZE"));
+        let encrypted = encrypt_incoming(&mut server, &plain, false);
+        deliver_incoming(&mut client, &encrypted, &[tunnel::MAX_STREAM]);
+        let events = client.take_events();
+        assert!(!client.is_closed(), "{events:?}");
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(event, Event::Server(ServerEvent::Notice(_))))
+                .count(),
+            1
+        );
+        let texts = events
+            .iter()
+            .filter_map(|event| match event {
+                Event::Text { body, .. } => Some(body.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(texts, ["HEALTHY_AFTER_OVERSIZE"]);
+    }
+    #[test]
+    fn incoming_tls_close_notify_keeps_final_complete_plaintext_in_order() {
+        let (mut client, mut server) = incoming_tls_peer();
+        let mut plain = incoming_text(&"x".repeat(96 * 1024));
+        plain.extend(incoming_text("last complete message"));
+        let encrypted = encrypt_incoming(&mut server, &plain, true);
+        deliver_incoming(&mut client, &encrypted, &[tunnel::MAX_STREAM]);
+        let events = client.take_events();
+        assert!(client.is_closed());
+        assert!(
+            matches!(events.as_slice(), [Event::Text { .. }, Event::Text { body, .. }, Event::Closed { reason }] if body == "last complete message" && reason == "The server closed the connection.")
+        );
+    }
+    #[test]
+    fn incoming_tls_partial_record_and_tamper_keep_existing_failure_policy() {
+        let (mut client, mut server) = incoming_tls_peer();
+        let encrypted = encrypt_incoming(
+            &mut server,
+            &incoming_text("complete after partial header"),
+            false,
+        );
+        deliver_incoming(&mut client, &encrypted[..1], &[1]);
+        client.tls_in(&[]);
+        assert!(!client.is_closed());
+        assert!(client.take_events().is_empty());
+        deliver_incoming(&mut client, &encrypted[1..], &[3, 127]);
+        assert!(
+            matches!(client.take_events().as_slice(), [Event::Text { body, .. }] if body == "complete after partial header")
+        );
+        let plain = incoming_text(&"x".repeat(24 * 1024));
+        let mut encrypted = encrypt_incoming(&mut server, &plain, false);
+        *encrypted.last_mut().unwrap() ^= 1;
+        assert!(encrypted.len() < tunnel::MAX_STREAM);
+        deliver_incoming(&mut client, &encrypted, &[tunnel::MAX_STREAM]);
+        assert!(client.is_closed());
+        assert!(
+            matches!(client.take_events().as_slice(), [Event::Closed { reason }] if reason.starts_with("TLS failed:"))
+        );
+    }
+
     #[test]
     fn private_ca_fullchain_and_leaf_renewal_require_no_pin_or_prompt() {
         let root = pki_authority();
