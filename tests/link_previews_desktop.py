@@ -275,6 +275,7 @@ def desktop(args):
         def focused_window_pid():
             return json.loads(shell.eval("JSON.stringify(global.display.focus_window?.get_pid()??null)"))
         def focus_window(pid):
+            shell._pointer()
             shell.eval("(()=>{const w=global.get_window_actors().map(a=>a.meta_window)"
                 f".find(w=>w.get_pid()==={pid}); if(!w)throw Error('owned window missing');"
                 "w.activate(global.get_current_time());return true;})()")
