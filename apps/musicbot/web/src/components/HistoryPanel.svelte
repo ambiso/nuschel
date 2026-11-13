@@ -91,7 +91,7 @@
           <Cover library={track.library} art={available ? track.cover_art : null} size={128} px={56} />
           <div class="description">
             <div class="track-heading">
-              <div class="title">{track.title}</div>
+              <div class="title">{#if available && track.id}<a href={buildRoute({ view: "song", library: track.library, id: track.id, namespace: store.browseKey })}>{track.title}</a>{:else}{track.title}{/if}</div>
               <SongRating library={track.library} songId={track.id} title={track.title} namespace={store.browseKey} enabled={available} />
             </div>
             <div class="muted">{#if available && track.artist_id}<a href={buildRoute({ view: "artist", library: track.library, id: track.artist_id, namespace: store.browseKey })}>{track.artist || "Unknown artist"}</a>{:else}{track.artist || "Unknown artist"}{/if}</div>

@@ -16,8 +16,11 @@ browsers. People control what plays on a web page; they get their link by writin
   lists (recently added, recently played, most played, random, by name, starred)
   with covers, the artist index, an artist's albums, an album's songs, and
   playlists. A search asks all libraries at once for artists, albums and songs.
-  Every song, album and playlist has *Add* and *Play next*. Choose the destination
-  queue in the player bar; the browser remembers the selection for that link.
+  Every song, album and playlist has *Add* and *Play next*. Song titles open the
+  song's page: its details (track, disc, length, year, genre, format, play count),
+  rating, the albums it appears on and, with sonic similarity, similar songs.
+  Choose the destination queue in the player bar; the browser remembers the
+  selection for that link.
 - **Sonic similarity.** Libraries with the OpenSubsonic `sonicSimilarity` extension
   offer **Similar songs** for library tracks and the playing song, plus **Sonic
   path from now playing** to a chosen song. The library analyses the audio, for

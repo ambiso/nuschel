@@ -8,6 +8,7 @@
   import Cover from "./Cover.svelte";
   import MediaCard from "./MediaCard.svelte";
   import SongList from "./SongList.svelte";
+  import SongPage from "./SongPage.svelte";
   import Icon from "./Icon.svelte";
 
   let { route } = $props();
@@ -35,6 +36,7 @@
   const heading = $derived(titles[route.view]
     ?? (route.view === "similar" ? (data?.song ? `Similar to ${data.song.title}` : "Similar songs")
       : route.view === "path" ? (matches.length ? `Sonic path: ${matches[0].track.title} → ${matches.at(-1).track.title}` : "Sonic path")
+      : route.view === "song" ? data?.song?.title ?? (data ? "Song" : "Loading…")
       : detail?.name ?? "Loading…"));
   const libraries = $derived(store.snapshot?.libraries ?? []);
   const libraryRoute = $derived(typeof route.library === "number");
@@ -154,6 +156,8 @@
       </div>
       <SongList songs={matchSongs} {namespace} covers similarities={matches.map((match) => match.similarity)} />
       {#if !matches.length}<p class="notice muted">{route.view === "similar" ? "The library found no similar songs." : "The library found no sonic path between these songs."}</p>{/if}
+    {:else if route.view === "song"}
+      {#if data.song}<SongPage {data} {namespace} {current} />{:else}<p class="notice muted">This song is not in the library.</p>{/if}
     {:else if detail}
       <div class="detail-header" role="group" aria-label={detail.name} draggable={current && route.view !== "artist"} ondragstart={(event) => {
         if (route.view !== "artist") startItemDrag(event, route.view, detail.library, detail.id, detail.name, namespace);
