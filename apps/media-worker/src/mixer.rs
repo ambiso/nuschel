@@ -522,7 +522,7 @@ mod tests {
 
     /// The specified 10 ms raised-cosine edge: up from or down to silence.
     fn ramped(mut pcm: Vec<f32>, rising: bool) -> Vec<f32> {
-        for (index, frame) in pcm.chunks_exact_mut(2).take(480).enumerate() {
+        for (index, frame) in pcm.as_chunks_mut::<2>().0.iter_mut().take(480).enumerate() {
             let up = 0.5 - 0.5 * (std::f32::consts::PI * (index as f32 + 0.5) / 480.).cos();
             for sample in frame {
                 *sample *= if rising { up } else { 1. - up };
