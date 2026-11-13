@@ -92,6 +92,15 @@ self-hosted runner; a maintainer pushes a reviewed fork branch here instead.
 Every workflow has a read-only token; CodeQL's `security-events: write`, to
 upload results, is the only exception.
 
+Reviews check that a change is:
+
+- minimal: no code, option or abstraction that the change does not need;
+- readable and correct, including its failure paths;
+- built on standard, widely used crates only;
+- tested through the real code paths, not only mocks;
+- checked by CI with a single command that also runs locally;
+- described plainly, without flattery or overstated results.
+
 ## Packages and cross builds
 
 The Linux package (`nix build .#default`, also used by the VM tests) is built per
