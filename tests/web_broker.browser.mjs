@@ -139,6 +139,9 @@ async function rpc(page,method,...args) {
   worker.addEventListener("message",listener);worker.postMessage({id,method,args,...(context===undefined?{}:{context})});
  }),{method,args,context:proof===undefined?undefined:JSON.stringify(proof)});
 }
+// Stock-protocol direct text (TextMessage session=2, message=5) from a fixture peer.
+const wireVarint=value=>{const out=[];do{out.push((value&127)|(value>127?128:0));value=Math.floor(value/128);}while(value);return Buffer.from(out);};
+function directText(peer,session,body){const text=Buffer.from(body);peer.send(11,Buffer.concat([wireVarint(2*8),wireVarint(session),wireVarint(5*8+2),wireVarint(text.length),text]));}
 async function send(page,text) {
  await page.getByLabel("Message",{exact:true}).fill(text);
  await page.getByRole("button",{name:"Send",exact:true}).click();
@@ -367,21 +370,33 @@ try {
    result.throughput.push(await recovery.evaluate(({channel,metric})=>({channel,messages:brokerFixture.last.timeline.messages.length,milliseconds:performance.now()-metric.at,snapshots:brokerFixture.snapshots-metric.snapshots,snapshot_bytes:brokerFixture.snapshot_bytes-metric.bytes}),{channel,metric}));
   }
   // Switching back to a busy conversation remounts ~900 rows. Hold every
-  // rehydration result 2s at the App boundary while recovery codec work
-  // completes: those RPCs stay few, and every content ACK still reaches the SDK.
+  // rehydration result 2s at the App boundary while real codec work for peer
+  // direct messages completes: those RPCs stay few, and every ACK reaches the SDK.
+  observer=await legacyPeer(Number(port),"broker-pressure-peer");
+  await observer.wait(()=>[...observer.users.values()].some(user=>user.name==="broker-recovery"),"pressure peer sees the browser user");
+  const browserSession=[...observer.users.values()].find(user=>user.name==="broker-recovery").session;
+  const peerSources=Array.from({length:6},(_,index)=>`PRESSURE_PEER_${index}`);
   const pressureErrors=await recovery.evaluate(()=>{brokerFixture.delayRequestResults=2000;brokerFixture.requestsPeak=brokerFixture.requestsOutstanding;return brokerFixture.errors.length;});
   const pressureStart=await recovery.evaluate(()=>({at:performance.now(),completions:brokerFixture.completions.length}));
   await rpc(recovery,"open",0,0);
   await recovery.waitForFunction(()=>brokerFixture.last?.timeline?.channel===0&&!brokerFixture.last.timeline.loading&&brokerFixture.last.timeline.messages.length>=900);
-  try { await recovery.waitForFunction(()=>brokerFixture.last.timeline.messages.every(message=>!message.content_failed&&!message.document.blocks.some(block=>block.kind==="text"&&block.text.startsWith("["))),null,{timeout:60000}); }
+  await recovery.waitForFunction(()=>brokerFixture.requestsOutstanding>0);
+  const outstandingAtSend=await recovery.evaluate(()=>brokerFixture.requestsOutstanding);
+  for(const source of peerSources)directText(observer,browserSession,source);
+  try {
+   await recovery.waitForFunction(()=>brokerFixture.last.timeline.messages.every(message=>!message.content_failed&&!message.document.blocks.some(block=>block.kind==="text"&&block.text.startsWith("["))),null,{timeout:60000});
+   await recovery.waitForFunction(sources=>sources.every(source=>{const operation=brokerFixture.work.find(work=>work.kind==="render"&&work.source===source);return operation&&brokerFixture.replies.some(reply=>reply.request===operation.request&&reply.error===undefined&&typeof reply.value==="string"&&reply.value!=="null");}),peerSources,{timeout:30000});
+  }
   catch(error) {
    const diagnostic=await recovery.evaluate(()=>({count:brokerFixture.last?.timeline?.messages.length,missing:brokerFixture.last?.timeline?.messages.filter(message=>!message.content_token).length,peak:brokerFixture.requestsPeak,errors:brokerFixture.errors.slice(-6),work:brokerFixture.work.slice(-10).map(({kind,request})=>({kind,request}))}));
    console.error("pressure-diagnostic",JSON.stringify(diagnostic));result.pressure_failure=diagnostic;throw error;
   }
   result.pressure=await recovery.evaluate(({errors,start})=>({milliseconds:performance.now()-start.at,messages:brokerFixture.last.timeline.messages.length,delayed_request_ms:brokerFixture.delayRequestResults,peak_request_rpcs:brokerFixture.requestsPeak,acks_sent:brokerFixture.completions.length-start.completions,ack_errors:brokerFixture.errors.slice(errors).filter(error=>error.method==="content_complete").length,request_errors:brokerFixture.errors.slice(errors).filter(error=>error.method==="content_request").length}),{errors:pressureErrors,start:pressureStart});
+  result.pressure.peer_direct_renders_accepted=peerSources.length;result.pressure.request_rpcs_outstanding_at_send=outstandingAtSend;
   await recovery.evaluate(()=>{brokerFixture.delayRequestResults=0;});
   assert.ok(result.pressure.peak_request_rpcs<=8,`rehydration RPCs in flight ${result.pressure.peak_request_rpcs}`);
-  assert.equal(result.pressure.ack_errors,0);assert.ok(result.pressure.acks_sent>0,"codec ACKs completed during held rehydration");
+  assert.equal(result.pressure.ack_errors,0);assert.ok(result.pressure.acks_sent>=peerSources.length,"codec ACKs completed during held rehydration");
+  assert.ok(outstandingAtSend>0,"held rehydration RPCs were outstanding when the peer texts arrived");
   // A verified rendered row keeps its exact derivative across a reconnect of
   // the visible conversation, and across another while inactive.
   const derivative=await recovery.evaluate(serial=>brokerFixture.last.timeline.messages.find(message=>message.serial===serial)?.content_token??null,original.serial);
