@@ -124,6 +124,7 @@ def desktop(args):
     args.output.chmod(0o700)
     cases = []
     extra_children = []
+    scene_start = len(control("snapshot")["events"])
     assert re.fullmatch(r"[0-9a-f]{40}", args.source_revision)
     def digest(path):
         value = hashlib.sha256()
@@ -164,7 +165,7 @@ def desktop(args):
 
     class Compatible(Nuschld):
         def __init__(self, _binary, root, port):
-            super().__init__(args.binaries, root, port)
+            super().__init__(args.binaries, root, port, extra='[history]\nguests = "full"')
             self.ini = root / "welcome-bridge.ini"
             self.ini.write_text('welcometext="Welcome to the <b>Nuschl</b> screenshot server."')
             self.database = root / "unused-legacy-database"
@@ -298,12 +299,23 @@ def desktop(args):
                 eventually(lambda: image_pixels(recipient.pid, args.output / "recipient-card.png") > 300,
                     "carried image was not actually painted in independent recipient")
                 focus_window(sender_pid)
+                if args.server == "nuschld":
+                    chat = eventually(lambda: next((event for event in list(receiver.events)
+                        if event.get("kind") == "chat" and marker in bytes(event.get("message", {}).get("content", [])).decode("utf-8", errors="strict")), None),
+                        "compatible server did not archive the projected message")
+                    request = 16000 + before
+                    receiver.send(kind="history", request_id=request, conversation=chat["conversation"], limit=32)
+                    page = receiver.wait(lambda event: event.get("kind") == "history_page" and event.get("request_id") == request)
+                    archived = [message for message in page["messages"] if marker in bytes(message["content"]).decode("utf-8", errors="strict")]
+                    assert len(archived) == 1 and archived[0]["format"] == "legacy_html", archived
+                    assert bytes(archived[0]["content"]).decode() == wire
+                    mark("compatible_history_keeps_one_legacy_html_message", seq=archived[0]["seq"])
             mark("single_message_received_by_independent_native_ui", preview=preview,
                 wire_sha256=hashlib.sha256(wire.encode()).hexdigest())
             return wire
 
         initial = len(events())
-        assert initial == 0, "startup/receiver display unexpectedly contacted a synthetic peer"
+        assert initial == scene_start, "startup/receiver display unexpectedly contacted a synthetic peer"
         assert image_pixels(sender_pid, args.output / "before-preview.png") < 300, "image pixel control is not discriminating"
         plain = f"off-{uuid.uuid4().hex[:8]} http://93.184.215.14/page "
         type_message(plain)
