@@ -603,6 +603,15 @@ encoded-file or source-URL authority. Invalid images return 404, unavailable or
 busy workers return 503. Library failures preserve the existing redacted errors.
 API errors carry an HTTP error status and `{"error":"message"}`.
 
+`GET song?library=N&id=ID` returns `{"song":Track,"details":{…},"appearances":[Track],
+"appearances_error":null}` for a song's page. `details` holds `year`, `genre`,
+`bit_rate` (kbit/s), `disc_number` and `play_count`, each null when the library
+does not say. `appearances` has one track per album with a song of the same title
+and artist (compared without case or surrounding spaces), the song's own album
+first. The bot finds them with `search3` on the title, which every server
+supports, and looks at its first 40 songs. When that search fails the song still
+shows, `appearances` is empty and `appearances_error` gives the redacted reason.
+
 `GET similar?library=N&id=ID` asks the library's `getSonicSimilarTracks` for up to
 25 songs and returns `{"song":Track,"matches":[{"track":Track,"similarity":N}]}`.
 `GET path?library=N&from=A&to=B` asks `findSonicPath` for up to 25 songs and

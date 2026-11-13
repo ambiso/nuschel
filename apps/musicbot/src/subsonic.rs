@@ -461,11 +461,29 @@ impl Library {
     }
 
     pub fn song(&self, id: &str) -> Result<Track, Error> {
+        self.song_details(id).map(|(track, _)| track)
+    }
+
+    /// A song with the details its page shows besides the queue fields.
+    pub fn song_details(&self, id: &str) -> Result<(Track, SongDetails), Error> {
         let reply = self.call(self.get("getSong").query("id", id))?;
-        reply
-            .song
-            .map(|song| song.track(self.index))
-            .ok_or_else(|| missing("song"))
+        let song = reply.song.ok_or_else(|| missing("song"))?;
+        let details = SongDetails {
+            year: song.year,
+            genre: song.genre.clone(),
+            bit_rate: song.bit_rate,
+            disc_number: song.disc_number,
+            play_count: song.play_count,
+        };
+        Ok((song.track(self.index), details))
+    }
+
+    /// One track per album with a song of the same title and artist as
+    /// `song`, its own album first. Search finds candidates by title, the
+    /// only field every server searches.
+    pub fn appearances(&self, song: &Track) -> Result<Vec<Track>, Error> {
+        let found = self.search(&song.title)?;
+        Ok(same_song_albums(song, found.songs))
     }
 
     /// Reads the configured account's current rating; never use a queued snapshot.
@@ -899,8 +917,54 @@ struct Song {
     suffix: Option<String>,
     content_type: Option<String>,
     user_rating: Option<i64>,
+    year: Option<u32>,
+    genre: Option<String>,
+    bit_rate: Option<u32>,
+    disc_number: Option<u32>,
+    play_count: Option<u64>,
     #[serde(default, deserialize_with = "optional_identifier")]
     cover_art: Option<String>,
+}
+
+/// What a song's page shows besides the queue fields.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct SongDetails {
+    pub year: Option<u32>,
+    pub genre: Option<String>,
+    /// In kbit/s.
+    pub bit_rate: Option<u32>,
+    pub disc_number: Option<u32>,
+    pub play_count: Option<u64>,
+}
+
+fn same_song_albums(song: &Track, candidates: Vec<Track>) -> Vec<Track> {
+    fn key(text: Option<&str>) -> Option<String> {
+        text.map(|text| text.trim().to_lowercase())
+    }
+    let wanted = (key(Some(&song.title)), key(song.artist.as_deref()));
+    let mut albums: Vec<Track> = song
+        .album_id
+        .is_some()
+        .then(|| song.clone())
+        .into_iter()
+        .collect();
+    for candidate in candidates {
+        let same = (
+            key(Some(&candidate.title)),
+            key(candidate.artist.as_deref()),
+        ) == wanted;
+        let Some(album) = candidate.album_id.as_deref() else {
+            continue;
+        };
+        if same
+            && !albums
+                .iter()
+                .any(|known| known.album_id.as_deref() == Some(album))
+        {
+            albums.push(candidate);
+        }
+    }
+    albums
 }
 
 impl Song {
