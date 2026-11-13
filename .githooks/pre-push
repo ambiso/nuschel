@@ -1,17 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/sh
 # SPDX-License-Identifier: EUPL-1.2
-# Opt-in for plain git: `git config core.hooksPath .githooks`. Runs
-# scripts/pre-pr on every commit this push would publish. jj does not run git
-# hooks; jj users push with scripts/pr-push instead. Skipping it
-# (`git push --no-verify`) only skips local feedback: the required "CI result"
-# check on GitHub still gates merges.
-set -euo pipefail
-
-zero=0000000000000000000000000000000000000000
-commits=()
-while read -r _local_ref local_oid _remote_ref _remote_oid; do
-  [[ $local_oid == "$zero" ]] && continue
-  commits+=("$local_oid")
-done
-(( ${#commits[@]} > 0 )) || exit 0
-exec "$(git rev-parse --show-toplevel)/scripts/pre-pr" "${commits[@]}"
+# Opt in with `git config core.hooksPath .githooks`.
+exec scripts/pre-pr
