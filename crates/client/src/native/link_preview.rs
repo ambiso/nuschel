@@ -181,3 +181,73 @@ async fn run(mut requests: watch::Receiver<Option<Work>>, events: mpsc::Sender<E
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::preview::{Context, PreviewSend};
+    use nuschl_core::model::TextTarget;
+    use nuschl_session::connection::{ActionSubject, Command};
+
+    fn request() -> PreviewSend {
+        PreviewSend {
+            context: Context {
+                server: "fixture".into(),
+                channel: 2,
+                instance: 22,
+                peer: None,
+                certificate: "a".repeat(64),
+                own: (1, 11),
+            },
+            connection: 7,
+            target: TextTarget::Channel(2),
+            html: "one logical message".into(),
+            expected_peer: None,
+        }
+    }
+
+    #[test]
+    fn one_message_retains_exact_channel_and_own_presence_authority() {
+        let (server, generation, Command::Scoped { authority, command }) = scoped_send(request()).unwrap() else {
+            panic!("missing scoped send");
+        };
+        assert_eq!((server.as_str(), generation), ("fixture", 7));
+        assert_eq!(authority.own, (1,11));
+        assert_eq!(authority.subject, Some(ActionSubject::Channel(2,22)));
+        assert_eq!(authority.channels, [(2,22)]);
+        assert!(authority.users.is_empty());
+        assert!(matches!(*command,Command::SendHtml{target:TextTarget::Channel(2),html,expected_peer:None} if html == ["one logical message"]));
+        for changed in [
+            PreviewSend {target:TextTarget::Channel(3),..request()},
+            PreviewSend {target:TextTarget::Direct(9),..request()},
+            PreviewSend {target:TextTarget::DirectConversation([1;16]),..request()},
+            PreviewSend {expected_peer:Some(33),..request()},
+            PreviewSend {html:String::new(),..request()},
+        ] {
+            assert!(scoped_send(changed).is_err());
+        }
+        let mut changed=request();
+        changed.context.own.1=0;
+        assert!(scoped_send(changed).is_err());
+        let mut changed=request();
+        changed.context.instance=0;
+        assert!(scoped_send(changed).is_err());
+    }
+
+    #[test]
+    fn private_preview_cannot_retarget_a_reused_peer_number() {
+        let mut send = request();
+        send.target=TextTarget::Direct(9);
+        send.context.peer=Some((9,99));
+        send.expected_peer=Some(99);
+        let (_,_,Command::Scoped {authority,command})=scoped_send(send.clone()).unwrap() else {
+            panic!("missing scoped send");
+        };
+        assert_eq!(authority.own,(1,11));
+        assert_eq!(authority.users,[(9,99)]);
+        assert!(authority.channels.is_empty());
+        assert!(matches!(*command,Command::SendHtml{expected_peer:Some(99),..}));
+        send.expected_peer=Some(100);
+        assert!(scoped_send(send).is_err());
+    }
+}
