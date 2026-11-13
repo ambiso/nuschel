@@ -111,6 +111,7 @@ pub(crate) struct HistoryProgress {
     pub batch_start: i64,
     pub resume_at_ms: Option<u64>,
     pub pages: u8,
+    pub batch_bytes: usize,
     pub started_ms: Option<u64>,
     pub paused: bool,
 }
@@ -127,6 +128,7 @@ impl HistoryProgress {
             batch_start: through,
             resume_at_ms: None,
             pages: 0,
+            batch_bytes: 0,
             started_ms: None,
             paused: false,
         }
@@ -140,6 +142,7 @@ impl HistoryProgress {
         self.batch_start = self.through;
         self.resume_at_ms = None;
         self.pages = 0;
+        self.batch_bytes = 0;
         self.started_ms = None;
         self.paused = false;
     }

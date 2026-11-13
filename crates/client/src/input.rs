@@ -114,6 +114,8 @@ pub enum Input {
         server: String,
         ticket: HistoryTicket,
         scanned_through: i64,
+        /// Canonical decoded protobuf bytes, measured by the native adapter.
+        scanned_bytes: usize,
         head: i64,
         changes: Vec<(u64, Change)>,
     },
