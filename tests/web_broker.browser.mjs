@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: EUPL-1.2
 // Disposable Chromium UI/worker integration against a PRIVATE local relay/server.
-// node tests/web_browser.mjs SITE RELAY_URL HOST PORT [SCREENSHOT]
+// node tests/web_broker.browser.mjs SITE RELAY_URL HOST PORT SCREENSHOT [stress|authority]
 import { createServer } from "node:http";
 import { createConnection } from "node:net";
 import { readFile } from "node:fs/promises";
@@ -12,6 +12,8 @@ assert.ok(root && relayUrl && host === "127.0.0.1" && Number(port)>1023,"private
 const relay = new URL(relayUrl);
 assert.ok(relay.hostname === "127.0.0.1" && relay.protocol === "ws:","private loopback relay required");
 const { chromium } = await import(pathToFileURL(process.env.NUSCHL_PLAYWRIGHT));
+const {actionProof}=await import(process.env.NUSCHL_ACTION_CONTEXT?pathToFileURL(process.env.NUSCHL_ACTION_CONTEXT):new URL("../web/app/src/action-context.js",import.meta.url));
+const {legacyPeer}=await import(process.env.NUSCHL_LEGACY_PEER?pathToFileURL(process.env.NUSCHL_LEGACY_PEER):new URL("./web_broker_legacy_peer.mjs",import.meta.url));
 const directory = resolve(root);
 const entry = await readFile(resolve(directory,"app/index.html")).then(()=>"/app/").catch(()=>"/");
 const types={".html":"text/html",".js":"text/javascript",".wasm":"application/wasm",".css":"text/css",".svg":"image/svg+xml"};
@@ -42,7 +44,7 @@ const origin=`http://127.0.0.1:${server.address().port}`;
 const browser=await chromium.launch({headless:true,executablePath:process.env.NUSCHL_CHROMIUM});
 const contexts=[];
 const forbidden=[];
-async function open(username,fault="",width=1280) {
+async function open(username,fault="",width=1280,trust=true) {
  const context=await browser.newContext({viewport:{width,height:900}});contexts.push(context);
  context.on("request",request=>{if(!request.url().startsWith(origin+"/")&&!request.url().startsWith("data:"))forbidden.push(request.url());});
  await context.route("**/*",async route=>{
@@ -61,17 +63,19 @@ async function open(username,fault="",width=1280) {
  const page=await context.newPage();
  await page.addInitScript(()=>{
   globalThis.captureCalls=0;navigator.mediaDevices.getUserMedia=()=>{captureCalls++;return Promise.reject(new Error("No capture in broker fixture"));};
-  const fixture=globalThis.brokerFixture={sdk:null,last:null,work:[],replies:[],pending:new Map(),workers:[],completions:[],codec:[],snapshots:0,snapshot_bytes:0};
+  const fixture=globalThis.brokerFixture={sdk:null,last:null,work:[],replies:[],pending:new Map(),workers:[],completions:[],codec:[],snapshots:0,snapshot_bytes:0,holdAck:false,heldAck:null,invalidateState:false,ackCount:0,commands:new Map(),errors:[],fatals:[]};
   const NativeWorker=globalThis.Worker;
   globalThis.Worker=class extends NativeWorker {
    constructor(...args) {
     super(...args);fixture.workers.push(String(args[0]));
     if(String(args[0]).includes("content-worker-"))this.addEventListener("message",({data})=>{fixture.codec.push({kind:data?.kind,error:data?.error,result_bytes:typeof data?.result==="string"?data.result.length:null});if(fixture.codec.length>128)fixture.codec.shift();});
     if(!String(args[0]).includes("sdk.worker-"))return;
-    fixture.sdk=this;
+    this.fixtureSdk=true;fixture.sdk=this;
     this.addEventListener("message",({data})=>{
-     if(data?.kind==="state"){fixture.last=data;fixture.snapshots++;fixture.snapshot_bytes+=new TextEncoder().encode(JSON.stringify(data)).length;}
+     if(data?.kind==="state"){if(fixture.invalidateState&&data.servers.length){fixture.invalidateState=false;data.servers[0].runtime_index=data.servers.length;}fixture.last=data;fixture.snapshots++;fixture.snapshot_bytes+=new TextEncoder().encode(JSON.stringify(data)).length;}
      if(data?.kind==="content_work")for(const operation of data.operations){fixture.work.push(operation);if(fixture.work.length>128)fixture.work.shift();}
+     if(data?.kind==="fatal")fixture.fatals.push(data.message);
+     if(data?.kind==="result"&&fixture.commands.has(data.id)){if(data.error)fixture.errors.push({method:fixture.commands.get(data.id),error:data.error});fixture.commands.delete(data.id);}
      if(data?.kind==="result"&&fixture.pending.has(data.id)) {
       fixture.replies.push({request:fixture.pending.get(data.id),value:data.value,error:data.error});fixture.pending.delete(data.id);
       if(fixture.replies.length>128)fixture.replies.shift();
@@ -79,6 +83,9 @@ async function open(username,fault="",width=1280) {
     });
    }
    postMessage(data,...rest) {
+    if(data?.method==="state_applied")fixture.ackCount++;
+    if(data?.method==="state_applied"&&fixture.holdAck){fixture.heldAck=data.args[0];return;}
+    if(this.fixtureSdk&&data?.id!==undefined){fixture.commands.set(data.id,data.method);if(fixture.commands.size>256)throw Error("fixture command bound");}
     if(data?.method==="content_complete"){fixture.pending.set(data.id,data.args[0]);fixture.completions.push({request:data.args[0],bytes:data.args[1]?.length});if(fixture.completions.length>128)fixture.completions.shift();}
     return super.postMessage(data,...rest);
    }
@@ -89,6 +96,7 @@ async function open(username,fault="",width=1280) {
  if(width<=760)await page.getByRole("button",{name:"Open navigation",exact:true}).click();
  try { await page.getByRole("button",{name:"Trust this certificate",exact:true}).waitFor({timeout:20000}); }
  catch(error) { console.error("fixture-open-failure",username,await page.locator("body").innerText());await page.screenshot({path:screenshot.replace(".png",`-${username}-open-failure.png`)});throw error; }
+ if(!trust)return page;
  await page.getByRole("button",{name:"Trust this certificate",exact:true}).click();
  await page.waitForFunction(()=>document.querySelector(".server-connection .status")?.textContent==="Connected",null,{timeout:20000});
  if(width<=760)await page.getByRole("button",{name:"Close navigation",exact:true}).click();
@@ -97,12 +105,14 @@ async function open(username,fault="",width=1280) {
 
 
 async function rpc(page,method,...args) {
- return page.evaluate(({method,args})=>new Promise((resolve,reject)=>{
+ const visible=await page.evaluate(()=>({servers:brokerFixture.last.servers,timeline:brokerFixture.last.timeline,voice:brokerFixture.last.voice}));
+ const proof=actionProof(method,args,visible.servers,visible.timeline,visible.voice);
+ return page.evaluate(({method,args,context})=>new Promise((resolve,reject)=>{
   const worker=brokerFixture.sdk,id=1_000_000+(globalThis.fixtureRpcNext=(globalThis.fixtureRpcNext||0)+1);
   const timer=setTimeout(()=>{worker.removeEventListener("message",listener);reject(new Error("fixture RPC timed out"));},5000);
   function listener({data}) {if(data?.kind!=="result"||data.id!==id)return;clearTimeout(timer);worker.removeEventListener("message",listener);if(data.error)reject(new Error(data.error));else resolve(data.value);}
-  worker.addEventListener("message",listener);worker.postMessage({id,method,args});
- }),{method,args});
+  worker.addEventListener("message",listener);worker.postMessage({id,method,args,...(context===undefined?{}:{context})});
+ }),{method,args,context:proof===undefined?undefined:JSON.stringify(proof)});
 }
 async function send(page,text) {
  await page.getByLabel("Message",{exact:true}).fill(text);
@@ -110,7 +120,82 @@ async function send(page,text) {
  await page.waitForFunction(()=>document.querySelector("textarea")?.value==="");
 }
 const result={passed:false,artifact:root,stale:null,retired:null,expiry:null,recovery:null,stress:process.argv[7]==="stress",throughput:[]};
+let observer;
+async function hold(page){
+ await page.evaluate(()=>{brokerFixture.holdAck=true;brokerFixture.heldAck=null;});
+ await rpc(page,"dismiss_notice",0);
+ await page.waitForFunction(()=>brokerFixture.heldAck!==null);
+ return page.evaluate(()=>brokerFixture.last.publication);
+}
+async function release(page){await page.evaluate(()=>{const id=brokerFixture.heldAck;brokerFixture.holdAck=false;brokerFixture.heldAck=null;brokerFixture.sdk.postMessage({method:"state_applied",args:[id]});});}
+async function refusal(page,method,after){await page.waitForFunction(({method,after})=>brokerFixture.errors.slice(after).some(error=>error.method===method&&/view changed|view is stale|target changed/i.test(error.error)),{method,after});}
 try {
+ if(process.argv[7]==="authority"){
+  observer=await legacyPeer(Number(port));
+  const page=await open("broker-authority");
+  await page.waitForFunction(()=>brokerFixture.last?.timeline?.channel===0&&brokerFixture.last.servers[0].channels.some(channel=>channel.id===1&&channel.instance!=="0"));
+  const held=await hold(page);await rpc(page,"open",0,1);
+  const draft="ORIGINAL_ROOT_DRAFT_STAYS_LOCAL";await page.getByLabel("Message",{exact:true}).fill(draft);
+  let errors=await page.evaluate(()=>brokerFixture.errors.length);await page.getByRole("button",{name:"Send",exact:true}).click();await refusal(page,"send_text",errors);
+  assert.equal(await page.getByLabel("Message",{exact:true}).inputValue(),draft);
+  assert.equal(observer.texts.filter(message=>message.body.includes(draft)).length,0);
+  assert.equal(await page.evaluate(()=>brokerFixture.last.publication),held,"no newer snapshot before ACK");
+  await release(page);await page.waitForFunction(()=>brokerFixture.last.timeline.channel===1);
+  await rpc(page,"open",0,0);await page.waitForFunction(()=>brokerFixture.last.timeline.channel===0);
+  assert.equal(await page.getByLabel("Message",{exact:true}).inputValue(),draft,"original conversation retains its draft");
+  await page.getByRole("button",{name:"Send",exact:true}).click();await page.waitForFunction(()=>document.querySelector("textarea").value==="");
+  await page.locator("article").filter({hasText:draft}).waitFor();
+  await hold(page);const previous=[...observer.users.values()].find(user=>user.name==="broker-authority")?.session;
+  await rpc(page,"disconnect",0);await rpc(page,"connect",0);
+  await observer.wait(()=>[...observer.users.values()].some(user=>user.name==="broker-authority"&&user.session!==previous),"fresh owned browser presence");
+  errors=await page.evaluate(()=>brokerFixture.errors.length);await page.getByRole("button",{name:"Join voice",exact:true}).click();await refusal(page,"join",errors);
+  const fresh=[...observer.users.values()].find(user=>user.name==="broker-authority");assert.equal(fresh.channel??0,0,"stale join did not move fresh presence");
+  await release(page);await page.waitForFunction(()=>brokerFixture.last.servers[0].status==="connected");
+  await rpc(page,"join",0,1);await observer.wait(()=>observer.users.get(fresh.session)?.channel===1,"fresh explicit join");
+  await page.waitForFunction(()=>brokerFixture.last.voice?.joined);
+  await rpc(page,"toggle_mute",0);await page.waitForFunction(()=>brokerFixture.last.servers[0].muted===false);
+  await hold(page);await rpc(page,"toggle_mute",0);
+  errors=await page.evaluate(()=>brokerFixture.errors.length);await page.getByRole("button",{name:"Mute microphone",exact:true}).click();await refusal(page,"toggle_mute",errors);
+  await release(page);await page.waitForFunction(()=>brokerFixture.last.servers[0].muted===true);
+  await observer.wait(()=>observer.users.get(fresh.session)?.muted===1,"stale mute must not unmute current presence");
+  assert.equal(await page.evaluate(()=>captureCalls),0);
+  const cert=await open("broker-certificate","",1280,false);await hold(cert);await rpc(cert,"connect",0);
+  errors=await cert.evaluate(()=>brokerFixture.errors.length);
+  await cert.getByRole("button",{name:"Trust this certificate",exact:true}).click();await refusal(cert,"accept_certificate",errors);
+  await release(cert);await cert.waitForFunction(()=>brokerFixture.last.servers[0].certificate&&brokerFixture.last.servers[0].pin===null);
+  await cert.getByRole("button",{name:"Trust this certificate",exact:true}).click();await cert.waitForFunction(()=>brokerFixture.last.servers[0].status==="connected");
+  result.authority={send_draft_preserved:true,wrong_channel_received:false,reconnected_join_refused:true,stale_toggle_cannot_unmute:true,stale_certificate_refused:true,capture_calls:await page.evaluate(()=>captureCalls)};
+  await page.screenshot({path:screenshot.replace(".png","-authority.png")});
+  // Server allows unlimited text; this is below its bounded control frame cap,
+  // but intentionally exceeds the browser's independent local preview bound.
+  await rpc(page,"open",0,1);await page.waitForFunction(()=>brokerFixture.last.timeline.channel===1);
+  const tooLarge="<p>"+"x".repeat(256*1024)+"</p>",beforeRows=await page.evaluate(()=>brokerFixture.last.timeline.messages.length);
+  for(let index=0;index<4;index++)observer.message(1,tooLarge);
+  const notice="Some incoming messages exceeded the local display limit and were not shown.";
+  await page.getByText(notice,{exact:true}).waitFor({timeout:20000});
+  assert.equal(await page.getByText(notice,{exact:true}).count(),1);
+  assert.equal(await page.evaluate(()=>brokerFixture.work.filter(work=>work.source?.length>256*1024).length),0);
+  assert.equal(await page.evaluate(()=>brokerFixture.last.timeline.messages.length),beforeRows,"oversized wire body is never admitted as a chat row");
+  observer.message(1,"HEALTHY_AFTER_OVERSIZE");await page.locator("article").filter({hasText:"HEALTHY_AFTER_OVERSIZE"}).waitFor();
+  await rpc(page,"open",0,0);await page.waitForFunction(()=>brokerFixture.last.timeline.channel===0);await rpc(page,"open",0,1);await page.waitForFunction(()=>brokerFixture.last.timeline.channel===1);
+  assert.equal(await page.evaluate(()=>brokerFixture.work.filter(work=>work.source?.length>256*1024).length),0);
+  result.permanent={wire_refusal_notice:true,oversized_bytes:Buffer.byteLength(tooLarge),worker_admissions:0,oversized_rows:0,healthy_following_message:true,broker_terminal_scope:"unit tests; normal wire/history paths enforce the source cap before broker admission"};
+  const stalled=await open("broker-no-ack");await hold(stalled);const snapshots=await stalled.evaluate(()=>brokerFixture.snapshots);
+  for(let index=0;index<8;index++)await rpc(stalled,"dismiss_notice",0);
+  const completions=await stalled.evaluate(()=>brokerFixture.completions.length);
+  await rpc(stalled,"send_text","HELD_STATE_CODEC_PROGRESS");
+  await stalled.waitForFunction(before=>brokerFixture.work.some(work=>work.source==="HELD_STATE_CODEC_PROGRESS")&&brokerFixture.completions.length>before,completions);
+  assert.equal(await stalled.evaluate(()=>brokerFixture.snapshots),snapshots);
+  await stalled.getByRole("button",{name:"Reload client",exact:true}).waitFor({timeout:20000});
+  assert.equal(await stalled.evaluate(()=>brokerFixture.workers.filter(url=>url.includes("sdk.worker-")).length),1);
+  result.no_ack={visible_terminal:true,no_snapshot_backlog:true,codec_progress_while_state_held:true,worker_replacements:0};
+  const badApply=await open("broker-apply-failure");const acks=await badApply.evaluate(()=>{brokerFixture.invalidateState=true;return brokerFixture.ackCount;});
+  await rpc(badApply,"dismiss_notice",0).catch(()=>{});
+  await badApply.getByRole("button",{name:"Reload client",exact:true}).waitFor();
+  assert.equal(await badApply.evaluate(()=>brokerFixture.ackCount),acks,"failed App state application cannot ACK credit");
+  assert.equal(await badApply.evaluate(()=>brokerFixture.workers.filter(url=>url.includes("sdk.worker-")).length),1);
+  result.apply_failure={visible_terminal:true,no_failed_state_ack:true,worker_replacements:0};
+ }else{
  const stale=await open("broker-stale","delay");
  await send(stale,"stale-source-canary");
  await stale.waitForFunction(()=>brokerFixture.work.some(operation=>operation.kind==="render"&&operation.source==="stale-source-canary"));
@@ -243,9 +328,11 @@ try {
   result.recovery={seeded,serial_preserved:true,unsaved_status_preserved:true,original_plain_mode_preserved:true,second_reconnect_inactive:true,articles:after.count,workers:after.workers,db_count:dbCount};
   await recovery.screenshot({path:screenshot.replace(".png","-recovery.png")});
  }
+ }
   assert.deepEqual(forbidden,[]);result.passed=true;result.forbidden=forbidden;
  console.log("Actual broker reconnect/source lease and permanent content-worker retirement passed.");
 } finally {
  const {writeFile}=await import("node:fs/promises");await writeFile(screenshot.replace(".png",".json"),JSON.stringify(result,null,2));
+ observer?.socket.destroy();
  for(const context of contexts)await context.close();await browser.close();for(const socket of tunnels)socket.destroy();await new Promise(resolve=>server.close(resolve));
 }
