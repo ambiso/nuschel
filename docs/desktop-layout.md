@@ -64,10 +64,23 @@ their existing handlers. No continuous timer or full-content measurement is
 added by these helpers.
 
 `tests/native_scrollbars.py` accepts the ACL fixture's arguments and exercises
-actual painted thumbs, wheel routing, thumb dragging, row clicks, text input and
-focus reveal at 100/125/150/200% zoom under an owned private GNOME compositor and
-loopback Murmur. Its screenshots and JSON record the exercised artifact; it is
-not physical Windows/macOS or touchpad proof.
+actual painted thumbs, wheel routing over content and scrollbar gutters, thumb
+dragging, row clicks, text selection, native editing keys and focus reveal at
+100/125/150/200% zoom under an owned private GNOME compositor and loopback stock
+Murmur. It also checks Settings/font nesting, the rail/channel/finder/search/emoji
+viewports, no thumb after filtering to short content, and context-menu wheel
+isolation at 100/200%. Fresh catalog entries never auto-connect; long channel
+lists are seeded in the fixture's stopped server database. ImageMagick measures
+thumb pixels. Tesseract reads rendered input values because the current native
+Entry has no AT-SPI Text interface; the fixture settles injected keyboard input
+before moving focus and removes the blinking caret before OCR. Set `MAGICK` and
+`TESSERACT` when those tools are outside the test environment's path.
+
+The screenshots and JSON record the exercised artifact. These Linux software
+rendering checks do not establish physical Windows/macOS, precise touchpad or
+matched frame-time benchmark results. The existing `rail-layout` scene separately
+checks first/last tile and outline clearance and same-frame animated contours at
+100/125/150/200% zoom.
 
 GPUI dispatches focus listeners during its focus draw phase, where an immediate
 refresh does not schedule a new frame. The helper retains one reveal intent and
