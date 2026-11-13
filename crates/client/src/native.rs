@@ -45,11 +45,23 @@ mod media;
 /// (server and generation) and the conversation it named; only that
 /// connection's answer for that conversation can take it. One driver and its
 /// connections share it; no other driver sees it.
-#[derive(Default)]
 struct PendingReplies {
     pages: BTreeMap<u64, PagePending>,
     page_epochs: BTreeMap<String, (u64, u64)>,
     changes: BTreeMap<u64, ChangePending>,
+    // Content rendering only. MLS queues and the selected crypto worker
+    // retain their separate existing authority and concurrency budgets.
+    render_credits: std::sync::Arc<tokio::sync::Semaphore>,
+}
+impl Default for PendingReplies {
+    fn default() -> Self {
+        Self {
+            pages: Default::default(),
+            page_epochs: Default::default(),
+            changes: Default::default(),
+            render_credits: std::sync::Arc::new(tokio::sync::Semaphore::new(2)),
+        }
+    }
 }
 type Pending = std::sync::Arc<std::sync::Mutex<PendingReplies>>;
 
@@ -325,6 +337,7 @@ async fn render_server_page(
     page: v1::HistoryPage,
     cache: Option<&CacheKey>,
     unauthenticated: &[u64],
+    admission: Option<&PageAdmission>,
 ) -> (
     Vec<IncomingMessage>,
     (Option<i64>, Option<i64>),
@@ -351,6 +364,9 @@ async fn render_server_page(
     let mut out = Vec::with_capacity(shown.len());
     let mut records = Vec::new();
     for message in shown {
+        if admission.is_some_and(|admission| !admission.current()) {
+            break;
+        }
         let author = message.author.clone().unwrap_or_default();
         let name = author_name(&author);
         let deleted = (message.deleted_ms != 0).then_some(Deletion {
@@ -366,6 +382,9 @@ async fn render_server_page(
             )
             .await
         };
+        if admission.is_some_and(|admission| !admission.current()) {
+            break;
+        }
         let edited_ms = (message.edited_ms != 0).then_some(message.edited_ms);
         if let Some(cache) = cache.filter(|_| !unauthenticated.contains(&message.seq)) {
             records.push(nuschl_core::ServerRecord {
@@ -2250,6 +2269,17 @@ async fn reply_page(
                     .await;
                 return;
             }
+            let credits = pending_replies(pending).render_credits.clone();
+            let Ok(credit) = credits.try_acquire_owned() else {
+                let _ = events
+                    .send(Event::HistoryFailed {
+                        server: asked.server,
+                        ticket: asked.ticket,
+                        reason: "History rendering is busy; retry this page shortly.".into(),
+                    })
+                    .await;
+                return;
+            };
             let admission = PageAdmission {
                 pending: pending.clone(),
                 server: asked.server.clone(),
@@ -2264,6 +2294,9 @@ async fn reply_page(
             };
             let (events, storage) = (events.clone(), storage.clone());
             tokio::spawn(async move {
+                // An epoch revocation does not abort this future or release
+                // its credit while an admitted content helper is returning.
+                let _credit = credit;
                 if !admission.current() {
                     return;
                 }
@@ -2277,12 +2310,17 @@ async fn reply_page(
                         _ => 0,
                     });
                 let changes = if asked.ticket.catchup {
-                    render_page_changes(&page, &asked, &unauthenticated).await
+                    render_page_changes(&page, &asked, &unauthenticated, &admission).await
                 } else {
                     Vec::new()
                 };
-                let (messages, (next_before, next_after), records) =
-                    render_server_page(page, asked.cache.as_ref(), &unauthenticated).await;
+                let (messages, (next_before, next_after), records) = render_server_page(
+                    page,
+                    asked.cache.as_ref(),
+                    &unauthenticated,
+                    Some(&admission),
+                )
+                .await;
                 if !admission.current() {
                     return;
                 }
@@ -2407,6 +2445,7 @@ async fn render_page_changes(
     page: &v1::HistoryPage,
     asked: &PagePending,
     unauthenticated: &[u64],
+    admission: &PageAdmission,
 ) -> Vec<RenderedChange> {
     let jobs: Vec<_> = page
         .messages
@@ -2437,33 +2476,32 @@ async fn render_page_changes(
             })
         })
         .collect();
-    let texts = jobs
-        .iter()
-        .filter_map(|job| match &job.change {
-            ChangeKind::Edit { content, .. } => Some((content.clone(), false)),
-            ChangeKind::Delete(_) => None,
-        })
-        .collect();
-    let mut prepared = prepare_many(texts).await.into_iter();
-    jobs.into_iter()
-        .map(|job| RenderedChange {
+    let mut rendered = Vec::with_capacity(jobs.len());
+    for job in jobs {
+        if !admission.current() {
+            break;
+        }
+        let change = match job.change {
+            ChangeKind::Edit { content, edited_ms } => {
+                let (source, document) = prepare(&content, false).await;
+                CacheChange::Edit {
+                    source,
+                    document,
+                    edited_ms,
+                }
+            }
+            ChangeKind::Delete(deletion) => CacheChange::Delete(deletion),
+        };
+        if !admission.current() {
+            break;
+        }
+        rendered.push(RenderedChange {
             seq: job.seq,
             cache: job.cache,
-            change: match job.change {
-                ChangeKind::Edit { content, edited_ms } => {
-                    let (source, document) = prepared
-                        .next()
-                        .unwrap_or_else(|| (content.clone(), plain(&content)));
-                    CacheChange::Edit {
-                        source,
-                        document,
-                        edited_ms,
-                    }
-                }
-                ChangeKind::Delete(deletion) => CacheChange::Delete(deletion),
-            },
-        })
-        .collect()
+            change,
+        });
+    }
+    rendered
 }
 
 /// An acknowledgement arrived on connection `from`: our edit or deletion,
@@ -3854,7 +3892,7 @@ mod encrypted_history_tests {
             identity: "server".into(),
             channel: "channel".into(),
         };
-        let (messages, _, records) = render_server_page(page, Some(&cache), &[]).await;
+        let (messages, _, records) = render_server_page(page, Some(&cache), &[], None).await;
         assert_eq!(messages[0].message.body, "Authenticated original text");
         assert!(messages[0].deleted.is_none() && messages[0].edited_ms.is_none());
         assert_eq!(records[0].message.body, "Authenticated original text");
@@ -3875,7 +3913,7 @@ mod encrypted_history_tests {
             identity: "server".into(),
             channel: "channel".into(),
         };
-        let (messages, _, records) = render_server_page(page, Some(&cache), &[7]).await;
+        let (messages, _, records) = render_server_page(page, Some(&cache), &[7], None).await;
         assert_eq!(messages.len(), 1, "the gap remains visible");
         assert!(
             records.is_empty(),
@@ -4757,5 +4795,38 @@ mod reply_owner_tests {
             page.ticket.owner = None;
         }
         assert!(!pending_replies(&pending).insert(502, unowned));
+    }
+    #[test]
+    fn retired_page_records_do_not_release_live_content_render_credits() {
+        let pending: Pending = Default::default();
+        pending_replies(&pending).insert(1, page_asked("a", 7));
+        let credits = pending_replies(&pending).render_credits.clone();
+        let first = credits.clone().try_acquire_owned().unwrap();
+        let second = credits.clone().try_acquire_owned().unwrap();
+        assert!(
+            credits.clone().try_acquire_owned().is_err(),
+            "no extra task or waiter is admitted"
+        );
+        pending_replies(&pending).cancel_pages(
+            Owner {
+                server: "a",
+                generation: 7,
+            },
+            1,
+        );
+        pending_replies(&pending).forget_pages(Owner {
+            server: "a",
+            generation: 7,
+        });
+        assert!(pending_replies(&pending).pages.is_empty());
+        assert_eq!(
+            credits.available_permits(),
+            0,
+            "the renderer, not a request-map entry, owns the credit"
+        );
+        drop(first); // the admitted helper has returned and its renderer ends
+        assert_eq!(credits.available_permits(), 1);
+        drop(second);
+        assert_eq!(credits.available_permits(), 2);
     }
 }
