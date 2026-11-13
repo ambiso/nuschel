@@ -480,15 +480,8 @@ async fn actual_fetch_privacy() {
         )
         .await
     });
-    // A kind unique to the stall request avoids mistaking an earlier request.
-    let deadline = Instant::now() + Duration::from_secs(3);
-    while !events()
-        .iter()
-        .any(|e| e["kind"] == "http" && e["path"] == "/stall")
-    {
-        assert!(Instant::now() < deadline);
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
+    // The peer has sent its response headers and entered the held body phase.
+    wait_event("stall_headers_sent").await;
     cancel.send(true).unwrap();
     assert!(
         tokio::time::timeout(Duration::from_secs(4), pending)
@@ -498,6 +491,11 @@ async fn actual_fetch_privacy() {
             .is_err()
     );
     wait_event("tcp_closed").await;
+    assert!(events().iter().any(|event| {
+        event["kind"] == "tcp_closed"
+            && event["path"] == "/stall"
+            && matches!(event["reason"].as_str(), Some("eof" | "ECONNRESET"))
+    }));
     assert!(
         request(&worker, direct(), "http://93.184.215.14/text")
             .await

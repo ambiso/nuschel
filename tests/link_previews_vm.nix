@@ -175,6 +175,7 @@ pkgs.testers.runNixOSTest {
     native_pids = {}
     native_groups = {}
     native_retirement = []
+    native_complete = False
     try:
         machine.succeed("systemctl start nuschl-preview-native-peers.service")
         machine.wait_until_succeeds(f"test -f {native_directory}/peers-ready.json", timeout=timedelta(seconds=15))
@@ -205,7 +206,22 @@ pkgs.testers.runNixOSTest {
         assert peer_exit == {"ActiveState": "inactive", "Result": "success", "ExecMainStatus": "0"}, peer_exit
         machine.succeed(f"test -f {native_directory}/peers.json")
         machine.succeed("printf %s " + shlex.quote(json.dumps(peer_exit)) + f" > {native_directory}/peer-exit.json")
+        native_complete = True
     finally:
+        if not native_complete:
+            snapshot_script = f"""
+    import json
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, "${fixtureTests}")
+    from link_previews_desktop import control
+    data = json.dumps(control("snapshot"), separators=(",", ":")).encode()
+    assert len(data) <= 524288
+    Path("{native_directory}/failure-peers.json").write_bytes(data)
+    """
+            snapshot_status, snapshot_log = machine.execute("${python} -c " + shlex.quote(textwrap.dedent(snapshot_script)), timeout=timedelta(seconds=8))
+            assert len(snapshot_log) <= 16384, "bounded failure snapshot output exceeded"
+            machine.succeed("printf %s " + shlex.quote(json.dumps({"exit": snapshot_status, "log": snapshot_log[-2048:]})) + f" > {native_directory}/failure-snapshot-status.json")
         # Requesting stop is insufficient: admission below also requires the
         # original nondelegated kernel cgroups empty/removed and leaders gone.
         stop_status, stop_log = machine.execute("systemctl stop " + " ".join(native_units), timeout=timedelta(seconds=60))
@@ -215,7 +231,7 @@ pkgs.testers.runNixOSTest {
         machine.succeed("printf %s " + shlex.quote("${sourceIdentity}") + f" > {native_directory}/source-identity.txt")
         machine.succeed(f"(ip -4 route show table all; ip -6 route show table all; iptables-save; ip6tables-save) > {native_directory}/routes.txt")
         machine.succeed("install -d /tmp/preview-native-evidence")
-        for name in ("launcher.log", "stop.log", "test.log", "peers.log", "fetch-result.json", "test-process-authority.json", "peers-ready.json", "peers.json", "peer-exit.json", "artifacts.sha256", "source-identity.txt", "routes.txt"):
+        for name in ("launcher.log", "stop.log", "test.log", "peers.log", "fetch-result.json", "test-process-authority.json", "peers-ready.json", "peers.json", "peer-exit.json", "failure-peers.json", "failure-snapshot-status.json", "artifacts.sha256", "source-identity.txt", "routes.txt"):
             machine.succeed(f"if test -f {native_directory}/{name}; then test $(stat -c%s {native_directory}/{name}) -le 1048576 && cp {native_directory}/{name} /tmp/preview-native-evidence/; fi")
         machine.copy_from_machine("/tmp/preview-native-evidence", "native")
         assert stop_status == 0, stop_log

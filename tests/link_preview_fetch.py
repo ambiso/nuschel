@@ -178,9 +178,14 @@ class Http(socketserver.BaseRequestHandler):
                 stream.sendall(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nContent-Type: text/html\r\n\r\n" + b"1\r\nx\r\n" * 80000 + b"0\r\n\r\n")
             elif parsed.path == "/stall":
                 stream.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 200\r\nContent-Type: text/html\r\n\r\n")
-                while stream.recv(1):
-                    pass
-                self.server.state.event("tcp_closed", path=parsed.path)
+                self.server.state.event("stall_headers_sent", path=parsed.path)
+                reason = "eof"
+                try:
+                    while stream.recv(1):
+                        pass
+                except ConnectionResetError:
+                    reason = "ECONNRESET"
+                self.server.state.event("tcp_closed", path=parsed.path, reason=reason)
             elif parsed.path in ("/page", "/private-image", "/text"):
                 image = "http://127.0.0.1/forbidden" if parsed.path == "/private-image" else "/image.png"
                 body = '<meta property="og:title" content="Synthetic preview"><meta property="og:description" content="Owned fixture">'
