@@ -16,6 +16,7 @@ use std::io::{self, Read, Write};
 use nuschl_core::{ChatMessage, ContentBlock, HistoryPage, MessageDocument};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use thiserror::Error;
+use tokio::io::{AsyncRead, AsyncReadExt};
 
 pub const PROTOCOL_VERSION: u16 = 1;
 /// Large enough for a maximal message (256 KiB) after worst-case JSON escaping.
@@ -288,9 +289,17 @@ pub enum Error {
     Json(#[from] serde_json::Error),
 }
 
-/// A length limit is checked before allocation or deserialization.
 pub fn read_frame<T: DeserializeOwned>(
     reader: &mut impl Read,
+) -> Result<Option<Envelope<T>>, Error> {
+    read_frame_within(reader, MAX_FRAME_BYTES)
+}
+
+/// A frame of at most `maximum` bytes; the length is checked before allocation
+/// or deserialization. `None` at a clean end of input.
+pub fn read_frame_within<T: DeserializeOwned>(
+    reader: &mut impl Read,
+    maximum: usize,
 ) -> Result<Option<Envelope<T>>, Error> {
     let mut header = [0; 4];
     match reader.read_exact(&mut header[..1]) {
@@ -299,25 +308,53 @@ pub fn read_frame<T: DeserializeOwned>(
     }
     reader.read_exact(&mut header[1..])?;
     let length = u32::from_be_bytes(header) as usize;
-    if length > MAX_FRAME_BYTES {
+    if length > maximum {
         return Err(Error::TooLarge);
     }
     let mut body = vec![0; length];
     reader.read_exact(&mut body)?;
-    let envelope: Envelope<T> = serde_json::from_slice(&body)?;
+    parse_frame(&body).map(Some)
+}
+
+/// Async [`read_frame_within`] for a worker's replies; a closed pipe is an
+/// [`Error::Io`], not `None`.
+pub async fn read_frame_async<T: DeserializeOwned>(
+    reader: &mut (impl AsyncRead + Unpin),
+    maximum: usize,
+) -> Result<Envelope<T>, Error> {
+    let length = reader.read_u32().await? as usize;
+    if length > maximum {
+        return Err(Error::TooLarge);
+    }
+    let mut body = vec![0; length];
+    reader.read_exact(&mut body).await?;
+    parse_frame(&body)
+}
+
+fn parse_frame<T: DeserializeOwned>(body: &[u8]) -> Result<Envelope<T>, Error> {
+    let envelope: Envelope<T> = serde_json::from_slice(body)?;
     if envelope.version != PROTOCOL_VERSION {
         return Err(Error::Version(envelope.version));
     }
-    Ok(Some(envelope))
+    Ok(envelope)
 }
 
-/// Serialize into a capped buffer before writing any bytes to the pipe.
 pub fn write_frame<T: Serialize>(
     writer: &mut impl Write,
     value: &Envelope<T>,
 ) -> Result<(), Error> {
+    write_frame_within(writer, value, MAX_FRAME_BYTES)
+}
+
+/// Serialize into a buffer capped at `maximum` bytes before writing any bytes to the pipe.
+pub fn write_frame_within<T: Serialize>(
+    writer: &mut impl Write,
+    value: &Envelope<T>,
+    maximum: usize,
+) -> Result<(), Error> {
     let mut buffer = CappedBuffer {
         bytes: Vec::new(),
+        maximum,
         full: false,
     };
     if let Err(error) = serde_json::to_writer(&mut buffer, value) {
@@ -335,12 +372,13 @@ pub fn write_frame<T: Serialize>(
 
 struct CappedBuffer {
     bytes: Vec<u8>,
+    maximum: usize,
     full: bool,
 }
 
 impl Write for CappedBuffer {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        if bytes.len() > MAX_FRAME_BYTES.saturating_sub(self.bytes.len()) {
+        if bytes.len() > self.maximum.saturating_sub(self.bytes.len()) {
             self.full = true;
             return Err(io::Error::other("worker frame too large"));
         }

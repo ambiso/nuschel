@@ -13,7 +13,7 @@
 //! Encode and Duck exchange one framed request/reply at a time, retaining
 //! codec state; request ids are checked by the parent. All roles use the
 //! existing IPC envelope/version and a stricter 64 KiB allocation bound.
-use crate::{Envelope, PROTOCOL_VERSION};
+use crate::Envelope;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{
     ffi::OsString,
@@ -27,7 +27,7 @@ use std::{
     time::Duration,
 };
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
+    io::AsyncWriteExt,
     process::{Child, ChildStdin, ChildStdout},
     sync::{Notify, mpsc, oneshot},
     time::Instant,
@@ -125,54 +125,30 @@ pub enum Response {
 pub fn read_message<T: DeserializeOwned>(
     input: &mut impl Read,
 ) -> Result<Option<Envelope<T>>, String> {
-    let mut header = [0; 4];
-    match input.read_exact(&mut header[..1]) {
-        Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => return Ok(None),
-        result => result.map_err(|_| "codec IPC read failed")?,
+    crate::read_frame_within(input, MAX_MESSAGE_BYTES).map_err(read_error)
+}
+
+fn read_error(error: crate::Error) -> String {
+    match error {
+        crate::Error::Io(_) => "codec IPC read failed or truncated",
+        crate::Error::TooLarge => "codec IPC frame exceeds its budget",
+        crate::Error::Json(_) => "invalid codec IPC message",
+        crate::Error::Version(_) => "unsupported codec IPC version",
     }
-    input
-        .read_exact(&mut header[1..])
-        .map_err(|_| "codec IPC header truncated")?;
-    let length = u32::from_be_bytes(header) as usize;
-    if length == 0 || length > MAX_MESSAGE_BYTES {
-        return Err("codec IPC frame is too large or empty".into());
-    }
-    let mut bytes = vec![0; length];
-    input
-        .read_exact(&mut bytes)
-        .map_err(|_| "codec IPC body truncated")?;
-    let envelope: Envelope<T> =
-        serde_json::from_slice(&bytes).map_err(|_| "invalid codec IPC message")?;
-    if envelope.version != PROTOCOL_VERSION {
-        return Err("unsupported codec IPC version".into());
-    }
-    Ok(Some(envelope))
+    .into()
 }
 
 pub fn write_message<T: Serialize>(
     output: &mut impl Write,
     envelope: &Envelope<T>,
 ) -> Result<(), String> {
-    struct Capped(Vec<u8>);
-    impl Write for Capped {
-        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-            if self.0.len() + bytes.len() > MAX_MESSAGE_BYTES {
-                return Err(io::Error::other("codec IPC frame exceeds its budget"));
-            }
-            self.0.extend_from_slice(bytes);
-            Ok(bytes.len())
+    crate::write_frame_within(output, envelope, MAX_MESSAGE_BYTES).map_err(|error| {
+        match error {
+            crate::Error::Io(_) => "codec IPC write failed",
+            _ => "codec IPC serialization failed",
         }
-        fn flush(&mut self) -> io::Result<()> {
-            Ok(())
-        }
-    }
-    let mut bytes = Capped(Vec::new());
-    serde_json::to_writer(&mut bytes, envelope).map_err(|_| "codec IPC serialization failed")?;
-    output
-        .write_all(&(bytes.0.len() as u32).to_be_bytes())
-        .and_then(|()| output.write_all(&bytes.0))
-        .and_then(|()| output.flush())
-        .map_err(|_| "codec IPC write failed".into())
+        .into()
+    })
 }
 
 pub fn valid_pcm(samples: &[f32]) -> bool {
@@ -433,22 +409,11 @@ pub async fn write_request(
 }
 
 pub async fn read_response(output: &mut ChildStdout, id: u64) -> Result<Response, String> {
-    let size = output
-        .read_u32()
+    let reply: Envelope<Response> = crate::read_frame_async(output, MAX_MESSAGE_BYTES)
         .await
-        .map_err(|_| "codec response header missing")? as usize;
-    if size == 0 || size > MAX_MESSAGE_BYTES {
-        return Err("codec response exceeds its budget".into());
-    }
-    let mut bytes = vec![0; size];
-    output
-        .read_exact(&mut bytes)
-        .await
-        .map_err(|_| "codec response truncated")?;
-    let reply: Envelope<Response> =
-        serde_json::from_slice(&bytes).map_err(|_| "codec response is invalid")?;
-    if reply.version != PROTOCOL_VERSION || reply.request_id != id {
-        return Err("codec response belongs to another request or protocol".into());
+        .map_err(read_error)?;
+    if reply.request_id != id {
+        return Err("codec response belongs to another request".into());
     }
     if let Response::Error { message } = &reply.payload
         && (message.len() > MAX_ERROR_BYTES || message.chars().any(char::is_control))
@@ -1067,6 +1032,18 @@ fn pump(
 mod tests {
     use super::*;
     use std::io::Cursor;
+
+    #[test]
+    fn messages_keep_the_codec_bound_in_both_directions() {
+        let header = ((MAX_MESSAGE_BYTES + 1) as u32).to_be_bytes();
+        assert!(read_message::<Request>(&mut &header[..]).is_err());
+        let mut output = Vec::new();
+        let message = Response::Error {
+            message: "x".repeat(MAX_MESSAGE_BYTES),
+        };
+        assert!(write_message(&mut output, &Envelope::new(1, message)).is_err());
+        assert!(output.is_empty());
+    }
 
     // The gate withholds retirement acknowledgement deterministically; this is
     // not a claim to reproduce an unkillable kernel task. The owned child and

@@ -4,6 +4,7 @@
 use std::{ffi::OsString, io, path::Path, process::Stdio, time::Duration};
 
 use nuschl_core::MessageDocument;
+use serde::de::DeserializeOwned;
 use thiserror::Error;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -12,8 +13,8 @@ use tokio::{
 };
 
 use crate::{
-    ContentRequest, ContentResponse, EncodedImage, Envelope, MAX_FRAME_BYTES, PROTOCOL_VERSION,
-    PreparedContent, write_frame,
+    ContentRequest, ContentResponse, EncodedImage, Envelope, MAX_FRAME_BYTES, PreparedContent,
+    write_frame,
 };
 
 #[derive(Debug, Error)]
@@ -243,7 +244,7 @@ pub async fn thumbnail(
                 let read = async {
                     let maximum =
                         (max_width as usize * max_height as usize * 4).div_ceil(3) * 4 + 4096;
-                    let reply = read_thumbnail_reply(&mut output, maximum).await?;
+                    let reply = read_reply::<ContentResponse>(&mut output, maximum).await?;
                     if reply.request_id != 1 {
                         return Err(Error::InvalidResponse);
                     }
@@ -283,23 +284,6 @@ pub async fn thumbnail(
     // replace this owner; a supervising HTTP task can time out independently.
     reap_thumbnail(&mut child).await;
     validated_thumbnail(reply?, max_width, max_height)
-}
-
-async fn read_thumbnail_reply(
-    output: &mut tokio::process::ChildStdout,
-    maximum: usize,
-) -> Result<Envelope<ContentResponse>, Error> {
-    let size = output.read_u32().await? as usize;
-    if size == 0 || size > maximum {
-        return Err(Error::Frame(crate::Error::TooLarge));
-    }
-    let mut bytes = vec![0; size];
-    output.read_exact(&mut bytes).await?;
-    let response: Envelope<ContentResponse> = serde_json::from_slice(&bytes)?;
-    if response.version != PROTOCOL_VERSION {
-        return Err(Error::InvalidResponse);
-    }
-    Ok(response)
 }
 
 async fn reap_thumbnail(child: &mut Child) {
@@ -657,9 +641,12 @@ async fn converse(
         };
         let read = async {
             for budget in budgets {
-                let reply = timeout(Duration::from_secs(*budget), read_reply(&mut output))
-                    .await
-                    .map_err(|_| Error::Timeout)??;
+                let reply = timeout(
+                    Duration::from_secs(*budget),
+                    read_reply::<ContentResponse>(&mut output, MAX_FRAME_BYTES),
+                )
+                .await
+                .map_err(|_| Error::Timeout)??;
                 if reply.request_id != results.len() as u64 + 1 {
                     return Err(Error::InvalidResponse);
                 }
@@ -695,20 +682,20 @@ async fn converse(
     outcome
 }
 
-async fn read_reply(
+/// A worker's reply of at most `maximum` bytes. A closed pipe stays
+/// [`Error::Io`]; another protocol version is an invalid response.
+pub(crate) async fn read_reply<T: DeserializeOwned>(
     output: &mut tokio::process::ChildStdout,
-) -> Result<Envelope<ContentResponse>, Error> {
-    let size = output.read_u32().await? as usize;
-    if size > MAX_FRAME_BYTES {
-        return Err(Error::Frame(crate::Error::TooLarge));
-    }
-    let mut bytes = vec![0; size];
-    output.read_exact(&mut bytes).await?;
-    let reply: Envelope<ContentResponse> = serde_json::from_slice(&bytes)?;
-    if reply.version != PROTOCOL_VERSION {
-        return Err(Error::InvalidResponse);
-    }
-    Ok(reply)
+    maximum: usize,
+) -> Result<Envelope<T>, Error> {
+    crate::read_frame_async(output, maximum)
+        .await
+        .map_err(|error| match error {
+            crate::Error::Io(error) => Error::Io(error),
+            crate::Error::Json(error) => Error::Json(error),
+            crate::Error::Version(_) => Error::InvalidResponse,
+            error @ crate::Error::TooLarge => Error::Frame(error),
+        })
 }
 
 /// OS containment applied to a worker after it starts, held for its lifetime.
