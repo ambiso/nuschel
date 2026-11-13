@@ -110,7 +110,8 @@ pkgs.testers.runNixOSTest {
     client.succeed("${pkgs.python3}/bin/python3 ${../tests}/udp_voice.py ${nuschl}/bin --host server --opus-library ${pkgs.libopus}/lib/libopus.so --netem --block-udp")
     client.succeed("su - tester -c '${pkgs.python3}/bin/python3 ${../tests}/protocol_features.py ${nuschl}/bin --host server --opus-library ${pkgs.libopus}/lib/libopus.so --openssl ${pkgs.openssl.bin}/bin/openssl'")
     # The echo test's room delays the speakers with the LADSPA SDK's example delay line.
-    client.succeed("su - tester -c '${pkgs.python3}/bin/python3 ${../tests}/media_live.py ${nuschl}/bin --pulse-bin ${pkgs.pulseaudio}/bin --opus-library ${pkgs.libopus}/lib/libopus.so --delay-plugin ${pkgs.ladspa-sdk}/lib/ladspa/delay.so'")
+    # print() puts every attempt's lines in the test log; the driver logs the output of failed commands.
+    print(client.succeed("su - tester -c '${pkgs.python3}/bin/python3 ${../tests}/media_live.py ${nuschl}/bin --pulse-bin ${pkgs.pulseaudio}/bin --opus-library ${pkgs.libopus}/lib/libopus.so --delay-plugin ${pkgs.ladspa-sdk}/lib/ladspa/delay.so'"))
     # Private PipeWire session (virtual nodes only): restarts, host pinning, echo-cancel reuse.
     client.succeed("su - tester -c '${pkgs.python3}/bin/python3 ${../tests}/pipewire_recovery.py ${nuschl}/bin --pipewire ${pkgs.pipewire} --wireplumber ${pkgs.wireplumber} --dbus-daemon ${pkgs.dbus}/bin/dbus-daemon --opus-library ${pkgs.libopus}/lib/libopus.so --output /tmp/nuschl-pipewire-artifacts'")
     client.copy_from_machine("/tmp/nuschl-pipewire-artifacts", "pipewire")
