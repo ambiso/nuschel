@@ -1,1 +1,94 @@
-{}
+{
+  "measured": "ci/check-trial a866cf2d with these benchmarks, AMD Ryzen 9 5900X, 5 one-core runs",
+  "instructions": {
+    "per_audio_second": {
+      "capture_chain": 204761440,
+      "opus_encode": 41834725,
+      "total": 246596165
+    },
+    "echo_reduction_db": 29.2
+  },
+  "one_core": {
+    "desktop-recovery": {
+      "passed": 2,
+      "runs": 5,
+      "cpu_per_second": {
+        "nuschl-media-worker": 0.0351
+      }
+    },
+    "media-double-talk": {
+      "passed": 5,
+      "runs": 5,
+      "cpu_per_second": {
+        "nuschl-media-worker": 0.2711
+      },
+      "capture_gaps_per_minute": 0.0,
+      "underruns_per_minute": 0.0,
+      "send_packets": 0,
+      "send_ms": {
+        "p50": null,
+        "p95": null,
+        "p99": null
+      }
+    },
+    "media-echo": {
+      "passed": 5,
+      "runs": 5,
+      "cpu_per_second": {
+        "nuschl-media-worker": 0.2419
+      },
+      "capture_gaps_per_minute": 0.44,
+      "underruns_per_minute": 0.0,
+      "send_packets": 0,
+      "send_ms": {
+        "p50": null,
+        "p95": null,
+        "p99": null
+      }
+    },
+    "media-jitter": {
+      "passed": 5,
+      "runs": 5,
+      "cpu_per_second": {
+        "nuschl-media-worker": 0.0335
+      },
+      "capture_gaps_per_minute": 0.0,
+      "underruns_per_minute": 0.0,
+      "send_packets": 0,
+      "send_ms": {
+        "p50": null,
+        "p95": null,
+        "p99": null
+      },
+      "jitter_silent_windows_per_minute": 15.94
+    },
+    "media-sounds": {
+      "passed": 5,
+      "runs": 5,
+      "cpu_per_second": {
+        "nuschl-media-worker": 0.1601
+      },
+      "capture_gaps_per_minute": 0.0,
+      "underruns_per_minute": 0.0,
+      "send_packets": 564,
+      "send_ms": {
+        "p50": 29,
+        "p95": 33,
+        "p99": 35
+      }
+    },
+    "rtc-probe": {
+      "passed": 5,
+      "runs": 5,
+      "cpu_per_second": {}
+    },
+    "musicbot-playback": {
+      "passed": 5,
+      "runs": 5,
+      "cpu_per_second": {
+        "nuschl-musicbot": 0.0167,
+        "nuschl-musicbot-codec-worker": 0.0071
+      }
+    }
+  }
+}

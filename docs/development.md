@@ -115,13 +115,14 @@ Reviews check that a change is:
   runs of one build differ by less than 0.001%, so the build fails only when the
   whole chain costs more than 5% over `bench/baseline.json`. Counts depend on the
   CPU's SIMD support: compare runs on one machine.
-- `one-core`, `one-core-musicbot`: existing VM tests (media_live's jitter, echo and
-  double-talk checks, rtc_probe, desktop_recovery, the music bot's playback) on a
-  guest with one core and a busy loop, each `--arg runs N` times (default 5). For
-  each test: the pass rate and the workers' CPU seconds per second alive. Where the
-  test starts the media worker itself (media_live), `NUSCHL_AUDIO_TIMING=1` makes it
-  print `audio-stats` lines: capture gaps and playback underruns per minute and
-  capture-to-send latency percentiles; media_live's jitter check adds silent 20 ms
+- `one-core`, `one-core-musicbot`: existing VM tests (media_live's jitter, echo,
+  double-talk and sounds checks, rtc_probe, desktop_recovery, the music bot's
+  playback) on a guest with one core and a busy loop, each `--arg runs N` times
+  (default 5). For each test: the pass rate and the workers' CPU seconds per second
+  alive. Where the test starts the media worker itself (media_live),
+  `NUSCHL_AUDIO_TIMING=1` makes it print `audio-stats` lines: capture gaps and
+  playback underruns per minute and capture-to-send latency percentiles (the sounds
+  check transmits continuously). media_live's jitter check adds silent 20 ms
   playback windows per minute. Sandboxed workers do not receive that variable. The
   results (`one-core.json`, each run's log) are printed beside the baseline.
 

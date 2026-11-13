@@ -36,9 +36,8 @@ def summarize(attempts):
     cpu, gaps, underruns, histogram, played, silent = {}, 0, 0, {}, 0, 0
     for _, workers, stats, jitter, _ in attempts:
         for name, total in workers.items():
-            total_ = cpu.setdefault(name, {"cpu_s": 0., "alive_s": 0.})
-            total_["cpu_s"] += total["cpu_s"]
-            total_["alive_s"] += total["alive_s"]
+            for key in ("cpu_s", "alive_s"):
+                cpu.setdefault(name, {"cpu_s": 0., "alive_s": 0.})[key] += total[key]
         for _, capture_gaps, output_underruns, send_ms in stats:
             gaps += int(capture_gaps)
             underruns += int(output_underruns)
@@ -54,7 +53,7 @@ def summarize(attempts):
         "runs": len(attempts),
         "cpu_per_second": {name: round(t["cpu_s"] / t["alive_s"], 4) for name, t in cpu.items() if t["alive_s"]},
     }
-    if stats_seen := any(attempt[2] for attempt in attempts):
+    if any(attempt[2] for attempt in attempts):
         result |= {
             "capture_gaps_per_minute": round(gaps / media_minutes, 2) if media_minutes else None,
             "underruns_per_minute": round(underruns / media_minutes, 2) if media_minutes else None,
@@ -63,7 +62,7 @@ def summarize(attempts):
         }
     if played:
         result["jitter_silent_windows_per_minute"] = round(silent / (played / 60000), 2)
-    return result | {"audio_stats": stats_seen}
+    return result
 
 
 def run(machine, tests, runs, sampler, out_dir, baseline):
