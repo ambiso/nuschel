@@ -10,6 +10,7 @@ import json
 import os
 import subprocess
 import time
+import uuid
 
 import acl_editor as fixture
 from accessibility import items, snapshot
@@ -17,6 +18,21 @@ from admin_bootstrap import encode
 from hash_document_wire import fields
 from layout_regression import inside
 from local_murmur import eventually
+
+
+_configure = fixture.configure
+
+
+def configure(shell, root, output):
+    env = _configure(shell, root, output)
+    path = root / "profile/config/servers.json"
+    bookmarks = json.loads(path.read_text())
+    # Normal fresh-profile catalog entries, pointing only at this owned server.
+    # They never auto-connect and require no unrelated loopback service.
+    bookmarks.extend(dict(bookmarks[0], id=str(uuid.uuid4()), name=f"Scrollbar bookmark {i:02}",
+                          username=f"Unused scrollbar {i}", auto_connect=False) for i in range(18))
+    path.write_text(json.dumps(bookmarks))
+    return env
 
 
 def actions(args, root, shell, application, bot, _murmur):
@@ -43,6 +59,12 @@ def actions(args, root, shell, application, bot, _murmur):
         first_rule = "@" + fields(checked[4][0])[5][0].decode()
         last_rule = "@" + fields(checked[4][-1])[5][0].decode()
         last_group = "@" + fields(checked[3][-1])[1][0].decode()
+        for index in range(20):
+            name = f"Scrollbar room {index:02}".encode()
+            admin.send(7, encode({2: [0], 3: [name]}))
+            while admin.wait(7).get(3) != [name]:
+                pass
+            time.sleep(.4)
     finally:
         admin.close()
 
@@ -78,7 +100,7 @@ def actions(args, root, shell, application, bot, _murmur):
         ox, oy = origin()
         shell.move(ox + 100, oy + 20)
 
-    def bar(node, zoom, name):
+    def bar(node, zoom, name, visible=True, inset=0):
         # Independently locate the painted thumb in its reserved gutter. Read
         # only the owned screenshot; no UI-internal scroll offset is consulted.
         park_pointer()
@@ -88,7 +110,8 @@ def actions(args, root, shell, application, bot, _murmur):
         ox, oy = origin()
         x, y, width, height = node.extents()
         gutter = max(8, round(8 * zoom / 100))
-        crop = (ox + x + width - gutter, oy + y, gutter, height)
+        margin = round(inset * zoom / 100)
+        crop = (ox + x + width - gutter - margin, oy + y, gutter, height)
         raw = subprocess.run([os.environ.get("MAGICK", "magick"), str(shot), "-crop",
             f"{crop[2]}x{crop[3]}+{crop[0]}+{crop[1]}", "+repage", "-depth", "8", "rgb:-"],
             check=True, capture_output=True, timeout=30).stdout
@@ -100,6 +123,12 @@ def actions(args, root, shell, application, bot, _murmur):
                       for col in range(gutter)]
             if sum(all(abs(a-b) <= 2 for a, b in zip(pixel, thumb)) for pixel in pixels) >= max(1, round(2 * zoom / 100)):
                 rows.append(row)
+        if not visible:
+            # Rounded container corners can share the border/normal-thumb
+            # colour. The straight gutter must have no overflowing-axis paint.
+            corner = round(12 * zoom / 100)
+            assert not [row for row in rows if corner < row < height-corner], (name, rows)
+            return {"bounds": node.extents(), "painted_thumb": None, "png": shot.name}
         assert rows, f"no visible native thumb: {name}, {crop}"
         # A border alone is not a thumb: require a bounded segment on a long list.
         assert len(rows) < height * .8, (name, rows, height)
@@ -108,7 +137,7 @@ def actions(args, root, shell, application, bot, _murmur):
             raw[(middle * gutter + col) * 3:(middle * gutter + col + 1) * 3], thumb))]
         # The kit insets its thumb from the track edge. A guessed right4px can
         # hit the track outside the thumb and legitimately jump without dragging.
-        right = gutter - (min(columns) + max(columns)) / 2
+        right = gutter + margin - (min(columns) + max(columns)) / 2
         return {"bounds": node.extents(), "painted_thumb": [min(rows), max(rows)],
                 "thumb_x_from_right": right, "png": shot.name}
 
@@ -161,7 +190,7 @@ def actions(args, root, shell, application, bot, _murmur):
         assert record["rules_end"]["painted_thumb"][0] > record["rules"]["painted_thumb"][0]
         # Grab during opposite wheel easing, then return to the first item by
         # dragging the actual native thumb; no synthetic scrollbar state.
-        shell.wheel(*point(owner), -1)
+        shell.wheel(*point(owner, right=record["rules_end"]["thumb_x_from_right"]), -1)
         end = record["rules_end"]["painted_thumb"]
         grab = (end[0] + end[1]) / 2 / owner.extents()[3]
         shell.drag(point(owner, right=record["rules_end"]["thumb_x_from_right"], fraction=grab),
@@ -230,12 +259,45 @@ def actions(args, root, shell, application, bot, _murmur):
     assert len(choices) > 1, "private fixture needs an overflowing font list"
     focus(choices[-1], dialog)
     eventually(lambda: inside(fonts.extents(), dialog.extents()), "nested font viewport not revealed")
-    records.append({"settings_fonts": bar(fonts, 100, "fonts"), "settings": bar(dialog, 100, "settings")})
+    font_bar = bar(fonts, 100, "fonts")
+    before = fonts.extents()
+    shell.wheel(*point(fonts, right=font_bar["thumb_x_from_right"]), -80)
+    time.sleep(.3)
+    assert fonts.extents() == before, "font gutter wheel escaped into the dialog"
+    records.append({"settings_fonts": font_bar, "settings": bar(dialog, 100, "settings"),
+                    "font_gutter_wheel_isolated": True})
     wait("Done", "push button").press()
+    eventually(lambda: not named("Settings", "dialog"), "Settings did not close")
+    records.append({"rail": bar(wait("Servers", "list"), 100, "rail"),
+                    "channels": bar(wait("Channels"), 100, "channels")})
+    shell.chord("Control_L", "k")
+    finder = wait("Quick switcher", "dialog")
+    shell.type("Scrollbar room")
+    choices = wait("20 results", "list box")
+    records.append({"finder": bar(choices, 100, "finder", inset=8)})
+    shell.key("Escape")
+    eventually(lambda: not named("Quick switcher", "dialog"), "finder did not close")
+    shell.chord("Control_L", "period")
+    picker = wait("Emoji", "dialog")
+    records.append({"emoji": bar(picker, 100, "emoji")})
+    shell.type("thumbs up")
+    time.sleep(.3)
+    records.append({"emoji_short": bar(picker, 100, "emoji-short", visible=False)})
+    shell.key("Escape")
+    for index in range(14):
+        bot.send(kind="text", channel=0, body=f"scrollbarprobe message {index:02}")
+        time.sleep(1.05)
+    shell.chord("Control_L", "f")
+    wait("Search messages", "entry")
+    shell.type("scrollbarprobe")
+    results = wait("14 results", "list")
+    records.append({"search": bar(results, 100, "search")})
+    shell.key("Escape")
     (args.output / "native-scrollbars.json").write_text(json.dumps(records, indent=2) + "\n")
     return {"native_scrollbars": records, "private_loopback_only": True}
 
 
 if __name__ == "__main__":
     fixture.actions = actions
+    fixture.configure = configure
     fixture.main()
