@@ -286,7 +286,9 @@ def actions(args, root, shell, application, bot, _murmur):
     assert fonts.extents() == before, "font gutter wheel escaped into the dialog"
     records.append({"settings_fonts": font_bar, "settings": bar(dialog, 100, "settings"),
                     "font_gutter_wheel_isolated": True})
-    wait("Done", "push button").press()
+    done = wait("Done", "push button")
+    focus(done, dialog)
+    shell.click(*point(done))
     eventually(lambda: not named("Settings", "dialog"), "Settings did not close")
     records.append({"rail": bar(wait("Servers", "list"), 100, "rail"),
                     "channels": bar(wait("Channels"), 100, "channels")})
