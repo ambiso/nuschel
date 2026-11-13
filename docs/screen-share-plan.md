@@ -201,6 +201,42 @@ Each device's tier is measured when the share starts and re-checked during it:
 - **Browsers with AV1 in WebRTC:** `mediaCapabilities` (`smooth`, `powerEfficient`) is only a hint. S0b saw Firefox claim hardware support without a GPU. The page then goes by `getStats`: encode and decode time, dropped frames, `qualityLimitationReason`.
 - **Never downgraded:** encryption, key agreement, labels and relay-only. A device below the floor (720p15) gets a clear refusal.
 
+### 4.4 Viewers ask, senders honour
+
+- **Request:** each viewer sends a small fixed-size `QualityRequest` (max width, height, fps and bitrate), at most once a second. "Auto" asks for the player's size in device pixels. Picking a higher tier is the owner's "request more bandwidth".
+- **What the viewer can process** (owner: "or what the clients can process"). The viewer keeps measuring decoded fps against the target, decode time p95, dropped and late frames, and CPU or thermal pressure where the platform reports it (the OS natively; Compute Pressure in Chromium). It sends the sharer a compact report, sealed under its channel key; the SFU only sees the resulting request.
+  - **Step down by itself** when it can't keep up: decoded fps below 90 % of the target for 3 s, decode p95 above 80 % of the frame interval, or more than 5 % of frames dropped.
+  - **Step up** only after 30 s of comfortable headroom (p95 below 50 %). A failed step-up doubles the wait.
+- **What a viewer gets** is the minimum of four things:
+  - its request;
+  - its decode capacity;
+  - its network capacity, from the leg's bandwidth estimate at the SFU (or at the sharer, on a direct path);
+  - policy: the per-viewer cap and its share of the room budget (§4.7).
+
+  When it gets less than it asked for, the player says why: "limited by your connection", "by your device", "by the sharer's upload" or "by the server's budget".
+- **The sharer encodes for the largest effective demand**, bounded by its upload, its encoder and policy. The SFU passes the sharer only that aggregate, not each viewer's details.
+- **With layers** (Chromium L1T3/L2T3/L3T3; native AV1): the SFU, or a sharer sending directly, picks layers per viewer from the Dependency Descriptor, so one slow viewer never lowers anyone else's quality. Hardware encoders usually offer temporal layers only (radeonsi advertises up to 4 temporal layers and no spatial ones), so per-viewer resolution needs Chromium's spatial layers or simulcast.
+- **Simulcast (evaluate in S0f):** for example 4K60 plus 1080p30 as two encodes.
+  - Cost: one extra encode, about +25 % pixels; cheap on hardware.
+  - Each encoding gets its own SFrame KID, so frame counters never collide.
+  - The SFU switches a viewer only at a key frame of the target encoding.
+  - AV1 simulcast in Firefox is unverified.
+- **Without layers or simulcast** (Firefox sharers today): one stream for everyone. The sender adapts to the slowest admitted viewer, but never below the 720p15 floor. Viewers who can't take even the floor are told "this stream needs more than your connection or device can do", instead of dragging everyone down.
+
+### 4.5 Automatic bitrate adaptation
+
+- **Congestion control on every connection:** GCC with TWCC in browsers, str0m's TWCC estimator natively, on each leg (sharer→SFU, SFU→viewer, sharer→viewer). New legs start low and probe up: S0c saw that starting at 2 Mbit/s on a 1 Mbit/s viewer caused key frames for everyone.
+- **The SFU reacts within a frame** by dropping layers for that viewer, before the encoder catches up.
+- **The encoder follows within 200 ms:** target = min(upload estimate × 0.85 − audio reserve, largest demand). Hardware encoders take a new rate per frame without a key frame. rav1e 0.8.1 has no live bitrate setter (S0e), which counts against it as the software fallback.
+- **Step-down order:**
+  1. bitrate, down to the tier's floor;
+  2. frame rate, 60 → 30 → 15, by dropping temporal layers (no key frame);
+  3. resolution, 4K → 1440p → 1080p → 720p. This needs a key frame, so at most one resolution change per 10 s.
+
+  For content marked as motion, resolution may go before frame rate.
+- **Hysteresis:** step down after 2 s below the floor. Step up only with ≥1.3× the next step's floor for 10 s (frame rate) or 30 s (resolution). A failed step-up doubles the wait, up to 2 min. S0c used 1.15× to stay and 1.3× to rise.
+- **Key-frame requests** stay coalesced and rate-limited (§4.2). They never change the tier by themselves.
+
 ## 5. Critical path
 
 Phase 1 order: S0 → K1 → K2 → W1 → B1 → T1, with E1 (the long pole) in parallel and D1 and I1 alongside. Rough estimate for Phase 1 with 5–6 lanes: about 2.5–3 weeks (uncertain).
@@ -255,7 +291,7 @@ Phase 1 order: S0 → K1 → K2 → W1 → B1 → T1, with E1 (the long pole) in
 - The SFU checks the Origin header.
 - Origin-Agent-Cluster and COOP/COEP only *request* origin-keyed process isolation; Chromium isolates per site by default. A **separate registrable domain** for viewing untrusted media is optional extra hardening.
 
-**What nuschl.eu learns:** IP addresses, user agents and TLS fingerprints, timing, the room id (which links all viewers of one stream), viewer counts, bitrates and packet timing, and TURN allocations.
+**What nuschl.eu learns:** IP addresses, user agents and TLS fingerprints, timing, the room id (which links all viewers of one stream), viewer counts, bitrates and packet timing, each viewer's requested tier (roughly its player size), and TURN allocations.
 
 **What it doesn't learn:** S or K (from an honest page), media content, sealed titles, the Mumble server, channels or names. A malicious or compromised stream host can serve JavaScript that steals S and K from browser users; native viewers never run its code.
 
@@ -292,6 +328,7 @@ Phase 1 order: S0 → K1 → K2 → W1 → B1 → T1, with E1 (the long pole) in
 - **Bounds:**
   - Video: tiers up to 3840×2160, 60 fps and 40 Mbit/s, each gated by measurement (§4.3). Key frames ≤1 MiB from 1440p up, ≤512 KiB below; deltas ≤ half that; oversized frames are dropped (§4.2). ≤2 queued frames at the encoder; SFU leg queues ≤2 MiB; RTX caches ≈1 s.
   - Key messages ≤16 KiB, ≤32 pending key requests, at least 1 s between epochs, bounded replay windows.
+  - Quality requests and decode reports: fixed size, at most one per second per viewer.
   - Viewer and SFU caps as in §6.
   - Decoder pixel, memory and CPU caps.
 
