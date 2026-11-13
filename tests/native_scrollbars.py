@@ -195,7 +195,7 @@ def actions(args, root, shell, application, bot, _murmur):
         shell.key("Home")
         shell.key("End")
         assert field.focused
-        shell.drag(point(field, right=field.extents()[2] - 4 * zoom / 100),
+        shell.drag(point(field, right=field.extents()[2]),
                    point(field, right=4 * zoom / 100))
         shell.type("selected-by-pointer")
         eventually(lambda: input_value(field, f"selected-input-{zoom}") == "selected-by-pointer",
