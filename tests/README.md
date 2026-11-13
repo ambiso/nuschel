@@ -9,6 +9,21 @@ The test runs the actual GPUI client under Xvfb against a stock Mumble server,
 with synthetic audio on a private PulseAudio daemon. It never opens the host microphone.
 Screenshots are copied into the test result.
 
+`nix build .#checks.x86_64-linux.vm-musicbot` exercises the packaged bot against
+stock Murmur and a local Subsonic fixture. `musicbot.py` checks shared/separate
+audio, channel-subscription playback, seeking, ducking, public comments, history pagination and restart recovery
+with reordered/removed libraries. The module test also checks actual codec child
+PID/network namespaces, role arguments, credential/environment/FD absence and
+address-space bounds. Non-mutating checks under the service UID verify empty
+effective capabilities and unwritable host sysctl/sysrq paths. The fixture uses
+restricted VM networking and no host audio devices. Separate launcher canaries and
+actual child role/framing tests are described in
+[musicbot.md](../docs/musicbot.md). `musicbot_artwork.py` adds actual HTTP
+cancellation/reaping and packaged Canvas checks at phone/desktop widths;
+`musicbot_artwork_boundary.py` checks the confined thumbnail helper's malformed,
+size, deadline and missing-helper boundaries. These use generated art only.
+Windows/macOS runtime confinement remains outside this proof.
+
 The iOS app track is cancelled/deferred by the user; its stopped environment experiment is documented in [ios-vm.md](../docs/ios-vm.md).
 `just ios-preflight` checks this Linux host without downloading VM media;
 `just ios-vm-check` runs the host-side tooling tests. Guest inspection is bounded
