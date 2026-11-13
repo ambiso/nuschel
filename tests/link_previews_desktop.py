@@ -265,7 +265,20 @@ def desktop(args):
             return node
         def choose(mode):
             activate("Settings")
-            activate(mode, "radio button")
+            group = wait("Link previews")
+            def scoped_radio():
+                pending, visited = [(group, 0)], 0
+                while pending:
+                    node, depth = pending.pop()
+                    visited += 1
+                    assert visited <= 64 and depth <= 12, "bounded preview radio group exceeded"
+                    if node.role == "radio button" and node.name == mode:
+                        return node
+                    pending.extend((child, depth + 1) for child in node.children())
+                return None
+            node = eventually(scoped_radio, f"missing {mode} radio within Link previews")
+            assert node.call("Component", "GrabFocus")[0]
+            shell.key("space")
             eventually(lambda: not any("Saving preference" in label for label in labels())
                 and any(label.startswith(f"Active policy: {mode}.") for label in labels()),
                 f"{mode} preference did not complete")
