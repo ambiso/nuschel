@@ -2484,29 +2484,43 @@ mod tests {
 
     /// A write killed between creating its temporary file and the rename
     /// leaves `<name>.<UUID>.tmp`; opening the profile removes it once it is
-    /// over a minute old, and keeps a younger one and the user's own files.
+    /// over a minute old, and keeps a younger one, the user's own files and
+    /// a symbolic link.
     #[test]
     fn opening_removes_what_a_killed_write_left() {
         let (root, profile) = temporary_profile("killed-write");
-        let config = profile.layout().config.clone();
-        let temporary = |name: &str| {
-            config
+        let layout = profile.layout().clone();
+        fs::create_dir(&layout.state).unwrap();
+        let temporary = |folder: &Path, name: &str| {
+            folder
                 .join(name)
                 .with_extension(format!("{}.tmp", Uuid::new_v4()))
         };
-        let (killed, writing) = (temporary("servers.json"), temporary("settings.json"));
-        let notes = config.join("notes.tmp");
+        let killed = [
+            temporary(&layout.config, "servers.json"),
+            temporary(&layout.state, "last-channels.json"),
+        ];
+        let writing = temporary(&layout.config, "settings.json");
+        let notes = layout.config.join("notes.tmp");
         let minute_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(61);
-        for path in [&killed, &writing, &notes] {
+        for path in killed.iter().chain([&writing, &notes]) {
             let file = fs::File::create(path).unwrap();
             if *path != writing {
                 file.set_modified(minute_ago).unwrap();
             }
         }
+        #[cfg(unix)]
+        let link = {
+            let link = temporary(&layout.config, "link");
+            std::os::unix::fs::symlink(&notes, &link).unwrap();
+            link
+        };
         drop(profile);
         Profile::open(Some(root.clone())).unwrap();
-        assert!(!killed.exists());
+        assert!(killed.iter().all(|path| !path.exists()));
         assert!(writing.exists() && notes.exists());
+        #[cfg(unix)]
+        assert!(fs::symlink_metadata(&link).is_ok());
         fs::remove_dir_all(root).unwrap();
     }
 

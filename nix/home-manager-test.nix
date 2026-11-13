@@ -392,7 +392,7 @@ assert lib.assertMsg (accepts {
           machine.wait_until_succeeds("journalctl -u murmur.service --grep 'New connection'")
           machine.succeed(f"systemctl {user} is-active {unit}")
           machine.succeed(f"systemctl {user} stop {unit}")
-          # SIGTERM quits it (status 0), after any configuration file being written.
+          # SIGTERM took the quit path of a closed window: the exit status is 0.
           machine.succeed(f"test \"$(systemctl {user} show -p ExecMainStatus --value {unit})\" = 0")
 
       with subtest("the identity and history are in the data folder, not with the dotfiles"):
