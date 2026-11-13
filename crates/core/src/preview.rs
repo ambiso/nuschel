@@ -162,6 +162,27 @@ impl Preview {
     }
 }
 
+/// `<img src="data:image/…;base64,…" />` as stock Mumble writes it
+/// (`Log::imageToImg`): the base64 text in lines of 72 characters, each
+/// percent-encoded. The element is ASCII and well-formed XML.
+pub fn img_element(mime: ImageMime, data: &[u8]) -> String {
+    let encoded = base64::engine::general_purpose::STANDARD.encode(data);
+    let mut element = format!("<img src=\"data:{};base64,", mime.as_str());
+    for (index, byte) in encoded.bytes().enumerate() {
+        if index > 0 && index.is_multiple_of(72) {
+            element.push('\n');
+        }
+        match byte {
+            b'+' => element.push_str("%2B"),
+            b'/' => element.push_str("%2F"),
+            b'=' => element.push_str("%3D"),
+            other => element.push(char::from(other)),
+        }
+    }
+    element.push_str("\" />");
+    element
+}
+
 fn inert(text: &str, limit: usize) -> bool {
     text.len() <= limit
         && !text.chars().any(|ch| {
@@ -238,5 +259,17 @@ mod tests {
             sample_preview()
         );
         assert!(serde_json::from_str::<Preview>(r#"{"version":1,"provider":"rfc6903","url":"https://example.org/","title":"x","description":"","image":null}"#).is_err());
+    }
+    #[test]
+    fn img_elements_are_percent_encoded_in_72_column_lines() {
+        assert_eq!(
+            img_element(ImageMime::Jpeg, &[0xfb, 0xff]),
+            "<img src=\"data:image/jpeg;base64,%2B%2F8%3D\" />"
+        );
+        // 54 bytes are exactly one line of 72 characters; no trailing break.
+        for (bytes, breaks) in [(54, 0), (55, 1), (108, 1), (109, 2)] {
+            let element = img_element(ImageMime::Png, &vec![0; bytes]);
+            assert_eq!(element.matches('\n').count(), breaks, "{bytes}");
+        }
     }
 }

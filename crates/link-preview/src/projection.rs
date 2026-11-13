@@ -17,7 +17,7 @@
 //! The preview never shortens, blocks or changes the text: when the card
 //! does not fit, a smaller card or the text alone is the result.
 use crate::card::Card;
-use crate::model::EmbeddedImage;
+use crate::model::img_element;
 use crate::text::{truncate_utf16, utf16_len};
 use nuschl_core::model::ServerLimits;
 use nuschl_legacy_html::{escape_html, legacy_body};
@@ -88,7 +88,9 @@ pub fn project(text: &str, card: &Card, limits: &ServerLimits) -> Projection {
     if !text_html.chars().all(is_xml_char) {
         return Projection::TextOnly(TextOnly::NotXml);
     }
-    let image = card.image().map(img_element);
+    let image = card
+        .image()
+        .map(|image| img_element(image.mime, &image.data));
     let description = !card.description().is_empty();
     // Largest first: the image and description, then each alone, then the
     // linked title only.
@@ -97,14 +99,10 @@ pub fn project(text: &str, card: &Card, limits: &ServerLimits) -> Projection {
         if (with_image && image.is_none()) || (with_description && !description) {
             continue;
         }
-        let image = image.as_ref().filter(|_| with_image);
-        let html = card_html(
-            &text_html,
-            card,
-            with_description,
-            image.map(|(element, _)| &**element),
-        );
-        let source_units = image.map_or(0, |(_, source_units)| *source_units);
+        let image = image.as_deref().filter(|_| with_image);
+        let html = card_html(&text_html, card, with_description, image);
+        // Murmur leaves the `src` value (ASCII) out of the text count.
+        let source_units = image.map_or(0, |element| element.len() - r#"<img src="" />"#.len());
         // Card strings are normalised and the image is ASCII; checked anyway.
         if fits(&html, source_units, image.is_some(), limits) && html.chars().all(is_xml_char) {
             return Projection::Card {
@@ -166,58 +164,12 @@ fn card_html(text_html: &str, card: &Card, description: bool, image: Option<&str
     html
 }
 
-/// `<img src="data:image/<kind>;base64,…" />` as stock Mumble writes it: the
-/// base64 text in lines of 72 characters, each percent-encoded. Also returns
-/// the UTF-16 length of the `src` value, which Murmur leaves out of the text.
-fn img_element(image: &EmbeddedImage) -> (String, usize) {
-    let encoded = base64(&image.data);
-    let mut source = String::with_capacity(encoded.len() * 9 / 8 + 32);
-    source.push_str("data:");
-    source.push_str(image.mime.as_str());
-    source.push_str(";base64,");
-    for (index, line) in encoded.as_bytes().chunks(72).enumerate() {
-        if index > 0 {
-            source.push('\n');
-        }
-        for &byte in line {
-            match byte {
-                b'+' => source.push_str("%2B"),
-                b'/' => source.push_str("%2F"),
-                b'=' => source.push_str("%3D"),
-                other => source.push(char::from(other)),
-            }
-        }
-    }
-    let units = source.len();
-    (format!("<img src=\"{source}\" />"), units)
-}
-
-/// Standard, padded base64 (RFC 4648 section 4).
-fn base64(data: &[u8]) -> String {
-    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
-    for chunk in data.chunks(3) {
-        let bytes = [
-            chunk[0],
-            chunk.get(1).copied().unwrap_or(0),
-            chunk.get(2).copied().unwrap_or(0),
-        ];
-        let group = (u32::from(bytes[0]) << 16) | (u32::from(bytes[1]) << 8) | u32::from(bytes[2]);
-        let symbol = |shift: u32| char::from(ALPHABET[((group >> shift) & 63) as usize]);
-        out.push(symbol(18));
-        out.push(symbol(12));
-        out.push(if chunk.len() > 1 { symbol(6) } else { '=' });
-        out.push(if chunk.len() > 2 { symbol(0) } else { '=' });
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::card::tests::image;
     use crate::metadata::ExtractedMetadata;
-    use crate::model::{ImageMime, MAX_IMAGE_BYTES};
+    use crate::model::{EmbeddedImage, ImageMime, MAX_IMAGE_BYTES};
     use crate::policy::Target;
     use nuschl_core::MAX_CONTENT_BYTES;
     use std::io::Write as _;
@@ -525,32 +477,5 @@ sys.stdout.write('\n'.join(out))
             panic!("fits");
         };
         assert!(html.contains("<b>example.org</b>"));
-    }
-
-    #[test]
-    fn base64_matches_rfc_4648_vectors() {
-        for (input, output) in [
-            ("", ""),
-            ("f", "Zg=="),
-            ("fo", "Zm8="),
-            ("foo", "Zm9v"),
-            ("foob", "Zm9vYg=="),
-            ("fooba", "Zm9vYmE="),
-            ("foobar", "Zm9vYmFy"),
-        ] {
-            assert_eq!(base64(input.as_bytes()), output);
-        }
-        assert_eq!(base64(&[0xfb, 0xff]), "+/8=");
-        let (element, units) = img_element(&EmbeddedImage {
-            data: vec![0xfb, 0xff],
-            ..image(ImageMime::Jpeg, 1, 1)
-        });
-        assert_eq!(element, "<img src=\"data:image/jpeg;base64,%2B%2F8%3D\" />");
-        assert_eq!(units, "data:image/jpeg;base64,%2B%2F8%3D".len());
-        let (element, _) = img_element(&EmbeddedImage {
-            data: vec![0; 54 * 2],
-            ..image(ImageMime::Png, 1, 1)
-        });
-        assert_eq!(element.matches('\n').count(), 1);
     }
 }
