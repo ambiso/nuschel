@@ -2239,7 +2239,7 @@ async fn reply_page(
                     .messages
                     .last()
                     .and_then(|message| i64::try_from(message.seq).ok())
-                    .unwrap_or_else(|| match asked.page {
+                    .unwrap_or(match asked.page {
                         Page::After(after) => after,
                         _ => 0,
                     });

@@ -543,9 +543,19 @@ impl ServerState {
     /// Our message was acknowledged as `seq` (or refused): returns whether a
     /// timeline shows it yet.
     pub fn settle_pending(&mut self, key: [u8; 16], seq: Option<u64>) -> bool {
-        self.channels
-            .iter_mut()
-            .any(|channel| channel.timeline.settle(key, seq))
+        let archive = self.history_source == HistorySource::ServerArchive;
+        self.channels.iter_mut().any(|channel| {
+            if !channel.timeline.settle(key, seq) {
+                return false;
+            }
+            if archive
+                && channel.conversation.is_some()
+                && !matches!(channel.target, TextTarget::Direct(_))
+            {
+                channel.timeline.order_archive();
+            }
+            true
+        })
     }
 
     /// Text still waiting for the rate limit when the connection ends is

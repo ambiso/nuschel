@@ -1731,18 +1731,17 @@ impl Client {
             .channels
             .iter()
             .position(|channel| channel.id == ticket.conversation.channel)?;
-        if let Some(owner) = &ticket.owner {
-            if owner.generation != state.generation
+        if let Some(owner) = &ticket.owner
+            && (owner.generation != state.generation
                 || owner.epoch != state.page_epoch
                 || state.history_identity().as_ref() != Some(&owner.identity)
                 || owner.archive.is_some_and(|id| {
                     ticket.source != HistorySource::ServerArchive
                         || state.history_source != HistorySource::ServerArchive
                         || state.channels[position].conversation != Some(id)
-                })
-            {
-                return None;
-            }
+                }))
+        {
+            return None;
         }
         Some((index, position))
     }
@@ -1811,6 +1810,13 @@ impl Client {
                 let used = channel
                     .timeline
                     .take_window(page, messages, (next_before, next_after));
+                if ticket
+                    .owner
+                    .as_ref()
+                    .is_some_and(|owner| owner.archive.is_some())
+                {
+                    channel.timeline.order_archive();
+                }
                 if used && matches!(page, Page::Around(_)) {
                     channel.new_messages = 0;
                     self.focus.following = false;
@@ -1946,6 +1952,13 @@ impl Client {
                     let channel = &mut self.servers[index].channels[position];
                     channel.timeline.loading = false;
                     channel.timeline.take_page(before, messages, next_before);
+                    if ticket
+                        .owner
+                        .as_ref()
+                        .is_some_and(|owner| owner.archive.is_some())
+                    {
+                        channel.timeline.order_archive();
+                    }
                     if before.is_none() {
                         // A conversation opens at its newest message.
                         self.focus.following = true;
@@ -2394,6 +2407,7 @@ impl Client {
                 self.platform.play_sound(&server.id, sound);
             }
         }
+        let archived_order = server.archived(&server.channels[position]);
         let channel = &mut server.channels[position];
         // Their message is here: they stopped typing it.
         let users = &server.users;
@@ -2421,6 +2435,9 @@ impl Client {
         // Older history shown apart from the newest gets the message with
         // the newer pages.
         let added = channel.timeline.receive(message);
+        if archived_order {
+            channel.timeline.order_archive();
+        }
         let selected = self
             .navigation
             .selection()
@@ -5534,5 +5551,80 @@ mod tests {
                     .any(|update| matches!(update, Update::HistoryFailed(_)))
             );
         }
+    }
+    #[test]
+    fn old_latest_completion_during_reconnect_is_rejected_before_new_navigation_exists() {
+        let (mut client, recorder, id) = recovery_client();
+        let old = recorder.pages.lock().unwrap().last().unwrap().1.clone();
+        client.handle(Input::Reconnecting {
+            server: id.clone(),
+            generation: 1,
+            attempt: 1,
+            delay_secs: 1,
+            reason: "synthetic early loss".into(),
+        });
+        assert!(
+            client.navigation.accepts(&old),
+            "navigation generation alone cannot reject this completion"
+        );
+        client.handle(Input::History {
+            server: id,
+            ticket: old,
+            before: None,
+            messages: vec![recovery_row(999)],
+            next_before: None,
+        });
+        let (_, position) = client.selected_indices().unwrap();
+        assert_eq!(
+            client.servers[0].channels[position].timeline.messages.len(),
+            3
+        );
+        assert!(client.servers[0].history_progress[&2].needed);
+    }
+
+    #[test]
+    fn archive_recovery_and_later_live_rows_keep_a_retried_own_send_in_server_sequence_order() {
+        let (mut client, recorder, id) = recovery_client();
+        let (_, position) = client.selected_indices().unwrap();
+        let mut pending = recovery_row(20);
+        pending.id = None;
+        pending.seq = None;
+        pending.pending = Some([7; 16]);
+        pending.outgoing = true;
+        pending.message.observed_at_ms = -1000; // composed before Bob, stored after him
+        client.servers[0].channels[position].timeline.merge(pending);
+        recovery_reconnect(&mut client, &id, false);
+        recovery_answer(
+            &mut client,
+            &recorder,
+            6,
+            6,
+            (4..=6).map(recovery_row).collect(),
+            None,
+            vec![],
+        );
+        client.handle(Input::Server {
+            server: id.clone(),
+            generation: 1,
+            event: ServerEvent::ChatAcked {
+                key: [7; 16],
+                seq: 6,
+            },
+        });
+        let mut live = recovery_row(7);
+        live.message.observed_at_ms = -2000; // arrival must not undo the archive's sequence order
+        client.handle(Input::Message {
+            server: id,
+            generation: 1,
+            target: TextTarget::Channel(2),
+            storage_key: "2".into(),
+            peer: None,
+            message: live,
+        });
+        let shown = &client.servers[0].channels[position].timeline.messages;
+        assert_eq!(
+            shown.iter().filter_map(|row| row.seq).collect::<Vec<_>>(),
+            (1..=7).collect::<Vec<_>>()
+        );
     }
 }

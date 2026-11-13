@@ -325,6 +325,13 @@ impl Timeline {
         }
     }
 
+    /// Archive-only total order. Stable sorting preserves the relative order
+    /// and identity of unknown pending rows, after confirmed server rows.
+    pub(crate) fn order_archive(&mut self) {
+        self.messages
+            .sort_by_key(|message| message.seq.map_or((1u8, 0), |seq| (0, seq)));
+    }
+
     /// Merge an authenticated forward recovery page without replacing a
     /// search window or removing messages still waiting for a real ACK.
     pub(crate) fn merge_catchup(&mut self, messages: Vec<IncomingMessage>) {
@@ -348,6 +355,7 @@ impl Timeline {
                 self.merge(message);
             }
         }
+        self.order_archive();
         // An outage never grows the retained view without a bound. Pending
         // rows have their own bounded outbox; trimming cannot discard keys.
         let mut drop = self
