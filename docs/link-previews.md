@@ -59,19 +59,20 @@ and embedded images carried in messages, with sender-side preview generation dis
 | ProxyRequired | No fetching until an explicit proxy and proxied DNS/bootstrap configuration are complete; no direct or local target-DNS fallback. |
 
 The mode selector does not edit proxy or resolver addresses. To use **Proxy
-required**, close Nuschl and create or edit `link-previews.json` beside
-`settings.json`: normally `~/.config/nuschl/link-previews.json` on Linux (or
-`$XDG_CONFIG_HOME/nuschl/link-previews.json` when set). With `--profile-dir DIR`,
-use `DIR/config/link-previews.json`. For example:
+required**, close Nuschl and add a `link_previews` object to your existing
+`settings.json`: normally `~/.config/nuschl/settings.json` on Linux (or
+`$XDG_CONFIG_HOME/nuschl/settings.json` when set). With `--profile-dir DIR`,
+use `DIR/config/settings.json`. Preserve the file's other settings. For example:
 
 ```json
 {
-  "version": 1,
-  "mode": "proxy_required",
-  "proxy": "socks5://127.0.0.1:9050",
-  "dns": {
-    "url": "https://resolver.example/dns-query",
-    "bootstrap": ["192.0.2.53"]
+  "link_previews": {
+    "mode": "proxy_required",
+    "proxy": "socks5://127.0.0.1:9050",
+    "dns": {
+      "url": "https://resolver.example/dns-query",
+      "bootstrap": ["192.0.2.53"]
+    }
   }
 }
 ```
@@ -87,13 +88,14 @@ built-in WebPKI roots. It resolves page and image hosts through that resolver
 rather than system DNS.
 Restart Nuschl after editing the file; **Active policy** and any configuration
 problem appear below the mode selector. Missing or invalid proxy configuration
-fetches nothing and never falls back to Direct.
+fetches nothing and never falls back to Direct. Switching modes preserves valid
+proxy and DNS settings. Preview policy is user-owned; `managed.json` does not
+supply or enable it. There are no dedicated preview sidecars.
 
-An optional `managed-link-previews.json` uses the same format to restrict the
-user's choice and, when requiring a proxy, supply its route. It can sit beside the
-user file or in the system Nuschl configuration directory. It cannot enable
-fetching when the user's mode is Off. The active policy may therefore be stricter
-than the saved selection.
+An absent `link_previews` field means Off. The exact default is omitted when saving;
+explicit choices or configured services use the new field. Older Nuschl releases
+with strict settings schemas can reject files containing this field; this change
+does not provide a downgrade migration.
 
 The policy covers the HTML document, its redirects, the selected image, image
 redirects and future metadata providers. A change invalidates late results and
@@ -149,7 +151,7 @@ Proposed initial limits:
 | Message previews | One |
 | Retained drafts | 64, at most 1 MiB of draft text in total |
 | Cached results | 16, at most 1 MiB; success expires after 10 minutes, failure after 2 |
-| Policy file | 4 KiB; explicit user saves are atomic and owner-only |
+| Settings | Existing 1 MiB file limit; proxy/resolver strings at most 2 KiB; at most four bootstrap addresses; atomic owner-only saves |
 
 The legacy projection may shorten the displayed title and description to 200 and
 300 UTF-16 units. It preserves the entire original message text, obeys the server's
