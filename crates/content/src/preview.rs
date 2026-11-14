@@ -177,7 +177,16 @@ pub fn extract_open_graph(
     if charset == TransportCharset::Unspecified && found.declared_charset == Some(false) {
         return Err(Unavailable::Encoding);
     }
-    let field = |raw: Option<String>, limit| normalize(raw.as_deref().unwrap_or(""), limit);
+    // Receivers link URLs and Markdown links in text: a field that would
+    // render a link is left out, so the card links only to the sender's URL.
+    let field = |raw: Option<String>, limit| {
+        let text = normalize(raw.as_deref().unwrap_or(""), limit);
+        if renders_link(&text) {
+            String::new()
+        } else {
+            text
+        }
+    };
     let title = field(found.og_title.or(found.title), MAX_TITLE_BYTES);
     let description = field(
         found.og_description.or(found.description),
@@ -198,6 +207,18 @@ pub fn extract_open_graph(
         image,
         image_alt,
     })
+}
+
+/// Whether `text`, rendered as a received message, holds a link.
+fn renders_link(text: &str) -> bool {
+    crate::ContentRenderer::default()
+        .render(text)
+        .map_or(true, |document| {
+            document.blocks.iter().any(|block| {
+                matches!(block, nuschl_core::ContentBlock::Text { spans, .. }
+                    if spans.iter().any(|span| span.link.is_some()))
+            })
+        })
 }
 
 /// A usable `og:image` reference: trimmed, without controls (tabs and line
@@ -569,6 +590,24 @@ mod tests {
             prepare_image(&oversized, ""),
             Err(Unavailable::Malformed)
         ));
+    }
+
+    #[test]
+    fn metadata_that_would_render_a_link_is_left_out() {
+        let found = extract(
+            r#"<meta property="og:title" content="See https://title.example/x">
+               <meta property="og:description" content="[label](https://description.example)">
+               <meta property="og:image" content="/a.png">"#,
+        )
+        .unwrap();
+        assert_eq!((found.title.as_str(), found.description.as_str()), ("", ""));
+        let found = extract(
+            r#"<meta property="og:title" content="A **bold** $x$ title">
+               <meta property="og:description" content="Plain words">"#,
+        )
+        .unwrap();
+        assert_eq!(found.title, "A **bold** $x$ title");
+        assert_eq!(found.description, "Plain words");
     }
 
     #[test]
