@@ -379,6 +379,16 @@ voice quality; the separate stereo music preset is still planned.
   while your voice is live asks once, "Speak on two servers?": *Speak on both* adds it
   to the talk servers (later unmutes there do not ask again), *Only on …* moves the
   voice, *Cancel* changes nothing.
+- **Only Unmute opens the microphone** (the button, the mute shortcut, `/mute`, and
+  the answer to "Speak on two servers?" after it). These close the microphone and
+  leave you muted until you unmute: the server suppressing (no Speak), muting or
+  deafening you, or leaving no voice budget (you stay muted after it lifts, also
+  when you move to a channel where you may speak); a reconnect; a failed media
+  worker or microphone. The server sees you muted too, and so do others. Unmuting
+  where you cannot speak keeps you muted, only undeafens, and says why ("You can't
+  speak here.", "No bandwidth for voice here."). Moving a live microphone to where
+  you may speak (joining a channel elsewhere, *Use voice here*) and choosing another
+  input device keep it live; push-to-talk keeps your mute as it is.
 - **Push-to-talk and the mute shortcuts act on the talk servers only.** Push-to-talk
   gates the one capture, which reaches only them; the mute shortcut toggles them
   together (a talk server you deafened is left alone). The footer's buttons stay per
