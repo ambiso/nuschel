@@ -5,6 +5,12 @@ Read [SECURITY.md](SECURITY.md), [architecture](docs/architecture.md) and
 [development](docs/development.md) before changing dependencies or trust boundaries.
 [tests/README.md](tests/README.md) describes what the existing fixtures actually prove.
 
+## Writing
+
+Describe what something is or does in comments, documentation, UI copy, commits,
+issues, pull requests and reviews. Avoid contrast phrasing and descriptive
+negation. State constraints as direct rules.
+
 ## Implementation boundaries
 
 - Prefer a suitable memory-safe Rust implementation. Review its enabled features
