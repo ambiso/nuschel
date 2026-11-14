@@ -24,6 +24,8 @@ pub struct CaptureQueue {
     active: bool,
     ending: bool,
     next: Option<Instant>,
+    /// Packets sent a period or more after their deadline (stalls).
+    pub late: u64,
 }
 impl Default for CaptureQueue {
     fn default() -> Self {
@@ -33,6 +35,7 @@ impl Default for CaptureQueue {
             active: false,
             ending: false,
             next: None,
+            late: 0,
         }
     }
 }
@@ -89,6 +92,9 @@ impl CaptureQueue {
             }
         }
     }
+    pub fn queued(&self) -> usize {
+        self.pending.len()
+    }
     /// One packet on the 20 ms sample clock. Small scheduler jitter preserves
     /// phase; a large stall starts a new deadline instead of a catch-up burst.
     /// There is no initial fill timer.
@@ -113,7 +119,11 @@ impl CaptureQueue {
         } else {
             self.next = Some(match self.next {
                 Some(previous) if now < previous + PACKET_PERIOD => previous + PACKET_PERIOD,
-                _ => now + PACKET_PERIOD,
+                Some(_) => {
+                    self.late += 1;
+                    now + PACKET_PERIOD
+                }
+                None => now + PACKET_PERIOD,
             });
         }
         Some(Packet { samples, end })
@@ -229,6 +239,9 @@ mod tests {
         assert!(queue.pending.len() <= MAX_PENDING_FRAMES);
         assert!(queue.due(now).is_some());
         assert!(queue.due(now).is_none());
+        // A packet one period past its deadline is late.
+        assert!(queue.due(now + 2 * PACKET_PERIOD).is_some());
+        assert_eq!(queue.late, 1);
         queue.reset();
         queue.push([0.3; FRAME], true, false);
         queue.push([0.; FRAME], false, false);

@@ -1,0 +1,99 @@
+{
+  "measured": "claude/benchmarks 7a316792 (on ci/check-trial a866cf2d), 5 one-core runs per test",
+  "instructions": {
+    "cpu": "AMD Ryzen 9 5900X 12-Core Processor",
+    "per_audio_second": {
+      "capture_chain": 204741519,
+      "opus_encode": 41837266,
+      "total": 246578786
+    },
+    "echo_reduction_db": 29.2
+  },
+  "one_core": {
+    "desktop-recovery": {
+      "passed": 3,
+      "runs": 5,
+      "cpu_per_second": {
+        "nuschl-media-worker": 0.035
+      }
+    },
+    "media-double-talk": {
+      "passed": 5,
+      "runs": 5,
+      "cpu_per_second": {
+        "nuschl-media-worker": 0.2711
+      },
+      "capture_gaps_per_minute": 4.23,
+      "underruns_per_minute": 0.0,
+      "send_packets": 0,
+      "late_packets": 0,
+      "send_ms": {
+        "p50": null,
+        "p95": null,
+        "p99": null
+      }
+    },
+    "media-echo": {
+      "passed": 5,
+      "runs": 5,
+      "cpu_per_second": {
+        "nuschl-media-worker": 0.2458
+      },
+      "capture_gaps_per_minute": 0.44,
+      "underruns_per_minute": 0.0,
+      "send_packets": 0,
+      "late_packets": 0,
+      "send_ms": {
+        "p50": null,
+        "p95": null,
+        "p99": null
+      }
+    },
+    "media-jitter": {
+      "passed": 5,
+      "runs": 5,
+      "cpu_per_second": {
+        "nuschl-media-worker": 0.0433
+      },
+      "capture_gaps_per_minute": 0.0,
+      "underruns_per_minute": 0.0,
+      "send_packets": 0,
+      "late_packets": 0,
+      "send_ms": {
+        "p50": null,
+        "p95": null,
+        "p99": null
+      },
+      "jitter_silent_windows_per_minute": 7.99
+    },
+    "media-sounds": {
+      "passed": 5,
+      "runs": 5,
+      "cpu_per_second": {
+        "nuschl-media-worker": 0.1694
+      },
+      "capture_gaps_per_minute": 0.0,
+      "underruns_per_minute": 0.0,
+      "send_packets": 563,
+      "late_packets": 0,
+      "send_ms": {
+        "p50": 29,
+        "p95": 32,
+        "p99": 34
+      }
+    },
+    "rtc-probe": {
+      "passed": 5,
+      "runs": 5,
+      "cpu_per_second": {}
+    },
+    "musicbot-playback": {
+      "passed": 5,
+      "runs": 5,
+      "cpu_per_second": {
+        "nuschl-musicbot": 0.018,
+        "nuschl-musicbot-codec-worker": 0.0082
+      }
+    }
+  }
+}
