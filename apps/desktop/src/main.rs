@@ -136,7 +136,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         arguments,
     }) = arguments.command
     {
-        let mut command = nuschl_ipc::host::content_sandbox_command(&executable, &arguments)?;
+        let role = nuschl_sandbox::Role::Content { cpu_seconds: 5 };
+        let mut command = nuschl_sandbox::command(&executable, role, &arguments)?;
         let status = runtime.block_on(async { command.status().await })?;
         return if status.success() {
             Ok(())
@@ -146,16 +147,19 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
     #[cfg(target_os = "linux")]
     if let Some(Action::MediaSandbox) = arguments.command {
-        let worker = nuschl_session::workers::sibling("nuschl-media-worker")?;
-        let mut command = nuschl_ipc::host::media_sandbox_command(&worker)?;
+        let worker = nuschl_sandbox::sibling("nuschl-media-worker")?;
+        let mut command = nuschl_sandbox::command(&worker, nuschl_sandbox::Role::Media, &[])?;
         let status = runtime.block_on(async { command.status().await })?;
         std::process::exit(status.code().unwrap_or(1));
     }
 
     #[cfg(target_os = "linux")]
     if let Some(Action::TransferSandbox { file }) = &arguments.command {
-        let worker = nuschl_session::workers::sibling("nuschl-transfer-worker")?;
-        let mut command = nuschl_ipc::host::transfer_sandbox_command(&worker, file.as_deref())?;
+        let worker = nuschl_sandbox::sibling("nuschl-transfer-worker")?;
+        let role = nuschl_sandbox::Role::Transfer {
+            file: file.as_deref(),
+        };
+        let mut command = nuschl_sandbox::command(&worker, role, &[])?;
         let status = runtime.block_on(async { command.status().await })?;
         std::process::exit(status.code().unwrap_or(1));
     }

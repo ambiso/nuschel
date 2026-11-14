@@ -23,7 +23,7 @@
 //!
 //! The storage and crypto workers may write anywhere in their folders, so each
 //! has one of its own with nothing else in it, and neither reaches the other's
-//! (`nuschl_ipc::host`). Folders are created owner-only (0700) when first
+//! (`nuschl_sandbox`). Folders are created owner-only (0700) when first
 //! needed, files 0600.
 //!
 //! ## Moving from earlier versions

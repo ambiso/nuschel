@@ -15,6 +15,7 @@ jiff = { version = "0.2", default-features = false, features = ["std", "tz-syste
 nuschl-client.workspace = true
 nuschl-core.workspace = true
 nuschl-ipc.workspace = true
+nuschl-sandbox.workspace = true
 nuschl-session.workspace = true
 # The full-screen view on crossterm (re-exported by ratatui), without the
 # calendar widget and macros.

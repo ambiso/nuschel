@@ -30,7 +30,7 @@ or raw pointers also needs review. Dependency changes must include that assessme
 | SQLx SQLite backend | Native SQLite provides transactional local history | Storage worker; one database directory, parameterized operations; extension loading and deserialization disabled. `nuschld --import-murmur` has the worker read an untrusted Murmur file confined by Landlock to that file: read-only and immutable, `query_only`, `trusted_schema` off, cell size checks, a heap limit, `quick_check`, no WAL files, ordinary tables only, every column capped, fixed statements |
 | SQLx PostgreSQL backend | Server persistence on a managed database | Storage worker; database credentials and a scoped database connection |
 | TLS crypto provider | Cryptographic implementation and CPU-specific acceleration | Session/server authority; bounded protocol framing and reviewed provider |
-| OS sandbox/process APIs | Establish restricted worker execution | Small supervisor adapter; prefer safe Rust wrappers (`win32job` for Windows job objects) |
+| OS sandbox/process APIs | Establish restricted worker execution | `nuschl-sandbox`, the supervisor adapter for the client and music-bot worker roles: content, math, update, storage, crypto, media and transfer on Linux, macOS and Windows, and the music-bot codec on Linux (macOS and Windows refuse it); prefer safe Rust wrappers (`win32job` for Windows job objects). Three processes do not use it: `nuschld`'s storage worker runs without bwrap, confined by the hardened systemd unit, because it holds the database credential and may reach PostgreSQL over the network; `nuschld`'s Murmur reader (`--read-murmur`) confines itself with Landlock to reading one file, with no network (docs/server.md), and under the NixOS service its systemd unit confines it too; the TUI clipboard helpers are OS clipboard programs that need the display socket, so they run under prlimit only |
 | `nuschl-sandbox-windows` (Win32 calls via `windows-sys`) | No maintained safe wrapper creates AppContainer processes with an explicit handle list and job limits (docs/windows-sandbox.md) | The workers' own launch stage only, before any input is read (`cargo-deny` allows only the six workers to depend on it). Each Win32 function is one trait method whose `# Safety` is Microsoft's documented contract (cross-checked with ReactOS); unsafe calls only in `os.rs`, one per block with a `SAFETY:` argument, behind guards that release what Windows allocates exactly once; pure logic in unsafe-free modules; no `as` casts. The launch steps run under Miri (Linux and Windows targets) against a mock of Win32 that fails every call in turn; an independent review found and fixed the issues listed in docs/windows-sandbox.md |
 | `aes` (OCB2 voice crypto) | Mumble's UDP voice encryption; AES-NI intrinsics | Session authority; fixed-size blocks, keys from the TLS control channel |
 | `rsa` (identity generation only) | Stock Mumble imports only RSA client certificates | Generates the local Mumble client key only; TLS signing uses ring, so the Marvin timing issue (RUSTSEC-2023-0071) in private-key operations never runs on untrusted input; `cargo-deny` confines the crate to `nuschl-session` |
@@ -40,7 +40,7 @@ or raw pointers also needs review. Dependency changes must include that assessme
 | Global shortcuts (`ashpd` portal; `global-hotkey` on Windows/macOS) | System-wide push-to-talk | Desktop shell; press/release of one bound key only |
 | Typst (`typst`, `typst-render`) | Typesetting LaTeX formulas; Typst is a scripting language with file, package, plugin and data access | Math worker only; formulas reach it as math markup from Nuschl's own converter, checked to contain no code; a world with one file and no packages, clock or system fonts; a library without `read`, `plugin`, `image`, the data loaders, `eval` and `std`; limits and a deadline per formula (docs/math.md) |
 | `psm` (assembly, through `stacker`) | Typst's evaluator grows its stack on deep recursion | Only through `stacker` and `typst-eval`, in the math worker |
-| Music and voice decoding in `nuschl-musicbot-codec-worker` (Symphonia, rubato, audioadapter-buffers, opus-pure, nnnoiseless) | Song demux/decoding, resampling, Opus encoding and incoming-voice ducking contain native/SIMD internals | That separate executable's fixed decode/encode/duck roles only; `cargo-deny` keeps these crates out of the credential-bearing `nuschl-musicbot`, which starts the worker from its fixed libexec path, fetches opaque bytes, validates bounded replies and routes encoded packets. Linux children use the existing IPC namespace/filesystem sandbox with no network, home, profile, audio services or inherited credentials; startup fails closed without confinement. No unsafe codec/DSP call is authorized in the parent. See docs/musicbot.md for limits and platform proof. |
+| Music and voice decoding in `nuschl-musicbot-codec-worker` (Symphonia, rubato, audioadapter-buffers, opus-pure, nnnoiseless) | Song demux/decoding, resampling, Opus encoding and incoming-voice ducking contain native/SIMD internals | That separate executable's fixed decode/encode/duck roles only; `cargo-deny` keeps these crates out of the credential-bearing `nuschl-musicbot`, which starts the worker from its fixed libexec path, fetches opaque bytes, validates bounded replies and routes encoded packets. Linux children use the shared `nuschl-sandbox` namespace/filesystem sandbox with no network, home, profile, audio services or inherited credentials; startup fails closed without confinement. No unsafe codec/DSP call is authorized in the parent. See docs/musicbot.md for limits and platform proof. |
 
 The `cargo-deny` wrapper rules enforce ownership for the named top-level dependencies.
 They do not automatically audit every transitive crate, dynamic system library, or new
@@ -205,7 +205,7 @@ The NixOS server's storage preflight inherits its hardened systemd unit.
 
 ### macOS (implemented, not yet validated on macOS)
 
-macOS workers start under `sandbox-exec` with Seatbelt profiles (`crates/ipc/src/host.rs`).
+macOS workers start under `sandbox-exec` with Seatbelt profiles (`crates/sandbox/src/macos.rs`).
 Content, math and storage workers are deny-by-default on top of Apple's `system.sb`. Storage
 may read and write only its history directory, and neither gets any network rule. The
 media worker needs CoreAudio's undocumented Mach services, so for now it is confined by
@@ -219,7 +219,7 @@ writes to the home directory. Neither test has run on macOS yet.
 
 Windows workers run in AppContainers, each in a job object of its own
 (docs/windows-sandbox.md). A worker executable is its own launch stage: started with
-`--nuschl-sandbox` and a policy (`crates/ipc/src/host.rs`), it creates or reuses the
+`--nuschl-sandbox` and a policy (`crates/sandbox/src/windows.rs`), it creates or reuses the
 worker kind's AppContainer profile, grants it its directories, and starts itself
 again inside it, suspended, then assigned to a job, then resumed; it waits and passes
 on the exit code. It reads no untrusted input, and it refuses (exit 125) rather than
