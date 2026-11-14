@@ -6,15 +6,12 @@
 use nuschl_client::native::content_worker;
 use nuschl_core::MessageDocument;
 use nuschl_session::config::ClientSettings;
-use std::sync::{Arc, Mutex};
 use tokio::{
     runtime::Handle,
     sync::{mpsc, watch},
 };
 
 pub enum ServiceEvent {
-    /// Wake only: a bounded watch mailbox holds the most recent completion.
-    LinkPreviewPolicy,
     LinkPreviewImage {
         ticket: crate::link_preview::ImageTicket,
         pixels: Option<nuschl_ipc::preview::Pixels>,
@@ -39,88 +36,11 @@ pub enum ServiceEvent {
     },
 }
 
-#[derive(Clone)]
-pub struct PolicyReply {
-    pub revision: u64,
-    pub result: Result<nuschl_session::config::LinkPreviewSettings, String>,
-}
-
-struct PolicySave {
-    profile: nuschl_session::config::Profile,
-    action: crate::link_preview::PolicyAction,
-}
-
-#[derive(Default)]
-struct PolicyQueue {
-    running: bool,
-    latest_revision: u64,
-    pending: Option<PolicySave>,
-}
-
-impl PolicyQueue {
-    fn enqueue(&mut self, save: PolicySave) -> Result<bool, ()> {
-        if save.action.revision <= self.latest_revision {
-            return Err(());
-        }
-        self.latest_revision = save.action.revision;
-        self.pending = Some(save);
-        let start = !self.running;
-        self.running = true;
-        Ok(start)
-    }
-
-    fn take(&mut self) -> Option<PolicySave> {
-        let save = self.pending.take();
-        if save.is_none() {
-            self.running = false;
-        }
-        save
-    }
-}
-
-/// No GUI await or notification backpressure between saves. The owned
-/// blocking task drains its one replaceable latest job even after GUI drop.
-fn save_preview_policies(
-    queue: Arc<Mutex<PolicyQueue>>,
-    replies: watch::Sender<Option<PolicyReply>>,
-) {
-    drain_preview_policies(queue, replies, |save| {
-        save.profile.save_link_previews(&save.action.settings)
-    });
-}
-
-fn drain_preview_policies(
-    queue: Arc<Mutex<PolicyQueue>>,
-    replies: watch::Sender<Option<PolicyReply>>,
-    mut save: impl FnMut(&PolicySave) -> std::io::Result<nuschl_session::config::LinkPreviewSettings>,
-) {
-    loop {
-        let next = match queue.lock() {
-            Ok(mut queue) => queue.take(),
-            // A poisoned owner stays fail closed; never start replacement IO.
-            Err(_) => return,
-        };
-        let Some(next) = next else {
-            return;
-        };
-        // The mutex is not held during local disk IO or completion publication.
-        let result =
-            save(&next).map_err(|_| "Link preview settings could not be saved.".to_owned());
-        replies.send_replace(Some(PolicyReply {
-            revision: next.action.revision,
-            result,
-        }));
-    }
-}
-
 pub struct Services {
     handle: Handle,
     sender: mpsc::Sender<ServiceEvent>,
     settings: watch::Receiver<ClientSettings>,
     image_permits: std::sync::Arc<tokio::sync::Semaphore>,
-    policy_queue: Arc<Mutex<PolicyQueue>>,
-    policy_completed: watch::Sender<Option<PolicyReply>>,
-    policy_results: watch::Receiver<Option<PolicyReply>>,
     preview: Option<(
         mpsc::Sender<crate::preview::Command>,
         tokio::task::JoinHandle<()>,
@@ -128,31 +48,6 @@ pub struct Services {
 }
 
 impl Services {
-    /// Immediate bounded handoff. The background owner, not GUI replies,
-    /// serializes all writes through the latest accepted preference.
-    pub fn save_link_preview_policy(
-        &self,
-        profile: nuschl_session::config::Profile,
-        action: crate::link_preview::PolicyAction,
-    ) -> Result<(), &'static str> {
-        let start = self
-            .policy_queue
-            .lock()
-            .map_err(|_| "Link preview writer is unavailable.")?
-            .enqueue(PolicySave { profile, action })
-            .map_err(|_| "Link preview preference was superseded.")?;
-        if start {
-            let queue = self.policy_queue.clone();
-            let replies = self.policy_completed.clone();
-            self.handle
-                .spawn_blocking(move || save_preview_policies(queue, replies));
-        }
-        Ok(())
-    }
-
-    pub fn link_preview_policy_result(&mut self) -> Option<PolicyReply> {
-        self.policy_results.borrow_and_update().as_ref().cloned()
-    }
     /// Exact carried bytes are decoded only in the confined content worker.
     /// The composer admits one such request until its completion is received.
     pub fn render_link_preview(
@@ -192,30 +87,11 @@ impl Services {
         settings: watch::Receiver<ClientSettings>,
     ) -> (Self, mpsc::Receiver<ServiceEvent>) {
         let (sender, events) = mpsc::channel(64);
-        let (policy_completed, policy_results) = watch::channel(None);
-        let mut policy_wakes = policy_results.clone();
-        let wake_sender = sender.clone();
-        handle.spawn(async move {
-            while policy_wakes.changed().await.is_ok() {
-                // Notifications can wait on the GUI; the disk writer cannot.
-                drop(policy_wakes.borrow_and_update());
-                if wake_sender
-                    .send(ServiceEvent::LinkPreviewPolicy)
-                    .await
-                    .is_err()
-                {
-                    return;
-                }
-            }
-        });
         let services = Self {
             handle,
             sender,
             settings,
             image_permits: std::sync::Arc::new(tokio::sync::Semaphore::new(2)),
-            policy_queue: Arc::new(Mutex::new(PolicyQueue::default())),
-            policy_completed,
-            policy_results,
             preview: None,
         };
         (services, events)
@@ -371,186 +247,5 @@ impl Services {
             .await;
             let _ = events.send(ServiceEvent::Prepared { id, result }).await;
         });
-    }
-}
-
-#[cfg(test)]
-mod preview_policy_tests {
-    use super::{PolicyQueue, PolicySave, drain_preview_policies};
-    use crate::link_preview::PolicyAction;
-    use nuschl_client::preview::{Mode, Settings};
-    use nuschl_session::config::Profile;
-    use std::{
-        path::PathBuf,
-        sync::{
-            Arc, Mutex,
-            atomic::{AtomicU64, Ordering},
-            mpsc,
-        },
-        time::Duration,
-    };
-    use tokio::sync::watch;
-
-    struct Scratch(PathBuf);
-
-    impl Scratch {
-        fn new() -> Self {
-            static NEXT: AtomicU64 = AtomicU64::new(1);
-            let root = std::env::temp_dir().join(format!(
-                "nuschl-preview-policy-{}-{}",
-                std::process::id(),
-                NEXT.fetch_add(1, Ordering::Relaxed)
-            ));
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::DirBuilderExt;
-                let mut builder = std::fs::DirBuilder::new();
-                builder.mode(0o700);
-                builder.create(&root).unwrap();
-            }
-            // Never reuse or remove a path whose ownership was not established.
-            #[cfg(not(unix))]
-            std::fs::create_dir(&root).unwrap();
-            Self(root)
-        }
-    }
-
-    impl Drop for Scratch {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
-
-    fn job(profile: &Profile, revision: u64, mode: Mode) -> PolicySave {
-        PolicySave {
-            profile: profile.clone(),
-            action: PolicyAction {
-                revision,
-                settings: Settings {
-                    mode,
-                    ..Settings::default()
-                },
-            },
-        }
-    }
-
-    #[test]
-    fn real_background_writer_persists_latest_off_after_gui_drop_and_toggle_storm() {
-        let scratch = Scratch::new();
-        let profile = Profile::open(Some(scratch.0.clone())).unwrap();
-        let queue = Arc::new(Mutex::new(PolicyQueue::default()));
-        assert!(
-            queue
-                .lock()
-                .unwrap()
-                .enqueue(job(&profile, 1, Mode::Direct))
-                .unwrap()
-        );
-        let (replies, gui) = watch::channel(None);
-        let (entered, started) = mpsc::sync_channel(0);
-        let (release, held) = mpsc::sync_channel(0);
-        let writes = Arc::new(Mutex::new(Vec::new()));
-        let physical = writes.clone();
-        let owned = queue.clone();
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .build()
-            .unwrap();
-        let finished = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let completed = finished.clone();
-        let worker = runtime.spawn_blocking(move || {
-            let mut first = true;
-            drain_preview_policies(owned, replies, |save| {
-                if first {
-                    first = false;
-                    entered.send(()).unwrap();
-                    held.recv_timeout(Duration::from_secs(10)).unwrap();
-                }
-                physical.lock().unwrap().push(save.action.settings.mode);
-                // Actual Profile atomic write/fsync/reload, not a fake result.
-                save.profile.save_link_previews(&save.action.settings)
-            });
-            completed.store(true, Ordering::Release);
-        });
-        started.recv_timeout(Duration::from_secs(10)).unwrap();
-        for revision in 2_u64..=1001 {
-            let mode = if revision == 1001 || revision.is_multiple_of(2) {
-                Mode::Off
-            } else {
-                Mode::ProxyRequired
-            };
-            assert!(
-                !queue
-                    .lock()
-                    .unwrap()
-                    .enqueue(job(&profile, revision, mode))
-                    .unwrap(),
-                "a second physical writer was requested while the first IO was held"
-            );
-        }
-        assert_eq!(
-            queue
-                .lock()
-                .unwrap()
-                .pending
-                .as_ref()
-                .unwrap()
-                .action
-                .revision,
-            1001
-        );
-        // No GUI receiver or GUI callback is left to start a replacement save.
-        // The background owner must still write Off after the held Direct IO.
-        drop(gui);
-        drop(queue);
-        release.send(()).unwrap();
-        drop(worker);
-        // Graceful runtime teardown must wait for this single blocking owner;
-        // it must not require an async callback or GUI event between writes.
-        drop(runtime);
-        assert!(
-            finished.load(Ordering::Acquire),
-            "background owner panicked or failed to finish at runtime teardown"
-        );
-        assert_eq!(*writes.lock().unwrap(), vec![Mode::Direct, Mode::Off]);
-        assert_eq!(profile.load_link_previews().user.settings.mode, Mode::Off);
-    }
-
-    #[test]
-    fn completion_mailbox_retains_latest_without_gui_backpressure() {
-        let scratch = Scratch::new();
-        let profile = Profile::open(Some(scratch.0.clone())).unwrap();
-        let queue = Arc::new(Mutex::new(PolicyQueue::default()));
-        assert!(
-            queue
-                .lock()
-                .unwrap()
-                .enqueue(job(&profile, 1, Mode::Direct))
-                .unwrap()
-        );
-        // Replacing an unstarted job still starts only the already-owned task.
-        assert!(
-            !queue
-                .lock()
-                .unwrap()
-                .enqueue(job(&profile, 2, Mode::Off))
-                .unwrap()
-        );
-        let (replies, mut gui) = watch::channel(None);
-        drain_preview_policies(queue.clone(), replies, |save| {
-            save.profile.save_link_previews(&save.action.settings)
-        });
-        let reply = gui.borrow_and_update().clone().unwrap();
-        assert_eq!(reply.revision, 2);
-        assert_eq!(reply.result.unwrap().effective.settings.mode, Mode::Off);
-        assert!(!queue.lock().unwrap().running);
-        assert!(queue.lock().unwrap().pending.is_none());
-        assert!(
-            queue
-                .lock()
-                .unwrap()
-                .enqueue(job(&profile, 2, Mode::Direct))
-                .is_err(),
-            "duplicate source authority must not restart a physical writer"
-        );
     }
 }

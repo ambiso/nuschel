@@ -10,8 +10,7 @@
 //!   [`model`];
 //! - [`projection`]: the one-message legacy HTML projection for stock Mumble;
 //! - [`draft`]: binding a card to the exact draft, with removal and
-//!   generations;
-//! - [`settings_file`]: the versioned `link-previews.json` sidecar.
+//!   generations.
 #![forbid(unsafe_code)]
 
 pub use nuschl_core::preview as model;
@@ -20,5 +19,4 @@ pub mod draft;
 pub mod metadata;
 pub mod policy;
 pub mod projection;
-pub mod settings_file;
 pub mod text;
