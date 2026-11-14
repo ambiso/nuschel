@@ -214,6 +214,52 @@ impl<P: Clone> JitterBuffer<P> {
     }
 }
 
+/// The edges of an underrun (issue #206). When playout runs dry mid-waveform,
+/// the caller conceals 10 ms more and fades it to silence; whatever plays next
+/// fades in. Every other sample, concealment choice and gain is unchanged.
+#[derive(Default)]
+pub struct UnderrunFade {
+    faded: bool,
+}
+
+impl UnderrunFade {
+    /// Whether a pull that returned `Idle` ran dry mid-waveform, given whether
+    /// the buffer was playing before it.
+    pub fn ran_dry(&self, was_playing: bool) -> bool {
+        was_playing && !self.faded
+    }
+
+    /// The 10 ms of concealment that continue a stream that ran dry.
+    pub fn fade_out(&mut self, pcm: &mut [f32]) {
+        ramp(pcm, false);
+        self.faded = true;
+    }
+
+    /// Decoded or concealed stereo audio about to play.
+    pub fn play(&mut self, pcm: &mut [f32]) {
+        if std::mem::take(&mut self.faded) {
+            ramp(pcm, true);
+        }
+    }
+
+    /// Whether a terminator's audio plays: straight after an underrun it only
+    /// ends audio that has already faded out.
+    pub fn end(&mut self) -> bool {
+        !std::mem::take(&mut self.faded)
+    }
+}
+
+/// Raised-cosine ramp over the first 10 ms (480 frames at 48 kHz) of
+/// interleaved stereo: up from silence when `rising`, else down to it.
+fn ramp(pcm: &mut [f32], rising: bool) {
+    for (index, frame) in pcm.as_chunks_mut::<2>().0.iter_mut().take(480).enumerate() {
+        let up = 0.5 - 0.5 * (std::f32::consts::PI * (index as f32 + 0.5) / 480.).cos();
+        let gain = if rising { up } else { 1. - up };
+        frame[0] *= gain;
+        frame[1] *= gain;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

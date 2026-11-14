@@ -11,6 +11,7 @@ use crate::{
     dsp::FRAME,
     jitter::{JitterBuffer, Pull},
 };
+use nuschl_audio_jitter::UnderrunFade;
 use opus_pure::{MAX_PACKET_SAMPLES, OpusDecoder};
 use std::{
     collections::{BTreeMap, VecDeque},
@@ -50,6 +51,7 @@ struct Speaker {
     /// Gain of the preceding successfully decoded packet, also used for loss.
     volume: f32,
     last_packet: Instant,
+    fade: UnderrunFade,
 }
 
 impl Speaker {
@@ -63,19 +65,25 @@ impl Speaker {
             pcm: VecDeque::with_capacity(MAX_DECODED),
             volume: 1.,
             last_packet: now,
+            fade: UnderrunFade::default(),
         })
     }
 
     /// Top up decoded audio for one output frame.
     fn fill(&mut self, scratch: &mut [f32]) {
         while self.pcm.len() < FRAME {
+            let was_playing = self.jitter.is_playing();
             match self.jitter.pull() {
                 Pull::Packet { opus, end } => {
+                    let plays = !end || self.fade.end();
                     if let Ok(count) = self.decoder.decode(&opus.opus, MAX_PACKET_SAMPLES, scratch)
                     {
                         self.jitter.observe_frames((count / FRAME) as u64);
                         self.volume = opus.gain;
-                        self.extend(&scratch[..2 * count]);
+                        if plays {
+                            self.fade.play(&mut scratch[..2 * count]);
+                            self.extend(&scratch[..2 * count]);
+                        }
                     }
                     if end {
                         let _ = self.decoder.reset_state();
@@ -88,12 +96,21 @@ impl Speaker {
                         None => self.decoder.decode(&[], size, scratch),
                     };
                     if let Ok(count) = decoded {
+                        self.fade.play(&mut scratch[..2 * count]);
                         self.extend(&scratch[..2 * count]);
                     } else {
                         break;
                     }
                 }
-                Pull::Idle => break,
+                Pull::Idle => {
+                    if self.fade.ran_dry(was_playing)
+                        && let Ok(count) = self.decoder.decode(&[], FRAME, scratch)
+                    {
+                        self.fade.fade_out(&mut scratch[..2 * count]);
+                        self.extend(&scratch[..2 * count]);
+                    }
+                    break;
+                }
             }
         }
     }
@@ -178,6 +195,7 @@ impl Mixer {
         {
             speaker.jitter = JitterBuffer::default();
             let _ = speaker.decoder.reset_state();
+            speaker.fade = UnderrunFade::default();
         }
         speaker.last_packet = now;
         speaker.jitter.push(
@@ -367,6 +385,56 @@ mod tests {
         speaker.volume = gain;
         speaker.extend(&frames.iter().flatten().copied().collect::<Vec<_>>());
         mixer.speakers.insert(key, speaker);
+    }
+
+    #[test]
+    fn an_underrun_fades_out_and_back_in_and_a_late_terminator_stays_silent() {
+        // A 0.5 sine: packets 0..15 arrive on time, the sender stalls for
+        // 300 ms, sends 15..30 and runs dry again, and its terminator comes
+        // last. Playout fades to silence and back instead of stepping, and the
+        // terminator only ends audio that has already faded out (issue #206).
+        let packets = tone(31, 0.5);
+        let start = Instant::now();
+        let mut mixer = Mixer::default();
+        let mut left = Vec::new();
+        for tick in 0..140 {
+            for (index, opus) in packets.iter().enumerate() {
+                let at = match index {
+                    0..15 => 20 * index,
+                    15..30 => 20 * index + 300,
+                    _ => 1200,
+                };
+                if at == 10 * tick {
+                    let voice = Voice {
+                        stream: 1,
+                        sender: 1,
+                        sequence: 2 * index as u64,
+                        opus: opus.clone(),
+                        end: index == 30,
+                        volume: 1.,
+                    };
+                    let now = start + Duration::from_millis(at as u64);
+                    mixer.push(voice, now).unwrap();
+                }
+            }
+            let mut wide = [[0.; 2]; FRAME];
+            mixer.mix(&mut wide);
+            left.extend(wide.iter().map(|frame| frame[0]));
+        }
+        let silent = left
+            .chunks(FRAME)
+            .filter(|frame| frame.iter().all(|v| *v == 0.));
+        assert!(silent.count() > 40, "the stream must run dry twice");
+        // A 0.5 sine at 440 Hz changes by at most 0.029 per sample.
+        let step = left
+            .windows(2)
+            .map(|pair| (pair[1] - pair[0]).abs())
+            .fold(0., f64::max);
+        assert!(step < 0.05, "{step}");
+        assert!(
+            left[110 * FRAME..].iter().all(|v| *v == 0.),
+            "terminator played"
+        );
     }
 
     #[test]
