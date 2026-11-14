@@ -4634,6 +4634,7 @@ mod reply_owner_tests {
             generation,
             voice_route: Default::default(),
             commands,
+            self_state: watch::channel((true, false)).0,
             sounds,
             task: tokio::spawn(async {}),
         };
@@ -4840,6 +4841,7 @@ mod reply_owner_tests {
                 generation: 7,
                 voice_route: Default::default(),
                 commands,
+                self_state: watch::channel((true, false)).0,
                 sounds,
                 task: runtime.spawn(async {}),
             },
