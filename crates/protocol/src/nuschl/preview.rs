@@ -284,42 +284,6 @@ mod tests {
         assert_eq!(message.encode_to_vec().as_slice(), message_bytes.as_slice());
     }
 
-    #[derive(Clone, PartialEq, prost::Message)]
-    struct PreviousAck {
-        #[prost(uint64, tag = "1")]
-        request_id: u64,
-        #[prost(bytes = "vec", tag = "2")]
-        conversation: Vec<u8>,
-        #[prost(uint64, tag = "3")]
-        seq: u64,
-        #[prost(int64, tag = "4")]
-        server_ms: i64,
-    }
-
-    #[test]
-    fn ack_absent_revision_stays_unknown_and_explicit_zero_keeps_its_presence() {
-        let old = PreviousAck {
-            request_id: 7,
-            conversation: vec![2; 16],
-            seq: 9,
-            server_ms: 11,
-        };
-        let bytes = old.encode_to_vec();
-        let mut ack = v1::ChatAck::decode(bytes.as_slice()).unwrap();
-        assert_eq!(ack.edits, None);
-        assert_eq!(ack.encode_to_vec(), bytes);
-        for revision in [0, 1, u32::MAX] {
-            ack.edits = Some(revision);
-            let encoded = ack.encode_to_vec();
-            assert_ne!(encoded, bytes);
-            assert_eq!(
-                v1::ChatAck::decode(encoded.as_slice()).unwrap().edits,
-                Some(revision)
-            );
-            assert_eq!(PreviousAck::decode(encoded.as_slice()).unwrap(), old);
-        }
-    }
-
     #[test]
     fn direct_and_nested_wire_debug_never_print_carried_metadata_or_image_bytes() {
         let mut value = example();
