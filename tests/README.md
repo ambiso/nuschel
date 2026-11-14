@@ -80,6 +80,11 @@ lack an AT-SPI Text counterpart. Pixel and geometry JSON is scoped to the actual
 tested Linux artifact; it does not prove physical platform, precise-touchpad or
 matched frame-time performance. No host clipboard or devices are used.
 
+`screenshots.py --scenes dialog-overscroll --at-spi …` (`dialog_overscroll.py`) opens Settings
+and "Profile and connection" at 100% and 200% zoom, scrolls each to the end by End key and by a
+wheel over its gutter, and fails on more than the dialog's padding below the last control or on
+spaced-out accessible text.
+
 ## Suites in the VM run
 
 | Script | What it proves |

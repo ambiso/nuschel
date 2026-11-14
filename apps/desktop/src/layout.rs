@@ -270,24 +270,29 @@ pub fn scroll_region(
 pub const SCROLLBAR_GUTTER: f32 = 12.;
 
 /// One native scrollbar style for ordinary and virtualized scroll handles.
-/// The kit positions this absolute element at the handle's actual viewport,
-/// even when appended inside moving content. Always means visible *when it
+/// The kit paints and hit-tests the bar at the handle's actual viewport, even
+/// when appended inside moving content. Always means visible *when it
 /// overflows*: the kit omits both track and thumb for a non-scrollable axis.
+/// GPUI counts absolute children toward a scroll container's extent, so the
+/// bar's full-size box sits in a zero-size box at its static position (insets
+/// would start at the padding edge), which adds none.
 pub fn scrollbar<H: ScrollbarHandle + Clone>(
     id: impl Into<ElementId>,
     handle: &H,
     background: Token,
-) -> Scrollbar {
-    Scrollbar::vertical(handle)
-        .id(id)
-        .mode(ScrollbarMode::Always)
-        .styles(|styles| {
-            styles
-                .track(|track| track.width(px(8.)).bg(color(background).into()))
-                .thumb(|thumb| thumb.width(px(4.)).bg(color(BORDER_STRONG)).radius(px(2.)))
-                .thumb_hover(|thumb| thumb.bg(color(TEXT_FAINT)))
-                .thumb_active(|thumb| thumb.bg(color(TEXT_MUTED)))
-        })
+) -> Div {
+    div().absolute().size(px(0.)).child(
+        Scrollbar::vertical(handle)
+            .id(id)
+            .mode(ScrollbarMode::Always)
+            .styles(|styles| {
+                styles
+                    .track(|track| track.width(px(8.)).bg(color(background).into()))
+                    .thumb(|thumb| thumb.width(px(4.)).bg(color(BORDER_STRONG)).radius(px(2.)))
+                    .thumb_hover(|thumb| thumb.bg(color(TEXT_FAINT)))
+                    .thumb_active(|thumb| thumb.bg(color(TEXT_MUTED)))
+            }),
+    )
 }
 
 /// Virtual lists cannot contain a sibling overlay themselves. This finite
@@ -351,7 +356,7 @@ fn scroll_events(
         },
     )
     .absolute()
-    .inset_0()
+    .size(px(0.))
 }
 
 /// The same keyboard/focus contract for a caller-owned scroll handle (dialogs
@@ -406,6 +411,7 @@ pub fn scrollable(id: &'static str, label: &'static str, handle: ScrollHandle) -
         .track_scroll(&handle)
         // Establish an autoscroll scope before prepainting descendants; a
         // request from a preceding sibling must not scroll this region.
+        // Zero-size without insets, as in `scrollbar`.
         .child(
             canvas(
                 move |_, window, _| {
@@ -414,8 +420,6 @@ pub fn scrollable(id: &'static str, label: &'static str, handle: ScrollHandle) -
                 |_, _, _, _| {},
             )
             .absolute()
-            .top_0()
-            .left_0()
             .size(px(0.)),
         )
         .on_key_down(move |event, window, cx| {
