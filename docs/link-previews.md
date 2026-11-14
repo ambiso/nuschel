@@ -49,9 +49,9 @@ in one compatible message, within its server limits, or text alone.
 ## Global fetch policy
 
 Choose the global mode in **Settings → Link previews** on Linux. The initial
-default is **Off**, and the setting applies to every connected server. There is no
-default public proxy or DNS service. The web adapter displays metadata and embedded
-images carried in messages, with sender-side preview generation disabled.
+default is **Off**, and the setting applies to every server in the current profile.
+There is no default public proxy or DNS service. The web adapter displays metadata
+and embedded images carried in messages, with sender-side preview generation disabled.
 
 | Mode | Behavior |
 |---|---|
@@ -80,10 +80,12 @@ use `DIR/config/link-previews.json`. For example:
 Replace the proxy address, resolver URL and bootstrap IP with services you have
 configured; the resolver values above are documentation placeholders. The proxy
 must use `socks5://` with an IP literal and explicit port, without authentication.
-The resolver must support DNS-over-HTTPS JSON responses, not only binary DNS wire
-responses. Bootstrap addresses are the resolver's IP addresses: Nuschl reaches
-those through the proxy while verifying TLS against the resolver URL's hostname.
-It resolves page and image hosts through that resolver rather than system DNS.
+The resolver must support DNS-over-HTTPS JSON GET requests using `name` and
+`type` query parameters for A and AAAA records, not only binary DNS wire responses.
+Supply one to four bootstrap IP addresses for the resolver: Nuschl reaches those
+through the proxy while verifying TLS against the resolver URL's hostname and
+built-in WebPKI roots. It resolves page and image hosts through that resolver
+rather than system DNS.
 Restart Nuschl after editing the file; **Active policy** and any configuration
 problem appear below the mode selector. Missing or invalid proxy configuration
 fetches nothing and never falls back to Direct.
