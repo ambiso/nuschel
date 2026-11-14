@@ -4,6 +4,7 @@
 use std::{io, path::Path, time::Duration};
 
 use nuschl_core::MessageDocument;
+pub use nuschl_sandbox::PreviewOperation;
 use nuschl_sandbox::{Role, Worker};
 use thiserror::Error;
 use tokio::{
@@ -16,6 +17,8 @@ use crate::{
     PreparedContent, write_frame,
 };
 
+pub mod preview_lifecycle;
+
 #[derive(Debug, Error)]
 pub enum Error {
     #[error(transparent)]
@@ -26,12 +29,27 @@ pub enum Error {
     Json(#[from] serde_json::Error),
     #[error("content worker exceeded its deadline")]
     Timeout,
+    #[error("the link preview worker is busy")]
+    Busy,
     #[error("content worker returned an invalid response or exited unsuccessfully")]
     InvalidResponse,
     #[error("content processing rejected: {0}")]
     Rejected(String),
     #[error(transparent)]
     Sandbox(#[from] nuschl_sandbox::Error),
+}
+
+/// Build a fixed preview role with its trusted namespace-init receipt on
+/// stderr. The owner acquires the receipt before input and retains its process
+/// permit through observed namespace retirement.
+pub fn preview_sandbox_command(
+    executable: &Path,
+    operation: PreviewOperation,
+) -> Result<tokio::process::Command, Error> {
+    Ok(nuschl_sandbox::command(
+        executable,
+        Role::Preview { operation },
+    )?)
 }
 
 /// Seconds of wall-clock time, and on Linux of CPU time, a request may take.
@@ -148,6 +166,60 @@ pub async fn thumbnail(
         max_width,
         max_height,
     };
+    let maximum = (max_width as usize * max_height as usize * 4).div_ceil(3) * 4 + 4096;
+    validated_thumbnail(
+        bounded_content_request(executable, request, maximum).await?,
+        max_width,
+        max_height,
+    )
+}
+
+/// Admit at most one extraction/preparation and one render worker, with no
+/// queue. Cancellation drops only the caller's interest: the owned task keeps
+/// its selected slot until the confined role has actually retired.
+pub async fn preview(
+    executable: &Path,
+    request: crate::preview::Request,
+) -> Result<crate::preview::Response, Error> {
+    static PREPARATION: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
+    static RENDER: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
+    if !request.is_bounded() {
+        return Err(Error::InvalidResponse);
+    }
+    let slot = match &request {
+        crate::preview::Request::Document { .. } | crate::preview::Request::PrepareImage { .. } => {
+            &PREPARATION
+        }
+        crate::preview::Request::RenderImage { .. } => &RENDER,
+    };
+    let permit = slot.try_acquire().map_err(|_| Error::Busy)?;
+    let executable = executable.to_owned();
+    tokio::spawn(async move {
+        let _permit = permit;
+        let response = bounded_content_request(
+            &executable,
+            ContentRequest::Preview(request),
+            crate::preview::MAX_RESPONSE_FRAME_BYTES,
+        )
+        .await?;
+        match response {
+            ContentResponse::Preview(response) if response.is_bounded() => Ok(response),
+            _ => Err(Error::InvalidResponse),
+        }
+    })
+    .await
+    .map_err(|_| Error::InvalidResponse)?
+}
+
+async fn bounded_content_request(
+    executable: &Path,
+    request: ContentRequest,
+    maximum: usize,
+) -> Result<ContentResponse, Error> {
+    if maximum == 0 || maximum > MAX_FRAME_BYTES {
+        return Err(Error::InvalidResponse);
+    }
+    let is_preview = matches!(&request, ContentRequest::Preview(_));
     let mut frame = Vec::new();
     write_frame(&mut frame, &Envelope::new(1, request))?;
     let Worker {
@@ -155,49 +227,70 @@ pub async fn thumbnail(
         mut input,
         mut output,
         containment: _containment,
-    } = spawn(executable, &[5]).await?;
-    let exchange = async {
-        let write = async move {
-            input.write_all(&frame).await?;
-            input.shutdown().await?;
-            io::Result::Ok(())
-        };
-        let read = async {
-            let maximum = (max_width as usize * max_height as usize * 4).div_ceil(3) * 4 + 4096;
-            let reply = read_thumbnail_reply(&mut output, maximum).await?;
-            if reply.request_id != 1 {
-                return Err(Error::InvalidResponse);
-            }
-            Ok(reply.payload)
-        };
-        let (_, response) = tokio::try_join!(async { write.await.map_err(Error::from) }, read)?;
-        Ok::<_, Error>(response)
+    } = if is_preview {
+        nuschl_sandbox::spawn_preview(executable, PreviewOperation::Prepare).await?
+    } else {
+        spawn(executable, &[5]).await?
     };
-    let mut reply = timeout(Duration::from_secs(5), exchange)
-        .await
-        .map_err(|_| Error::Timeout)
-        .and_then(|result| result);
-    if reply.is_ok() {
-        let finish = async {
-            let mut extra = [0];
-            if output.read(&mut extra).await? != 0 {
-                return Err(Error::InvalidResponse);
+    let mut retirement = is_preview.then(|| preview_lifecycle::Retirement::new(&mut child));
+    // Acquire the bounded trusted startup receipt before input. Keeping this
+    // read owned preserves the original namespace identity through cancellation.
+    let ready = match retirement.as_mut() {
+        Some(retirement) => retirement.ready().await,
+        None => Ok(()),
+    };
+    let reply = match ready {
+        Err(error) => Err(error),
+        Ok(()) => {
+            let exchange = async {
+                let write = async move {
+                    input.write_all(&frame).await?;
+                    input.shutdown().await?;
+                    io::Result::Ok(())
+                };
+                let read = async {
+                    let reply = read_thumbnail_reply(&mut output, maximum).await?;
+                    if reply.request_id != 1 {
+                        return Err(Error::InvalidResponse);
+                    }
+                    Ok(reply.payload)
+                };
+                let (_, response) =
+                    tokio::try_join!(async { write.await.map_err(Error::from) }, read)?;
+                Ok::<_, Error>(response)
+            };
+            let result = timeout(Duration::from_secs(5), exchange)
+                .await
+                .map_err(|_| Error::Timeout)
+                .and_then(|result| result);
+            if result.is_ok() {
+                let finish = async {
+                    let mut extra = [0];
+                    if output.read(&mut extra).await? != 0 {
+                        return Err(Error::InvalidResponse);
+                    }
+                    if !child.wait().await?.success() {
+                        return Err(Error::InvalidResponse);
+                    }
+                    Ok(())
+                };
+                match timeout(Duration::from_secs(2), finish).await {
+                    Ok(Ok(())) => result,
+                    Ok(Err(error)) => Err(error),
+                    Err(_) => Err(Error::Timeout),
+                }
+            } else {
+                result
             }
-            if !child.wait().await?.success() {
-                return Err(Error::InvalidResponse);
-            }
-            Ok(())
-        };
-        reply = match timeout(Duration::from_secs(2), finish).await {
-            Ok(Ok(())) => reply,
-            Ok(Err(error)) => Err(error),
-            Err(_) => Err(Error::Timeout),
-        };
+        }
+    };
+    // Process credit stays with this owner through actual retirement. A
+    // supervising HTTP task can complete its logical timeout independently.
+    match retirement {
+        Some(retirement) => retirement.retire(&mut child).await,
+        None => nuschl_sandbox::reap(&mut child).await,
     }
-    // A failed wait/kill must not release a caller's process credit. Never
-    // replace this owner; a supervising HTTP task can time out independently.
-    nuschl_sandbox::reap(&mut child).await;
-    validated_thumbnail(reply?, max_width, max_height)
+    reply
 }
 
 async fn read_thumbnail_reply(
@@ -524,19 +617,13 @@ pub async fn exchange(
     Ok(results)
 }
 
-/// A content worker for requests with these budgets; one that cannot be
-/// contained is reaped before the error returns.
+/// A content worker for requests with these budgets.
 async fn spawn(executable: &Path, budgets: &[u64]) -> Result<Worker, Error> {
     let role = Role::Content {
         cpu_seconds: budgets.iter().sum(),
+        arguments: &[],
     };
-    match nuschl_sandbox::spawn(nuschl_sandbox::command(executable, role, &[])?) {
-        Err(nuschl_sandbox::Error::Uncontained { error, mut child }) => {
-            nuschl_sandbox::reap(&mut child).await;
-            Err(error.into())
-        }
-        result => Ok(result?),
-    }
+    Ok(nuschl_sandbox::spawn(nuschl_sandbox::command(executable, role)?).await?)
 }
 
 /// Send `frames` to one worker and collect its replies into `results`, whose
@@ -596,8 +683,7 @@ async fn converse(
         }
     };
     if outcome.is_err() {
-        // kill_on_drop is a fallback; explicitly reap while the runtime still exists.
-        child.kill().await.ok();
+        nuschl_sandbox::reap(&mut child).await;
     }
     outcome
 }
@@ -657,5 +743,22 @@ mod thumbnail_validation_tests {
         }
         assert!(validated_thumbnail(reply(vec![image(2, 1, "AQIDBAUGBwg=")]), 1, 1).is_err());
         assert!(validated_thumbnail(ContentResponse::Rejected("no".into()), 1, 1).is_err());
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod reap_tests {
+    /// `reap` returns only once the worker's exit is confirmed: waited for,
+    /// so not even a zombie remains, not just sent a kill.
+    #[tokio::test]
+    async fn reap_confirms_the_exit_of_a_spawned_worker() {
+        let mut command = tokio::process::Command::new("sleep");
+        command.arg("60");
+        let mut worker = nuschl_sandbox::spawn(command).await.unwrap();
+        let pid = worker.child.id().unwrap();
+        assert!(std::path::Path::new(&format!("/proc/{pid}")).exists());
+        nuschl_sandbox::reap(&mut worker.child).await;
+        assert!(worker.child.try_wait().unwrap().is_some());
+        assert!(!std::path::Path::new(&format!("/proc/{pid}")).exists());
     }
 }

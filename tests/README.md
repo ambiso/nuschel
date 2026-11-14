@@ -111,7 +111,12 @@ mentions and text-only jumps over AT-SPI, with screenshots. Against a loopback `
 (edits, deletions and their authorisation, typing, direct conversations, with
 `nuschl-cli`) and `conversation_screenshots.py` (the desktop with edits, tombstones,
 the typing line, a direct conversation from server history, keyboard links, and the
-local cache it leaves, in a private headless GNOME Shell). The client SDK without a
+local cache it leaves, in a private headless GNOME Shell) and `emoji_smoke.py
+<binaries> --output DIR` (Twemoji in messages and the composer, checked by pixel
+colours: `™` stays text and `™️` is an image; the picker's search, skin tone,
+Shift+Enter, Shift+click and click insert the expected text, and it is what is sent;
+short codes type emoji; an emoji in a message shows its tooltip and card;
+docs/emoji.md). The client SDK without a
 UI: `with_local_nuschld.py <binaries> sdk_headless.py <binaries> --port PORT` runs
 `crates/client/examples/headless.rs` (three people connect, register, meet in a
 channel, send, receive, edit, and load the server's history through the SDK alone).
@@ -125,6 +130,24 @@ PORT` (or `with_local_murmur.py <mumble-server> tui_loopback.py <binaries> --por
 and one in plain lines: certificate on first use, joining through Ctrl+K, sending and
 receiving, and on nuschld registering, typing, editing, deleting, search, a direct
 conversation and unread counts.
+`tls_drop.py <binaries> --root DIR` loses TLS connections while one loopback
+`nuschld` keeps running. Relays owned by the test sit between it and `nuschl-tui
+--plain` (Ada, who reconnects by herself) or `nuschl-cli` (Cleo, who does not). They
+reset the connection and refuse reconnections, or silently discard traffic one way
+or both, while Bob writes directly. It checks that the reconnection reaches the same
+server process (pid, start time, log) and shows the gap line. It also checks that
+what was said meanwhile appears once, in order, in Ada's reopened timeline, compared
+with a server page. Text typed during the loss is refused while reconnecting, and is
+resent under its idempotency key and stored once after a silent loss. The JSON
+client gives no outcome before it exits. Cleo, started again, pages `after` her last
+seq until `more_after` is false, covering every seq to the head. Negative controls:
+a send retried under its key keeps its seq, but under a new key it is stored twice
+and must fail the exactly-once check; `--control no-drop` must fail the reconnection
+checks. Runs, failed ones too, stay in DIR (`results.json`). The relay discards
+bytes but keeps both sockets healthy, so kernel TCP timeouts and real packet loss
+are not exercised. Against main 32f66817 (2026-11-13) the client never fills a gap in
+an already loaded server-history timeline after reconnecting in process: `/older`
+and reopening do not, a restarted client does. Those checks fail.
 
 Deterministic voice reordering, not yet in the VM run: `with_local_murmur.py
 <mumble-server> udp_reorder.py <binaries> --port PORT --opus-library LIB` (or

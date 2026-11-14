@@ -185,6 +185,19 @@ enum Input {
         #[serde(default)]
         end: bool,
     },
+    /// Report plugin data from others (off until asked).
+    PluginAccept {
+        accept: bool,
+    },
+    /// Plugin data to receivers named `[session, instance]`; answered by
+    /// `plugin_data_admission` with `request`.
+    PluginData {
+        #[serde(default)]
+        request: u64,
+        receivers: Vec<(u32, u64)>,
+        data_id: String,
+        data: Vec<u8>,
+    },
     /// Nuschl servers: send to a conversation (32 hex digits); `key` makes a
     /// retry idempotent.
     ChatSend {
@@ -935,6 +948,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                         }
                     }
                 }
+                Ok(Input::PluginAccept { accept }) => Command::AcceptPluginData(accept),
+                Ok(Input::PluginData {
+                    request,
+                    receivers,
+                    data_id,
+                    data,
+                }) => match nuschl_protocol::plugin::Payload::new(data_id, data) {
+                    Ok(payload) => Command::PluginData {
+                        request,
+                        receivers,
+                        payload,
+                    },
+                    Err(error) => {
+                        let _ = output(json!({"kind":"error", "message":error.to_string()}));
+                        continue;
+                    }
+                },
                 Ok(Input::Disconnect) => Command::Disconnect,
                 Err(error) => {
                     let _ = output(json!({"kind":"error", "message":error.to_string()}));
@@ -959,6 +989,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 Err(error) => { output(json!({"kind":"disconnected", "message":error.to_string()}))?; return Err(error.into()); },
             },
             Some(event) = events.recv() => output(match event {
+                SessionEvent::LinkPreviewSendResult { id, result } => json!({"kind":"link_preview_send_result", "request_id":id, "sent":result.is_ok(), "reason":result.err()}),
                 SessionEvent::PeerCertificate(sha256) => json!({"kind":"peer_certificate", "sha256":sha256}),
                 SessionEvent::Negotiated(negotiated) => json!({"kind":"negotiated", "nuschl":negotiated.nuschl, "capabilities":negotiated.capabilities,
                     "policy":negotiated.policy.map(|policy| json!({"moderators_delete":policy.moderators_delete, "edit_limit":policy.edit_limit}))}),
@@ -1002,6 +1033,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 SessionEvent::ConversationState { channel, head, read } => json!({"kind":"conversation_state", "channel":channel, "head":head, "read":read}),
                 SessionEvent::Identity(event) => identity_json(&event),
                 SessionEvent::Mls(event) => mls_json(&event),
+                SessionEvent::PluginData(data) => json!({"kind":"plugin_data", "sender":data.sender, "sender_instance":data.sender_instance,
+                    "sender_user_id":data.sender_user_id, "sender_certificate_hash":data.sender_certificate_hash,
+                    "data_id":data.payload.data_id(), "data":hex(data.payload.data())}),
+                SessionEvent::PluginDataAdmission { request, result } => json!({"kind":"plugin_data_admission", "request":request,
+                    "admitted":result.is_ok(), "error":result.as_ref().err().map(ToString::to_string),
+                    "retry_after_ms":match result { Err(nuschl_protocol::plugin::Refusal::RateLimited { retry_after_ms }) => Some(retry_after_ms), _ => None }}),
             })?,
         }
     }

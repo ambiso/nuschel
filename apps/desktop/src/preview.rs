@@ -295,7 +295,7 @@ pub async fn run(
                 applied = audio;
             },
             _ = tokio::time::sleep_until(retry), if media.is_none() => {
-                match Media::start() {
+                match Media::start().await {
                     Ok(worker) => {
                         configure(&worker, &applied);
                         let _ = worker.commands.try_send(LiveMediaRequest::Preview { capture, loopback });

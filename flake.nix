@@ -105,8 +105,6 @@
             || lib.hasSuffix ".ico" path
             # The math worker's bundled font (crates/math/fonts).
             || lib.hasSuffix ".otf" path
-            # The emoji picker's table.
-            || lib.hasSuffix "emoji.txt" path
             # Frozen identity vectors are compiled into the all-target tests.
             || lib.hasInfix "/test-vectors/" path
             # Vendored GPUI crates keep their shaders, headers and README.
@@ -139,13 +137,19 @@
           pkgs.libxrandr
           pkgs.libxcb
         ];
+        # Twemoji images and emojibase names for both clients; the sources
+        # are pinned together in nix/emoji.nix.
+        emojiAssets = import ./nix/emoji.nix { inherit pkgs; };
+        version = (builtins.fromTOML (builtins.readFile ./Cargo.toml)).workspace.package.version;
         common = {
           pname = "nuschl";
-          version = "0.1.0";
+          inherit version;
           inherit src nativeBuildInputs buildInputs;
           strictDeps = true;
           cargoExtraArgs = "--workspace";
           LIBCLANG_PATH = "${pkgs.libclang.lib}/lib";
+          # Compiled into the desktop by apps/desktop/build.rs.
+          NUSCHL_EMOJI_ASSETS = emojiAssets;
         };
         # Registry CPAL uses this patched path dependency. Its real API must
         # survive Crane's dummy-source pass so CPAL can compile against it.
@@ -182,6 +186,8 @@
             "postInstall"
             "installPhase"
             "installPhaseCommand"
+            # Only the desktop's own build script reads it.
+            "NUSCHL_EMOJI_ASSETS"
           ];
         buildDeps = args: craneLib.buildDepsOnly (dependencyArgs args // { inherit dummySrc; });
         buildCrossPackage =
@@ -203,7 +209,12 @@
         cargoArtifacts = buildDeps common;
         musicbotWeb = import ./nix/musicbot-web.nix { inherit pkgs lib; };
         webClient = import ./nix/web-client.nix {
-          inherit pkgs lib toolchain;
+          inherit
+            pkgs
+            lib
+            toolchain
+            emojiAssets
+            ;
           releaseNotices = releaseNotices.web.bundle;
         };
         releaseNotices = import ./nix/release-notices.nix {
@@ -234,7 +245,7 @@
           mkdir -p "$out/share/licenses/nuschl"
           cp -R ${nativeNoticeBundle}/share/licenses/nuschl/. "$out/share/licenses/nuschl/"
         '';
-        witnessPackage = pkgs.runCommand "nuschl-witness-0.1.0" { meta.mainProgram = "nuschl-witness"; } ''
+        witnessPackage = pkgs.runCommand "nuschl-witness-${version}" { meta.mainProgram = "nuschl-witness"; } ''
           install -Dm755 ${crates.project.workspaceMembers.nuschl-witness.build}/bin/nuschl-witness "$out/bin/nuschl-witness"
           install -Dm644 ${./LICENSE} "$out/share/licenses/nuschl/EUPL-1.2"
           ${installNativeNotices}
@@ -242,7 +253,7 @@
         musicbotNoticeScope = "musicbot-${pkgs.stdenv.hostPlatform.rust.rustcTarget}";
         musicbotNotices = releaseNotices.forScope musicbotNoticeScope;
         musicbotPackage =
-          pkgs.runCommand "nuschl-musicbot-0.1.0"
+          pkgs.runCommand "nuschl-musicbot-${version}"
             {
               nativeBuildInputs = [ pkgs.makeWrapper ];
               meta.mainProgram = "nuschl-musicbot";
@@ -390,7 +401,7 @@
             )
           );
         package =
-          pkgs.runCommand "nuschl-0.1.0"
+          pkgs.runCommand "nuschl-${version}"
             {
               nativeBuildInputs = [ pkgs.makeWrapper ];
               meta.mainProgram = "nuschl";
@@ -425,7 +436,7 @@
           };
         desktopCrates = "-p nuschl -p nuschl-content-worker -p nuschl-crypto-worker -p nuschl-math-worker -p nuschl-media-worker -p nuschl-storage-worker -p nuschl-transfer-worker";
         crossCommon = {
-          version = "0.1.0";
+          inherit version;
           inherit src dummySrc;
           strictDeps = true;
           doCheck = false; # Tests run natively, never under an emulator.
@@ -434,6 +445,7 @@
             pkgs.protobuf
             pkgs.pkg-config
           ];
+          NUSCHL_EMOJI_ASSETS = emojiAssets;
         };
         mingw = pkgs.pkgsCross.mingwW64;
         windowsVerifiers = import ./nix/cross-updaters.nix { inherit pkgs; };
@@ -596,6 +608,7 @@
         packages.${distroOutput "deb-source-check"} = linuxDistro.debSourceCheck;
         legacyPackages.crate2nixInputs = crate2nixInputs;
         packages.default-crane = cranePackage;
+        packages.emojiAssets = emojiAssets;
         packages.server = serverPackage;
         packages.witness = witnessPackage;
         packages.update-signer = updateSigner;
@@ -712,6 +725,29 @@
           # Scoped unit-test leaves over the cached per-crate graph (no Cargo target).
           desktop-unit = crates.project.workspaceMembers."nuschl".build.override { runTests = true; };
           core-unit = crates.project.workspaceMembers."nuschl-core".build.override { runTests = true; };
+          protocol-unit = crates.project.workspaceMembers."nuschl-protocol".build.override {
+            runTests = true;
+          };
+          client-unit = crates.project.workspaceMembers."nuschl-client".build.override {
+            runTests = true;
+          };
+          session-unit = crates.project.workspaceMembers."nuschl-session".build.override {
+            runTests = true;
+          };
+          content-worker-unit = crates.project.workspaceMembers."nuschl-content-worker".build.override {
+            runTests = true;
+            testInputs = [
+              pkgs.bubblewrap
+              pkgs.util-linux
+            ];
+          };
+          content-unit = crates.project.workspaceMembers."nuschl-content".build.override {
+            runTests = true;
+          };
+          link-preview-unit = crates.project.workspaceMembers."nuschl-link-preview".build.override {
+            runTests = true;
+            testInputs = [ pkgs.python3 ];
+          };
           server-unit = crates.project.workspaceMembers."nuschld".build.override { runTests = true; };
           media-unit = crates.project.workspaceMembers."nuschl-media-worker".build.override {
             runTests = true;
@@ -769,6 +805,11 @@
             };
           in
           {
+            preview-worker = import ./nix/preview-worker-check.nix {
+              inherit pkgs toolchain;
+              ipc = crates.project.workspaceMembers."nuschl-ipc".build;
+              contentWorker = crates.project.workspaceMembers."nuschl-content-worker".build;
+            };
             rename-options =
               let
                 legacy = nixpkgs.lib.nixosSystem {
@@ -824,11 +865,34 @@
                 "1.3" = "${nixpkgs-mumble13.legacyPackages.${system}.murmur}/bin/murmurd";
               };
             };
+            vm-link-previews = import ./tests/link_previews_vm.nix {
+              inherit pkgs;
+              nuschl = package;
+              sourceIdentity = self.rev or self.outPath;
+              contentWorker = crates.project.workspaceMembers."nuschl-content-worker".build;
+              # Export the actual cached test ELF without running its private
+              # network fixture in a build sandbox or rewriting its bytes.
+              nativeFetchTest =
+                (crates.project.workspaceMembers."nuschl-session".build.override {
+                  runTests = true;
+                  testPreRun = ''
+                    case "$f" in
+                      */nuschl_session-*)
+                        test ! -e "$out/bin/nuschl-preview-fetch-test"
+                        install -Dm0555 "$f" "$out/bin/nuschl-preview-fetch-test"
+                        ;;
+                    esac
+                    continue
+                  '';
+                }).test.overrideAttrs
+                  { dontFixup = true; };
+            };
           }
         );
         devShells.default = craneLib.devShell {
           inherit buildInputs;
           LIBCLANG_PATH = common.LIBCLANG_PATH;
+          NUSCHL_EMOJI_ASSETS = emojiAssets;
           packages =
             nativeBuildInputs
             ++ [

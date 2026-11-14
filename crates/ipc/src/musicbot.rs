@@ -16,7 +16,6 @@
 use crate::{Envelope, PROTOCOL_VERSION};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{
-    ffi::OsString,
     io::{self, Read, Write},
     path::{Path, PathBuf},
     sync::{
@@ -385,17 +384,14 @@ pub async fn spawn(executable: &Path, role: Role) -> Result<Process, String> {
     if !executable.is_file() {
         return Err("the music codec worker is not installed".into());
     }
-    let arguments = [
-        OsString::from("--codec-worker"),
-        OsString::from(role.argument()),
-    ];
-    let sandbox = nuschl_sandbox::Role::MusicbotCodec;
-    let command = nuschl_sandbox::command(executable, sandbox, &arguments)
+    let sandbox = nuschl_sandbox::Role::MusicbotCodec {
+        operation: role.argument(),
+    };
+    let command = nuschl_sandbox::command(executable, sandbox)
         .map_err(|_| "secure music codec sandbox is unavailable")?;
-    match nuschl_sandbox::spawn(command) {
+    match nuschl_sandbox::spawn(command).await {
         Ok(worker) => Ok(Process::new(worker)),
-        Err(nuschl_sandbox::Error::Uncontained { mut child, .. }) => {
-            nuschl_sandbox::reap(&mut child).await;
+        Err(nuschl_sandbox::Error::Uncontained(_)) => {
             Err("cannot contain music codec worker".into())
         }
         Err(_) => Err("cannot start isolated music codec worker".into()),
@@ -1068,12 +1064,12 @@ mod tests {
     }
 
     #[cfg(target_os = "linux")]
-    fn held_client(role: Role) -> (Client, Arc<Notify>, u32) {
+    async fn held_client(role: Role) -> (Client, Arc<Notify>, u32) {
         let mut command = tokio::process::Command::new(std::env::current_exe().unwrap());
         command
             .args(["--exact", "musicbot::tests::retirement_child", "--ignored"])
             .env("NUSCHL_RETIREMENT_CHILD", "1");
-        let mut process = Process::new(nuschl_sandbox::spawn(command).unwrap());
+        let mut process = Process::new(nuschl_sandbox::spawn(command).await.unwrap());
         let pid = process.child.id().unwrap();
         let gate = Arc::new(Notify::new());
         process.retirement_gate = Some(gate.clone());
@@ -1086,7 +1082,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn failed_exchange_and_cancelled_close_retain_the_same_child() {
-        let (mut client, gate, pid) = held_client(Role::Encode);
+        let (mut client, gate, pid) = held_client(Role::Encode).await;
         // The fixture's libtest stdout is an invalid framed reply, driving the
         // real request -> end -> bounded close path.
         let error = tokio::time::timeout(
@@ -1136,7 +1132,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn duck_disable_and_new_session_keep_unconfirmed_credit() {
-        let (client, gate, pid) = held_client(Role::Duck);
+        let (client, gate, pid) = held_client(Role::Duck).await;
         let mut ducker = Ducker {
             client,
             quarantined: vec![4],
@@ -1165,7 +1161,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn decode_terminal_precedes_reaping_and_a_controlled_blocking_read() {
-        let (mut client, gate, pid) = held_client(Role::Decode);
+        let (mut client, gate, pid) = held_client(Role::Decode).await;
         let process = client.process.take().unwrap();
         let (entered, started) = oneshot::channel();
         let (release, read_release) = std::sync::mpsc::channel();

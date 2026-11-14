@@ -17,11 +17,10 @@ use crate::{
 pub(crate) fn command(
     executable: &std::path::Path,
     role: Role,
-    arguments: &[std::ffi::OsString],
 ) -> Result<tokio::process::Command, crate::Error> {
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     let policy = policy(role).ok_or(crate::Error::MissingSandboxHelper(
-        "musicbot codec containment on this platform",
+        "containment for this role on this platform",
     ))?;
     let mut command = tokio::process::Command::new(executable);
     command.env_clear();
@@ -32,58 +31,75 @@ pub(crate) fn command(
     }
     command.creation_flags(CREATE_NO_WINDOW);
     command.args(policy.arguments());
-    // An offer's file reaches the worker as an inherited read-only handle
+    // A readable file reaches the worker as an inherited read-only handle
     // (`--file-handle N`, appended by the launch stage), never as a path.
-    let data = role.directory().unwrap_or(std::path::Path::new(""));
-    command.args(role.arguments(data, None));
-    command.args(arguments);
+    let data = role.capabilities().writable;
+    command.args(role.arguments(data.unwrap_or(std::path::Path::new("")), None));
     Ok(command)
 }
 
-/// The role's AppContainer and job limits. Everything but audio and the
-/// network runs as a less privileged AppContainer (LPAC): not even given
-/// what Windows grants every AppContainer. COM, which WASAPI needs, and
-/// Winsock refuse an LPAC. No confinement for the music bot's codec children
-/// has been designed and proven here.
+/// The role's AppContainer and job limits. A writable directory scopes the
+/// profile name to it, so two Nuschl profiles' workers never share a container.
 fn policy(role: Role) -> Option<Policy> {
-    let (profile, capabilities): (String, &[&str]) = match role {
-        Role::Content { .. } => ("nuschl.content".into(), &[]),
-        Role::Math => ("nuschl.math".into(), &[]),
-        Role::Update { post_quantum: true } => ("nuschl.update.mldsa44".into(), &[]),
-        Role::Update {
-            post_quantum: false,
-        } => ("nuschl.update.ed25519".into(), &[]),
-        Role::Storage { directory } => (scoped_profile("nuschl.storage", directory), &[]),
-        Role::Crypto { directory } => (scoped_profile("nuschl.crypto", directory), &[]),
-        Role::Media => ("nuschl.media".into(), &["microphone"]),
+    let can = role.capabilities();
+    if can.linux_only {
+        return None;
+    }
+    let mut capabilities = Vec::new();
+    if can.audio {
+        capabilities.push("microphone".into());
+    }
+    if can.network {
         // Outgoing connections to the Internet (rendezvous, relay, peers) and
         // connections to and from the local network (direct transit between
         // peers on one LAN), but no inbound connections from the Internet.
-        Role::Transfer { .. } => (
-            "nuschl.transfer".into(),
-            &["internetClient", "privateNetworkClientServer"],
-        ),
-        Role::MusicbotCodec => return None,
-    };
+        capabilities.extend(["internetClient".into(), "privateNetworkClientServer".into()]);
+    }
+    let profile = format!("nuschl.{}", can.name);
     Some(Policy {
-        profile,
-        less_privileged: capabilities.is_empty(),
-        capabilities: capabilities.iter().map(|&name| name.into()).collect(),
-        writable: role.directory().map(Into::into).into_iter().collect(),
-        file: match role {
-            Role::Transfer { file } => file.map(Into::into),
-            _ => None,
+        profile: match can.writable {
+            Some(directory) => scoped_profile(&profile, directory),
+            None => profile,
         },
-        memory: role.memory(),
-        cpu_seconds: role.cpu_seconds(),
+        capabilities,
+        writable: can.writable.map(Into::into).into_iter().collect(),
+        file: can.readable.map(Into::into),
+        memory: can.memory,
+        cpu_seconds: can.cpu_seconds,
+        less_privileged: can.lpac,
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::policy;
-    use crate::Role;
+    use crate::{Role, windows_policy::scoped_profile};
     use std::path::Path;
+
+    /// The launch stage's arguments for each role.
+    #[test]
+    fn roles_map_to_their_launch_policy() {
+        let directory = Path::new(r"C:\data");
+        let file = Path::new(r"C:\offer.zip");
+        let storage = scoped_profile("nuschl.storage", directory);
+        let crypto = scoped_profile("nuschl.crypto", directory);
+        let pure = "--memory 1073741824 --less-privileged --";
+        for (role, expected) in [
+            (Role::Content { cpu_seconds: 7, arguments: &[] }, "nuschl.content --memory 536870912 --cpu 7 --less-privileged --".into()),
+            (Role::Math, "nuschl.math --memory 536870912 --cpu 120 --less-privileged --".into()),
+            (Role::Update { post_quantum: true }, "nuschl.update.mldsa44 --memory 268435456 --cpu 5 --less-privileged --".into()),
+            (Role::Update { post_quantum: false }, "nuschl.update.ed25519 --memory 268435456 --cpu 5 --less-privileged --".into()),
+            (Role::Storage { directory }, format!(r"{storage} --writable C:\data {pure}")),
+            (Role::Crypto { directory }, format!(r"{crypto} --writable C:\data {pure}")),
+            (Role::Media, "nuschl.media --capability microphone --memory 1073741824 --".into()),
+            (Role::Transfer { file: Some(file) }, r"nuschl.transfer --capability internetClient --capability privateNetworkClientServer --read-file C:\offer.zip --memory 1073741824 --".into()),
+            (Role::Transfer { file: None }, "nuschl.transfer --capability internetClient --capability privateNetworkClientServer --memory 1073741824 --".into()),
+        ] {
+            let arguments = policy(role).unwrap().arguments();
+            let arguments: Vec<_> = arguments.iter().map(|a| a.to_string_lossy()).collect();
+            assert_eq!(arguments.join(" "), format!("--nuschl-sandbox --profile {expected}"));
+        }
+    }
 
     #[test]
     fn update_verifiers_have_distinct_lpac_profiles_without_external_authority() {
@@ -111,7 +127,11 @@ mod tests {
         let history = Path::new(r"C:\Users\a\AppData\Local\Nuschl\Nuschl\data\history");
         let crypto = Path::new(r"C:\Users\a\AppData\Local\Nuschl\Nuschl\data\keys");
         let offer = Path::new(r"C:\Users\a\Documents\offer.zip");
-        let content = policy(Role::Content { cpu_seconds: 7 }).unwrap();
+        let content = policy(Role::Content {
+            cpu_seconds: 7,
+            arguments: &[],
+        })
+        .unwrap();
         assert_eq!(content.profile, "nuschl.content");
         assert_eq!(content.cpu_seconds, Some(7));
         assert_eq!(content.memory, 512 << 20);
@@ -139,7 +159,18 @@ mod tests {
         let receive = policy(Role::Transfer { file: None }).unwrap();
         assert_eq!(send.file.as_deref(), Some(offer));
         assert_eq!(receive.file, None);
-        assert!(policy(Role::MusicbotCodec).is_none());
+        assert!(
+            policy(Role::MusicbotCodec {
+                operation: "decode"
+            })
+            .is_none()
+        );
+        for operation in [
+            crate::PreviewOperation::Prepare,
+            crate::PreviewOperation::Fetch,
+        ] {
+            assert!(policy(Role::Preview { operation }).is_none());
+        }
         for policy in [&content, &math, &storage, &keys, &media, &send, &receive] {
             // Only transfers reach the network; only storage and crypto get
             // a directory; every worker has a memory limit.

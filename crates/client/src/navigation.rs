@@ -27,11 +27,23 @@ pub enum SessionSecurity {
     MlsEstablished,
 }
 
+/// The authenticated scope in which a page was requested. Transport retries
+/// keep the driver generation, so pages also carry a client page epoch.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PageOwner {
+    pub generation: u64,
+    pub epoch: u64,
+    pub archive: Option<[u8; 16]>,
+    pub identity: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HistoryTicket {
     pub conversation: Conversation,
     pub source: HistorySource,
     generation: u64,
+    pub(crate) owner: Option<PageOwner>,
+    pub(crate) catchup: bool,
 }
 
 #[derive(Default)]
@@ -53,6 +65,8 @@ impl Navigation {
             conversation,
             source,
             generation: self.generation,
+            owner: None,
+            catchup: false,
         }
     }
 

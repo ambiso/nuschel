@@ -268,6 +268,12 @@ pub fn server_limit(kind: u16) -> usize {
     .min(MAX_CONTROL_BYTES)
 }
 
+/// Canonical size of the decoded history page's protobuf body. Unknown wire
+/// fields have already been discarded; the original frame is bounded separately.
+pub fn history_page_bytes(page: &v1::HistoryPage) -> usize {
+    page.encoded_len()
+}
+
 /// The fixed text for an error code. Clients show it as plain text.
 pub fn detail(code: Code) -> &'static str {
     match code {
@@ -466,6 +472,37 @@ pub fn valid_kt_log(hello: &v1::Hello) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn history_page_bytes_counts_canonical_payload_metadata_and_varint_ranges() {
+        for seq in [0, 127, 128, i64::MAX as u64, u64::MAX] {
+            let page = v1::HistoryPage {
+                request_id: seq,
+                conversation: vec![1; 16],
+                head: seq,
+                messages: vec![v1::Message {
+                    seq,
+                    content: "x".repeat(MAX_CONTENT_BYTES),
+                    author: Some(v1::Author {
+                        name: "a".repeat(MAX_NAME_BYTES),
+                        account: vec![2; 16],
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            };
+            assert_eq!(history_page_bytes(&page), page.encode_to_vec().len());
+            assert!(history_page_bytes(&page) > MAX_CONTENT_BYTES + MAX_NAME_BYTES);
+            assert!(history_page_bytes(&page) < server_limit(kind::HISTORY_PAGE));
+        }
+        assert_eq!(history_page_bytes(&v1::HistoryPage::default()), 0);
+        // Unknown field 15 is discarded by decoding, so this helper reports
+        // canonical size, independently of the original frame's byte cap.
+        let with_unknown = [0x78, 0x01];
+        let decoded = v1::HistoryPage::decode(with_unknown.as_slice()).unwrap();
+        assert_eq!(history_page_bytes(&decoded), 0);
+    }
 
     fn hello_with(capabilities: &[&str]) -> v1::Hello {
         v1::Hello {

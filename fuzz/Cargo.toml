@@ -14,7 +14,7 @@ publish = false
 cargo-fuzz = true
 
 [dependencies]
-nuschl-audio-jitter = { path = "../crates/audio-jitter", version = "0.1.0" }
+nuschl-audio-jitter = { path = "../crates/audio-jitter", version = "0.2.0" }
 libfuzzer-sys = "0.4"
 nuschl-content = { path = "../crates/content" }
 nuschl-math = { path = "../crates/math" }

@@ -213,9 +213,16 @@ pub struct Desktop {
     pub driver: Arc<Driver>,
     /// The desktop's own background work (services.rs).
     pub services: Services,
+    pub link_preview: crate::link_preview::ComposerPreview,
     pub profile: Profile,
     pub form: Option<ServerForm>,
     pub composer: Entity<TextareaState>,
+    /// Logical body bounds below the window chrome and update bar.
+    pub body_size: std::rc::Rc<std::cell::Cell<Size<Pixels>>>,
+    pub composer_rows: usize,
+    /// Observed extra control-row height contributes to the timeline reservation.
+    pub composer_wrap: std::rc::Rc<std::cell::Cell<Pixels>>,
+    pub channels_open: bool,
     pub scroll: ScrollHandle,
     pub channel_scroll: ScrollHandle,
     pub server_scroll: ScrollHandle,
@@ -267,10 +274,17 @@ pub struct Desktop {
     pub viewer: Option<crate::viewer::Viewer>,
     pub viewer_requests: u64,
     pub menu_image: Option<crate::viewer::ViewerImage>,
-    /// The emoji picker's search while it is open, recent picks, and its focus.
+    /// The emoji picker while it is open, recent picks, the chosen skin
+    /// tone (0 default, 1 light to 5 dark), and its focus.
     pub emoji: Option<crate::emoji::Picker>,
-    pub emoji_recent: Vec<&'static str>,
+    pub emoji_recent: Vec<&'static crate::emoji::Emoji>,
+    pub emoji_tone: usize,
     pub emoji_focus: FocusHandle,
+    /// Short codes typed in the composer (`:heart:`), and the card of an
+    /// emoji clicked in a message with its focus (emoji/info.rs).
+    pub shortcodes: crate::emoji::Shortcodes,
+    pub emoji_card: Option<crate::emoji::EmojiCard>,
+    pub emoji_card_focus: FocusHandle,
     /// The footer's mute and deafen animations (created on first render).
     pub mute_ease: Option<crate::motion::Ease>,
     /// Focus stays inside an open dialog (see `keep_dialog_focus`).
@@ -361,7 +375,7 @@ impl Desktop {
             accessible(
                 TextareaState::new(window, cx)
                     .placeholder("Write a message…")
-                    .auto_grow(1, 10)
+                    .auto_grow(1, 1)
                     .submit_on_enter(true),
                 "Message",
                 true,
@@ -386,7 +400,10 @@ impl Desktop {
                             input.replace_text_in_range(None, "\n", window, cx)
                         });
                     }
-                    InputEvent::Change => this.composer_changed(cx),
+                    InputEvent::Change => {
+                        this.composer_changed(cx);
+                        this.shortcodes_changed(window, cx);
+                    }
                     _ => {}
                 },
             );
@@ -446,10 +463,18 @@ impl Desktop {
             .iter()
             .map(|bookmark| (bookmark.id.clone(), ServerUi::new(bookmark)))
             .collect();
-        let client = Client::new(
+        let mut client = Client::new(
             Box::new(driver.clone()),
             bookmarks,
             nuschl_client::native::preferences(&settings),
+        );
+        client.set_link_preview_settings(
+            if cfg!(target_os = "linux") {
+                settings.link_previews.clone()
+            } else {
+                crate::link_preview::off()
+            },
+            monotonic_ms(),
         );
         let (services, mut service_events) = Services::new(handle.clone(), driver.settings());
         // The desktop's own services report apart from the driver.
@@ -511,9 +536,14 @@ impl Desktop {
             notes: crate::notify::start(&handle),
             driver,
             services,
+            link_preview: crate::link_preview::ComposerPreview::default(),
             profile,
             form: None,
             composer,
+            body_size: Default::default(),
+            composer_rows: 1,
+            composer_wrap: Default::default(),
+            channels_open: false,
             scroll: ScrollHandle::new(),
             channel_scroll: ScrollHandle::new(),
             server_scroll: ScrollHandle::new(),
@@ -549,7 +579,11 @@ impl Desktop {
             menu_image: None,
             emoji: None,
             emoji_recent: Vec::new(),
+            emoji_tone: 0,
             emoji_focus: cx.focus_handle(),
+            shortcodes: Default::default(),
+            emoji_card: None,
+            emoji_card_focus: cx.focus_handle(),
             mute_ease: None,
             modal_focus: cx.focus_handle(),
             deafen_ease: None,
@@ -801,12 +835,12 @@ impl Desktop {
         let Some(server) = self.client.servers.get(index) else {
             return;
         };
-        if self
+        let switching = self
             .client
             .navigation
             .selection()
-            .is_none_or(|selection| selection.server != server.id)
-        {
+            .is_none_or(|selection| selection.server != server.id);
+        if switching {
             self.unread.reset_channels();
             self.channel_motion.cancel();
             self.channel_scroll.set_offset(point(px(0.), px(0.)));
@@ -817,6 +851,9 @@ impl Desktop {
             .remembered_channel(&server.id)
             .filter(|id| server.channels.iter().any(|channel| channel.id == *id))
             .unwrap_or(0);
+        if switching && self.channels_open {
+            self.cancel_modal_scroll();
+        }
         self.browse_channel(index, channel, window, cx);
     }
     pub fn browse_channel(
@@ -860,6 +897,7 @@ impl Desktop {
             self.error = Some(error);
         }
         self.scroll.scroll_to_bottom();
+        self.sync_link_preview(cx);
     }
     /// What only drawing needs of the server at `index`.
     pub fn ui_of(&self, index: usize) -> Option<&ServerUi> {
@@ -974,6 +1012,13 @@ impl Desktop {
     pub fn cancel_modal_scroll(&mut self) {
         self.modal_motion.cancel();
         self.nested.cancel();
+    }
+    /// Closing the sheet retires its wheel transaction and easing.
+    pub fn close_channels(&mut self) {
+        if self.channels_open {
+            self.channels_open = false;
+            self.cancel_modal_scroll();
+        }
     }
 
     /// Move one nested list or the dialog per wheel run (`scrolling::WheelRun`).
@@ -1618,6 +1663,10 @@ impl Desktop {
                 .shortcuts
                 .window_actions(&self.settings, keystroke, true)
                 .is_empty();
+        }
+        if keystroke.key == "escape" && self.channels_open {
+            self.close_channels();
+            return true;
         }
         if keystroke.key == "escape" && self.viewer.is_some() && self.menu.is_none() {
             self.viewer = None;
@@ -2401,6 +2450,7 @@ impl Desktop {
         // that came before their message's page.
         self.client.settle();
         self.apply_updates(cx);
+        self.sync_link_preview(cx);
         self.expire_typing(cx);
         self.flush_outgoing(cx);
     }
@@ -2645,6 +2695,9 @@ impl Desktop {
     /// What the desktop's own services report (services.rs).
     fn apply_service_event(&mut self, event: ServiceEvent, cx: &mut Context<Self>) {
         match event {
+            ServiceEvent::LinkPreviewImage { ticket, pixels } => {
+                self.link_preview_pixels(ticket, pixels, cx)
+            }
             ServiceEvent::Prepared { id, result } => self.prepared(id, result, cx),
             ServiceEvent::ServerIcon { server, icon } => {
                 if let Some(server) = self

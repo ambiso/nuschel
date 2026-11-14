@@ -124,7 +124,7 @@ pkgs.testers.runNixOSTest {
         client.copy_from_machine("/tmp/nuschl-recovery-artifacts", "recovery")
     # Screen-reader view over AT-SPI: names and roles, and operating Mute without a pointer.
     try:
-        client.succeed("su - tester -c '${pkgs.dbus}/bin/dbus-run-session -- xvfb-run -a -s \"-screen 0 1280x800x24\" ${pkgs.python3}/bin/python3 ${../tests}/accessibility.py ${nuschl}/bin --murmur ${pkgs.murmur}/bin/mumble-server --at-spi ${pkgs.at-spi2-core} --output /tmp/nuschl-a11y-artifacts'")
+        client.succeed("su - tester -c '${pkgs.dbus}/bin/dbus-run-session -- xvfb-run -a -s \"-screen 0 1280x800x24\" ${pkgs.python3}/bin/python3 ${../tests}/accessibility.py ${nuschl}/bin --murmur ${pkgs.murmur}/bin/mumble-server --at-spi ${pkgs.at-spi2-core} --pulse-bin ${pkgs.pulseaudio}/bin --output /tmp/nuschl-a11y-artifacts'")
     finally:
         client.copy_from_machine("/tmp/nuschl-a11y-artifacts", "accessibility")
     # Older stock servers use the legacy UDP packet format.
