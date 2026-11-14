@@ -105,8 +105,6 @@
             || lib.hasSuffix ".ico" path
             # The math worker's bundled font (crates/math/fonts).
             || lib.hasSuffix ".otf" path
-            # The emoji picker's table.
-            || lib.hasSuffix "emoji.txt" path
             # Frozen identity vectors are compiled into the all-target tests.
             || lib.hasInfix "/test-vectors/" path
             # Vendored GPUI crates keep their shaders, headers and README.
@@ -139,6 +137,9 @@
           pkgs.libxrandr
           pkgs.libxcb
         ];
+        # Twemoji images and emojibase names for both clients; the sources
+        # are pinned together in nix/emoji.nix.
+        emojiAssets = import ./nix/emoji.nix { inherit pkgs; };
         common = {
           pname = "nuschl";
           version = "0.1.0";
@@ -146,6 +147,8 @@
           strictDeps = true;
           cargoExtraArgs = "--workspace";
           LIBCLANG_PATH = "${pkgs.libclang.lib}/lib";
+          # Compiled into the desktop by apps/desktop/build.rs.
+          NUSCHL_EMOJI_ASSETS = emojiAssets;
         };
         # Registry CPAL uses this patched path dependency. Its real API must
         # survive Crane's dummy-source pass so CPAL can compile against it.
@@ -182,6 +185,8 @@
             "postInstall"
             "installPhase"
             "installPhaseCommand"
+            # Only the desktop's own build script reads it.
+            "NUSCHL_EMOJI_ASSETS"
           ];
         buildDeps = args: craneLib.buildDepsOnly (dependencyArgs args // { inherit dummySrc; });
         buildCrossPackage =
@@ -203,7 +208,12 @@
         cargoArtifacts = buildDeps common;
         musicbotWeb = import ./nix/musicbot-web.nix { inherit pkgs lib; };
         webClient = import ./nix/web-client.nix {
-          inherit pkgs lib toolchain;
+          inherit
+            pkgs
+            lib
+            toolchain
+            emojiAssets
+            ;
           releaseNotices = releaseNotices.web.bundle;
         };
         releaseNotices = import ./nix/release-notices.nix {
@@ -434,6 +444,7 @@
             pkgs.protobuf
             pkgs.pkg-config
           ];
+          NUSCHL_EMOJI_ASSETS = emojiAssets;
         };
         mingw = pkgs.pkgsCross.mingwW64;
         windowsVerifiers = import ./nix/cross-updaters.nix { inherit pkgs; };
@@ -596,6 +607,7 @@
         packages.${distroOutput "deb-source-check"} = linuxDistro.debSourceCheck;
         legacyPackages.crate2nixInputs = crate2nixInputs;
         packages.default-crane = cranePackage;
+        packages.emojiAssets = emojiAssets;
         packages.server = serverPackage;
         packages.witness = witnessPackage;
         packages.update-signer = updateSigner;
@@ -829,6 +841,7 @@
         devShells.default = craneLib.devShell {
           inherit buildInputs;
           LIBCLANG_PATH = common.LIBCLANG_PATH;
+          NUSCHL_EMOJI_ASSETS = emojiAssets;
           packages =
             nativeBuildInputs
             ++ [
