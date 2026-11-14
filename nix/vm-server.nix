@@ -251,7 +251,7 @@ pkgs.testers.runNixOSTest {
     # imported by the module into a fresh SQLite database, then logged in to.
     server.succeed(f"sqlite3 /tmp/murmur.sqlite < {tests}/fixtures/murmur-1.5.sql && chmod 0600 /tmp/murmur.sqlite")
     # Where Landlock is unavailable (its syscalls fail with ENOSYS here) the reader
-    # refuses the file; --allow-unconfined-murmur-read reads it, and the report says so.
+    # refuses the file.
     unconfined = (
         "systemd-run --wait --pipe --collect -p SystemCallErrorNumber=ENOSYS"
         " -p SystemCallFilter='~landlock_create_ruleset landlock_add_rule landlock_restrict_self'"
@@ -261,8 +261,6 @@ pkgs.testers.runNixOSTest {
     refused = server.fail(f"{unconfined} 2>&1")
     assert "reader: not confined (no Landlock in this kernel" in refused, refused
     assert "the file was not read" in refused, refused
-    allowed = server.succeed(f"{unconfined} --allow-unconfined-murmur-read 2>&1")
-    assert "read anyway (--allow-unconfined-murmur-read)" in allowed, allowed
     server.succeed("/run/current-system/specialisation/murmur/bin/switch-to-configuration test")
     server.wait_until_succeeds("test -e /var/lib/nuschl/murmur-imported", timeout=120)
     server.wait_for_unit("nuschl.service")

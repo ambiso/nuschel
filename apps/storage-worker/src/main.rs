@@ -38,9 +38,6 @@ struct Arguments {
     /// The Murmur virtual server to read.
     #[arg(long, default_value_t = 1, requires = "read_murmur")]
     murmur_server_id: i64,
-    /// Read the Murmur database even where Landlock cannot fully confine the reader.
-    #[arg(long, requires = "read_murmur")]
-    allow_unconfined_murmur_read: bool,
     /// With `--server`: take the operator lock before opening the database; if
     /// another process holds it, answer every request with `Held` instead.
     #[arg(long, requires = "server")]
@@ -58,12 +55,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     let arguments = Arguments::parse();
     if let Some(path) = &arguments.read_murmur {
-        return read_murmur(
-            path,
-            arguments.murmur_server_id,
-            arguments.allow_unconfined_murmur_read,
-        )
-        .await;
+        return read_murmur(path, arguments.murmur_server_id).await;
     }
     if arguments.server {
         return serve_server_state(arguments).await;
@@ -206,7 +198,6 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
 async fn read_murmur(
     path: &std::path::Path,
     server: i64,
-    allow_unconfined: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use nuschl_ipc::murmur::MurmurFrame;
     let mut output = io::stdout().lock();
@@ -216,22 +207,19 @@ async fn read_murmur(
         write_frame(&mut output, &Envelope::new(sequence, frame)).map_err(|error| error.to_string())
     };
     // Before SQLite starts its thread, so that the thread is confined too.
-    // Without full confinement the file is not read, unless the operator allows it.
-    let confinement = match confine(path) {
-        Ok(()) => "reader: confined by Landlock to reading the file".to_owned(),
-        Err(missing) if allow_unconfined => {
-            format!("reader: {missing}; read anyway (--allow-unconfined-murmur-read)")
-        }
-        Err(missing) => {
-            let error = format!(
-                "reader: {missing}, so the file was not read. Use Linux 6.12 or later with Landlock \
-                 enabled, or pass --allow-unconfined-murmur-read"
-            );
-            let _ = emit(MurmurFrame::Failed(error.clone()));
-            return Err(error.into());
-        }
-    };
-    let _ = emit(MurmurFrame::Notes(vec![confinement]));
+    // Without full confinement the file is not read.
+    if let Err(missing) = confine(path) {
+        let error = format!(
+            "reader: {missing}, so the file was not read. Run the import on Linux 6.12 or later \
+             with Landlock enabled (on another machine, for example), then copy the resulting \
+             database or state here"
+        );
+        let _ = emit(MurmurFrame::Failed(error.clone()));
+        return Err(error.into());
+    }
+    let _ = emit(MurmurFrame::Notes(vec![
+        "reader: confined by Landlock to reading the file".into(),
+    ]));
     if let Err(error) = nuschl_storage::murmur::read(path, server, &mut emit).await {
         let _ = emit(MurmurFrame::Failed(error.clone()));
         return Err(error.into());

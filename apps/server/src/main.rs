@@ -63,9 +63,6 @@ struct Arguments {
     /// Delete this server's channels, registered users and bans before the import.
     #[arg(long, requires = "import_murmur")]
     replace_existing: bool,
-    /// Read the Murmur database even where Landlock cannot fully confine the reader.
-    #[arg(long, requires = "import_murmur")]
-    allow_unconfined_murmur_read: bool,
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -158,7 +155,6 @@ async fn run(arguments: Arguments) -> Result<(), Box<dyn std::error::Error>> {
             path: path.clone(),
             server_id: arguments.murmur_server_id,
             replace_existing: arguments.replace_existing,
-            allow_unconfined_read: arguments.allow_unconfined_murmur_read,
         };
         let report = nuschld::murmur::import(&settings, backend, &options).await?;
         print!("{}", report.render());

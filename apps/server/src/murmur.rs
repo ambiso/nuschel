@@ -63,8 +63,6 @@ pub struct Options {
     pub server_id: i64,
     /// Replace existing channels, registered users and bans.
     pub replace_existing: bool,
-    /// Read the file even where Landlock cannot fully confine the reader.
-    pub allow_unconfined_read: bool,
 }
 
 /// `nuschld admin import-murmur` (and the older `--import-murmur`).
@@ -79,10 +77,6 @@ pub struct ImportArguments {
     /// Delete this server's channels, registered users and bans first.
     #[arg(long)]
     pub replace_existing: bool,
-    /// Read the database even where Landlock cannot fully confine the reader
-    /// (an old kernel, Landlock disabled); the report says so.
-    #[arg(long)]
-    pub allow_unconfined_murmur_read: bool,
 }
 
 impl From<ImportArguments> for Options {
@@ -91,7 +85,6 @@ impl From<ImportArguments> for Options {
             path: arguments.path,
             server_id: arguments.murmur_server_id,
             replace_existing: arguments.replace_existing,
-            allow_unconfined_read: arguments.allow_unconfined_murmur_read,
         }
     }
 }
@@ -187,11 +180,6 @@ pub async fn read_dump(worker: &Path, options: &Options) -> Result<MurmurDump, I
         .arg(&options.path)
         .arg("--murmur-server-id")
         .arg(options.server_id.to_string())
-        .args(
-            options
-                .allow_unconfined_read
-                .then_some("--allow-unconfined-murmur-read"),
-        )
         .env_clear()
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
