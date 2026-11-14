@@ -158,6 +158,9 @@ impl Render for Desktop {
             .when_some(crate::emoji::overlay(self, cx), |view, picker| {
                 view.child(picker)
             })
+            .when_some(crate::emoji::card(self, window, cx), |view, card| {
+                view.child(card)
+            })
             .when_some(crate::viewer::overlay(self, window, cx), |view, viewer| {
                 view.child(viewer)
             })
@@ -2882,6 +2885,12 @@ fn message_row(
             hovered.filter(|hovered| hovered.deceptive && this.menu.is_none()),
             |row, hovered| row.child(link_target(hovered)),
         )
+        .when_some(
+            this.text.hovered_emoji.as_ref().filter(|hovered| {
+                hovered.message == serial && this.menu.is_none() && this.emoji_card.is_none()
+            }),
+            |row, hovered| row.child(crate::emoji::tooltip(hovered)),
+        )
         .on_mouse_down(
             MouseButton::Right,
             cx.listener(move |this, event: &MouseDownEvent, _, cx| {
@@ -3201,9 +3210,39 @@ fn composer(
                 }
             }),
         )
+        // While short codes list their emoji (emoji/shortcodes.rs), Up and
+        // Down choose one, Enter or Tab types it and Esc closes the list.
+        .capture_action(
+            cx.listener(|this, _: &gpui_kit::base::input::MoveDown, window, cx| {
+                if this.shortcode_key(crate::emoji::ShortcodeKey::Down, window, cx) {
+                    cx.stop_propagation();
+                }
+            }),
+        )
+        .capture_action(
+            cx.listener(|this, action: &gpui_kit::base::input::Enter, window, cx| {
+                if !action.secondary
+                    && !action.shift
+                    && this.shortcode_key(crate::emoji::ShortcodeKey::Accept, window, cx)
+                {
+                    cx.stop_propagation();
+                }
+            }),
+        )
+        .capture_action(cx.listener(
+            |this, _: &gpui_kit::base::input::IndentInline, window, cx| {
+                if this.shortcode_key(crate::emoji::ShortcodeKey::Accept, window, cx) {
+                    cx.stop_propagation();
+                }
+            },
+        ))
         // Esc ends an edit, or in an empty composer lets go of its attachments.
         .capture_action(
             cx.listener(|this, _: &gpui_kit::base::input::Escape, window, cx| {
+                if this.shortcode_key(crate::emoji::ShortcodeKey::Close, window, cx) {
+                    cx.stop_propagation();
+                    return;
+                }
                 if this.cancel_edit(window, cx)
                     || this.composer.read(cx).value().is_empty() && this.clear_attachments()
                 {
@@ -3215,6 +3254,10 @@ fn composer(
         // Up in an empty composer edits our last message (Nuschl servers).
         .capture_action(
             cx.listener(|this, _: &gpui_kit::base::input::MoveUp, window, cx| {
+                if this.shortcode_key(crate::emoji::ShortcodeKey::Up, window, cx) {
+                    cx.stop_propagation();
+                    return;
+                }
                 if this.edit_last(window, cx) {
                     cx.stop_propagation();
                     cx.notify();
@@ -3295,6 +3338,10 @@ fn composer(
         })
         .child(
             div()
+                .relative()
+                .when_some(crate::emoji::shortcode_list(this, cx), |input, list| {
+                    input.child(list)
+                })
                 .pl_1()
                 .pr_2()
                 .py_2()
@@ -3321,6 +3368,15 @@ fn composer(
                         .py_1()
                         .child(Textarea::new(&this.composer)),
                 )
+                .child(icon_button(
+                    "emoji-picker-button",
+                    "smile",
+                    "Emoji, stickers and GIFs (Ctrl+.)",
+                    TEXT_MUTED,
+                    this.emoji.is_some().then_some(ACCENT),
+                    |this, window, cx| this.toggle_emoji(window, cx),
+                    cx,
+                ))
                 .child(icon_button(
                     "send-message",
                     "send",

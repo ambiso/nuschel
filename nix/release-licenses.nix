@@ -252,6 +252,9 @@ let
         required_external.add('syntect-default-assets')
     if any(name == 'nuschl-client-wasm' for name, _ in selected):
         required_external.add('web-runtime-assets')
+    # Twemoji's CC-BY 4.0 asks for attribution wherever its images go.
+    if any(name in ('nuschl', 'nuschl-client-wasm') for name, _ in selected):
+        required_external.add('emoji-assets')
     for name in sorted(required_external - external_names):
         issue((name, 'toolchain'), 'pinned non-Cargo runtime notices have not been supplied')
     report = {
