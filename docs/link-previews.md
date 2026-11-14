@@ -42,8 +42,8 @@ Late worker replies cannot undo removal. A failed or unfinished preview never bl
 the original text from being sent.
 
 The planned negotiated format gives text and preview one idempotency key, sequence
-number, storage transaction, edit and deletion. A preview is not a second image message. Modern
-clients use typed, versioned metadata; the legacy projection is ordinary Mumble HTML
+number, storage transaction, edit and deletion. A preview is not a second image message. In that
+format, clients use typed, versioned metadata; the legacy projection is ordinary Mumble HTML
 in one compatible message, within its server limits, or text alone.
 
 ## Global fetch policy
