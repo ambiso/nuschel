@@ -17,6 +17,7 @@ pub mod names;
 pub mod native;
 mod navigation;
 pub mod platform;
+pub mod preview;
 pub mod search;
 pub mod server;
 pub mod sounds;

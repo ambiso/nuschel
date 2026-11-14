@@ -53,7 +53,7 @@ pub fn person_label(client: &Client, server: &ServerState, user: &User) -> Strin
         states.push("muted");
     }
     if user.suppressed {
-        states.push("suppressed");
+        states.push("can't speak here");
     }
     if user.priority_speaker {
         states.push("priority speaker");

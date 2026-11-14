@@ -201,7 +201,7 @@ pub fn panel(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement> {
             for (flag, text) in [
                 (user.muted, "server-muted"),
                 (user.deafened, "server-deafened"),
-                (user.suppressed, "suppressed"),
+                (user.suppressed, "can't speak here"),
                 (user.self_muted, "muted"),
                 (user.self_deafened, "deafened"),
                 (user.priority_speaker, "priority speaker"),

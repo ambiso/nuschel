@@ -1445,6 +1445,10 @@ pub fn dialog(
                 .child(section("APPEARANCE", crate::appearance::settings(this, cx)))
                 .child(section("GENERAL", general))
                 .child(section("PRIVACY", privacy))
+                .child(section(
+                    "LINK PREVIEWS",
+                    vec![crate::link_preview::settings(this, cx)],
+                ))
                 .child(section("IDENTITY", identity_section)),
         )
         .into_any_element();

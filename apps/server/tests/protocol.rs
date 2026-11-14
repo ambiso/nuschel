@@ -655,6 +655,62 @@ async fn unauthenticated_peers_cannot_send_large_or_unexpected_frames() {
     fixture.running.shutdown().await;
 }
 
+#[tokio::test]
+async fn plugin_data_is_relayed_and_oversized_plugin_frames_are_dropped() {
+    let fixture = Fixture::start("").await;
+    let (alice_id, bob_id) = (identity(), identity());
+    let mut alice = Client::connect(fixture.address(), Options::new("Alice", &alice_id))
+        .await
+        .unwrap();
+    let mut bob = Client::connect(fixture.address(), Options::new("Bob", &bob_id))
+        .await
+        .unwrap();
+    let message = |receivers: Vec<u32>, data: &[u8]| proto::PluginDataTransmission {
+        sender_session: Some(9999),
+        receiver_sessions: receivers,
+        data: Some(data.to_vec()),
+        data_id: Some("game".into()),
+    };
+    alice
+        .send(
+            kind::PLUGIN_DATA_TRANSMISSION,
+            &message(vec![bob.session, bob.session, 9999], b"one"),
+        )
+        .await;
+    let got = bob
+        .expect::<proto::PluginDataTransmission>(kind::PLUGIN_DATA_TRANSMISSION, |_| true)
+        .await;
+    assert_eq!(got.sender_session, Some(alice.session));
+    assert!(got.receiver_sessions.is_empty());
+    assert_eq!(got.data.as_deref(), Some(&b"one"[..]));
+    // Above the fixed ceiling yet within stock Mumble's frame limit: read
+    // past and dropped, as Murmur drops it; the connection goes on.
+    let ceiling = nuschl_protocol::plugin::max_body(nuschld::connection::PLUGIN_FRAME_RECEIVERS);
+    let mut oversized = Vec::new();
+    oversized.extend_from_slice(&kind::PLUGIN_DATA_TRANSMISSION.to_be_bytes());
+    oversized.extend_from_slice(&((ceiling + 1) as u32).to_be_bytes());
+    oversized.resize(oversized.len() + ceiling + 1, 0x2a);
+    alice.send_raw(&oversized).await.unwrap();
+    alice
+        .send(
+            kind::PLUGIN_DATA_TRANSMISSION,
+            &message(vec![bob.session], b"two"),
+        )
+        .await;
+    let got = bob
+        .expect::<proto::PluginDataTransmission>(kind::PLUGIN_DATA_TRANSMISSION, |_| true)
+        .await;
+    assert_eq!(got.data.as_deref(), Some(&b"two"[..]));
+    alice.sync().await;
+    // Beyond stock Mumble's frame limit the connection closes, as Murmur's does.
+    alice.send_raw(&[0, 26, 0, 0x80, 0, 0]).await.unwrap();
+    let mut sink = Vec::new();
+    let closed = timeout(WAIT, alice.reader.read_to_end(&mut sink)).await;
+    assert!(closed.is_ok(), "connection stayed open");
+    bob.sync().await;
+    fixture.running.shutdown().await;
+}
+
 async fn superuser(address: SocketAddr, identity: &Identity) -> Client {
     let mut options = Options::new("SuperUser", identity);
     options.password = Some(SUPERUSER_PASSWORD);
@@ -1298,13 +1354,12 @@ async fn hostile_frames_leave_the_server_running() {
     fixture.running.shutdown().await;
 }
 
-fn fixture_text(name: &str) -> String {
-    std::fs::read_to_string(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../tests/fixtures")
-            .join(name),
-    )
-    .unwrap()
+fn fixture_text() -> String {
+    let file = option_env!("NUSCHL_TEST_MURMUR_FIXTURE").unwrap_or(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tests/fixtures/murmur-1.5.json"
+    ));
+    std::fs::read_to_string(file).unwrap()
 }
 
 fn plain_settings(directory: &std::path::Path, extra: &str) -> nuschld::config::Settings {
@@ -1359,8 +1414,7 @@ async fn import_murmur(
 #[tokio::test]
 async fn a_murmur_database_imports_with_its_passwords_and_acls() {
     let carol = identity();
-    let mut dump =
-        nuschl_ipc::murmur::MurmurDump::from_json(&fixture_text("murmur-1.5.json")).unwrap();
+    let mut dump = nuschl_ipc::murmur::MurmurDump::from_json(&fixture_text()).unwrap();
     for user in &mut dump.users {
         if user.name == "carol" {
             // Murmur's hashes are lowercase; an uppercase one is normalised.
@@ -2027,8 +2081,7 @@ async fn statistics_count_connections_messages_and_voice() {
 /// fails before anything is replaced.
 #[tokio::test]
 async fn murmur_16_details_and_failures_before_any_change() {
-    let mut dump =
-        nuschl_ipc::murmur::MurmurDump::from_json(&fixture_text("murmur-1.5.json")).unwrap();
+    let mut dump = nuschl_ipc::murmur::MurmurDump::from_json(&fixture_text()).unwrap();
     dump.header.layout = "1.6".into();
     dump.channels[0].parent = Some(0);
     dump.acls.push(nuschl_ipc::murmur::MurmurAcl {

@@ -8,6 +8,8 @@
 }:
 let
   inherit (pkgs) lib;
+  # Read by the desktop's build script (apps/desktop/build.rs).
+  emojiAssets = import ./emoji.nix { inherit pkgs; };
   pkgConfig = [ pkgs.pkg-config ];
   # Libraries the final binaries link against (and whose -sys crates probe).
   linuxLibraries = [
@@ -43,6 +45,11 @@ let
       nativeBuildInputs = [ pkgs.protobuf ];
       PROTOC = "${pkgs.protobuf}/bin/protoc";
     };
+    # Server integration tests read the unchanged workspace import fixture.
+    # Isolated crate sources do not contain the repository's tests directory.
+    nuschld = _: {
+      NUSCHL_TEST_MURMUR_FIXTURE = "${../tests/fixtures/murmur-1.5.json}";
+    };
     # The probe embeds the actual workspace fixture; isolated crate sources do
     # not contain ../../../tests. Keep identical frame bytes as an explicit input.
     nuschl-rtc-probe = _: {
@@ -52,16 +59,7 @@ let
           '"${../tests/fixtures/rtc-keyframe.vp8}"'
       '';
     };
-    # Its integration tests read Murmur fixtures from the workspace's
-    # tests/fixtures, which the isolated crate source does not contain.
-    nuschld = _: {
-      postPatch = ''
-        substituteInPlace tests/protocol.rs --replace-fail \
-          '.join("../../tests/fixtures")' \
-          '.join("${../tests/fixtures}")'
-      '';
-    };
-    nuschl = withLibraries;
+    nuschl = attrs: withLibraries attrs // { NUSCHL_EMOJI_ASSETS = emojiAssets; };
     nuschl-media-worker = withLibraries;
     nuschl-cli = withLibraries;
   };

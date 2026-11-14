@@ -49,6 +49,10 @@ pub fn text_html(body: &str) -> String {
 /// and www. addresses at a word start, with URL characters as Mumble matches
 /// them, minus trailing punctuation that belongs to the sentence. Linear in
 /// the text: the server makes this copy of every message under its lock.
+pub fn link_ranges(text: &str) -> Vec<(usize, usize)> {
+    links(text)
+}
+
 fn links(text: &str) -> Vec<(usize, usize)> {
     const PREFIXES: [&str; 4] = ["https://", "http://", "mumble://", "www."];
     let lower = text.to_ascii_lowercase();

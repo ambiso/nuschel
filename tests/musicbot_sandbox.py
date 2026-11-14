@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: EUPL-1.2
-"""Exercise the exact IPC musicbot launcher against owned file/network canaries.
+"""Exercise the exact musicbot codec launcher against owned file/network canaries.
 
-Compile musicbot_sandbox.rs with the packaged bot's nuschl-ipc rlib and its
+Compile musicbot_sandbox.rs with the packaged bot's nuschl-sandbox rlib and its
 normal dependency search paths; this script never opens host devices/profiles.
 This proves the launch profile, not the whole decoder or systemd integration.
 """
@@ -12,7 +12,6 @@ import os
 from pathlib import Path
 import socket
 import subprocess
-import sys
 import tempfile
 
 
@@ -32,7 +31,7 @@ def main():
             listener.settimeout(0.1)
             port = listener.getsockname()[1]
             env = {"PATH": os.environ.get("PATH", ""), "MUSICBOT_TEST_SECRET": "public-test-value"}
-            result = subprocess.run([str(args.probe.resolve()), sys.executable, str(canary), str(port)],
+            result = subprocess.run([str(args.probe.resolve()), str(canary), str(port)],
                                     env=env, capture_output=True, text=True, timeout=10)
             (args.output / "stderr.txt").write_text(result.stderr)
             assert result.returncode == 0, result.stderr

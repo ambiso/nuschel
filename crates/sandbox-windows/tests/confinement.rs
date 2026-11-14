@@ -4,7 +4,7 @@
 //! `confinement.exe [--only KIND] [--nested] [--connect HOST:PORT] [--workers DIR [--rendezvous ws://HOST:PORT/v1
 //! --relay tcp://HOST:PORT [--code-file PATH] [--receive CODE --expect TEXT]]]`
 //!
-//! This binary starts itself through `nuschl_ipc::host`'s real sandbox
+//! This binary starts itself through `nuschl_sandbox`'s real sandbox
 //! commands, once per worker kind, as if it were that worker. Inside, as a
 //! probe, it tries what a compromised worker would: read a file in the user's
 //! Documents, list the user's profile, write outside its directory, connect
@@ -61,6 +61,7 @@ mod windows {
         math::{MathRequest, MathResponse},
         write_frame,
     };
+    use nuschl_sandbox::{Containment, Role, command, contain};
     use serde_json::{Value, json};
     use tokio::{
         io::{AsyncBufReadExt as _, AsyncReadExt as _, AsyncWriteExt as _, BufReader},
@@ -430,32 +431,44 @@ mod windows {
         let probes = [
             (
                 "content",
-                host::content_sandbox_command(&me, &["--probe".into()]),
+                command(
+                    &me,
+                    Role::Content {
+                        cpu_seconds: 5,
+                        arguments: &["--probe".into()],
+                    },
+                ),
                 request(None, 640 * mib),
             ),
-            (
-                "math",
-                host::math_sandbox_command(&me),
-                request(None, 640 * mib),
-            ),
+            ("math", command(&me, Role::Math), request(None, 640 * mib)),
             (
                 "storage",
-                host::storage_sandbox_command(&me, &storage),
+                command(
+                    &me,
+                    Role::Storage {
+                        directory: &storage,
+                    },
+                ),
                 request(Some(&storage), 1200 * mib),
             ),
             (
                 "crypto",
-                host::crypto_sandbox_command(&me, &crypto),
+                command(&me, Role::Crypto { directory: &crypto }),
                 request(Some(&crypto), 1200 * mib),
             ),
             (
                 "media",
-                host::media_sandbox_command(&me),
+                command(&me, Role::Media),
                 request(None, 1200 * mib),
             ),
             (
                 "transfer",
-                host::transfer_sandbox_command(&me, Some(&offered)),
+                command(
+                    &me,
+                    Role::Transfer {
+                        file: Some(&offered),
+                    },
+                ),
                 request(None, 1200 * mib),
             ),
         ];
@@ -610,7 +623,7 @@ mod windows {
             .kill_on_drop(true)
             .spawn()
             .map_err(|error| format!("spawn: {error}"))?;
-        let _containment = host::contain(&child).map_err(|error| error.to_string())?;
+        let _containment = contain(&child).map_err(|error| error.to_string())?;
         let mut input = child.stdin.take().ok_or("no stdin")?;
         input
             .write_all(format!("{request}\n").as_bytes())
@@ -630,7 +643,7 @@ mod windows {
 
     // ------------------------------------------------------ the real workers
 
-    fn spawn(mut command: Command) -> Result<(Child, host::Containment), String> {
+    fn spawn(mut command: Command) -> Result<(Child, Containment), String> {
         let child = command
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
@@ -638,7 +651,7 @@ mod windows {
             .kill_on_drop(true)
             .spawn()
             .map_err(|error| format!("spawn: {error}"))?;
-        let containment = host::contain(&child).map_err(|error| error.to_string())?;
+        let containment = contain(&child).map_err(|error| error.to_string())?;
         Ok((child, containment))
     }
 
@@ -698,8 +711,7 @@ mod windows {
 
         if wanted("math") {
             let rendered = async {
-                let command =
-                    host::math_sandbox_command(&worker("math")).map_err(|e| e.to_string())?;
+                let command = command(&worker("math"), Role::Math).map_err(|e| e.to_string())?;
                 let (mut child, _containment) = spawn(command)?;
                 let request = MathRequest {
                     tex: r"\frac{a}{b} + \sqrt{x^2}".into(),
@@ -736,8 +748,10 @@ mod windows {
 
         let history = work.join("history");
         let stored = async {
-            let command = host::storage_sandbox_command(&worker("storage"), &history)
-                .map_err(|e| e.to_string())?;
+            let role = Role::Storage {
+                directory: &history,
+            };
+            let command = command(&worker("storage"), role).map_err(|e| e.to_string())?;
             let (mut child, _containment) = spawn(command)?;
             let message = nuschl_core::ChatMessage {
                 server: "vm".into(),
@@ -782,8 +796,8 @@ mod windows {
 
         let keys = work.join("crypto");
         let identity = async {
-            let command = host::crypto_sandbox_command(&worker("crypto"), &keys)
-                .map_err(|e| e.to_string())?;
+            let role = Role::Crypto { directory: &keys };
+            let command = command(&worker("crypto"), role).map_err(|e| e.to_string())?;
             let (mut child, _containment) = spawn(command)?;
             send(
                 &mut child,
@@ -809,8 +823,7 @@ mod windows {
         checks.report("crypto", "creates an identity", identity.await);
 
         let media = async {
-            let command =
-                host::media_sandbox_command(&worker("media")).map_err(|e| e.to_string())?;
+            let command = command(&worker("media"), Role::Media).map_err(|e| e.to_string())?;
             let (mut child, _containment) = spawn(command)?;
             send(
                 &mut child,
@@ -855,8 +868,10 @@ mod windows {
         checks.report("media", "opens the default devices", media.await);
 
         let transfer = async {
-            let command = host::transfer_sandbox_command(&worker("transfer"), Some(offered))
-                .map_err(|e| e.to_string())?;
+            let role = Role::Transfer {
+                file: Some(offered),
+            };
+            let command = command(&worker("transfer"), role).map_err(|e| e.to_string())?;
             let (mut child, _containment) = spawn(command)?;
             send(
                 &mut child,
@@ -898,8 +913,8 @@ mod windows {
         let expected = option(arguments, "--expect").unwrap_or_default();
         let download = async {
             use base64::Engine as _;
-            let command = host::transfer_sandbox_command(&worker("transfer"), None)
-                .map_err(|e| e.to_string())?;
+            let role = Role::Transfer { file: None };
+            let command = command(&worker("transfer"), role).map_err(|e| e.to_string())?;
             let (mut child, _containment) = spawn(command)?;
             send(
                 &mut child,
