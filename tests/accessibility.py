@@ -260,6 +260,17 @@ class AccessibilityTest:
                 # can be after the server has told the peer.
                 return nodes if "Ada Lovelace" in " ".join(names) and {"Send", "Disconnect from Accessible server (voice and chat)"} <= names else None
             nodes = eventually(ready, "the accessibility tree did not fill in", timeout=30)
+
+            def settled():
+                # The first frames can come before the desktop has applied the
+                # server's echo of the self-mute and the channel it sent on
+                # connecting: "· awaiting server" in #Root. check_tree checks
+                # the state that follows, whatever it is.
+                nodes = snapshot(nuschl)
+                voice = [name for _, _, _, name in nodes if name.startswith("Accessible server")]
+                return nodes if any(name.startswith("Accessible server #Development: ") for name in voice) \
+                    and not any(name.endswith(" · awaiting server") for name in voice) else None
+            nodes = eventually(settled, "the server's echo of the self-mute and channel did not show", timeout=15)
             self.write_tree(nodes, "tree.txt")
             self.check_tree(nodes)
             print(f"Accessibility tree: {len(nodes)} nodes; window controls, voice controls, channel tree, "
