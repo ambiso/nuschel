@@ -16,7 +16,7 @@ use std::{
     },
 };
 
-use nuschl_ipc::windows_sandbox::Policy;
+use nuschl_sandbox::windows_policy::Policy;
 use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ;
 
 use crate::{

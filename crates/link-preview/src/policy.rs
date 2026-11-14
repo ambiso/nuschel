@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: EUPL-1.2
-//! Explicit network authority. Page-controlled targets and operator-configured
-//! services are different types; an image cannot become a trusted DNS/proxy URI.
+//! Explicit network authority: the fetch mode, and page-controlled targets
+//! checked before any lookup or connection.
 use ipnet::IpNet;
 use serde::{Deserialize, Serialize};
-use std::net::{IpAddr, SocketAddr};
+use std::net::IpAddr;
 use thiserror::Error;
 use url::{Host, Url};
 
@@ -12,10 +12,9 @@ pub const MAX_URL_BYTES: usize = 2048;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Mode {
-    #[default]
     Off,
+    #[default]
     Direct,
-    ProxyRequired,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -23,33 +22,17 @@ pub enum Mode {
 pub struct Settings {
     #[serde(default)]
     pub mode: Mode,
-    /// An explicit SOCKS5 IP:port, never an ambient environment proxy.
-    pub proxy: Option<String>,
-    /// No resolver is supplied implicitly on the user's behalf.
-    pub dns: Option<DnsSettings>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct DnsSettings {
-    /// A configured DNS-over-HTTPS JSON endpoint. Its bootstrap addresses are
-    /// explicit; reaching it must not need a system DNS lookup.
-    pub url: String,
-    pub bootstrap: Vec<IpAddr>,
+impl Settings {
+    /// Off starts no DNS lookup, socket or fetch worker.
+    pub fn fetches(&self) -> bool {
+        self.mode == Mode::Direct
+    }
 }
 
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
 pub enum Error {
-    #[error("link previews are off")]
-    Off,
-    #[error("configure a proxy before requesting a preview")]
-    MissingProxy,
-    #[error("configure proxied DNS and bootstrap addresses before requesting a preview")]
-    MissingDns,
-    #[error("invalid or unsupported proxy; use an explicit SOCKS5 IP address and port")]
-    Proxy,
-    #[error("invalid proxied DNS configuration")]
-    Dns,
     #[error("invalid or unsupported preview URL")]
     Url,
     #[error("private, local, or special-purpose preview addresses are refused")]
@@ -156,95 +139,6 @@ fn checked_url(text: &str) -> Result<Url, Error> {
     Ok(url)
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Proxy {
-    address: SocketAddr,
-}
-
-impl Proxy {
-    pub fn parse(text: &str) -> Result<Self, Error> {
-        let url = Url::parse(text).map_err(|_| Error::Proxy)?;
-        if url.scheme() != "socks5"
-            || !url.username().is_empty()
-            || url.password().is_some()
-            || !matches!(url.path(), "" | "/")
-            || url.query().is_some()
-            || url.fragment().is_some()
-        {
-            return Err(Error::Proxy);
-        }
-        let ip = match url.host().ok_or(Error::Proxy)? {
-            Host::Ipv4(ip) => ip.into(),
-            Host::Ipv6(ip) => ip.into(),
-            // SOCKS is not a WHATWG special URL scheme: its numeric IPv4
-            // authority is returned as Domain, unlike http/https. Accept only
-            // an actual IP literal here, never a hostname/system DNS lookup.
-            Host::Domain(host) => host.parse::<IpAddr>().map_err(|_| Error::Proxy)?,
-        };
-        let port = url.port().filter(|port| *port != 0).ok_or(Error::Proxy)?;
-        if !service_ip(ip) {
-            return Err(Error::Proxy);
-        }
-        Ok(Self {
-            address: SocketAddr::new(ip, port),
-        })
-    }
-    pub fn address(&self) -> SocketAddr {
-        self.address
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ProxiedDns {
-    url: Url,
-    bootstrap: Vec<IpAddr>,
-}
-
-impl ProxiedDns {
-    pub fn parse(settings: &DnsSettings) -> Result<Self, Error> {
-        let url = checked_url(&settings.url).map_err(|_| Error::Dns)?;
-        if url.scheme() != "https"
-            || url.fragment().is_some()
-            || settings.bootstrap.is_empty()
-            || settings.bootstrap.len() > 4
-            || settings.bootstrap.iter().any(|ip| !service_ip(*ip))
-        {
-            return Err(Error::Dns);
-        }
-        Ok(Self {
-            url,
-            bootstrap: settings.bootstrap.clone(),
-        })
-    }
-    pub fn url(&self) -> &Url {
-        &self.url
-    }
-    pub fn bootstrap(&self) -> &[IpAddr] {
-        &self.bootstrap
-    }
-}
-
-/// Constructing this value performs no DNS, socket, worker or environment I/O.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Route {
-    Direct,
-    Proxy { proxy: Proxy, dns: ProxiedDns },
-}
-
-impl Settings {
-    pub fn route(&self) -> Result<Route, Error> {
-        match self.mode {
-            Mode::Off => Err(Error::Off),
-            Mode::Direct => Ok(Route::Direct),
-            Mode::ProxyRequired => {
-                let proxy = Proxy::parse(self.proxy.as_deref().ok_or(Error::MissingProxy)?)?;
-                let dns = ProxiedDns::parse(self.dns.as_ref().ok_or(Error::MissingDns)?)?;
-                Ok(Route::Proxy { proxy, dns })
-            }
-        }
-    }
-}
-
 /// Pin a bounded DNS result before connecting; never resolve the hostname again
 /// while opening the socket/tunnel. Reject a mixed public/private answer too.
 pub fn validate_addresses(addresses: &[IpAddr]) -> Result<Vec<IpAddr>, Error> {
@@ -261,10 +155,6 @@ pub fn validate_addresses(addresses: &[IpAddr]) -> Result<Vec<IpAddr>, Error> {
         }
     }
     Ok(pinned)
-}
-
-fn service_ip(ip: IpAddr) -> bool {
-    !ip.is_unspecified() && !ip.is_multicast()
 }
 
 // Same audited special-range baseline as the web relay. The preview target
@@ -320,22 +210,9 @@ pub fn public_ip(ip: IpAddr) -> bool {
 mod tests {
     use super::*;
     #[test]
-    fn settings_never_fall_back_from_off_or_an_incomplete_proxy() {
-        assert_eq!(Settings::default().route(), Err(Error::Off));
-        let mut settings = Settings {
-            mode: Mode::ProxyRequired,
-            ..Default::default()
-        };
-        assert_eq!(settings.route(), Err(Error::MissingProxy));
-        settings.proxy = Some("socks5://127.0.0.1:9050".into());
-        assert_eq!(settings.route(), Err(Error::MissingDns));
-        settings.dns = Some(DnsSettings {
-            url: "https://resolver.example/dns-query".into(),
-            bootstrap: vec!["192.168.1.2".parse().unwrap()],
-        });
-        assert!(matches!(settings.route(), Ok(Route::Proxy { .. })));
-        settings.mode = Mode::Direct;
-        assert_eq!(settings.route(), Ok(Route::Direct));
+    fn previews_fetch_by_default_and_off_fetches_nothing() {
+        assert!(Settings::default().fetches());
+        assert!(!Settings { mode: Mode::Off }.fetches());
     }
     #[test]
     fn numeric_and_redirect_tricks_do_not_reach_local_addresses() {
@@ -386,22 +263,5 @@ mod tests {
             Err(Error::Address)
         );
         assert!(validate_addresses(&[]).is_err());
-    }
-    #[test]
-    fn proxy_and_dns_services_need_explicit_addresses_and_no_credentials() {
-        assert!(Proxy::parse("socks5://127.0.0.1:9050").is_ok());
-        assert_eq!(
-            Proxy::parse("socks5://[::1]:9050").unwrap().address(),
-            "[::1]:9050".parse().unwrap()
-        );
-        for proxy in [
-            "socks5h://127.0.0.1:9050",
-            "socks5://proxy.example:9050",
-            "http://127.0.0.1:9050",
-            "socks5://user:password@127.0.0.1:9050",
-            "socks5://0.0.0.0:9050",
-        ] {
-            assert!(Proxy::parse(proxy).is_err(), "{proxy}");
-        }
     }
 }

@@ -7,7 +7,7 @@
 
 use std::{ffi::c_void, io, ptr};
 
-use nuschl_ipc::windows_sandbox::{Policy, append_argument};
+use nuschl_sandbox::windows_policy::{Policy, append_argument};
 use windows_sys::{
     Win32::{
         Foundation::{HANDLE, INVALID_HANDLE_VALUE},

@@ -289,6 +289,9 @@ DOM, so a Web Worker can host it.
   with an app-opening explanation until the browser implements that negotiation;
   they must never silently fall back to legacy Mumble. Malformed or ambiguous
   security options also fail closed. `npm test` covers these fragment rules.
+- Emoji in messages are Twemoji images served from the same origin, and the smiley
+  button beside the composer (or Ctrl+.) opens the picker; the composer stays a
+  plain textarea ([emoji.md](emoji.md)).
 - Tests: `cargo test -p nuschl-client-wasm` runs the Session through the real relay
   to a TLS server (and to Murmur with `NUSCHL_TEST_MURMUR`); `tests/web_client.py
   <binaries> --murmur <mumble-server>` runs the WebAssembly build in Node.js (the
@@ -323,8 +326,12 @@ connection and are not written to IndexedDB.
 
 The voice transport slice supports bounded Opus `UDPTunnel` frames in the same
 verified TLS session, for legacy Mumble/compatible servers. `join(index,channel)`
-selects **one explicit voice route**, leaves the microphone muted and allows
-listening after the server acknowledges the channel. Single-click text navigation
+selects **one explicit voice route** and leaves the microphone muted. The route is
+published as `joined` only after the server acknowledges both the channel and the
+self-state the join requested, or once that request's retries are exhausted.
+Joining is necessary, not sufficient, for listening: sound also needs the server
+to report the user undeafened. After exhausted retries capture stays blocked, and
+sound too unless the server reported that. Single-click text navigation
 never changes this route. Moving to another voice destination first mutes the
 previous one through shared SDK policy. `toggle_mute(index)` and
 `toggle_deaf(index)` operate only on the joined route; deaf implies mute. Server

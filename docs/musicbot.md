@@ -363,7 +363,7 @@ real NixOS module-evaluation invariants, plus package/deny/audit/fmt/crate2nix
 checks. `tests/musicbot_workers.py` exercises actual confined decode/encode/duck
 roles (malformed media and framing, fresh-owner recovery, finite PCM, encoder
 reset and independent C libopus interoperability). Its companion
-`musicbot_sandbox.rs` links the production IPC launcher; `musicbot_sandbox.py`
+`musicbot_sandbox.rs` links the production sandbox launcher; `musicbot_sandbox.py`
 uses only owned file/network/environment sentinels. `musicbot_module.nix` evaluates
 credential handling and retained parent restrictions without starting a service.
 `musicbot_service_isolation.py` runs only inside the owned NixOS VM and verifies

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! `nuschl-crypto-worker --data DIR`: serves `nuschl_ipc::crypto` requests on
 //! stdin/stdout until stdin closes. Started by the session in its sandbox
-//! (`nuschl_ipc::host::crypto_sandbox_command`); never logs secrets, and logs
+//! (`nuschl_sandbox::Role::Crypto`); never logs secrets, and logs
 //! nothing at all on stdout.
 use nuschl_crypto_worker::{KeySource, Store, Worker};
 use nuschl_ipc::{
@@ -22,7 +22,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
     let data = data.ok_or("usage: nuschl-crypto-worker --data DIR")?;
     // Two threads for OpenMLS's TreeKEM work: one per CPU would not fit the
-    // sandbox's address-space limit (crates/ipc host.rs) on a large machine.
+    // sandbox's address-space limit (nuschl-sandbox) on a large machine.
     nuschl_e2ee::limit_threads(2);
     let store = Store::open(&data, KeySource::File(data.join("store.key")))?;
     let mut worker = Worker::open(store)?;

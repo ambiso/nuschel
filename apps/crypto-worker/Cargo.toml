@@ -25,16 +25,17 @@ zeroize = "1.9.1"
 
 [dev-dependencies]
 # Loopback tests: nuschld, the real client session and this worker in its sandbox.
-nuschld = { path = "../server", version = "0.1.0" }
+nuschld = { path = "../server", version = "0.2.0" }
 nuschl-session.workspace = true
 nuschl-protocol.workspace = true
+nuschl-sandbox.workspace = true
 # The project auditor, in process, for the loopback test of witnessing.
-nuschl-witness = { path = "../witness", version = "0.1.0" }
+nuschl-witness = { path = "../witness", version = "0.2.0" }
 tempfile = "3.27.0"
 tokio = { version = "1.54.1", features = ["macros", "rt-multi-thread", "time", "sync"] }
 
 # The launch stage: on Windows the worker starts itself again inside its
-# AppContainer (nuschl_ipc::windows_sandbox).
+# AppContainer (nuschl_sandbox::windows_policy).
 [target.'cfg(windows)'.dependencies]
 nuschl-sandbox-windows.workspace = true
 

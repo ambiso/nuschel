@@ -303,6 +303,16 @@ rec {
       # File a bug if you depend on any for non-debug work!
       debug = internal.debugCrate { inherit packageId; };
     };
+    "nuschl-sandbox" = rec {
+      packageId = "nuschl-sandbox";
+      build = internal.buildRustCrateWithFeatures {
+        packageId = "nuschl-sandbox";
+      };
+
+      # Debug support which might change between releases.
+      # File a bug if you depend on any for non-debug work!
+      debug = internal.debugCrate { inherit packageId; };
+    };
     "nuschl-sandbox-windows" = rec {
       packageId = "nuschl-sandbox-windows";
       build = internal.buildRustCrateWithFeatures {
@@ -23058,7 +23068,7 @@ rec {
       };
       "nuschl" = rec {
         crateName = "nuschl";
-        version = "0.1.0";
+        version = "0.2.0";
         edition = "2024";
         crateBin = [
           {
@@ -23134,6 +23144,10 @@ rec {
             packageId = "nuschl-protocol";
           }
           {
+            name = "nuschl-sandbox";
+            packageId = "nuschl-sandbox";
+          }
+          {
             name = "nuschl-session";
             packageId = "nuschl-session";
           }
@@ -23180,7 +23194,7 @@ rec {
       };
       "nuschl-audio-jitter" = rec {
         crateName = "nuschl-audio-jitter";
-        version = "0.1.0";
+        version = "0.2.0";
         edition = "2024";
         src = lib.cleanSourceWith { filter = sourceFilter;  src = ../../crates/audio-jitter; };
         libName = "nuschl_audio_jitter";
@@ -23188,7 +23202,7 @@ rec {
       };
       "nuschl-audio-wasm" = rec {
         crateName = "nuschl-audio-wasm";
-        version = "0.1.0";
+        version = "0.2.0";
         edition = "2024";
         src = lib.cleanSourceWith { filter = sourceFilter;  src = ../../crates/audio-wasm; };
         libName = "nuschl_audio_wasm";type = [ "cdylib" "rlib" ];
@@ -23211,7 +23225,7 @@ rec {
       };
       "nuschl-cli" = rec {
         crateName = "nuschl-cli";
-        version = "0.1.0";
+        version = "0.2.0";
         edition = "2024";
         crateBin = [
           {
@@ -23234,6 +23248,10 @@ rec {
           {
             name = "nuschl-protocol";
             packageId = "nuschl-protocol";
+          }
+          {
+            name = "nuschl-sandbox";
+            packageId = "nuschl-sandbox";
           }
           {
             name = "nuschl-session";
@@ -23268,7 +23286,7 @@ rec {
       };
       "nuschl-client" = rec {
         crateName = "nuschl-client";
-        version = "0.1.0";
+        version = "0.2.0";
         edition = "2024";
         src = lib.cleanSourceWith { filter = sourceFilter;  src = ../../crates/client; };
         libName = "nuschl_client";
@@ -23287,8 +23305,17 @@ rec {
             packageId = "nuschl-legacy-html";
           }
           {
+            name = "nuschl-link-preview";
+            packageId = "nuschl-link-preview";
+          }
+          {
             name = "nuschl-protocol";
             packageId = "nuschl-protocol";
+          }
+          {
+            name = "nuschl-sandbox";
+            packageId = "nuschl-sandbox";
+            optional = true;
           }
           {
             name = "nuschl-session";
@@ -23325,13 +23352,13 @@ rec {
         ];
         features = {
           "default" = [ "native" ];
-          "native" = [ "dep:nuschl-ipc" "dep:nuschl-session" "dep:tokio" "nuschl-core/uuid" ];
+          "native" = [ "dep:nuschl-ipc" "dep:nuschl-sandbox" "dep:nuschl-session" "dep:tokio" "nuschl-core/uuid" ];
         };
         resolvedDefaultFeatures = [ "default" "native" ];
       };
       "nuschl-client-wasm" = rec {
         crateName = "nuschl-client-wasm";
-        version = "0.1.0";
+        version = "0.2.0";
         edition = "2024";
         src = lib.cleanSourceWith { filter = sourceFilter;  src = ../../crates/client-wasm; };
         libName = "nuschl_client_wasm";type = [ "cdylib" "rlib" ];
@@ -23459,7 +23486,7 @@ rec {
       };
       "nuschl-content" = rec {
         crateName = "nuschl-content";
-        version = "0.1.0";
+        version = "0.2.0";
         edition = "2024";
         src = lib.cleanSourceWith { filter = sourceFilter;  src = ../../crates/content; };
         libName = "nuschl_content";
@@ -23488,6 +23515,10 @@ rec {
             packageId = "nuschl-core";
           }
           {
+            name = "nuschl-link-preview";
+            packageId = "nuschl-link-preview";
+          }
+          {
             name = "pulldown-cmark";
             packageId = "pulldown-cmark";
             usesDefaultFeatures = false;
@@ -23511,7 +23542,7 @@ rec {
       };
       "nuschl-content-wasm" = rec {
         crateName = "nuschl-content-wasm";
-        version = "0.1.0";
+        version = "0.2.0";
         edition = "2024";
         src = lib.cleanSourceWith { filter = sourceFilter;  src = ../../crates/content-wasm; };
         libName = "nuschl_content_wasm";type = [ "cdylib" "rlib" ];
@@ -23543,7 +23574,7 @@ rec {
       };
       "nuschl-content-worker" = rec {
         crateName = "nuschl-content-worker";
-        version = "0.1.0";
+        version = "0.2.0";
         edition = "2024";
         crateBin = [
           {
@@ -23575,6 +23606,12 @@ rec {
             packageId = "nuschl-sandbox-windows";
             target = { target, features }: (target."windows" or false);
           }
+          {
+            name = "ureq-proto";
+            packageId = "ureq-proto";
+            usesDefaultFeatures = false;
+            features = [ "client" ];
+          }
         ];
         devDependencies = [
           {
@@ -23587,7 +23624,7 @@ rec {
       };
       "nuschl-core" = rec {
         crateName = "nuschl-core";
-        version = "0.1.0";
+        version = "0.2.0";
         edition = "2024";
         src = lib.cleanSourceWith { filter = sourceFilter;  src = ../../crates/core; };
         libName = "nuschl_core";
@@ -23629,7 +23666,7 @@ rec {
       };
       "nuschl-crypto-worker" = rec {
         crateName = "nuschl-crypto-worker";
-        version = "0.1.0";
+        version = "0.2.0";
         edition = "2024";
         crateBin = [
           {
@@ -23682,6 +23719,10 @@ rec {
             packageId = "nuschl-protocol";
           }
           {
+            name = "nuschl-sandbox";
+            packageId = "nuschl-sandbox";
+          }
+          {
             name = "nuschl-session";
             packageId = "nuschl-session";
           }
@@ -23707,7 +23748,7 @@ rec {
       };
       "nuschl-e2ee" = rec {
         crateName = "nuschl-e2ee";
-        version = "0.1.0";
+        version = "0.2.0";
         edition = "2024";
         src = lib.cleanSourceWith { filter = sourceFilter;  src = ../../crates/e2ee; };
         libName = "nuschl_e2ee";
@@ -23757,7 +23798,7 @@ rec {
       };
       "nuschl-files" = rec {
         crateName = "nuschl-files";
-        version = "0.1.0";
+        version = "0.2.0";
         edition = "2024";
         src = lib.cleanSourceWith { filter = sourceFilter;  src = ../../crates/files; };
         libName = "nuschl_files";
@@ -23779,7 +23820,7 @@ rec {
       };
       "nuschl-identity" = rec {
         crateName = "nuschl-identity";
-        version = "0.1.0";
+        version = "0.2.0";
         edition = "2024";
         src = lib.cleanSourceWith { filter = sourceFilter;  src = ../../crates/identity; };
         libName = "nuschl_identity";
@@ -23851,7 +23892,7 @@ rec {
       };
       "nuschl-ipc" = rec {
         crateName = "nuschl-ipc";
-        version = "0.1.0";
+        version = "0.2.0";
         edition = "2024";
         src = lib.cleanSourceWith { filter = sourceFilter;  src = ../../crates/ipc; };
         libName = "nuschl_ipc";
@@ -23863,6 +23904,10 @@ rec {
           {
             name = "nuschl-core";
             packageId = "nuschl-core";
+          }
+          {
+            name = "nuschl-sandbox";
+            packageId = "nuschl-sandbox";
           }
           {
             name = "serde";
@@ -23882,17 +23927,12 @@ rec {
             packageId = "tokio";
             features = [ "io-util" "macros" "process" "time" "rt" "sync" ];
           }
-          {
-            name = "win32job";
-            packageId = "win32job";
-            target = { target, features }: (target."windows" or false);
-          }
         ];
 
       };
       "nuschl-kt" = rec {
         crateName = "nuschl-kt";
-        version = "0.1.0";
+        version = "0.2.0";
         edition = "2024";
         src = lib.cleanSourceWith { filter = sourceFilter;  src = ../../crates/kt; };
         libName = "nuschl_kt";
@@ -23976,7 +24016,7 @@ rec {
       };
       "nuschl-legacy-html" = rec {
         crateName = "nuschl-legacy-html";
-        version = "0.1.0";
+        version = "0.2.0";
         edition = "2024";
         src = lib.cleanSourceWith { filter = sourceFilter;  src = ../../crates/legacy-html; };
         libName = "nuschl_legacy_html";
@@ -23984,7 +24024,7 @@ rec {
       };
       "nuschl-link-preview" = rec {
         crateName = "nuschl-link-preview";
-        version = "0.1.0";
+        version = "0.2.0";
         edition = "2024";
         src = lib.cleanSourceWith { filter = sourceFilter;  src = ../../crates/link-preview; };
         libName = "nuschl_link_preview";
@@ -23996,6 +24036,10 @@ rec {
           {
             name = "nuschl-core";
             packageId = "nuschl-core";
+          }
+          {
+            name = "nuschl-legacy-html";
+            packageId = "nuschl-legacy-html";
           }
           {
             name = "serde";
@@ -24011,17 +24055,11 @@ rec {
             packageId = "url";
           }
         ];
-        devDependencies = [
-          {
-            name = "serde_json";
-            packageId = "serde_json";
-          }
-        ];
 
       };
       "nuschl-math" = rec {
         crateName = "nuschl-math";
-        version = "0.1.0";
+        version = "0.2.0";
         edition = "2024";
         src = lib.cleanSourceWith { filter = sourceFilter;  src = ../../crates/math; };
         libName = "nuschl_math";
@@ -24059,7 +24097,7 @@ rec {
       };
       "nuschl-math-worker" = rec {
         crateName = "nuschl-math-worker";
-        version = "0.1.0";
+        version = "0.2.0";
         edition = "2024";
         crateBin = [
           {
@@ -24099,7 +24137,7 @@ rec {
       };
       "nuschl-media-worker" = rec {
         crateName = "nuschl-media-worker";
-        version = "0.1.0";
+        version = "0.2.0";
         edition = "2024";
         crateBin = [
           {
@@ -24191,7 +24229,7 @@ rec {
       };
       "nuschl-musicbot" = rec {
         crateName = "nuschl-musicbot";
-        version = "0.1.0";
+        version = "0.2.0";
         edition = "2024";
         crateBin = [
           {
@@ -24303,7 +24341,7 @@ rec {
       };
       "nuschl-musicbot-codec-worker" = rec {
         crateName = "nuschl-musicbot-codec-worker";
-        version = "0.1.0";
+        version = "0.2.0";
         edition = "2024";
         crateBin = [
           {
@@ -24361,7 +24399,7 @@ rec {
       };
       "nuschl-protocol" = rec {
         crateName = "nuschl-protocol";
-        version = "0.1.0";
+        version = "0.2.0";
         edition = "2024";
         src = lib.cleanSourceWith { filter = sourceFilter;  src = ../../crates/protocol; };
         libName = "nuschl_protocol";
@@ -24397,7 +24435,7 @@ rec {
       };
       "nuschl-rtc" = rec {
         crateName = "nuschl-rtc";
-        version = "0.1.0";
+        version = "0.2.0";
         edition = "2024";
         src = lib.cleanSourceWith { filter = sourceFilter;  src = ../../crates/rtc; };
         libName = "nuschl_rtc";
@@ -24417,7 +24455,7 @@ rec {
       };
       "nuschl-rtc-probe" = rec {
         crateName = "nuschl-rtc-probe";
-        version = "0.1.0";
+        version = "0.2.0";
         edition = "2024";
         crateBin = [
           {
@@ -24435,16 +24473,40 @@ rec {
         ];
 
       };
+      "nuschl-sandbox" = rec {
+        crateName = "nuschl-sandbox";
+        version = "0.2.0";
+        edition = "2024";
+        src = lib.cleanSourceWith { filter = sourceFilter;  src = ../../crates/sandbox; };
+        libName = "nuschl_sandbox";
+        dependencies = [
+          {
+            name = "thiserror";
+            packageId = "thiserror 2.0.21";
+          }
+          {
+            name = "tokio";
+            packageId = "tokio";
+            features = [ "process" "time" ];
+          }
+          {
+            name = "win32job";
+            packageId = "win32job";
+            target = { target, features }: (target."windows" or false);
+          }
+        ];
+
+      };
       "nuschl-sandbox-windows" = rec {
         crateName = "nuschl-sandbox-windows";
-        version = "0.1.0";
+        version = "0.2.0";
         edition = "2024";
         src = lib.cleanSourceWith { filter = sourceFilter;  src = ../../crates/sandbox-windows; };
         libName = "nuschl_sandbox_windows";
         dependencies = [
           {
-            name = "nuschl-ipc";
-            packageId = "nuschl-ipc";
+            name = "nuschl-sandbox";
+            packageId = "nuschl-sandbox";
           }
           {
             name = "windows-sys";
@@ -24461,6 +24523,10 @@ rec {
           {
             name = "nuschl-core";
             packageId = "nuschl-core";
+          }
+          {
+            name = "nuschl-ipc";
+            packageId = "nuschl-ipc";
           }
           {
             name = "serde";
@@ -24485,7 +24551,7 @@ rec {
       };
       "nuschl-session" = rec {
         crateName = "nuschl-session";
-        version = "0.1.0";
+        version = "0.2.0";
         edition = "2024";
         src = lib.cleanSourceWith { filter = sourceFilter;  src = ../../crates/session; };
         libName = "nuschl_session";
@@ -24512,8 +24578,16 @@ rec {
             packageId = "nuschl-legacy-html";
           }
           {
+            name = "nuschl-link-preview";
+            packageId = "nuschl-link-preview";
+          }
+          {
             name = "nuschl-protocol";
             packageId = "nuschl-protocol";
+          }
+          {
+            name = "nuschl-sandbox";
+            packageId = "nuschl-sandbox";
           }
           {
             name = "p12-keystore";
@@ -24594,7 +24668,7 @@ rec {
       };
       "nuschl-storage" = rec {
         crateName = "nuschl-storage";
-        version = "0.1.0";
+        version = "0.2.0";
         edition = "2024";
         src = lib.cleanSourceWith { filter = sourceFilter;  src = ../../crates/storage; };
         libName = "nuschl_storage";
@@ -24610,6 +24684,10 @@ rec {
           {
             name = "nuschl-ipc";
             packageId = "nuschl-ipc";
+          }
+          {
+            name = "serde_json";
+            packageId = "serde_json";
           }
           {
             name = "sqlx";
@@ -24637,7 +24715,7 @@ rec {
       };
       "nuschl-storage-worker" = rec {
         crateName = "nuschl-storage-worker";
-        version = "0.1.0";
+        version = "0.2.0";
         edition = "2024";
         crateBin = [
           {
@@ -24687,7 +24765,7 @@ rec {
       };
       "nuschl-transfer-worker" = rec {
         crateName = "nuschl-transfer-worker";
-        version = "0.1.0";
+        version = "0.2.0";
         edition = "2024";
         crateBin = [
           {
@@ -24738,7 +24816,7 @@ rec {
       };
       "nuschl-tui" = rec {
         crateName = "nuschl-tui";
-        version = "0.1.0";
+        version = "0.2.0";
         edition = "2024";
         crateBin = [
           {
@@ -24782,6 +24860,10 @@ rec {
             packageId = "nuschl-ipc";
           }
           {
+            name = "nuschl-sandbox";
+            packageId = "nuschl-sandbox";
+          }
+          {
             name = "nuschl-session";
             packageId = "nuschl-session";
           }
@@ -24811,7 +24893,7 @@ rec {
       };
       "nuschl-update" = rec {
         crateName = "nuschl-update";
-        version = "0.1.0";
+        version = "0.2.0";
         edition = "2024";
         src = lib.cleanSourceWith { filter = sourceFilter;  src = ../../crates/update; };
         libName = "nuschl_update";
@@ -24822,8 +24904,8 @@ rec {
             optional = true;
           }
           {
-            name = "nuschl-ipc";
-            packageId = "nuschl-ipc";
+            name = "nuschl-sandbox";
+            packageId = "nuschl-sandbox";
             optional = true;
           }
           {
@@ -24873,14 +24955,14 @@ rec {
           }
         ];
         features = {
-          "client" = [ "dep:cap-std" "dep:ureq" "dep:nuschl-ipc" "dep:tokio" ];
+          "client" = [ "dep:cap-std" "dep:ureq" "dep:nuschl-sandbox" "dep:tokio" ];
           "default" = [ "client" ];
         };
         resolvedDefaultFeatures = [ "client" "default" ];
       };
       "nuschl-update-worker" = rec {
         crateName = "nuschl-update-worker";
-        version = "0.1.0";
+        version = "0.2.0";
         edition = "2024";
         crateBin = [
           {
@@ -24996,7 +25078,7 @@ rec {
       };
       "nuschl-web-relay" = rec {
         crateName = "nuschl-web-relay";
-        version = "0.1.0";
+        version = "0.2.0";
         edition = "2024";
         crateBin = [
           {
@@ -25107,7 +25189,7 @@ rec {
       };
       "nuschl-witness" = rec {
         crateName = "nuschl-witness";
-        version = "0.1.0";
+        version = "0.2.0";
         edition = "2024";
         crateBin = [
           {
@@ -25196,7 +25278,7 @@ rec {
       };
       "nuschld" = rec {
         crateName = "nuschld";
-        version = "0.1.0";
+        version = "0.2.0";
         edition = "2024";
         crateBin = [
           {
