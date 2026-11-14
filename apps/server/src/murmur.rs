@@ -115,8 +115,8 @@ pub struct Report {
     pub notes: Vec<String>,
     /// Limits the imported data exceeds, and files written.
     pub advice: Vec<String>,
-    pub sha1_passwords: usize,
-    pub pbkdf2_passwords: usize,
+    pub sha1_hashes: usize,
+    pub pbkdf2_hashes: usize,
 }
 
 impl Report {
@@ -125,10 +125,10 @@ impl Report {
     }
 
     /// An imported Murmur hash, by kind.
-    fn count_password(&mut self, hash: Option<&str>) {
+    fn count_hash(&mut self, hash: Option<&str>) {
         match hash {
-            Some(hash) if hash.starts_with(password::MURMUR_SHA1) => self.sha1_passwords += 1,
-            Some(_) => self.pbkdf2_passwords += 1,
+            Some(hash) if hash.starts_with(password::MURMUR_SHA1) => self.sha1_hashes += 1,
+            Some(_) => self.pbkdf2_hashes += 1,
             None => {}
         }
     }
@@ -143,11 +143,11 @@ impl Report {
         for (what, count) in &self.imported {
             let _ = writeln!(out, "  {what}: {count}");
         }
-        if self.pbkdf2_passwords + self.sha1_passwords > 0 {
+        if self.pbkdf2_hashes + self.sha1_hashes > 0 {
             let _ = writeln!(
                 out,
                 "  passwords: {} PBKDF2, {} legacy unsalted SHA-1; each becomes argon2id at the user's next login",
-                self.pbkdf2_passwords, self.sha1_passwords
+                self.pbkdf2_hashes, self.sha1_hashes
             );
         }
         if !self.skipped.is_empty() {
@@ -518,8 +518,11 @@ pub fn apply(
             (Some(hash), _) if hash.trim().is_empty() => None,
             (None, _) => None,
             (Some(hash), Some(iterations)) if iterations > 0 => {
-                let stored =
-                    password::murmur_pbkdf2(iterations, user.salt.as_deref().unwrap_or(""), hash);
+                // A missing salt is malformed, like an empty one.
+                let stored = user
+                    .salt
+                    .as_deref()
+                    .and_then(|salt| password::murmur_pbkdf2(iterations, salt, hash));
                 if stored.is_none() {
                     report.skip(format!(
                         "user {id}: malformed PBKDF2 password or more than {} iterations; \
@@ -544,7 +547,7 @@ pub fn apply(
             let ours = state.registry.users.get(&0).cloned();
             if let Some(mut superuser) = ours {
                 if superuser.password_hash.is_none() && password_hash.is_some() {
-                    report.count_password(password_hash.as_deref());
+                    report.count_hash(password_hash.as_deref());
                     superuser.password_hash = password_hash;
                     report
                         .advice
@@ -622,7 +625,7 @@ pub fn apply(
             .and_then(to_id)
             .filter(|channel| imported_channels.contains(channel));
         let last_active = user.last_active.as_deref().and_then(parse_time);
-        report.count_password(password_hash.as_deref());
+        report.count_hash(password_hash.as_deref());
         state.registry.insert(Registered {
             id,
             account: random(),
