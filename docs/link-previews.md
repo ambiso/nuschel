@@ -1,17 +1,16 @@
 # Sender-generated link previews
 
-Under implementation, 2026-11-13. Native Linux has the sender-side Open Graph
+Initial legacy delivery, 2026-11-14. Native Linux has the sender-side Open Graph
 pipeline, composer card and removal, global policy settings, and one-message Mumble
 HTML projection. Parsing and image conversion run in confined content workers.
 The default is Off. New preview fetching fails closed on other native platforms
 until their process-lifetime adapters are implemented and tested.
 
-The negotiated typed-message contract, encrypted structured body and browser sender
-below remain unfinished. Compatible Nuschl servers currently receive the same single
-legacy HTML message as stock servers; that is not `preview/1`. MLS and durable direct
-conversations currently send text alone. Required private HTTP/proxy and desktop
-interoperability fixtures are being validated; unit tests do not establish those
-runtime guarantees.
+The negotiated typed-message contract and encrypted structured body below remain
+unfinished. Compatible Nuschl servers currently receive the same single legacy HTML
+message as stock servers; that is not `preview/1`. MLS and durable direct
+conversations currently send text alone. Browser sender generation remains disabled
+by design; receiving carried cards does not require it.
 
 ## Current delivery scope
 
@@ -199,9 +198,27 @@ The network and HTML parsers' dependency safety review determines which operatio
 need the isolated worker. No new unsafe parser is silently introduced into the
 frontend under the existing OS-binding exception.
 
-## Required private tests
+## Validation and remaining tests
 
-All HTTP, proxy, DNS, TLS and image fixtures are private. No tests fetch public sites.
+`checks.x86_64-linux.preview-worker` exercises the actual confined worker protocol,
+including cancellation and process retirement. `checks.x86_64-linux.vm-link-previews`
+runs synthetic HTTP/proxy/DNS peers and the packaged desktop in a software-rendered
+Linux VM against stock Murmur and a compatible Nuschl server. It checks sender-only
+fetching, Off/proxy failure behavior, one-message delivery to an independent native
+recipient, removal and late results, and compact/zoomed composer and recipient layouts.
+
+The `legacy-preview` scene in `tests/web_broker.browser.mjs` checks a real browser
+recipient through stock Murmur and the web relay using a message exported by the
+native fixture. It checks metadata inside the quote card, embedded image pixels,
+one message, 1280px/390px layouts and forbidden browser requests. The coordinated
+Linux VM and headless Chromium runs passed on `6f8b185e`; this does not establish
+physical Windows/macOS/iOS/Safari behavior or kernel-wide browser egress containment.
+Browser codec/content workers retain the browser isolation limitations described
+in the architecture documentation. Final required CI remains a separate merge gate.
+
+All HTTP, proxy, DNS, TLS and image fixtures use owned synthetic peers. No tests
+fetch public sites. The complete feature's requirements include the following;
+typed-history and MLS cases remain deferred with their implementation:
 
 - Off/incomplete ProxyRequired starts no DNS, socket or worker; changing policy and
   dismissing a card reject late replies. Failed previews preserve text sending.
