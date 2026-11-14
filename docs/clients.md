@@ -401,7 +401,8 @@ voice quality; the separate stereo music preset is still planned.
   someone talks there (eased, `motion::Ease`, drawn 25 times a second rather than at
   the display's rate, since GPUI redraws the whole window; lit without motion when
   motion is reduced). The voice card names each server/channel first, with a
-  separate microphone destination/listening/deafened status. Speaking reflects
+  separate microphone destination/listening/deafened status. It leaves out servers
+  you deafened yourself; a server that deafened you stays. Speaking reflects
   observed sending rather than idle push-to-talk eligibility. Every row has its
   own named disconnect action (voice and chat); text selection does not change its
   scope. Pending acknowledgements and reconnects are explicit. Rail, card, current

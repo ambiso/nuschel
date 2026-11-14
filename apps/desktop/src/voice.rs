@@ -439,12 +439,25 @@ pub(crate) fn target(places: &[Place], server: &str) -> Option<Target> {
         .map(|place| place.target.clone())
 }
 
-fn summary(places: &[Place]) -> String {
+fn summary<'a>(places: impl IntoIterator<Item = &'a Place>) -> String {
     places
-        .iter()
+        .into_iter()
         .map(|place| format!("{}: {}", place.label, place.state.label()))
         .collect::<Vec<_>>()
         .join(" · ")
+}
+
+/// The voice card's rows and heading. A server you deafened yourself is left
+/// out: you chose to hear nothing there, and its rail badge and the footer's
+/// Undeafen still name it. A server that deafened you stays, explaining why
+/// nothing is heard. The heading describes only the rows shown.
+fn shown(places: &[Place]) -> Option<(Vec<&Place>, &'static str, bool)> {
+    let rows = places
+        .iter()
+        .filter(|place| !matches!(place.state, State::Deafened | State::DeafenedPending))
+        .collect::<Vec<_>>();
+    let (heading, connected) = status::connection_heading(rows.iter().map(|place| place.state));
+    (!rows.is_empty()).then_some((rows, heading, connected))
 }
 
 fn place_link(place: &Place, cx: &mut Context<Desktop>) -> AnyElement {
@@ -489,21 +502,18 @@ fn place_link(place: &Place, cx: &mut Context<Desktop>) -> AnyElement {
     layout::focusable(id, control)
 }
 
-/// Every connected/pending voice context, independent of text navigation.
-/// Each hang-up names and targets its own connection (voice AND chat).
+/// Every connected/pending voice context you hear ([`shown`]), independent of
+/// text navigation. Each hang-up names and targets its own connection (voice AND chat).
 pub fn card(
     _this: &Desktop,
     places: &[Place],
     window: &mut Window,
     cx: &mut Context<Desktop>,
 ) -> Option<AnyElement> {
-    if places.is_empty() {
-        return None;
-    }
-    let text = summary(places);
-    let (heading, connected) = status::connection_heading(places.iter().map(|place| place.state));
-    let rows = places
-        .iter()
+    let (rows, heading, connected) = shown(places)?;
+    let text = summary(rows.iter().copied());
+    let rows = rows
+        .into_iter()
         .map(|place| {
             let id = ElementId::from(format!(
                 "voice-route-{}-{}-{}",
@@ -850,10 +860,40 @@ impl Desktop {
 #[cfg(test)]
 mod tests {
     use super::{
-        Place, SecondServerPrompt, ServerView, State, Status, Target, badge_style, summary,
+        Place, SecondServerPrompt, ServerView, State, Status, Target, badge_style, shown, summary,
     };
     use nuschl_client::conversation::ConversationState;
     use nuschl_core::{bookmark::ServerBookmark, model::User};
+
+    fn place(id: &str, label: &str, state: State) -> Place {
+        Place {
+            target: Target::capture(&server(id)),
+            name: label.into(),
+            label: label.into(),
+            state,
+            issue: None,
+            bitrate: None,
+        }
+    }
+
+    #[test]
+    fn card_leaves_out_servers_you_deafened() {
+        let places = vec![
+            place("a", "Alpha", State::Connecting),
+            place("b", "Beta #Root", State::Deafened),
+            place("c", "Gamma #Root", State::DeafenedPending),
+            place("d", "Delta #Root", State::ServerDeafened),
+        ];
+        let (rows, ..) = shown(&places).expect("servers you hear keep the card");
+        let labels: Vec<_> = rows.iter().map(|place| place.label.as_str()).collect();
+        // A server's deafen is not your choice: Delta stays.
+        assert_eq!(labels, ["Alpha", "Delta #Root"]);
+        // The heading describes the rows shown: Beta is connected, Alpha is not yet.
+        let (_, heading, connected) = shown(&places[..2]).unwrap();
+        assert_eq!((heading, connected), ("Connecting voice", false));
+        // Deafened yourself everywhere: no card.
+        assert!(shown(&places[1..3]).is_none());
+    }
 
     #[test]
     fn summary_keeps_each_context_and_never_calls_idle_eligibility_speech() {
