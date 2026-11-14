@@ -207,11 +207,19 @@ async fn read_murmur(
         write_frame(&mut output, &Envelope::new(sequence, frame)).map_err(|error| error.to_string())
     };
     // Before SQLite starts its thread, so that the thread is confined too.
-    // Where Landlock cannot be used (an old kernel, a seccomp filter), the
-    // reader carries on with its other limits and the report says so.
-    let confinement =
-        confine(path).unwrap_or_else(|error| format!("reader: not confined ({error})"));
-    let _ = emit(MurmurFrame::Notes(vec![confinement]));
+    // Without full confinement the file is not read.
+    if let Err(missing) = confine(path) {
+        let error = format!(
+            "reader: {missing}, so the file was not read. Run the import on Linux 6.12 or later \
+             with Landlock enabled (on another machine, for example), then copy the resulting \
+             database or state here"
+        );
+        let _ = emit(MurmurFrame::Failed(error.clone()));
+        return Err(error.into());
+    }
+    let _ = emit(MurmurFrame::Notes(vec![
+        "reader: confined by Landlock to reading the file".into(),
+    ]));
     if let Err(error) = nuschl_storage::murmur::read(path, server, &mut emit).await {
         let _ = emit(MurmurFrame::Failed(error.clone()));
         return Err(error.into());
@@ -234,13 +242,12 @@ fn serve_held() -> Result<(), Box<dyn std::error::Error>> {
 
 /// Landlock: from here on this process (and the threads it starts) may only
 /// read the Murmur file: no other file, no TCP, no abstract Unix sockets, no
-/// signals to other processes. Best effort on kernels with an older Landlock;
-/// the result is reported.
+/// signals to other processes. An error says what is not confined.
 #[cfg(target_os = "linux")]
-fn confine(path: &std::path::Path) -> Result<String, String> {
+fn confine(path: &std::path::Path) -> Result<(), String> {
     use landlock::{
-        ABI, Access, AccessFs, AccessNet, Ruleset, RulesetAttr, RulesetCreatedAttr, RulesetStatus,
-        Scope, path_beneath_rules,
+        ABI, Access, AccessFs, AccessNet, Ruleset, RulesetAttr, RulesetCreatedAttr, Scope,
+        path_beneath_rules,
     };
     let abi = ABI::V6;
     let status = Ruleset::default()
@@ -250,19 +257,53 @@ fn confine(path: &std::path::Path) -> Result<String, String> {
         .and_then(|ruleset| ruleset.create())
         .and_then(|ruleset| ruleset.add_rules(path_beneath_rules([path], AccessFs::from_read(abi))))
         .and_then(|ruleset| ruleset.restrict_self())
-        .map_err(|error| error.to_string())?;
-    Ok(match status.ruleset {
-        RulesetStatus::FullyEnforced => "reader: confined by Landlock to reading the file".into(),
-        RulesetStatus::PartiallyEnforced => {
-            "reader: partly confined by Landlock (the kernel lacks newer Landlock features)".into()
+        .map_err(|error| format!("not confined (Landlock failed: {error})"))?;
+    enforced(&status.ruleset, status.landlock)
+}
+
+/// Whether Landlock enforced every rule; if not, what it left out.
+#[cfg(target_os = "linux")]
+fn enforced(
+    ruleset: &landlock::RulesetStatus,
+    landlock: landlock::LandlockStatus,
+) -> Result<(), String> {
+    use landlock::{ABI, LandlockStatus, RulesetStatus};
+    let abi = match (ruleset, landlock) {
+        (RulesetStatus::FullyEnforced, _) => return Ok(()),
+        (_, LandlockStatus::NotEnabled) => {
+            return Err("not confined (Landlock is not enabled in this kernel's lsm=)".into());
         }
-        RulesetStatus::NotEnforced => "reader: not confined (this kernel has no Landlock)".into(),
+        (_, LandlockStatus::NotImplemented) => {
+            return Err(
+                "not confined (no Landlock in this kernel, or a seccomp filter blocks it)".into(),
+            );
+        }
+        (_, LandlockStatus::Available { effective_abi, .. }) => effective_abi,
+    };
+    let missing: Vec<_> = [
+        (ABI::V3, "truncation"),
+        (ABI::V4, "TCP"),
+        (ABI::V5, "device ioctls"),
+        (ABI::V6, "abstract Unix sockets, signals"),
+    ]
+    .into_iter()
+    .filter(|(needed, _)| abi < *needed)
+    .map(|(_, what)| what)
+    .collect();
+    Err(if missing.is_empty() {
+        "only partly confined (Landlock did not enforce every rule)".into()
+    } else {
+        format!(
+            "only partly confined (this kernel's Landlock ABI {} leaves out {})",
+            abi as i32,
+            missing.join(", ")
+        )
     })
 }
 
 #[cfg(not(target_os = "linux"))]
-fn confine(_: &std::path::Path) -> Result<String, String> {
-    Ok("reader: not confined (Landlock is Linux only)".into())
+fn confine(_: &std::path::Path) -> Result<(), String> {
+    Err("not confined (Landlock is Linux only)".into())
 }
 
 async fn serve_server_state(arguments: Arguments) -> Result<(), Box<dyn std::error::Error>> {
@@ -447,4 +488,44 @@ async fn serve_server_state(arguments: Arguments) -> Result<(), Box<dyn std::err
         write_frame(&mut output, &Envelope::new(request.request_id, payload))?;
     }
     Ok(())
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::enforced;
+    use landlock::{ABI, LandlockStatus, RulesetStatus};
+
+    fn available(abi: ABI) -> LandlockStatus {
+        LandlockStatus::Available {
+            effective_abi: abi,
+            kernel_abi: None,
+        }
+    }
+
+    #[test]
+    fn only_full_enforcement_passes() {
+        assert_eq!(
+            enforced(&RulesetStatus::FullyEnforced, available(ABI::V6)),
+            Ok(())
+        );
+        let partial = |abi| enforced(&RulesetStatus::PartiallyEnforced, available(abi));
+        assert_eq!(
+            partial(ABI::V4),
+            Err(
+                "only partly confined (this kernel's Landlock ABI 4 leaves out device ioctls, \
+                 abstract Unix sockets, signals)"
+                    .into()
+            )
+        );
+        assert!(
+            partial(ABI::V1)
+                .unwrap_err()
+                .contains("ABI 1 leaves out truncation, TCP")
+        );
+        assert!(partial(ABI::V6).is_err());
+        for landlock in [LandlockStatus::NotEnabled, LandlockStatus::NotImplemented] {
+            let error = enforced(&RulesetStatus::NotEnforced, landlock).unwrap_err();
+            assert!(error.starts_with("not confined"), "{error}");
+        }
+    }
 }
