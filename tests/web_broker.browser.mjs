@@ -191,11 +191,13 @@ try {
   const card=page.locator("article").filter({hasText:"Synthetic preview"});
   await card.waitFor();assert.equal(await card.count(),1,"one card/message");
   assert.equal(await page.locator("article").count(),count+1,"one legacy TextMessage must add one row");
-  assert.ok((await card.innerText()).includes("Owned fixture"),"description is visible");
-  const title=card.getByRole("link",{name:"Synthetic preview",exact:true});
-  assert.ok((await title.getAttribute("href")).startsWith("http://93.184.215.14/"),"actual target is linked");
-  assert.ok((await card.innerText()).includes("93.184.215.14"),"actual host is visible");
-  assert.ok(await card.locator(".quote").count()>0,"card labels keep quote styling");
+  const quote=card.locator(".quote");
+  assert.ok(await quote.count()>0,"card labels keep quote styling");
+  const quoteText=(await quote.allInnerTexts()).join(" ").replace(/\s+/g," ");
+  assert.ok(quoteText.includes("Owned fixture"),"description is visible inside the card");
+  assert.ok(quoteText.includes("93.184.215.14"),"actual host is visible inside the card");
+  const title=quote.getByRole("link",{name:"Synthetic preview",exact:true});
+  assert.ok((await title.getAttribute("href")).startsWith("http://93.184.215.14/"),"actual target is linked inside the card");
   await card.locator("canvas").waitFor();
   const pixels=await card.locator("canvas").evaluate(canvas=>{
    const rgba=canvas.getContext("2d").getImageData(0,0,canvas.width,canvas.height).data;
