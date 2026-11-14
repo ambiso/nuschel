@@ -3,7 +3,7 @@
 Initial legacy delivery, 2026-11-14. Native Linux has the sender-side Open Graph
 pipeline, composer card and removal, global policy settings, and one-message Mumble
 HTML projection. Parsing and image conversion run in confined content workers.
-The default is Off. New preview fetching fails closed on other native platforms
+The default is Direct. New preview fetching fails closed on other native platforms
 until their process-lifetime adapters are implemented and tested.
 
 The negotiated typed-message contract and encrypted structured body below remain
@@ -47,55 +47,21 @@ in one compatible message, within its server limits, or text alone.
 
 ## Global fetch policy
 
-Choose the global mode in **Settings → Link previews** on Linux. The initial
-default is **Off**, and the setting applies to every server in the current profile.
-There is no default public proxy or DNS service. The web adapter displays metadata
-and embedded images carried in messages, with sender-side preview generation disabled.
+Choose **Off** or **Direct** in **Settings → Link previews** on Linux. The default
+is **Direct**, and the setting applies to every server in the current profile. The
+web adapter displays metadata and embedded images carried in messages, with
+sender-side preview generation disabled.
 
 | Mode | Behavior |
 |---|---|
 | Off | No automatic network request, DNS lookup or fetch worker. |
-| Direct | Explicit opt-in to resolving and connecting to public target addresses directly. |
-| ProxyRequired | No fetching until an explicit proxy and proxied DNS/bootstrap configuration are complete; no direct or local target-DNS fallback. |
+| Direct | Resolving and connecting to public target addresses directly. |
 
-The mode selector does not edit proxy or resolver addresses. To use **Proxy
-required**, close Nuschl and add a `link_previews` object to your existing
-`settings.json`: normally `~/.config/nuschl/settings.json` on Linux (or
-`$XDG_CONFIG_HOME/nuschl/settings.json` when set). With `--profile-dir DIR`,
-use `DIR/config/settings.json`. Preserve the file's other settings. For example:
-
-```json
-{
-  "link_previews": {
-    "mode": "proxy_required",
-    "proxy": "socks5://127.0.0.1:9050",
-    "dns": {
-      "url": "https://resolver.example/dns-query",
-      "bootstrap": ["192.0.2.53"]
-    }
-  }
-}
-```
-
-Replace the proxy address, resolver URL and bootstrap IP with services you have
-configured; the resolver values above are documentation placeholders. The proxy
-must use `socks5://` with an IP literal and explicit port, without authentication.
-The resolver must support DNS-over-HTTPS JSON GET requests using `name` and
-`type` query parameters for A and AAAA records, not only binary DNS wire responses.
-Supply one to four bootstrap IP addresses for the resolver: Nuschl reaches those
-through the proxy while verifying TLS against the resolver URL's hostname and
-built-in WebPKI roots. It resolves page and image hosts through that resolver
-rather than system DNS.
-Restart Nuschl after editing the file; **Active policy** and any configuration
-problem appear below the mode selector. Missing or invalid proxy configuration
-fetches nothing and never falls back to Direct. Switching modes preserves valid
-proxy and DNS settings. Preview policy is user-owned; `managed.json` does not
-supply or enable it. There are no dedicated preview sidecars.
-
-An absent `link_previews` field means Off. The exact default is omitted when saving;
-explicit choices or configured services use the new field. Older Nuschl releases
-with strict settings schemas can reject files containing this field; this change
-does not provide a downgrade migration.
+Preview policy is user-owned; `managed.json` does not supply or enable it. An
+absent `link_previews` field means Direct. A `settings.json` that Nuschl sets aside
+as invalid leaves previews Off until you choose again. The exact default is omitted
+when saving. Older Nuschl releases with strict settings schemas can reject files
+containing this field; this change does not provide a downgrade migration.
 
 The policy covers the HTML document, its redirects, the selected image, image
 redirects and future metadata providers. A change invalidates late results and
@@ -105,15 +71,6 @@ already started in Direct mode can finish after cancellation; no new lookup or
 connection is admitted for that revoked job. Displaying a carried preview does not
 itself fetch anything, including when this sender-side policy is Off.
 
-Initial standard-proxy support is SOCKS5 with numeric, validated target addresses.
-Opaque SOCKS5h/CONNECT hostname resolution alone cannot prove that the proxy did not
-resolve a public-looking name to a private address. Instead, target DNS is queried
-through the configured proxy using an explicitly configured DNS-over-HTTPS endpoint
-and bootstrap addresses; public answers are validated and pinned for the actual
-tunnel. The original hostname remains the HTTP Host/TLS verification identity.
-There is no implicit third-party resolver. A configured local proxy/resolver is an
-explicit service exception, not permission for page-controlled private destinations.
-
 Private, loopback, link-local, multicast, unspecified and other special-purpose
 target ranges are denied. The same rule applies after every redirect and to every
 image address. Numeric shorthand, mapped IPv4, alternate ports, credentials in URLs,
@@ -121,7 +78,7 @@ local names and redirect scheme changes must not bypass it. Tests use explicit
 private fixture allowances unavailable to normal remote metadata.
 
 No request carries browser cookies, authorization, referrer or ambient proxy
-environment settings. Proxy failures never fall through to direct access.
+environment settings.
 
 ## Provider contract
 
@@ -151,7 +108,7 @@ Proposed initial limits:
 | Message previews | One |
 | Retained drafts | 64, at most 1 MiB of draft text in total |
 | Cached results | 16, at most 1 MiB; success expires after 10 minutes, failure after 2 |
-| Settings | Existing 1 MiB file limit; proxy/resolver strings at most 2 KiB; at most four bootstrap addresses; atomic owner-only saves |
+| Settings | Existing 1 MiB file limit; atomic owner-only saves |
 
 The legacy projection may shorten the displayed title and description to 200 and
 300 UTF-16 units. It preserves the entire original message text, obeys the server's
@@ -186,7 +143,7 @@ budget or omit the preview rather than increasing that limit or truncating text.
    outside the frontend.
 6. **Native fetch supervisor/worker:** isolated HTTP response parsing with no home,
    credentials or new network connections in the worker. The supervisor validates
-   DNS and establishes the one approved direct connection/proxy tunnel. A bounded
+   DNS and establishes the one approved direct connection. A bounded
    duplex transport over inherited IPC pipes lets the worker exchange bytes only
    with that connection; redirects return to supervisor policy. Versioned preview
    requests use the existing worker framing and containment.
@@ -204,9 +161,9 @@ frontend under the existing OS-binding exception.
 
 `checks.x86_64-linux.preview-worker` exercises the actual confined worker protocol,
 including cancellation and process retirement. `checks.x86_64-linux.vm-link-previews`
-runs synthetic HTTP/proxy/DNS peers and the packaged desktop in a software-rendered
+runs synthetic HTTP/DNS peers and the packaged desktop in a software-rendered
 Linux VM against stock Murmur and a compatible Nuschl server. It checks sender-only
-fetching, Off/proxy failure behavior, one-message delivery to an independent native
+fetching, Off behavior, one-message delivery to an independent native
 recipient, removal and late results, and compact/zoomed composer and recipient layouts.
 
 The `legacy-preview` scene in `tests/web_broker.browser.mjs` checks a real browser
@@ -219,15 +176,15 @@ physical Windows/macOS/iOS/Safari behavior or kernel-wide browser egress contain
 Browser codec/content workers retain the browser isolation limitations described
 in the architecture documentation. Final required CI remains a separate merge gate.
 
-All HTTP, proxy, DNS, TLS and image fixtures use owned synthetic peers. No tests
+All HTTP, DNS, TLS and image fixtures use owned synthetic peers. No tests
 fetch public sites. The complete feature's requirements include the following;
 typed-history and MLS cases remain deferred with their implementation:
 
-- Off/incomplete ProxyRequired starts no DNS, socket or worker; changing policy and
+- Off starts no DNS, socket or worker; changing policy and
   dismissing a card reject late replies. Failed previews preserve text sending.
-- Recorded proxy/DNS fixtures prove every HTML/image/redirect/DNS request follows
+- Recorded DNS fixtures prove every HTML/image/redirect/DNS request follows
   policy, numeric target pinning survives rebinding, forbidden addresses are refused
-  and neither ambient proxy settings nor a failed proxy cause direct access.
+  and ambient proxy settings are ignored.
 - Bounds cover headers, bodies, redirect loops, malformed HTML, duplicate metadata,
   invalid URLs, oversized images, decompression and decoder rejection.
 - Compatible and legacy servers carry one logical message. History, retries, edits

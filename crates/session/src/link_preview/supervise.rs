@@ -12,14 +12,13 @@ use nuschl_ipc::{
 use nuschl_link_preview::{
     card::Card,
     metadata::{ExtractedMetadata, Unavailable},
-    policy::{Route, Target},
+    policy::Target,
 };
 use std::{path::Path, sync::Arc, time::Duration};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 pub(super) async fn pipeline(
     executable: &Path,
-    route: &Route,
     original: &Target,
     cancel: &Arc<Cancel>,
     budget: &mut Budget,
@@ -27,7 +26,6 @@ pub(super) async fn pipeline(
     budget.check(cancel)?;
     let (document, document_url) = target_http(
         executable,
-        route,
         original.clone(),
         Purpose::Document,
         cancel,
@@ -71,16 +69,9 @@ pub(super) async fn pipeline(
     }
     let image = if let Some(reference) = metadata.image.as_ref() {
         match document_url.join(reference) {
-            Ok(target) => prepare_image(
-                executable,
-                route,
-                target,
-                &metadata.image_alt,
-                cancel,
-                budget,
-            )
-            .await
-            .ok(),
+            Ok(target) => prepare_image(executable, target, &metadata.image_alt, cancel, budget)
+                .await
+                .ok(),
             Err(_) => None,
         }
     } else {
@@ -94,14 +85,13 @@ pub(super) async fn pipeline(
 
 async fn prepare_image(
     executable: &Path,
-    route: &Route,
     target: Target,
     alt: &str,
     cancel: &Arc<Cancel>,
     budget: &mut Budget,
 ) -> Result<nuschl_core::preview::EmbeddedImage, Unavailable> {
     budget.check(cancel)?;
-    let (image, _) = target_http(executable, route, target, Purpose::Image, cancel, budget).await?;
+    let (image, _) = target_http(executable, target, Purpose::Image, cancel, budget).await?;
     if !matches!(
         image.media_type.as_deref(),
         Some("image/png" | "image/jpeg" | "image/webp" | "image/gif")
@@ -160,7 +150,6 @@ async fn offline(
 
 async fn target_http(
     executable: &Path,
-    route: &Route,
     mut target: Target,
     purpose: Purpose,
     cancel: &Arc<Cancel>,
@@ -168,14 +157,11 @@ async fn target_http(
 ) -> Result<(Response, Target), Unavailable> {
     loop {
         budget.check(cancel)?;
-        let addresses = resolve::addresses(executable, route, &target, cancel, budget).await?;
+        let addresses = resolve::addresses(&target, cancel, budget).await?;
         let ip = *addresses.first().ok_or(Unavailable::Address)?;
         let endpoint = Endpoint::target(&target, ip)?;
         let request = HttpUrl::target(&target);
-        let response = http(
-            executable, route, endpoint, &request, purpose, cancel, budget,
-        )
-        .await?;
+        let response = http(executable, endpoint, &request, purpose, cancel, budget).await?;
         if matches!(response.status, 301 | 302 | 303 | 307 | 308) {
             budget.check(cancel)?;
             budget.redirects += 1;
@@ -197,9 +183,8 @@ async fn target_http(
     }
 }
 
-pub(super) async fn http(
+async fn http(
     executable: &Path,
-    route: &Route,
     endpoint: Endpoint,
     url: &HttpUrl,
     purpose: Purpose,
@@ -227,7 +212,7 @@ pub(super) async fn http(
         // request bytes are sent, and the next check forbids all new work.
         retirement.ready().await.map_err(|_| Unavailable::Network)?;
         budget.check(cancel)?;
-        let mut socket = transport::open(route, endpoint, cancel, budget).await?;
+        let mut socket = transport::open(endpoint, cancel, budget).await?;
         io_stage(cancel, budget, 5, socket.write_all(&request)).await?;
         budget.check(cancel)?;
         let mut input = child_input;

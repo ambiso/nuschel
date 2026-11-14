@@ -3983,7 +3983,6 @@ mod tests {
         client.set_link_preview_settings(
             crate::preview::Settings {
                 mode: crate::preview::Mode::Direct,
-                ..Default::default()
             },
             0,
         );
@@ -4019,7 +4018,6 @@ mod tests {
                 client.set_link_preview_settings(
                     crate::preview::Settings {
                         mode: crate::preview::Mode::Direct,
-                        ..Default::default()
                     },
                     0,
                 );
