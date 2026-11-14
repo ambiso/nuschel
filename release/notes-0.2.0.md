@@ -2,10 +2,11 @@
 
 - **Emoji:** a picker beside the message box, short codes such as `:smile:`, and
   the same emoji images on desktop and in the browser.
-- **Link previews:** on Linux, the desktop app can attach a preview card (title,
-  description and image) to a link you send. Previews are off until you choose
-  Direct or a proxy in Settings. The desktop app and the browser show received
-  cards without fetching anything.
+- **Link previews:** on Linux, the desktop app attaches a preview card (title,
+  description and image) to a link you send, fetched directly from your
+  computer. You can turn previews off in Settings, or set up a proxy for them.
+  The desktop app and the browser show received cards without fetching
+  anything.
 - **Microphone:** only your own Unmute opens the microphone. Server changes,
   reconnects and restarts keep you muted, and mute and deafen carry over to the
   next connection.
