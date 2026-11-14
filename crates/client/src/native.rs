@@ -463,6 +463,12 @@ pub enum Event {
         generation: u64,
         message: String,
     },
+    /// The microphone stopped by itself (the worker or the device failed).
+    /// It stays closed, and the connection is to be muted (#199).
+    MicrophoneStopped {
+        server: String,
+        generation: u64,
+    },
     Message {
         server: String,
         generation: u64,
@@ -586,8 +592,59 @@ struct Connection {
     generation: u64,
     voice_route: std::sync::Arc<nuschl_session::connection::VoiceRoute>,
     commands: mpsc::Sender<Command>,
+    /// Mute and deafen as last set (muted includes deafened): state, not a
+    /// queued request, so neither a busy connection nor a reconnection loses
+    /// a mute or deafen (see `next_command`).
+    self_state: watch::Sender<(bool, bool)>,
     sounds: mpsc::Sender<Sound>,
     task: tokio::task::JoinHandle<()>,
+}
+
+/// Queue a request for a connection; mute and deafen replace its state.
+fn enqueue(connection: &Connection, command: Command) -> Result<(), String> {
+    if let Command::SetSelf { muted, deafened } = command {
+        connection
+            .self_state
+            .send_replace((muted || deafened, deafened));
+        return Ok(());
+    }
+    connection
+        .commands
+        .try_send(command)
+        .map_err(|_| "Connection is busy or has ended; reconnect to try again.".into())
+}
+
+/// A connection's next request. A change of mute or deafen comes first,
+/// ahead of the queued requests, unless it opens (an unmute or undeafen,
+/// against `now`): that waits until the queue is empty, so it never
+/// overtakes a move. The latest state is taken: an older one never follows
+/// a newer one.
+async fn next_command(
+    commands: &mut mpsc::Receiver<Command>,
+    self_state: &mut watch::Receiver<(bool, bool)>,
+    now: (bool, bool),
+) -> Option<Command> {
+    tokio::select! {
+        biased;
+        Ok(()) = self_state.changed() => {
+            // Decided when the change is taken, not when the wait began.
+            let (muted, deafened) = *self_state.borrow();
+            let opens = (!muted && now.0) || (!deafened && now.1);
+            if !opens || commands.is_empty() {
+                return Some(Command::SetSelf { muted, deafened });
+            }
+            self_state.mark_changed();
+            commands.recv().await
+        }
+        command = commands.recv() => command,
+    }
+}
+
+/// Whether a connection holds back our voice: muted or deafened, or with a
+/// change of either not taken yet. A mute and the unmute after it can merge
+/// into one such change; nothing captured in between leaves.
+fn holds_voice(muted: bool, self_state: &watch::Receiver<(bool, bool)>) -> bool {
+    muted || self_state.has_changed().unwrap_or(true)
 }
 /// Synchronous UI callback scope only. No async task inherits this thread-local
 /// value. The guard restores the prior scope even when a callback unwinds.
@@ -1056,6 +1113,7 @@ impl Driver {
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
             + 1;
         let (commands, receiver) = mpsc::channel(32);
+        let (self_state, self_changes) = watch::channel((true, deafened));
         let (sounds, sound_requests) = mpsc::channel(8);
         let id = server.id.clone();
         let voice_route = std::sync::Arc::new(nuschl_session::connection::VoiceRoute::default());
@@ -1065,7 +1123,7 @@ impl Driver {
             (password, deafened),
             generation,
             voice_route.clone(),
-            (receiver, sound_requests),
+            (receiver, sound_requests, self_changes),
             (self.sender.clone(), self.media.clone()),
             (
                 self.content.clone(),
@@ -1084,6 +1142,7 @@ impl Driver {
                 generation,
                 voice_route,
                 commands,
+                self_state,
                 sounds,
                 task,
             },
@@ -1219,12 +1278,12 @@ impl Driver {
             );
         }
 
-        self.connections()
-            .get(server)
-            .ok_or("Server is not connected.")?
-            .commands
-            .try_send(command)
-            .map_err(|_| "Connection is busy or has ended; reconnect to try again.".into())
+        enqueue(
+            self.connections()
+                .get(server)
+                .ok_or("Server is not connected.")?,
+            command,
+        )
     }
     /// A new explicit local voice intent suspends before trying the bounded
     /// queue. Its revision prevents an older queued action from resuming audio.
@@ -1536,13 +1595,20 @@ impl Drop for Driver {
 struct Restore {
     voice_route: std::sync::Arc<nuschl_session::connection::VoiceRoute>,
     channel: Option<u32>,
-    muted: bool,
     deafened: bool,
     connected: bool,
     disconnected_at_ms: Option<i64>,
     /// Our messages a Nuschl server has not acknowledged yet; sent again
     /// with their keys after a reconnect.
     unacked: Vec<PendingChat>,
+}
+impl Restore {
+    /// A deafen made while reconnecting applies to the next connection, and
+    /// an undeafen or unmute made meanwhile is dropped. Every connection
+    /// starts muted: only an explicit Unmute opens the microphone (#199).
+    fn keep_closed(&mut self, self_state: &mut watch::Receiver<(bool, bool)>) {
+        self.deafened |= self_state.borrow_and_update().1;
+    }
 }
 
 enum Outcome {
@@ -1554,7 +1620,7 @@ enum Outcome {
 }
 
 /// Supervise one server connection: reconnect with backoff after transient
-/// failures, restoring channel and mute/deafen, and report gaps in history.
+/// failures, restoring channel and deafen (muted), and report gaps in history.
 #[allow(clippy::too_many_arguments)]
 async fn connection_loop(
     (profile, crypto): (Profile, nuschl_session::identity::CryptoHandle),
@@ -1562,7 +1628,11 @@ async fn connection_loop(
     (password, deafened): (Option<String>, bool),
     generation: u64,
     voice_route: std::sync::Arc<nuschl_session::connection::VoiceRoute>,
-    (mut commands, mut sounds): (mpsc::Receiver<Command>, mpsc::Receiver<Sound>),
+    (mut commands, mut sounds, mut self_state): (
+        mpsc::Receiver<Command>,
+        mpsc::Receiver<Sound>,
+        watch::Receiver<(bool, bool)>,
+    ),
     (events, hub): (mpsc::Sender<Event>, media::Hub),
     (content, storage, pending): (
         mpsc::Sender<ContentWork>,
@@ -1580,19 +1650,19 @@ async fn connection_loop(
     let mut restore = Restore {
         voice_route,
         channel: server.last_channel,
-        muted: true,
         deafened,
         ..Restore::default()
     };
     let mut attempt = 0_u32;
     loop {
+        restore.keep_closed(&mut self_state);
         let started = tokio::time::Instant::now();
         let outcome = connect_once(
             (&profile, &crypto),
             &server,
             password.clone(),
             generation,
-            (&mut commands, &mut sounds),
+            (&mut commands, &mut sounds, &mut self_state),
             (&events, &hub),
             (&content, &storage, &pending),
             (&mut settings, &mut voice_keys, &mut plugin_data),
@@ -1735,7 +1805,11 @@ async fn connect_once(
     server: &ServerBookmark,
     password: Option<String>,
     generation: u64,
-    (commands, sounds): (&mut mpsc::Receiver<Command>, &mut mpsc::Receiver<Sound>),
+    (commands, sounds, self_state): (
+        &mut mpsc::Receiver<Command>,
+        &mut mpsc::Receiver<Sound>,
+        &mut watch::Receiver<(bool, bool)>,
+    ),
     (events, hub): (&mpsc::Sender<Event>, &media::Hub),
     (content, storage, pending): (
         &mpsc::Sender<ContentWork>,
@@ -1767,7 +1841,7 @@ async fn connect_once(
             password,
             force_tcp: settings.borrow().force_tcp,
             relay_only: settings.borrow().relay_only,
-            muted: restore.muted,
+            muted: true,
             deafened: restore.deafened,
             channel: restore.channel,
             resend: restore.unacked.clone(),
@@ -1800,10 +1874,15 @@ async fn connect_once(
     let mut session = tokio::spawn(connection::run(options, receiver, session_events));
     let mut peer: Option<String> = None;
     let nonce = format!("{}:{generation}:{}", id, connection::now_ms());
-    let mut muted = restore.muted;
+    let mut muted = true;
     let mut deafened = restore.deafened;
     let mut voice_revision = 0_u64;
     let mut voice_allowed = true;
+    // The server restricts us (it suppressed us, no Speak permission, or
+    // muted or deafened us): see `hold_while_blocked`. Sessions it
+    // restricts, known before our own is.
+    let mut restricted = false;
+    let mut restricted_users = std::collections::BTreeSet::<u32>::new();
     let mut sequence = 0;
     let mut content_gap = false;
     // The budget this server advertised (ServerSync, then ServerConfig) and
@@ -1902,7 +1981,7 @@ async fn connect_once(
                 if deafened { continue; }
                 hub.send(media::Control::Sound(sound));
             },
-            Some(command) = commands.recv() => {
+            Some(command) = next_command(commands, self_state, (muted, deafened)) => {
                 if let Command::Mls(open @ (nuschl_session::mls::MlsCommand::OpenChannel { .. } | nuschl_session::mls::MlsCommand::OpenDirect { .. })) = match &command { Command::Scoped { command, .. } => command.as_ref(), command => command } {
                     let authority = match &command { Command::Scoped { authority, .. } => Some(authority.clone()), _ => None };
                     pending_encrypted_open = Some((open.clone(), authority));
@@ -1910,8 +1989,10 @@ async fn connect_once(
                 }
                 if let Command::SetSelf { muted: mute, deafened: deaf } = &command {
                     voice_revision = voice_revision.wrapping_add(1);
-                    let cue = crate::sounds::self_state((muted, deafened), (*mute || *deaf, *deaf));
-                    muted = *mute || *deaf; deafened = *deaf;
+                    let mut next = *mute || *deaf;
+                    hold_while_blocked(restricted, bitrate, &mut next, &mut voice_revision);
+                    let cue = crate::sounds::self_state((muted, deafened), (next, *deaf));
+                    muted = next; deafened = *deaf;
                     if muted && std::mem::take(&mut transmitting) {
                         let _ = session_commands.try_send(silent_terminator(&mut sequence));
                         if let Some(session) = own_session { mark_talking(events, &id, generation, &mut speaking, session, false).await; }
@@ -1930,8 +2011,8 @@ async fn connect_once(
             outgoing = async { voice.as_mut().unwrap().0.recv().await }, if voice.is_some() => {
                 let Some(media::Outgoing { revision, opus, end }) = outgoing else { voice = None; continue };
                 // Only unmuted, as the worker's supervisor routes it; nothing
-                // captured before a mute leaves.
-                if !voice_allowed || revision != voice_revision || muted || deafened || voice_keys.borrow().mute || !voice_frame_fits(bitrate, opus.len()) { continue; }
+                // captured before a mute leaves, nor while one waits.
+                if !voice_allowed || revision != voice_revision || holds_voice(muted || deafened, self_state) || voice_keys.borrow().mute || !voice_frame_fits(bitrate, opus.len()) { continue; }
                 let packet = nuschl_protocol::voice::VoicePacket { sender: 0, sequence, opus, end, volume: 1. };
                 sequence += 2;
                 transmitting = !end;
@@ -2019,8 +2100,10 @@ async fn connect_once(
                     }
                     own_session = Some(connected_session);
                     let own_session = connected_session;
+                    restricted = restricted_users.contains(&own_session);
                     budget = max_bandwidth;
                     bitrate = VoiceBitrate::resolve(requested, budget).effective;
+                    hold_while_blocked(restricted, bitrate, &mut muted, &mut voice_revision);
                     let (sender, receiver) = mpsc::channel(64);
                     let link = media::Link { revision: voice_revision, voice_allowed, muted, deafened, bitrate, loss_percent };
                     hub.send(media::Control::Attach { server: id.clone(), generation, link, voice: sender });
@@ -2034,6 +2117,7 @@ async fn connect_once(
                         let next = VoiceBitrate::resolve(requested, budget).effective;
                         if (next == 0) != (bitrate == 0) { voice_revision = voice_revision.wrapping_add(1); }
                         bitrate = next;
+                        hold_while_blocked(restricted, bitrate, &mut muted, &mut voice_revision);
                         if voice.is_some() {
                             hub.send(media::Control::Update { server: id.clone(), generation,
                                 link: media::Link { revision: voice_revision, voice_allowed, muted, deafened, bitrate, loss_percent }, cue: None });
@@ -2056,17 +2140,31 @@ async fn connect_once(
                 },
                 SessionEvent::User(user) => {
                     hashes.insert(user.session, user.certificate_hash.clone());
+                    let restricts = user.suppressed || user.muted || user.deafened;
+                    if restricts { restricted_users.insert(user.session); } else { restricted_users.remove(&user.session); }
                     if Some(user.session) == own_session {
                         restore.channel = Some(user.channel);
                         if own_registration != user.user_id && user.user_id.is_some() {
                             own_registration = user.user_id;
                             let _ = session_commands.send(Command::Identity(nuschl_session::identity::IdentityCommand::Refresh)).await;
                         }
+                        restricted = restricts;
+                        if hold_while_blocked(restricted, bitrate, &mut muted, &mut voice_revision) {
+                            if std::mem::take(&mut transmitting) {
+                                let _ = session_commands.try_send(silent_terminator(&mut sequence));
+                                mark_talking(events, &id, generation, &mut speaking, user.session, false).await;
+                            }
+                            if voice.is_some() {
+                                hub.send(media::Control::Update { server: id.clone(), generation,
+                                    link: media::Link { revision: voice_revision, voice_allowed, muted, deafened, bitrate, loss_percent }, cue: None });
+                            }
+                        }
                     }
                     let _ = events.send(Event::Protocol { server: id.clone(), generation, event: SessionEvent::User(user) }).await;
                 },
                 SessionEvent::UserRemoved(session) => {
                     hashes.remove(&session);
+                    restricted_users.remove(&session);
                     let _ = events.send(Event::Protocol { server: id.clone(), generation, event: SessionEvent::UserRemoved(session) }).await;
                 },
                 SessionEvent::Transport(stats) => {
@@ -2161,7 +2259,6 @@ async fn connect_once(
             },
         }
     }
-    restore.muted = muted;
     restore.deafened = deafened;
     if !finished {
         session.abort();
@@ -2171,6 +2268,25 @@ async fn connect_once(
 }
 
 const TALK_HOLD: std::time::Duration = std::time::Duration::from_millis(280);
+
+/// Keep the connection muted while the server stops our voice (#199): it
+/// restricts us (suppressed, server muted or deafened), or its budget leaves
+/// a voice `bitrate` of 0. That mutes us in a new routing epoch, an unmute
+/// taken meanwhile stays muted, and we stay muted after it lifts. Returns
+/// whether this muted us.
+fn hold_while_blocked(
+    restricted: bool,
+    bitrate: u32,
+    muted: &mut bool,
+    revision: &mut u64,
+) -> bool {
+    if *muted || !(restricted || bitrate == 0) {
+        return false;
+    }
+    *muted = true;
+    *revision = revision.wrapping_add(1);
+    true
+}
 
 /// Push-to-talk and push-to-mute keys, held or not.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -2861,7 +2977,7 @@ async fn storage_loop(
             continue;
         }
         if storage.is_none() {
-            match Storage::start(&directory) {
+            match Storage::start(&directory).await {
                 Ok(worker) => storage = Some(worker),
                 Err(error) => {
                     let _ = events.send(Event::HistoryError(error.to_string())).await;
@@ -2916,7 +3032,7 @@ async fn storage_loop(
                 let mut id = None;
                 for attempt in 0..2 {
                     if storage.is_none() {
-                        storage = Storage::start(&directory).ok();
+                        storage = Storage::start(&directory).await.ok();
                     }
                     let Some(worker) = &mut storage else { break };
                     let saved = match seq {
@@ -3223,7 +3339,7 @@ async fn chime(
     host: Option<String>,
     sound: Sound,
 ) {
-    let Ok(mut worker) = Media::start() else {
+    let Ok(mut worker) = Media::start().await else {
         return;
     };
     configure(&worker, &audio, (DEFAULT_VOICE_BITRATE, 5), host);
@@ -3447,6 +3563,9 @@ impl Event {
                 generation,
                 message,
             },
+            Event::MicrophoneStopped { server, generation } => {
+                Input::MicrophoneStopped { server, generation }
+            }
             Event::Message {
                 server,
                 generation,
@@ -4069,6 +4188,7 @@ mod action_scope_tests {
             generation: 7,
             voice_route: Default::default(),
             commands,
+            self_state: watch::channel((true, false)).0,
             sounds,
             task: tokio::spawn(async {}),
         };
@@ -4125,6 +4245,113 @@ mod action_scope_tests {
         missing.users.clear();
         assert!(metadata_command(10, "a", missing, request()).is_err());
     }
+    /// The mute and deafen a connection's next request sets, if it does.
+    fn set_self(command: Option<Command>) -> Option<(bool, bool)> {
+        match command? {
+            Command::SetSelf { muted, deafened } => Some((muted, deafened)),
+            _ => None,
+        }
+    }
+    /// #199: a restriction or a lost voice budget mutes us in a new routing
+    /// epoch, an unmute taken meanwhile stays muted, and its lift keeps us
+    /// muted until the next unmute.
+    #[test]
+    fn a_blocked_voice_holds_the_connection_muted() {
+        for (restricted, bitrate) in [(true, 40_000), (false, 0)] {
+            let (mut muted, mut revision) = (false, 4);
+            assert!(hold_while_blocked(
+                restricted,
+                bitrate,
+                &mut muted,
+                &mut revision
+            ));
+            assert_eq!((muted, revision), (true, 5));
+            // The unmute a connection takes while blocked.
+            let mut unmute = false;
+            assert!(hold_while_blocked(
+                restricted,
+                bitrate,
+                &mut unmute,
+                &mut revision
+            ));
+            assert!(unmute);
+            // Lifted: we stay muted, until the next unmute is taken.
+            assert!(!hold_while_blocked(
+                false,
+                40_000,
+                &mut muted,
+                &mut revision
+            ));
+            assert!(muted);
+            let mut unmute = false;
+            assert!(!hold_while_blocked(
+                false,
+                40_000,
+                &mut unmute,
+                &mut revision
+            ));
+            assert!(!unmute);
+        }
+    }
+    #[tokio::test]
+    async fn a_mute_is_neither_refused_nor_lost_while_the_connection_is_busy_or_reconnecting() {
+        let (commands, mut queued) = mpsc::channel(1);
+        let (sounds, _) = mpsc::channel(1);
+        let (self_state, mut changes) = watch::channel((true, false));
+        let connection = Connection {
+            generation: 7,
+            voice_route: Default::default(),
+            commands,
+            self_state,
+            sounds,
+            task: tokio::spawn(async {}),
+        };
+        let set = |muted, deafened| enqueue(&connection, Command::SetSelf { muted, deafened });
+        let (unmuted, muted) = ((false, false), (true, false));
+        // The connection is busy: its queue is full.
+        enqueue(&connection, Command::RequestStats(2)).unwrap();
+        assert!(enqueue(&connection, Command::RequestStats(3)).is_err());
+        // A mute and the unmute after it merge, yet hold back voice until
+        // the connection takes them, ahead of the queue (a new revision).
+        assert!(!holds_voice(false, &changes));
+        set(true, false).unwrap();
+        set(false, false).unwrap();
+        assert!(holds_voice(false, &changes), "voice from the muted moment");
+        let next = next_command(&mut queued, &mut changes, unmuted).await;
+        assert_eq!(set_self(next), Some(unmuted));
+        assert!(!holds_voice(false, &changes));
+        // A mute comes first; an unmute waits until the queue is empty.
+        set(true, false).unwrap();
+        let next = next_command(&mut queued, &mut changes, unmuted).await;
+        assert_eq!(set_self(next), Some(muted));
+        set(false, false).unwrap();
+        let next = next_command(&mut queued, &mut changes, muted).await;
+        assert!(matches!(next, Some(Command::RequestStats(2))));
+        let next = next_command(&mut queued, &mut changes, muted).await;
+        assert_eq!(set_self(next), Some(unmuted));
+        // Also when both arrive while the connection is already waiting.
+        {
+            let mut next = std::pin::pin!(next_command(&mut queued, &mut changes, muted));
+            let waiting = tokio::time::timeout(std::time::Duration::ZERO, next.as_mut()).await;
+            assert!(waiting.is_err());
+            enqueue(&connection, Command::RequestStats(4)).unwrap();
+            set(false, false).unwrap();
+            assert!(matches!(next.await, Some(Command::RequestStats(4))));
+        }
+        let next = next_command(&mut queued, &mut changes, muted).await;
+        assert_eq!(set_self(next), Some(unmuted));
+        // A deafen made while reconnecting applies to the next connection,
+        // and an undeafen made meanwhile is dropped (every one starts muted).
+        let mut restore = Restore::default();
+        set(false, false).unwrap();
+        restore.keep_closed(&mut changes);
+        assert!(!restore.deafened);
+        set(true, true).unwrap();
+        restore.keep_closed(&mut changes);
+        set(true, false).unwrap();
+        restore.keep_closed(&mut changes);
+        assert!(restore.deafened);
+    }
     #[tokio::test]
     async fn queue_full_new_voice_intent_stays_suspended_with_its_new_revision() {
         let (commands, mut queued) = mpsc::channel(1);
@@ -4136,6 +4363,7 @@ mod action_scope_tests {
                 generation: 7,
                 voice_route: route.clone(),
                 commands,
+                self_state: watch::channel((true, false)).0,
                 sounds,
                 task: tokio::spawn(async {}),
             },
@@ -4495,6 +4723,7 @@ mod reply_owner_tests {
             generation,
             voice_route: Default::default(),
             commands,
+            self_state: watch::channel((true, false)).0,
             sounds,
             task: tokio::spawn(async {}),
         };
@@ -4701,6 +4930,7 @@ mod reply_owner_tests {
                 generation: 7,
                 voice_route: Default::default(),
                 commands,
+                self_state: watch::channel((true, false)).0,
                 sounds,
                 task: runtime.spawn(async {}),
             },

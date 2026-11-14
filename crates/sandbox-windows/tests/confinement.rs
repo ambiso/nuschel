@@ -431,14 +431,16 @@ mod windows {
         let probes = [
             (
                 "content",
-                command(&me, Role::Content { cpu_seconds: 5 }, &["--probe".into()]),
+                command(
+                    &me,
+                    Role::Content {
+                        cpu_seconds: 5,
+                        arguments: &["--probe".into()],
+                    },
+                ),
                 request(None, 640 * mib),
             ),
-            (
-                "math",
-                command(&me, Role::Math, &[]),
-                request(None, 640 * mib),
-            ),
+            ("math", command(&me, Role::Math), request(None, 640 * mib)),
             (
                 "storage",
                 command(
@@ -446,18 +448,17 @@ mod windows {
                     Role::Storage {
                         directory: &storage,
                     },
-                    &[],
                 ),
                 request(Some(&storage), 1200 * mib),
             ),
             (
                 "crypto",
-                command(&me, Role::Crypto { directory: &crypto }, &[]),
+                command(&me, Role::Crypto { directory: &crypto }),
                 request(Some(&crypto), 1200 * mib),
             ),
             (
                 "media",
-                command(&me, Role::Media, &[]),
+                command(&me, Role::Media),
                 request(None, 1200 * mib),
             ),
             (
@@ -467,7 +468,6 @@ mod windows {
                     Role::Transfer {
                         file: Some(&offered),
                     },
-                    &[],
                 ),
                 request(None, 1200 * mib),
             ),
@@ -711,8 +711,7 @@ mod windows {
 
         if wanted("math") {
             let rendered = async {
-                let command =
-                    command(&worker("math"), Role::Math, &[]).map_err(|e| e.to_string())?;
+                let command = command(&worker("math"), Role::Math).map_err(|e| e.to_string())?;
                 let (mut child, _containment) = spawn(command)?;
                 let request = MathRequest {
                     tex: r"\frac{a}{b} + \sqrt{x^2}".into(),
@@ -752,7 +751,7 @@ mod windows {
             let role = Role::Storage {
                 directory: &history,
             };
-            let command = command(&worker("storage"), role, &[]).map_err(|e| e.to_string())?;
+            let command = command(&worker("storage"), role).map_err(|e| e.to_string())?;
             let (mut child, _containment) = spawn(command)?;
             let message = nuschl_core::ChatMessage {
                 server: "vm".into(),
@@ -798,7 +797,7 @@ mod windows {
         let keys = work.join("crypto");
         let identity = async {
             let role = Role::Crypto { directory: &keys };
-            let command = command(&worker("crypto"), role, &[]).map_err(|e| e.to_string())?;
+            let command = command(&worker("crypto"), role).map_err(|e| e.to_string())?;
             let (mut child, _containment) = spawn(command)?;
             send(
                 &mut child,
@@ -824,7 +823,7 @@ mod windows {
         checks.report("crypto", "creates an identity", identity.await);
 
         let media = async {
-            let command = command(&worker("media"), Role::Media, &[]).map_err(|e| e.to_string())?;
+            let command = command(&worker("media"), Role::Media).map_err(|e| e.to_string())?;
             let (mut child, _containment) = spawn(command)?;
             send(
                 &mut child,
@@ -872,7 +871,7 @@ mod windows {
             let role = Role::Transfer {
                 file: Some(offered),
             };
-            let command = command(&worker("transfer"), role, &[]).map_err(|e| e.to_string())?;
+            let command = command(&worker("transfer"), role).map_err(|e| e.to_string())?;
             let (mut child, _containment) = spawn(command)?;
             send(
                 &mut child,
@@ -915,7 +914,7 @@ mod windows {
         let download = async {
             use base64::Engine as _;
             let role = Role::Transfer { file: None };
-            let command = command(&worker("transfer"), role, &[]).map_err(|e| e.to_string())?;
+            let command = command(&worker("transfer"), role).map_err(|e| e.to_string())?;
             let (mut child, _containment) = spawn(command)?;
             send(
                 &mut child,
