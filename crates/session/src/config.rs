@@ -3824,8 +3824,10 @@ mod tests {
 
         let root = tempfile::tempdir_in(".").unwrap();
         let profile = Profile::open(Some(root.path().to_owned())).unwrap();
-        let mut settings = ClientSettings::default();
-        settings.link_previews = preview_services();
+        let mut settings = ClientSettings {
+            link_previews: preview_services(),
+            ..ClientSettings::default()
+        };
         for proxy in [
             "socks5://private-route.example:9050".to_owned(),
             "x".repeat(2049),
