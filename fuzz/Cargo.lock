@@ -3255,6 +3255,7 @@ dependencies = [
  "nuschl-core",
  "nuschl-ipc",
  "nuschl-legacy-html",
+ "nuschl-link-preview",
  "nuschl-protocol",
  "nuschl-sandbox",
  "nuschl-session",
@@ -3395,7 +3396,6 @@ dependencies = [
  "nuschl-core",
  "nuschl-legacy-html",
  "serde",
- "serde_json",
  "thiserror 2.0.21",
  "url",
 ]
@@ -3443,6 +3443,7 @@ dependencies = [
  "nuschl-core",
  "nuschl-ipc",
  "nuschl-legacy-html",
+ "nuschl-link-preview",
  "nuschl-protocol",
  "nuschl-sandbox",
  "p12-keystore",

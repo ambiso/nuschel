@@ -468,9 +468,12 @@ impl Desktop {
             bookmarks,
             nuschl_client::native::preferences(&settings),
         );
-        let link_preview_settings = profile.load_link_previews();
         client.set_link_preview_settings(
-            link_preview_settings.effective.settings.clone(),
+            if cfg!(target_os = "linux") {
+                settings.link_previews.clone()
+            } else {
+                Default::default()
+            },
             monotonic_ms(),
         );
         let (services, mut service_events) = Services::new(handle.clone(), driver.settings());
@@ -533,7 +536,7 @@ impl Desktop {
             notes: crate::notify::start(&handle),
             driver,
             services,
-            link_preview: crate::link_preview::ComposerPreview::new(link_preview_settings),
+            link_preview: crate::link_preview::ComposerPreview::default(),
             profile,
             form: None,
             composer,
@@ -2692,11 +2695,6 @@ impl Desktop {
     /// What the desktop's own services report (services.rs).
     fn apply_service_event(&mut self, event: ServiceEvent, cx: &mut Context<Self>) {
         match event {
-            ServiceEvent::LinkPreviewPolicy => {
-                if let Some(reply) = self.services.link_preview_policy_result() {
-                    self.link_preview_policy_saved(reply.revision, reply.result, cx);
-                }
-            }
             ServiceEvent::LinkPreviewImage { ticket, pixels } => {
                 self.link_preview_pixels(ticket, pixels, cx)
             }

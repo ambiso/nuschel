@@ -40,67 +40,16 @@ fn pixels_match_image(image: &EmbeddedImage, pixels: &nuschl_ipc::preview::Pixel
 
 #[derive(Default)]
 pub struct ComposerPreview {
-    pub policy: Option<nuschl_session::config::LinkPreviewSettings>,
     pub pasted: bool,
     timer: bool,
     pending: Option<ImageTicket>,
     settled: Option<ImageTicket>,
     pixels: Option<Arc<RenderImage>>,
-    writes: PolicyWrites,
-}
-
-#[derive(Clone)]
-pub struct PolicyAction {
-    pub revision: u64,
-    pub settings: Settings,
-}
-
-/// GUI intent only. Services owns disk ordering independently of GUI lifetime.
-#[derive(Default)]
-struct PolicyWrites {
-    revision: u64,
-    pending: Option<PolicyAction>,
-    exhausted: bool,
-}
-
-impl PolicyWrites {
-    fn choose(&mut self, settings: Settings) -> Result<PolicyAction, ()> {
-        let Some(revision) = self.revision.checked_add(1).filter(|_| !self.exhausted) else {
-            self.exhausted = true;
-            self.pending = None;
-            return Err(());
-        };
-        self.revision = revision;
-        let action = PolicyAction { revision, settings };
-        self.pending = Some(action.clone());
-        Ok(action)
-    }
-
-    fn finished(&mut self, revision: u64) -> bool {
-        if self.exhausted || self.pending.as_ref().map(|action| action.revision) != Some(revision) {
-            return false;
-        }
-        self.pending = None;
-        true
-    }
-
-    fn desired(&self) -> Option<&Settings> {
-        self.pending.as_ref().map(|action| &action.settings)
-    }
-}
-
-impl ComposerPreview {
-    pub fn new(policy: nuschl_session::config::LinkPreviewSettings) -> Self {
-        Self {
-            policy: Some(policy),
-            ..Self::default()
-        }
-    }
 }
 
 impl Desktop {
     pub fn choose_link_preview_mode(&mut self, mode: Mode, cx: &mut Context<Self>) {
-        // Revocation precedes disk work and even revision-exhaustion errors.
+        // Revoke active work before saving the next preference.
         self.client
             .set_link_preview_settings(Settings::default(), crate::state::monotonic_ms());
         self.link_preview.pixels = None;
@@ -109,58 +58,22 @@ impl Desktop {
             cx.notify();
             return;
         }
-        let Some(loaded) = &self.link_preview.policy else {
-            cx.notify();
-            return;
-        };
-        // A managed route is never copied into the user's sidecar.
-        let mut settings = loaded.user.settings.clone();
-        settings.mode = mode;
-        match self.link_preview.writes.choose(settings) {
-            Ok(action) => {
-                let revision = action.revision;
-                if self
-                    .services
-                    .save_link_preview_policy(self.profile.clone(), action)
-                    .is_err()
-                {
-                    self.link_preview.writes.finished(revision);
-                    self.error = Some(
-                        "Link preview settings could not be queued; previews remain off.".into(),
-                    );
-                }
-            }
-            Err(()) => {
-                self.error = Some(
-                    "Link preview settings cannot be changed in this session; previews remain off."
-                        .into(),
-                )
-            }
-        }
-        cx.notify();
-    }
-
-    pub fn link_preview_policy_saved(
-        &mut self,
-        revision: u64,
-        result: Result<nuschl_session::config::LinkPreviewSettings, String>,
-        cx: &mut Context<Self>,
-    ) {
-        if !self.link_preview.writes.finished(revision) {
-            return;
-        }
-        match result {
-            Ok(loaded) => {
+        let mut settings = self.settings.clone();
+        settings.link_previews.mode = mode;
+        let settings = self.managed.apply(settings.sanitized());
+        match self.profile.save_settings(&settings, &self.managed) {
+            Ok(()) => {
+                self.driver.apply_settings(settings.clone());
                 self.client.set_link_preview_settings(
-                    loaded.effective.settings.clone(),
+                    settings.link_previews.clone(),
                     crate::state::monotonic_ms(),
                 );
-                self.link_preview.policy = Some(loaded);
+                self.settings = settings;
                 self.sync_link_preview(cx);
             }
             Err(_) => {
                 self.error =
-                    Some("Link preview settings could not be saved; previews remain off.".into())
+                    Some("Link preview settings could not be saved; previews remain off.".into());
             }
         }
         cx.notify();
@@ -357,22 +270,11 @@ pub fn composer(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement>
 }
 
 pub fn settings(this: &Desktop, cx: &mut Context<Desktop>) -> AnyElement {
-    let saved_mode = this
-        .link_preview
-        .policy
-        .as_ref()
-        .map_or(Mode::Off, |loaded| loaded.user.settings.mode);
-    let mode = this
-        .link_preview
-        .writes
-        .desired()
-        .map_or(saved_mode, |settings| settings.mode);
-    let problem = this
-        .link_preview
-        .policy
-        .as_ref()
-        .and_then(|loaded| loaded.effective.problem.as_ref())
-        .map(ToString::to_string);
+    let mode = this.settings.link_previews.mode;
+    let problem = (mode == Mode::ProxyRequired)
+        .then(|| this.settings.link_previews.route().err())
+        .flatten()
+        .map(|error| format!("{error}; link previews stay off until the route is complete."));
     let active_mode = if cfg!(target_os = "linux") {
         this.client.link_preview_settings().mode
     } else {
@@ -383,8 +285,7 @@ pub fn settings(this: &Desktop, cx: &mut Context<Desktop>) -> AnyElement {
         Mode::Direct => "Direct",
         Mode::ProxyRequired => "Proxy required",
     };
-    let effective =
-        format!("Active policy: {effective}. System configuration may restrict your saved choice.");
+    let effective = format!("Active policy: {effective}.");
     div().flex().flex_col().gap_2()
         .when(cfg!(target_os = "linux"), |settings| settings.child(crate::settings::segmented("link-preview-mode", "Link previews", [
             ("Off", Mode::Off), ("Direct", Mode::Direct), ("Proxy required", Mode::ProxyRequired),
@@ -396,7 +297,6 @@ pub fn settings(this: &Desktop, cx: &mut Context<Desktop>) -> AnyElement {
         .when(!cfg!(target_os = "linux"), |settings| settings.child(div().text_sm().child(text!("Link previews are not available on this platform yet.").with_id("link-preview-platform-unavailable"))))
         .child(div().text_xs().text_color(color(TEXT_MUTED)).child(text!("Off makes no requests. Direct contacts the website. Proxy required stays disabled until an explicit proxy and proxied DNS are configured. Receivers never fetch previews.").with_id("link-preview-privacy")))
         .child(div().text_xs().text_color(color(TEXT_MUTED)).child(text!(effective).with_id("link-preview-effective-policy")))
-        .when(this.link_preview.writes.pending.is_some(), |settings| settings.child(div().text_xs().text_color(color(TEXT_MUTED)).child(text!("Saving preference; previews stay off until it finishes.").with_id("link-preview-saving-policy"))))
         .when_some(problem, |settings, problem| settings.child(div().text_xs().text_color(color(TEXT_MUTED)).child(text!(problem).with_id("link-preview-policy-status"))))
         .into_any_element()
 }
@@ -404,17 +304,10 @@ pub fn settings(this: &Desktop, cx: &mut Context<Desktop>) -> AnyElement {
 #[cfg(test)]
 mod tests {
     // GPUI's prelude also exports a test attribute.
-    use super::{EmbeddedImage, Mode, PolicyWrites, Settings, pixels_match_image};
+    use super::{EmbeddedImage, pixels_match_image};
     use base64::Engine as _;
     use nuschl_core::preview::ImageMime;
     use nuschl_ipc::preview::Pixels;
-
-    fn choice(mode: Mode) -> Settings {
-        Settings {
-            mode,
-            ..Settings::default()
-        }
-    }
 
     #[test]
     fn carried_pixels_match_the_exact_requested_dimensions_before_rendering() {
@@ -440,28 +333,5 @@ mod tests {
         pixels.width = u32::MAX;
         pixels.height = u32::MAX;
         assert!(!pixels_match_image(&image, &pixels));
-    }
-
-    #[test]
-    fn only_the_latest_policy_intent_may_apply_once() {
-        let mut writes = PolicyWrites::default();
-        let first = writes.choose(choice(Mode::Direct)).unwrap();
-        let latest = writes.choose(choice(Mode::Off)).unwrap();
-        assert!(!writes.finished(first.revision));
-        assert_eq!(writes.desired().unwrap().mode, Mode::Off);
-        assert!(writes.finished(latest.revision));
-        assert!(!writes.finished(latest.revision));
-        assert!(writes.pending.is_none());
-    }
-
-    #[test]
-    fn exhausted_policy_revision_never_accepts_an_old_reply() {
-        let mut writes = PolicyWrites::default();
-        let first = writes.choose(choice(Mode::Direct)).unwrap();
-        writes.revision = u64::MAX;
-        assert!(writes.choose(choice(Mode::Off)).is_err());
-        assert!(writes.pending.is_none());
-        assert!(!writes.finished(first.revision));
-        assert!(writes.choose(choice(Mode::Direct)).is_err());
     }
 }

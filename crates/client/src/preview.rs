@@ -8,7 +8,6 @@ pub use nuschl_link_preview::{
     draft::{Delivery, Ineligible, RequestId, Status, SubmissionToken},
     metadata::Unavailable,
     policy::{DnsSettings, Mode, Settings},
-    settings_file,
 };
 use nuschl_link_preview::{
     draft::{Draft, DraftPreviews, Effect, Ticket},
