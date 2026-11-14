@@ -49,6 +49,9 @@
       nixosModules.witness = import ./nix/witness-module.nix { inherit self; };
       # The Mumble music bot for Subsonic servers (docs/musicbot.md).
       nixosModules.musicbot = import ./nix/musicbot-module.nix { inherit self; };
+      # Screen sharing: the TURN relay and the stream host (#143).
+      nixosModules.turn = ./nix/turn-module.nix;
+      nixosModules.stream = ./nix/stream-module.nix;
       homeModules.default = import ./nix/home-manager.nix { inherit self; };
       homeManagerModules.default = self.homeModules.default;
     }
@@ -845,6 +848,13 @@
               inherit pkgs;
               relay = crates.project.workspaceMembers."nuschl-web-relay".build;
               module = self.nixosModules.web;
+            };
+            # The screen-share TURN relay and stream host under their modules,
+            # with a fake SFU peer (`nix build .#checks.x86_64-linux.vm-turn-stream`).
+            vm-turn-stream = import ./nix/turn-stream-vm.nix {
+              inherit pkgs;
+              turnModule = self.nixosModules.turn;
+              streamModule = self.nixosModules.stream;
             };
             # The music bot under its module, against Murmur and a fake library
             # (`nix build .#checks.x86_64-linux.vm-musicbot`).
