@@ -241,6 +241,18 @@ pub async fn spawn_preview(
     .await
 }
 
+/// Start the media role. On Linux its namespace-init receipt is piped on
+/// standard error, as for the preview roles, so its owner can wait for the
+/// whole sandbox to exit before starting another.
+pub async fn spawn_media(executable: &Path) -> Result<Worker, Error> {
+    let stderr = if cfg!(target_os = "linux") {
+        Stdio::piped()
+    } else {
+        Stdio::null()
+    };
+    spawn_with_stderr(command(executable, Role::Media)?, stderr).await
+}
+
 async fn spawn_with_stderr(mut command: Command, stderr: Stdio) -> Result<Worker, Error> {
     let mut child = command
         .stdin(Stdio::piped())

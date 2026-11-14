@@ -36,7 +36,7 @@ pub(crate) fn command(executable: &Path, role: Role) -> Result<Command, Error> {
     }
     command.arg("--").arg(helper("bwrap")?);
     command.args(["--die-with-parent", "--new-session", "--unshare-all"]);
-    if matches!(role, Role::Preview { .. }) {
+    if matches!(role, Role::Preview { .. } | Role::Media) {
         command.args(["--json-status-fd", "2"]);
     }
     bind_existing(
@@ -172,6 +172,12 @@ mod tests {
             arguments: &[],
         });
         assert!(!ordinary.iter().any(|arg| arg == "--json-status-fd"));
+        let media = arguments(Role::Media);
+        assert!(
+            media
+                .windows(2)
+                .any(|pair| pair == ["--json-status-fd", "2"])
+        );
     }
 
     #[test]

@@ -1437,7 +1437,7 @@ impl Driver {
     }
     pub fn set_push_to_talk(&self, active: bool) {
         self.voice_keys
-            .send_if_modified(|keys| std::mem::replace(&mut keys.talk, active) != active);
+            .send_if_modified(|keys| keys.set_talk(active));
     }
     /// Whether every connection, now and after reconnects, decodes and
     /// reports plugin data.
@@ -2307,6 +2307,18 @@ fn hold_while_blocked(
 pub struct VoiceKeys {
     pub talk: bool,
     pub mute: bool,
+    /// When push-to-talk was last released.
+    pub released: Option<tokio::time::Instant>,
+}
+impl VoiceKeys {
+    /// Press or release push-to-talk; whether that changed it.
+    fn set_talk(&mut self, active: bool) -> bool {
+        let changed = std::mem::replace(&mut self.talk, active) != active;
+        if changed && !active {
+            self.released = Some(tokio::time::Instant::now());
+        }
+        changed
+    }
 }
 
 /// Ends our transmission. Receivers stop at once, as with stock Mumble, but
@@ -3320,24 +3332,23 @@ const HOST_PIN: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// The audio settings, and the bitrate and packet loss the encoder plans for.
 fn configure(
-    media: &Media,
     audio: &nuschl_core::audio::AudioSettings,
     (bitrate, packet_loss_percent): (u32, u8),
     host: Option<String>,
-) {
-    let _ = media.commands.try_send(LiveMediaRequest::Configure {
+) -> LiveMediaRequest {
+    LiveMediaRequest::Configure {
         bitrate,
         packet_loss_percent,
         settings: audio.clone(),
         host,
-    });
+    }
 }
 
 /// Sound effects older than this when a worker starts are stale.
 const MAX_SOUND_DELAY: std::time::Duration = std::time::Duration::from_secs(2);
 
 fn play(media: &Media, settings: &ClientSettings, sound: Sound) {
-    if settings.sound_effects {
+    if settings.sound_effects && media::admits_voice(media) {
         let _ = media.commands.try_send(LiveMediaRequest::PlaySound {
             sound,
             volume: settings.sound_volume,
@@ -3356,7 +3367,9 @@ async fn chime(
     let Ok(mut worker) = Media::start().await else {
         return;
     };
-    configure(&worker, &audio, (DEFAULT_VOICE_BITRATE, 5), host);
+    let _ = worker
+        .commands
+        .try_send(configure(&audio, (DEFAULT_VOICE_BITRATE, 5), host));
     let _ = worker.commands.try_send(LiveMediaRequest::SetState {
         epoch: 0,
         muted: true,
