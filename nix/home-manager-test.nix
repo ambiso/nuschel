@@ -183,8 +183,9 @@ assert lib.assertMsg (
 ) "programs.nuschl.package does not default to this flake's package";
 assert lib.assertMsg (accepted == [ ]) "invalid bookmarks were accepted: ${toString accepted}";
 assert lib.assertMsg (lib.length settingFields > 15) "could not read ClientSettings' fields";
+# link_previews is the user's own choice: managed settings drop it.
 assert lib.assertMsg (accepts {
-  programs.nuschl.settings = lib.genAttrs settingFields (_: null);
+  programs.nuschl.settings = lib.genAttrs (lib.remove "link_previews" settingFields) (_: null);
 }) "programs.nuschl.settings refuses a field of ClientSettings: update settingNames";
 {
   files =
