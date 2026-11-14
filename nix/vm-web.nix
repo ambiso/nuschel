@@ -85,6 +85,7 @@ pkgs.testers.runNixOSTest {
     client.succeed("curl -sf http://web/join.js | grep -q 'nuschl://join/'")
     headers = client.succeed("curl -sfI http://web/join/AAAAAAAAAAAAAAAAAAAAAA")
     assert "Content-Security-Policy" in headers and "no-referrer" in headers, headers
+    assert "X-DNS-Prefetch-Control: off" in headers, headers
     client.succeed("curl -sf http://web/.well-known/assetlinks.json | jq -e '.[0].target.package_name == \"org.nuschl.android\"'")
     client.succeed("curl -sfI http://web/.well-known/assetlinks.json | grep -qi 'content-type: application/json'")
     client.succeed("curl -sf http://web/.well-known/apple-app-site-association | jq -e '.applinks.details[0].appIDs[0] == \"ABCDE12345.org.nuschl.Nuschl\"'")

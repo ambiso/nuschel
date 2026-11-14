@@ -165,8 +165,7 @@ pkgs.testers.runNixOSTest {
     machine.succeed("ip -4 route flush default; ip -6 route flush default")
     machine.succeed("iptables -F OUTPUT; iptables -P OUTPUT DROP; iptables -A OUTPUT -o lo -j ACCEPT")
     machine.succeed("ip6tables -F OUTPUT; ip6tables -P OUTPUT DROP; ip6tables -A OUTPUT -o lo -j ACCEPT")
-    for address in ("93.184.215.14", "93.184.215.53", "93.184.215.99"):
-        machine.succeed(f"ip addr add {address}/32 dev lo")
+    machine.succeed("ip addr add 93.184.215.14/32 dev lo")
     machine.succeed("touch /run/nuschl-preview-dedicated-vm")
     native_directory = "${nativeDirectory}"
     machine.succeed(f"test ! -e {native_directory} && install -d -m0700 -o tester -g users {native_directory} {native_directory}/tmp")
@@ -197,7 +196,7 @@ pkgs.testers.runNixOSTest {
         assert authority["cgroup"] == "0::/system.slice/nuschl-preview-native-test.service\n", authority
         native_groups[native_units[0]] = authority["cgroup"].split("::", 1)[1].rstrip("\n")
         result = json.loads(machine.succeed(f"test $(stat -c%s {native_directory}/fetch-result.json) -le 65536 && cat {native_directory}/fetch-result.json"))
-        assert result["passed"] is True and len(result["checks"]) == 13, result
+        assert result["passed"] is True and len(result["checks"]) == 11, result
         # The test requests peer shutdown. Let its joined finalizer publish the
         # final event oracle before finally requests forced cleanup.
         machine.wait_until_succeeds("test \"$(systemctl show -p ActiveState --value nuschl-preview-native-peers.service)\" = inactive", timeout=timedelta(seconds=15))

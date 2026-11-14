@@ -18,14 +18,12 @@ pub const RAW_OVERHEAD_BYTES: usize = 96 * 1024;
 pub enum Purpose {
     Document,
     Image,
-    Dns,
 }
 impl Purpose {
     pub fn body_limit(self) -> usize {
         match self {
             Self::Document => 256 * 1024,
             Self::Image => 2 * 1024 * 1024,
-            Self::Dns => 16 * 1024,
         }
     }
     pub fn raw_limit(self) -> usize {
@@ -227,7 +225,7 @@ mod tests {
         reply.location = Some("https://example.org/\r\nx".into());
         assert!(reply.decode_body(Purpose::Document).is_err());
         reply.location = None;
-        reply.body = encode(&vec![0; Purpose::Dns.body_limit() + 1]);
-        assert!(reply.decode_body(Purpose::Dns).is_err());
+        reply.body = encode(&vec![0; Purpose::Document.body_limit() + 1]);
+        assert!(reply.decode_body(Purpose::Document).is_err());
     }
 }

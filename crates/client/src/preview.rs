@@ -7,7 +7,7 @@ pub use nuschl_link_preview::{
     card::Card,
     draft::{Delivery, Ineligible, RequestId, Status, SubmissionToken},
     metadata::Unavailable,
-    policy::{DnsSettings, Mode, Settings},
+    policy::{Mode, Settings},
 };
 use nuschl_link_preview::{
     draft::{Draft, DraftPreviews, Effect, Ticket},
@@ -313,7 +313,8 @@ impl Client {
     }
 
     pub fn set_link_preview_settings(&mut self, settings: Settings, now: u64) {
-        if self.previews.settings == settings {
+        // The first settings always apply: the drafts start disabled.
+        if self.previews.drafts.policy_generation() != 0 && self.previews.settings == settings {
             return;
         }
         self.previews.settings = settings;
@@ -550,11 +551,11 @@ mod tests {
     }
 
     #[test]
-    fn default_off_and_incomplete_proxy_never_schedule_network_work() {
+    fn previews_before_the_first_policy_and_off_never_schedule_network_work() {
         let mut previews = Previews::default();
         previews.observe(source("https://example.org/ "), 0);
         assert!(previews.pending.is_none());
-        previews.settings.mode = Mode::ProxyRequired;
+        previews.settings.mode = Mode::Off;
         let effects = previews.drafts.set_policy(&previews.settings);
         previews.effects(effects, 0);
         previews.observe(source("https://example.org/ "), 1);

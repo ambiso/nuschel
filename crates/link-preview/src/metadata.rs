@@ -63,7 +63,8 @@ pub enum Unavailable {
     TooLarge,
     MediaType,
     Network,
-    Proxy,
+    /// Link previews are off.
+    Off,
     Address,
     Timeout,
     Malformed,
