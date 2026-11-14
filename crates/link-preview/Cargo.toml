@@ -9,13 +9,11 @@ publish.workspace = true
 
 [dependencies]
 nuschl-core.workspace = true
+nuschl-legacy-html.workspace = true
 ipnet = "2.12.2"
 serde = { version = "1.0.229", features = ["derive"] }
 thiserror = "2.0.21"
 url = "2.5.8"
-
-[dev-dependencies]
-serde_json = "1.0.154"
 
 [lints]
 workspace = true

@@ -23,6 +23,7 @@ mod icons;
 mod identity;
 mod images;
 mod layout;
+mod link_preview;
 mod math;
 mod menus;
 mod motion;

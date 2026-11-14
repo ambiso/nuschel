@@ -8,6 +8,8 @@ pub mod math;
 pub mod murmur;
 #[cfg(not(target_family = "wasm"))]
 pub mod musicbot;
+pub mod preview;
+pub mod preview_fetch;
 pub mod server;
 
 use std::io::{self, Read, Write};
@@ -60,6 +62,8 @@ pub enum ContentRequest {
         max_width: u32,
         max_height: u32,
     },
+    /// Sender-only metadata or a bounded carried image; never a fetch instruction.
+    Preview(preview::Request),
     /// A base64-encoded website icon (favicon, also ICO/BMP); answered like `Avatar`.
     Icon { image: String },
     /// An inline `data:` image; answered with a `Rendered` image at the viewer's size.
@@ -96,6 +100,7 @@ pub enum ContentResponse {
     Prepared(PreparedContent),
     /// Mumble rich text to send as it is.
     Encoded(EncodedImage),
+    Preview(preview::Response),
     Rejected(String),
 }
 

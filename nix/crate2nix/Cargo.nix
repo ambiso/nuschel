@@ -23305,6 +23305,10 @@ rec {
             packageId = "nuschl-legacy-html";
           }
           {
+            name = "nuschl-link-preview";
+            packageId = "nuschl-link-preview";
+          }
+          {
             name = "nuschl-protocol";
             packageId = "nuschl-protocol";
           }
@@ -23511,6 +23515,10 @@ rec {
             packageId = "nuschl-core";
           }
           {
+            name = "nuschl-link-preview";
+            packageId = "nuschl-link-preview";
+          }
+          {
             name = "pulldown-cmark";
             packageId = "pulldown-cmark";
             usesDefaultFeatures = false;
@@ -23597,6 +23605,12 @@ rec {
             name = "nuschl-sandbox-windows";
             packageId = "nuschl-sandbox-windows";
             target = { target, features }: (target."windows" or false);
+          }
+          {
+            name = "ureq-proto";
+            packageId = "ureq-proto";
+            usesDefaultFeatures = false;
+            features = [ "client" ];
           }
         ];
         devDependencies = [
@@ -24024,6 +24038,10 @@ rec {
             packageId = "nuschl-core";
           }
           {
+            name = "nuschl-legacy-html";
+            packageId = "nuschl-legacy-html";
+          }
+          {
             name = "serde";
             packageId = "serde";
             features = [ "derive" ];
@@ -24035,12 +24053,6 @@ rec {
           {
             name = "url";
             packageId = "url";
-          }
-        ];
-        devDependencies = [
-          {
-            name = "serde_json";
-            packageId = "serde_json";
           }
         ];
 
@@ -24566,6 +24578,10 @@ rec {
             packageId = "nuschl-legacy-html";
           }
           {
+            name = "nuschl-link-preview";
+            packageId = "nuschl-link-preview";
+          }
+          {
             name = "nuschl-protocol";
             packageId = "nuschl-protocol";
           }
@@ -24668,6 +24684,10 @@ rec {
           {
             name = "nuschl-ipc";
             packageId = "nuschl-ipc";
+          }
+          {
+            name = "serde_json";
+            packageId = "serde_json";
           }
           {
             name = "sqlx";
