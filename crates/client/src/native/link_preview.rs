@@ -4,7 +4,6 @@
 use super::Event;
 use crate::{input::Input, preview::FetchTicket};
 use nuschl_link_preview::{draft::RequestId, metadata::Unavailable, policy::Settings};
-use nuschl_session::workers;
 use std::path::PathBuf;
 use tokio::{
     runtime::Handle,
@@ -98,7 +97,7 @@ impl Hub {
             return Err(Unavailable::Network);
         }
         let executable =
-            workers::sibling("nuschl-content-worker").map_err(|_| Unavailable::Network)?;
+            nuschl_sandbox::sibling("nuschl-content-worker").map_err(|_| Unavailable::Network)?;
         self.control.send_replace(Some(Work {
             executable,
             settings,
