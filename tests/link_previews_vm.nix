@@ -301,7 +301,7 @@ pkgs.testers.runNixOSTest {
             machine.succeed("install -d /tmp/preview-evidence/" + server)
             # Never export the retained profile, test TLS private keys or CA key.
             machine.execute("find " + shlex.quote(output) + " -maxdepth 1 -type f "
-                + "\\( -name '*.json' -o -name '*.png' -o -name '*.log' \\) "
+                + "\\( -name '*.json' -o -name '*.png' -o -name '*.log' -o -name 'legacy-preview-message.html' \\) "
                 + "-exec cp '{}' /tmp/preview-evidence/" + server + "/ \\;")
             assert len(scenario_log) <= 1024 * 1024, "bounded scenario stdout exceeded 1MiB"
             machine.succeed("printf %s " + shlex.quote(scenario_log) + " > /tmp/preview-evidence/" + server + "/scenario.log")

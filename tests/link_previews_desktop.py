@@ -458,6 +458,61 @@ def desktop(args):
                 encoded = json.dumps(diagnostic, separators=(",", ":")).encode()
                 assert len(encoded) <= 256 * 1024
                 (args.output / "recipient-failure.json").write_bytes(encoded + b"\n")
+        def recipient_card(marker, contained=False):
+            timelines = [node for node, role, name, _ in items(recipient_ui)
+                if role == "list" and name == "Messages in #Root"]
+            if not timelines:
+                return None
+            assert len(timelines) == 1
+            timeline = timelines[0]
+            def descendants(root_node):
+                pending, visited, result, name_bytes = [(root_node, 0)], set(), [], 0
+                while pending:
+                    node, depth = pending.pop()
+                    identity = (node.destination, node.path)
+                    assert identity not in visited, "recipient card traversal repeated a node"
+                    visited.add(identity)
+                    assert len(visited) <= 1024 and depth <= 32, "recipient card traversal exceeded its bounds"
+                    assert node.destination == recipient_ui.destination, "recipient card left its application"
+                    name = node.name
+                    name_bytes += len(name.encode())
+                    assert name_bytes <= 64 * 1024, "recipient card labels exceeded their byte budget"
+                    result.append((node, node.role, name))
+                    children = node.children()
+                    assert len(visited) + len(pending) + len(children) <= 1024
+                    pending.extend((child, depth + 1) for child in children)
+                return result
+            rows = [node for node, role, name in descendants(timeline)
+                if role == "list item" and marker in name]
+            if not rows:
+                return None
+            assert len(rows) == 1, "recipient marker must identify one message row"
+            row = rows[0]
+            card = descendants(row)
+            # The row's complete accessible label carries styled quote text;
+            # child edges bind the carried image to this same logical message.
+            quote = "93.184.215.14 Synthetic preview Owned fixture"
+            if not any(quote in " ".join(name.split()) for _, _, name in card):
+                return None
+            images = [node for node, role, name in card
+                if role == "image" and name == "Image (click to enlarge)"]
+            if not images:
+                return None
+            assert len(images) == 1, "recipient card must have one carried image"
+            bounds = {"row": row.extents(), "image": images[0].extents()}
+            viewport = timeline.extents()
+            window = window_rect(recipient.pid)
+            if contained:
+                for x, y, width, height in bounds.values():
+                    tx, ty, tw, th = viewport
+                    if not (width > 0 and height > 0 and x >= max(tx, 0) and y >= max(ty, 0)
+                        and x + width <= min(tx + tw, window[2]) + 1
+                        and y + height <= min(ty + th, window[3]) + 1):
+                        return None
+            return dict(row=[row.destination, row.path], label=row.name[:8192],
+                image=[images[0].destination, images[0].path], bounds=bounds,
+                timeline=viewport, window=window)
+
         def send_and_receive(body, preview):
             observation.update(stage="send_and_receive", last_send_preview=preview)
             marker = body.split()[0]
@@ -485,15 +540,47 @@ def desktop(args):
                         "file": wire_path.name,
                         "sha256": hashlib.sha256(wire.encode()).hexdigest(),
                     }
-                assert any("Synthetic preview" in label for _, _, label, _ in items(recipient_ui))
                 pixel_count = None
                 def recipient_image_painted():
                     nonlocal pixel_count
                     pixel_count = image_pixels(recipient.pid, args.output / "recipient-card.png")
                     return pixel_count > 300
                 try:
+                    eventually(lambda: recipient_card(marker),
+                        "recipient message row did not retain the domain, title, description and image")
                     eventually(recipient_image_painted,
                         "carried image was not actually painted in independent recipient")
+                    focus_window(recipient.pid)
+                    shell.chord("Control_L", "0")
+                    def recipient_zoom(percent):
+                        settings = json.loads((recipient_profile / "config/settings.json").read_text())
+                        return abs(settings.get("appearance", {}).get("zoom", 1.0) - percent / 100) < .001
+                    eventually(lambda: recipient_zoom(100), "recipient zoom did not reset to 100 percent")
+                    shell.eval("(()=>{const w=global.get_window_actors().map(a=>a.meta_window)"
+                        f".find(w=>w.get_pid()==={recipient.pid});if(w.is_maximized())w.unmaximize();"
+                        "w.move_resize_frame(true,40,40,900,800);return true;})()")
+                    eventually(lambda: window_rect(recipient.pid, frame=True)[2:] == [900, 800],
+                        "recipient actual frame did not reach 900 by 800")
+                    for _ in range(5):
+                        shell.chord("Control_L", "equal")
+                        time.sleep(.1)
+                    eventually(lambda: recipient_zoom(200), "recipient zoom did not reach 200 percent")
+                    card = eventually(lambda: recipient_card(marker, contained=True),
+                        "complete recipient card left the narrow 200 percent timeline")
+                    def narrow_image_painted():
+                        nonlocal pixel_count
+                        pixel_count = image_pixels(recipient.pid, args.output / "recipient-card-200.png")
+                        return pixel_count > 300
+                    eventually(narrow_image_painted, "narrow recipient carried image was not actually painted")
+                    mark("recipient_quote_card_fields_and_image_fit_at_narrow_real_200_percent",
+                        marker=marker, frame=window_rect(recipient.pid, frame=True), zoom=200,
+                        card=card, cyan_pixels=pixel_count)
+                    shell.chord("Control_L", "0")
+                    eventually(lambda: recipient_zoom(100), "recipient zoom did not return to 100 percent")
+                    shell.eval("(()=>{const w=global.get_window_actors().map(a=>a.meta_window)"
+                        f".find(w=>w.get_pid()==={recipient.pid});w.move_resize_frame(true,40,40,1280,800);return true;}})()")
+                    eventually(lambda: window_rect(recipient.pid, frame=True)[2:] == [1280, 800],
+                        "recipient actual frame did not return to 1280 by 800")
                 except AssertionError as failure:
                     capture_recipient_failure(failure, pixel_count)
                     raise
