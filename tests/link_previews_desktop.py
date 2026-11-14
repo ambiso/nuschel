@@ -542,7 +542,10 @@ def desktop(args):
                     wait_zoom(100, recipient_profile)
                     resize_window(recipient.pid, 1280, 800)
                 except AssertionError as failure:
-                    capture_failure(failure, recipient_view=True, pixel_count=pixel_count)
+                    try:
+                        capture_failure(failure, recipient_view=True, pixel_count=pixel_count)
+                    except BaseException as capture_error:
+                        failure.add_note(f"Recipient diagnostic capture failed: {type(capture_error).__name__}"[:128])
                     raise
                 focus_window(sender_pid)
                 if args.server == "nuschld":
