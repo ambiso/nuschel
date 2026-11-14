@@ -11,6 +11,7 @@ publish.workspace = true
 base64 = "0.22"
 nuschl-core.workspace = true
 nuschl-ipc.workspace = true
+serde_json = "1.0.154"
 sqlx = { version = "0.9.0", default-features = false, features = [
   "runtime-tokio",
   "sqlite-bundled",

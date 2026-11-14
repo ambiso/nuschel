@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! `Debug` for extension messages that carry message text or idempotency
 //! keys: only their lengths are shown.
-use super::{ChatEdit, ChatSend, Message, ShareLink, ShareLinkCreate};
+use super::{ChatEdit, ChatSend, Message, Preview, PreviewImage, ShareLink, ShareLinkCreate};
 use std::fmt;
 
 struct Length(usize);
@@ -21,6 +21,7 @@ impl fmt::Debug for ChatSend {
             .field("format", &self.format)
             .field("content", &Length(self.content.len()))
             .field("reply_to", &self.reply_to)
+            .field("preview", &self.preview)
             .finish()
     }
 }
@@ -33,6 +34,7 @@ impl fmt::Debug for ChatEdit {
             .field("target", &self.target)
             .field("format", &self.format)
             .field("content", &Length(self.content.len()))
+            .field("preview", &self.preview)
             .finish()
     }
 }
@@ -53,6 +55,32 @@ impl fmt::Debug for Message {
             .field("delete_reason", &self.delete_reason)
             .field("edits", &self.edits)
             .field("mls", &Length(self.mls.len()))
+            .field("preview", &self.preview)
+            .finish()
+    }
+}
+
+impl fmt::Debug for Preview {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Preview")
+            .field("version", &self.version)
+            .field("provider", &self.provider)
+            .field("url", &Length(self.url.len()))
+            .field("title", &Length(self.title.len()))
+            .field("description", &Length(self.description.len()))
+            .field("image", &self.image)
+            .finish()
+    }
+}
+
+impl fmt::Debug for PreviewImage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PreviewImage")
+            .field("mime", &self.mime)
+            .field("data", &Length(self.data.len()))
+            .field("width", &self.width)
+            .field("height", &self.height)
+            .field("alt", &Length(self.alt.len()))
             .finish()
     }
 }

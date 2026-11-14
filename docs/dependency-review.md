@@ -85,6 +85,19 @@ it with a dummy library while compiling registry CPAL. Remove the override once 
 upstream release includes the fixes. PulseAudio buffers are configured per stream;
 native Windows/macOS device-wide buffer settings are left to the OS.
 
+## Link-preview HTTP parsing
+
+The link-preview HTTP response parser uses `ureq-proto` 0.7.1 with default
+features disabled and only `client` enabled, in the content worker. It has no
+socket, DNS or TLS implementation. Its locked dependencies are `base64` 0.23.1
+(`std`, with default features disabled on this edge), `http` 1.5.0, `httparse` 1.10.1 and
+`log` 0.4.35; `http` also uses `bytes` 1.12.1 and `itoa` 1.0.18. These are
+MIT/Apache-2.0, except `bytes` (MIT). The parser crate forbids unsafe code;
+`httparse`, `http` and `bytes` contain unsafe internals. HTTP parsing therefore
+stays in the confined worker, with bounded headers, body, chunks and lifetime.
+The session supervisor retains socket/TLS authority and validates every target.
+This does not add a full HTTP client or networking capability to the worker.
+
 ## Unmaintained transitive dependencies
 
 The following are unmaintained advisories, not vulnerability or unsoundness waivers.

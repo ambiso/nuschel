@@ -205,10 +205,7 @@ impl Desktop {
                 }
             };
             let name = display_name(&path.file_name().unwrap_or_default().to_string_lossy());
-            let started = {
-                let _runtime = self.driver.runtime().enter();
-                Transfer::start(Some(&path))
-            };
+            let started = self.driver.runtime().block_on(Transfer::start(Some(&path)));
             let request = TransferRequest::Offer {
                 name: name.clone(),
                 servers: servers.clone(),
@@ -341,10 +338,7 @@ impl Desktop {
             max_size: size_limit(offer.size),
             servers,
         };
-        let started = {
-            let _runtime = self.driver.runtime().enter();
-            Transfer::start(None)
-        };
+        let started = self.driver.runtime().block_on(Transfer::start(None));
         self.transfers
             .downloads
             .retain(|download| download.key != key);

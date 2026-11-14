@@ -1,8 +1,32 @@
 # Sender-generated link previews
 
-Design under implementation, 2026-11-11. This document distinguishes the intended
-message contract from the provider/policy code currently being built. Shared wire,
-storage, MLS and UI changes require coordinated ownership before implementation.
+Under implementation, 2026-11-13. Native Linux has the sender-side Open Graph
+pipeline, composer card and removal, global policy settings, and one-message Mumble
+HTML projection. Parsing and image conversion run in confined content workers.
+The default is Off. New preview fetching fails closed on other native platforms
+until their process-lifetime adapters are implemented and tested.
+
+The negotiated typed-message contract, encrypted structured body and browser sender
+below remain unfinished. Compatible Nuschl servers currently receive the same single
+legacy HTML message as stock servers; that is not `preview/1`. MLS and durable direct
+conversations currently send text alone. Required private HTTP/proxy and desktop
+interoperability fixtures are being validated; unit tests do not establish those
+runtime guarantees.
+
+## Current delivery scope
+
+The initial release targets legacy Mumble servers: a visible composer card and a
+single ordinary HTML message carrying the original text, actual host, linked title,
+description and embedded image. Native and web recipients display that card through
+the existing inert legacy-content path; neither recipient fetches its resources.
+Stock Mumble clients receive the same compatible message. The quote-style card
+remains available on legacy servers without plugin-message support.
+
+Negotiated typed previews, new archive/persistence handling and MLS preview support
+are deferred. This does not disable ordinary existing local chat history. Issue
+[#11](https://github.com/ambiso/nuschl/issues/11) remains open for the deferred work.
+The sections below describe both this delivery and the remaining modern contracts;
+they are not a claim that those contracts have shipped.
 
 ## User behavior
 
@@ -33,9 +57,12 @@ The initial default is **Off**. There is no default public proxy or DNS service.
 | ProxyRequired | No fetching until an explicit proxy and proxied DNS/bootstrap configuration are complete; no direct or local target-DNS fallback. |
 
 The policy covers the HTML document, its redirects, the selected image, image
-redirects and future metadata providers. A change aborts pending work and invalidates
-late results, even when the message URL is unchanged. Displaying a carried preview
-does not itself fetch anything, including when this sender-side policy is Off.
+redirects and future metadata providers. A change invalidates late results and
+requests cancellation, even when the message URL is unchanged. The native supervisor
+keeps its one job slot until owned work has actually retired. A libc DNS lookup
+already started in Direct mode can finish after cancellation; no new lookup or
+connection is admitted for that revoked job. Displaying a carried preview does not
+itself fetch anything, including when this sender-side policy is Off.
 
 Initial standard-proxy support is SOCKS5 with numeric, validated target addresses.
 Opaque SOCKS5h/CONNECT hostname resolution alone cannot prove that the proxy did not
@@ -75,29 +102,43 @@ Proposed initial limits:
 |---|---|
 | Candidate URL | 2 KiB, HTTP(S), no userinfo/control characters |
 | Metadata document | 256 KiB, HTML only, no content decompression initially |
+| Extraction | 4096 tags/comments/doctypes, 256 metadata tags, 4 KiB per attribute value |
 | Redirects | At most three across the preview fetch |
 | Source image | 2 MiB encoded; existing worker pixel/dimension/CPU limits |
 | Carried image | At most 32 KiB, canonical PNG/JPEG, at most 640×360 |
 | Title / description | 512 / 2048 UTF-8 bytes, plain text |
 | Message previews | One |
+| Retained drafts | 64, at most 1 MiB of draft text in total |
+| Cached results | 16, at most 1 MiB; success expires after 10 minutes, failure after 2 |
+| Policy file | 4 KiB; explicit user saves are atomic and owner-only |
+
+The legacy projection may shorten the displayed title and description to 200 and
+300 UTF-16 units. It preserves the entire original message text, obeys the server's
+text/image limits and never exceeds the 256 KiB content limit. Attribute-name work
+is bounded by the document cap and the worker's CPU/wall limits; it is not a claim
+that html5ever's handling of many distinct attributes is linear.
 
 The carried image budget must also fit the actual message/encryption envelope.
 Existing MLS bodies are bounded near 64 KiB: preview preparation must adapt the image
 budget or omit the preview rather than increasing that limit or truncating text.
 
-## Ownership and execution DAG
+## Execution model and remaining contracts
 
 1. **Provider and policy library:** `crates/link-preview`, including URL/address
    validation, explicit routes, request budgets and draft/result tickets. No UI or
    received-message code can initiate a fetch implicitly.
-2. **Portable model:** a versioned preview value with provider, actual URL, title,
-   description and embedded image. Shared core ownership is coordinated before
-   placing these types in `crates/core`.
-3. **Atomic compatible-server contract:** negotiated `preview/1`; optional typed
-   preview fields on send/message/edit; SQLite/Postgres and local-history migrations.
-   Idempotency comparison includes the preview. Delete erases text and preview;
-   editing without a preview removes the old one. Existing text remains literal text.
-4. **MLS:** protect the entire structured body and archive record. A new authenticated
+2. **Portable model:** `crates/core/src/preview.rs` holds the versioned preview value
+   with provider, actual URL, title, description and embedded image.
+3. **Atomic compatible-server contract (remaining):** the optional preview fields on
+   send/message/edit and bounded conversions in `nuschl_protocol::nuschl::preview`
+   are implemented. They retain literal text and the existing combined 64 KiB body
+   limit. No endpoint advertises `preview/1` yet: SQLite/Postgres and local-history
+   persistence, idempotency, live delivery and SDK handling must land together.
+   Delete erases text and preview; editing without a preview removes the old one.
+   `ChatAck.edits` carries a committed revision when present. Absence represents
+   an unknown revision. Storage and timeline ordering must use authoritative edit counts
+   when available, since timestamps cannot order edits in the same millisecond.
+4. **MLS (remaining):** protect the entire structured body and archive record. A new authenticated
    application-body kind/version must not cause older clients to display raw JSON.
    Until group capability is authenticated, send text only. No cleartext preview
    field is added alongside ciphertext.
@@ -111,10 +152,11 @@ budget or omit the preview rather than increasing that limit or truncating text.
    duplex transport over inherited IPC pipes lets the worker exchange bytes only
    with that connection; redirects return to supervisor policy. This reuses worker
    framing/containment rather than adding a general plugin framework.
-7. **SDK and UI:** frozen composer/conversation/certificate/generation/policy tickets,
+7. **SDK and native UI:** frozen composer/conversation/certificate/generation/policy tickets,
    debounced sender work, removal suppression, preview-aware atomic sends and
-   acknowledgment handling; global settings and sender/receiver cards. TUI/web
-   fallback displays carried metadata without fetching URLs.
+   acknowledgment handling; global settings and a sender card. Existing receiving
+   clients render the carried legacy HTML through their content adapter, without
+   fetching URLs. Browser sender work and typed receiver cards remain unfinished.
 
 The network and HTML parsers' dependency safety review determines which operations
 need the isolated worker. No new unsafe parser is silently introduced into the

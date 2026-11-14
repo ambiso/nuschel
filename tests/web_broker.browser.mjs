@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: EUPL-1.2
 // Disposable Chromium UI/worker integration against a PRIVATE local relay/server.
-// node tests/web_broker.browser.mjs SITE RELAY_URL HOST PORT SCREENSHOT [stress|authority|missing-ack-control]
+// node tests/web_broker.browser.mjs SITE RELAY_URL HOST PORT SCREENSHOT [stress|authority|missing-ack-control|legacy-preview]
 import { createServer } from "node:http";
 import { createConnection } from "node:net";
 import { readFile } from "node:fs/promises";
@@ -173,7 +173,47 @@ async function hold(page){
 async function release(page){await page.evaluate(()=>{const id=brokerFixture.heldAck;brokerFixture.holdAck=false;brokerFixture.heldAck=null;brokerFixture.sdk.postMessage({method:"state_applied",args:[id]});});}
 async function refusal(page,method,after){await page.waitForFunction(({method,after})=>brokerFixture.errors.slice(after).some(error=>error.method===method&&/view changed|view is stale|target changed/i.test(error.error)),{method,after});}
 try {
- if(process.argv[7]==="authority"){
+ if(process.argv[7]==="legacy-preview"){
+  // The input is the exact one-message projection saved by the native
+  // desktop fixture, including its synthetic embedded image.
+  const {stat}=await import("node:fs/promises");
+  const {createHash}=await import("node:crypto");
+  const fixture=process.env.NUSCHL_LEGACY_PREVIEW_WIRE;
+  assert.ok(fixture,"NUSCHL_LEGACY_PREVIEW_WIRE must name the desktop fixture's synthetic HTML");
+  const info=await stat(fixture);assert.ok(info.isFile()&&info.size>0&&info.size<=256*1024);
+  const wire=await readFile(fixture,"utf8");assert.ok(Buffer.byteLength(wire)<=256*1024);
+  assert.ok(wire.includes("<blockquote>")&&wire.includes("Synthetic preview")&&wire.includes("Owned fixture")&&wire.includes("data:image/"));
+  observer=await legacyPeer(Number(port),"legacy-preview-sender");
+  observer.join(0);await observer.wait(()=>observer.users.get(observer.session)?.channel===0,"preview sender root join");
+  const page=await open("legacy-preview-recipient");
+  await page.waitForFunction(()=>brokerFixture.last?.timeline?.channel===0);
+  const count=await page.locator("article").count();observer.message(0,wire);
+  const card=page.locator("article").filter({hasText:"Synthetic preview"});
+  await card.waitFor();assert.equal(await card.count(),1,"one card/message");
+  assert.equal(await page.locator("article").count(),count+1,"one legacy TextMessage must add one row");
+  assert.ok((await card.innerText()).includes("Owned fixture"),"description is visible");
+  const title=card.getByRole("link",{name:"Synthetic preview",exact:true});
+  assert.ok((await title.getAttribute("href")).startsWith("http://93.184.215.14/"),"actual target is linked");
+  assert.ok((await card.innerText()).includes("93.184.215.14"),"actual host is visible");
+  assert.ok(await card.locator(".quote").count()>0,"card labels keep quote styling");
+  await card.locator("canvas").waitFor();
+  const pixels=await card.locator("canvas").evaluate(canvas=>{
+   const rgba=canvas.getContext("2d").getImageData(0,0,canvas.width,canvas.height).data;
+   let colored=0;for(let at=0;at<rgba.length;at+=4)if(rgba[at+3]>0&&Math.max(rgba[at],rgba[at+1],rgba[at+2])-Math.min(rgba[at],rgba[at+1],rgba[at+2])>50)colored++;
+   return {width:canvas.width,height:canvas.height,colored};
+  });
+  assert.ok(pixels.colored>300,"embedded preview pixels are actually painted");
+  const layouts=[];
+  for(const width of [1280,390]){
+   await page.setViewportSize({width,height:900});await title.scrollIntoViewIfNeeded();
+   const bounds=await card.evaluate(article=>({width:innerWidth,scroll:document.documentElement.scrollWidth,card:article.getBoundingClientRect().toJSON()}));
+   assert.ok(bounds.scroll<=bounds.width+1,"legacy card must fit mobile and desktop");
+   assert.ok(bounds.card.left>=-1&&bounds.card.right<=bounds.width+1);
+   await page.screenshot({path:screenshot.replace(".png",`-${width}.png`)});layouts.push(bounds);
+  }
+  assert.equal(await page.evaluate(()=>captureCalls),0);
+  result.legacy_preview={wire_sha256:createHash("sha256").update(wire).digest("hex"),one_message:true,labels:true,pixels,layouts,no_receiver_fetch:forbidden.length===0};
+ }else if(process.argv[7]==="authority"){
   observer=await legacyPeer(Number(port));
   const page=await open("broker-authority");
   await page.waitForFunction(()=>brokerFixture.last?.timeline?.channel===0&&brokerFixture.last.servers[0].channels.some(channel=>channel.id===1&&channel.instance!=="0"));

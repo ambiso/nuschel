@@ -3,7 +3,7 @@
 //! unshared (no network), read-only system libraries, private /proc, /dev
 //! and /tmp, itself at `/worker` and an empty environment; its role adds to that.
 
-use std::{ffi::OsString, os::unix::fs::MetadataExt as _, path::Path};
+use std::{os::unix::fs::MetadataExt as _, path::Path};
 
 use tokio::process::Command;
 
@@ -27,18 +27,18 @@ fn bind_existing(command: &mut Command, paths: &[&str]) {
     }
 }
 
-pub(crate) fn command(
-    executable: &Path,
-    role: Role,
-    arguments: &[OsString],
-) -> Result<Command, Error> {
+pub(crate) fn command(executable: &Path, role: Role) -> Result<Command, Error> {
+    let can = role.capabilities();
     let mut command = Command::new(helper("prlimit")?);
-    command.arg(format!("--as={}", role.memory()));
-    if let Some(seconds) = role.cpu_seconds() {
+    command.arg(format!("--as={}", can.memory));
+    if let Some(seconds) = can.cpu_seconds {
         command.arg(format!("--cpu={seconds}"));
     }
     command.arg("--").arg(helper("bwrap")?);
     command.args(["--die-with-parent", "--new-session", "--unshare-all"]);
+    if matches!(role, Role::Preview { .. }) {
+        command.args(["--json-status-fd", "2"]);
+    }
     bind_existing(
         &mut command,
         &["/nix/store", "/usr/lib", "/usr/lib64", "/lib", "/lib64"],
@@ -50,37 +50,34 @@ pub(crate) fn command(
         .arg("/worker");
     command.args(["--chdir", "/tmp", "--clearenv"]);
     command.env_clear();
-    if let Some(directory) = role.directory() {
+    if let Some(directory) = can.writable {
         command
             .arg("--bind")
             .arg(directory.canonicalize()?)
             .arg("/data");
     }
-    let mut input = None;
-    match role {
-        Role::Media => media(&mut command),
-        Role::Transfer { file } => {
-            command.arg("--share-net");
-            let resolver = [
-                "/etc/resolv.conf",
-                "/etc/hosts",
-                "/etc/nsswitch.conf",
-                "/etc/gai.conf",
-            ];
-            bind_existing(&mut command, &resolver);
-            if let Some(file) = file {
-                command
-                    .arg("--ro-bind")
-                    .arg(file.canonicalize()?)
-                    .arg("/input");
-                input = Some(Path::new("/input"));
-            }
-        }
-        _ => {}
+    if can.audio {
+        media(&mut command);
+    }
+    if can.network {
+        command.arg("--share-net");
+        let resolver = [
+            "/etc/resolv.conf",
+            "/etc/hosts",
+            "/etc/nsswitch.conf",
+            "/etc/gai.conf",
+        ];
+        bind_existing(&mut command, &resolver);
+    }
+    if let Some(file) = can.readable {
+        command
+            .arg("--ro-bind")
+            .arg(file.canonicalize()?)
+            .arg("/input");
     }
     command.args(["--", "/worker"]);
+    let input = can.readable.map(|_| Path::new("/input"));
     command.args(role.arguments(Path::new("/data"), input));
-    command.args(arguments);
     Ok(command)
 }
 
@@ -134,42 +131,73 @@ fn media(command: &mut Command) {
 mod tests {
     use crate::Role;
 
-    fn arguments(role: Role, extra: &[&str]) -> Vec<String> {
+    fn arguments(role: Role) -> Vec<String> {
         let executable = std::env::current_exe().unwrap();
-        let extra: Vec<_> = extra.iter().map(Into::into).collect();
-        let command = super::command(&executable, role, &extra).unwrap();
+        let command = super::command(&executable, role).unwrap();
         let arguments = command.as_std().get_args();
         arguments.map(|a| a.to_string_lossy().into()).collect()
+    }
+
+    #[test]
+    fn preview_roles_have_fixed_arguments_and_namespace_receipt() {
+        for (operation, suffix) in [
+            (crate::PreviewOperation::Prepare, vec!["/worker"]),
+            (
+                crate::PreviewOperation::Fetch,
+                vec!["/worker", "--preview-fetch"],
+            ),
+        ] {
+            let args = arguments(Role::Preview { operation });
+            assert_eq!(args[..3], ["--as=536870912", "--cpu=5", "--"]);
+            let end = args.iter().rposition(|arg| arg == "--").unwrap();
+            assert_eq!(args[end + 1..], suffix);
+            let status: Vec<_> = args
+                .windows(2)
+                .filter(|pair| pair[0] == "--json-status-fd")
+                .collect();
+            assert_eq!(status.len(), 1);
+            assert_eq!(status[0][1], "2");
+            for grant in [
+                "--share-net",
+                "--bind",
+                "--dev-bind",
+                "--setenv",
+                "--as-pid-1",
+            ] {
+                assert!(!args.iter().any(|arg| arg == grant), "{grant}: {args:?}");
+            }
+        }
+        let ordinary = arguments(Role::Content {
+            cpu_seconds: 5,
+            arguments: &[],
+        });
+        assert!(!ordinary.iter().any(|arg| arg == "--json-status-fd"));
     }
 
     #[test]
     fn workers_share_one_bwrap_setup() {
         let directory = std::env::temp_dir();
         let executable = std::env::current_exe().unwrap();
-        let content = arguments(Role::Content { cpu_seconds: 7 }, &["x"]);
-        let math = arguments(Role::Math, &[]);
-        let update = arguments(Role::Update { post_quantum: true }, &[]);
-        let codec = arguments(Role::MusicbotCodec, &["--codec-worker", "decode"]);
-        let storage = arguments(
-            Role::Storage {
-                directory: &directory,
-            },
-            &[],
-        );
-        let crypto = arguments(
-            Role::Crypto {
-                directory: &directory,
-            },
-            &[],
-        );
-        let media = arguments(Role::Media, &[]);
-        let offer = arguments(
-            Role::Transfer {
-                file: Some(&executable),
-            },
-            &[],
-        );
-        let receive = arguments(Role::Transfer { file: None }, &[]);
+        let content = arguments(Role::Content {
+            cpu_seconds: 7,
+            arguments: &["x".into()],
+        });
+        let math = arguments(Role::Math);
+        let update = arguments(Role::Update { post_quantum: true });
+        let codec = arguments(Role::MusicbotCodec {
+            operation: "decode",
+        });
+        let storage = arguments(Role::Storage {
+            directory: &directory,
+        });
+        let crypto = arguments(Role::Crypto {
+            directory: &directory,
+        });
+        let media = arguments(Role::Media);
+        let offer = arguments(Role::Transfer {
+            file: Some(&executable),
+        });
+        let receive = arguments(Role::Transfer { file: None });
         assert_eq!(content[..3], ["--as=536870912", "--cpu=7", "--"]);
         assert_eq!(math[..3], ["--as=536870912", "--cpu=120", "--"]);
         assert_eq!(update[..3], ["--as=268435456", "--cpu=5", "--"]);

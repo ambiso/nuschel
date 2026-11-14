@@ -7097,6 +7097,7 @@ dependencies = [
  "nuschl-core",
  "nuschl-ipc",
  "nuschl-legacy-html",
+ "nuschl-link-preview",
  "nuschl-protocol",
  "nuschl-sandbox",
  "nuschl-session",
@@ -7144,6 +7145,7 @@ dependencies = [
  "image",
  "markup5ever_rcdom 0.40.1+unofficial",
  "nuschl-core",
+ "nuschl-link-preview",
  "pulldown-cmark",
  "syntect",
  "thiserror 2.0.21",
@@ -7170,6 +7172,7 @@ dependencies = [
  "nuschl-ipc",
  "nuschl-sandbox-windows",
  "tokio",
+ "ureq-proto",
 ]
 
 [[package]]
@@ -7293,6 +7296,7 @@ version = "0.1.0"
 dependencies = [
  "ipnet",
  "nuschl-core",
+ "nuschl-legacy-html",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
@@ -7390,6 +7394,7 @@ version = "0.1.0"
 dependencies = [
  "aes 0.8.4",
  "bytes",
+ "nuschl-core",
  "prost",
  "prost-build",
  "semver",
@@ -7443,6 +7448,7 @@ dependencies = [
  "nuschl-core",
  "nuschl-ipc",
  "nuschl-legacy-html",
+ "nuschl-link-preview",
  "nuschl-protocol",
  "nuschl-sandbox",
  "p12-keystore",
@@ -7468,6 +7474,7 @@ dependencies = [
  "base64 0.22.1",
  "nuschl-core",
  "nuschl-ipc",
+ "serde_json",
  "sqlx",
  "tempfile",
  "thiserror 2.0.21",

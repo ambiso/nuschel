@@ -68,7 +68,7 @@ impl CryptoHandle {
             let role = Role::Crypto {
                 directory: &directory,
             };
-            nuschl_sandbox::command(&executable, role, &[])
+            nuschl_sandbox::command(&executable, role)
                 .map_err(|error| std::io::Error::other(error.to_string()))
         }))
     }
@@ -107,7 +107,7 @@ async fn supervise(spawn: Arc<Spawn>, mut jobs: mpsc::Receiver<Job>) {
     let mut next_id = 0_u64;
     while let Some(job) = jobs.recv().await {
         if running.is_none() {
-            match start(&spawn) {
+            match start(&spawn).await {
                 Ok(worker) => running = Some(worker),
                 Err(error) => {
                     let _ = job.reply.send(Err(error));
@@ -135,8 +135,9 @@ async fn supervise(spawn: Arc<Spawn>, mut jobs: mpsc::Receiver<Job>) {
     }
 }
 
-fn start(spawn: &Spawn) -> Result<Worker, Error> {
-    nuschl_sandbox::spawn(spawn()?).map_err(|e| Error::Worker(e.to_string()))
+async fn start(spawn: &Spawn) -> Result<Worker, Error> {
+    let worker = nuschl_sandbox::spawn(spawn()?).await;
+    worker.map_err(|e| Error::Worker(e.to_string()))
 }
 
 async fn exchange(

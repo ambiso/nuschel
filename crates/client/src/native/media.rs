@@ -191,12 +191,14 @@ pub async fn run(
     run_with_start(inputs, events, watches, Media::start).await;
 }
 
-async fn run_with_start(
+async fn run_with_start<Starting>(
     (mut control, mut playback): (mpsc::UnboundedReceiver<Control>, mpsc::Receiver<Playback>),
     events: mpsc::Sender<Event>,
     (mut settings, mut voice_keys): (watch::Receiver<ClientSettings>, watch::Receiver<VoiceKeys>),
-    mut start: impl FnMut() -> Result<Media, nuschl_session::Error> + Send,
-) {
+    mut start: impl FnMut() -> Starting + Send,
+) where
+    Starting: Future<Output = Result<Media, nuschl_session::Error>> + Send,
+{
     let mut streams = BTreeMap::<String, Stream>::new();
     let mut numbers = 0_u32;
     let mut media: Option<Media> = None;
@@ -373,7 +375,7 @@ async fn run_with_start(
                 epoch += 1;
                 // Until the devices are open, nobody hears you yet.
                 broadcast(&streams, &events, |server, generation| Event::AudioStatus { server, generation, message: "Starting audio…".into() }).await;
-                match start() {
+                match start().await {
                     Ok(worker) => {
                         configure(&worker, &applied, (planned.bitrate, planned.loss_percent), pinned_host(&audio_host));
                         let _ = worker.commands.try_send(LiveMediaRequest::SetState { epoch, muted: !planned.capture, deafened: false });
@@ -529,9 +531,9 @@ mod tests {
             (settings, keys),
             move || {
                 let _ = started.send(());
-                Err(nuschl_session::Error::Worker(
+                std::future::ready(Err(nuschl_session::Error::Worker(
                     "synthetic worker start".into(),
-                ))
+                )))
             },
         ));
         async fn inspect(
@@ -636,7 +638,11 @@ mod tests {
             (input, playback),
             events,
             (settings, keys),
-            || Err(nuschl_session::Error::Worker("synthetic worker".into())),
+            || {
+                std::future::ready(Err(nuschl_session::Error::Worker(
+                    "synthetic worker".into(),
+                )))
+            },
         ));
         let (one, _one) = mpsc::channel(4);
         let (two, _two) = mpsc::channel(4);
@@ -684,9 +690,9 @@ mod tests {
             (settings, keys),
             move || {
                 let _ = started.send(());
-                Err(nuschl_session::Error::Worker(
+                std::future::ready(Err(nuschl_session::Error::Worker(
                     "synthetic worker start".into(),
-                ))
+                )))
             },
         ));
         async fn rates(control: &mpsc::UnboundedSender<Control>) -> (u64, u32, u32) {
