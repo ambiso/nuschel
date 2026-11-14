@@ -206,7 +206,7 @@ fn write_device<T: SizedSample + FromSample<f32>>(output: &mut [T], frame: [f64;
     }
 }
 
-fn device_sample(sample: f64) -> f32 {
+pub(crate) fn device_sample(sample: f64) -> f32 {
     if sample.is_finite() {
         sample.clamp(-1., 1.) as f32
     } else {
