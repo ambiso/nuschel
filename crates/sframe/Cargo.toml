@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: EUPL-1.2
+[package]
+name = "nuschl-sframe"
+description = "RFC 9605 SFrame and the AV1 frame envelope for screen sharing (docs/screen-share-plan.md §3)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+# RFC 9605 suite 0x0004 AES_128_GCM_SHA256_128. libcrux's AES is pre-verification.
+aes-gcm = { version = "0.11.1", default-features = false, features = ["aes", "zeroize"] }
+libcrux-hkdf = "0.0.9"
+thiserror = "2.0.21"
+zeroize = "1.9.1"
