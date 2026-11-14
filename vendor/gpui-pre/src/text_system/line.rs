@@ -145,6 +145,7 @@ impl ShapedLine {
         paint_line(
             origin,
             &self.layout,
+            Some(&self.text),
             line_height,
             align,
             align_width,
@@ -398,6 +399,7 @@ impl LineLayout {
         paint_line(
             origin,
             self,
+            None,
             line_height,
             align,
             align_width,
@@ -474,6 +476,7 @@ impl WrappedLine {
         paint_line(
             origin,
             &self.layout.unwrapped_layout,
+            Some(&self.text),
             line_height,
             align,
             align_width,
@@ -521,6 +524,7 @@ impl WrappedLine {
 fn paint_line(
     origin: Point<Pixels>,
     layout: &LineLayout,
+    text: Option<&str>,
     line_height: Pixels,
     align: TextAlign,
     align_width: Option<Pixels>,
@@ -555,6 +559,9 @@ fn paint_line(
         let mut current_underline: Option<(Point<Pixels>, UnderlineStyle, Range<usize>)> = None;
         let mut current_strikethrough: Option<(Point<Pixels>, StrikethroughStyle)> = None;
         let text_system = cx.text_system().clone();
+        // Nuschel patch: emoji drawn as images (emoji_images.rs).
+        let mut emoji = emoji_ranges(text, layout);
+        let mut emoji_cursor = 0;
         let mut glyph_origin = point(
             aligned_origin_x(
                 origin,
@@ -729,6 +736,33 @@ fn paint_line(
                 };
 
                 let content_mask = window.content_mask();
+                // Nuschel patch: a glyph of an emoji range is drawn as the
+                // range's image, or as itself if there is none.
+                while emoji
+                    .get(emoji_cursor)
+                    .is_some_and(|range| range.range.end <= glyph.index)
+                {
+                    emoji_cursor += 1;
+                }
+                if let Some(range) = emoji
+                    .get_mut(emoji_cursor)
+                    .filter(|range| range.range.contains(&glyph.index))
+                {
+                    if glyph.index == range.first_glyph {
+                        range.drawn = paint_emoji_image(
+                            range,
+                            glyph_origin,
+                            line_height,
+                            layout.font_size,
+                            &content_mask.bounds,
+                            window,
+                            cx,
+                        );
+                    }
+                    if range.drawn {
+                        continue;
+                    }
+                }
                 if max_glyph_bounds.intersects(&content_mask.bounds) {
                     let vertical_offset = point(px(0.0), glyph.position.y);
                     if glyph.is_emoji {
@@ -786,6 +820,97 @@ fn paint_line(
 
         Ok(())
     })
+}
+
+/// Nuschel patch: an emoji range of a line, laid out as its glyphs were.
+struct EmojiRange {
+    range: Range<usize>,
+    image: u32,
+    /// The byte index of its first glyph.
+    first_glyph: usize,
+    /// Its glyphs' advance, from the first to the next glyph after it.
+    width: Pixels,
+    /// Whether its image was painted (its glyphs are not).
+    drawn: bool,
+}
+
+/// The emoji ranges of a line's text that have glyphs in its layout.
+fn emoji_ranges(text: Option<&str>, layout: &LineLayout) -> Vec<EmojiRange> {
+    let Some(text) = text.and_then(|text| text.get(..layout.len)) else {
+        return Vec::new();
+    };
+    let mut found = Vec::new();
+    super::emoji_images::find(text, &mut found);
+    if found.is_empty() {
+        return Vec::new();
+    }
+    let glyphs: Vec<(usize, Pixels)> = layout
+        .runs
+        .iter()
+        .flat_map(|run| {
+            run.glyphs
+                .iter()
+                .map(|glyph| (glyph.index, glyph.position.x))
+        })
+        .collect();
+    // The glyphs are in text order, as the paint loop assumes, so each
+    // range's glyphs are found by binary search.
+    found
+        .into_iter()
+        .filter_map(|(range, image)| {
+            let first = glyphs.partition_point(|(index, _)| *index < range.start);
+            let after = glyphs.partition_point(|(index, _)| *index < range.end);
+            let &(first_glyph, start) = glyphs
+                .get(first)
+                .filter(|(index, _)| range.contains(index))?;
+            let end = glyphs.get(after).map_or(layout.width, |(_, x)| *x);
+            Some(EmojiRange {
+                range,
+                image,
+                first_glyph,
+                width: end - start,
+                drawn: false,
+            })
+        })
+        .collect()
+}
+
+/// Paints an emoji range's image, square and centred in the line box over
+/// its glyphs' advance; whether its glyphs are covered (painted, or off
+/// screen like they would be).
+fn paint_emoji_image(
+    range: &EmojiRange,
+    line_origin: Point<Pixels>,
+    line_height: Pixels,
+    font_size: Pixels,
+    visible: &Bounds<Pixels>,
+    window: &mut Window,
+    cx: &mut App,
+) -> bool {
+    let side = range.width.min(font_size * 1.25).min(line_height);
+    if side <= px(0.) {
+        return false;
+    }
+    let bounds = Bounds {
+        origin: point(
+            line_origin.x + (range.width - side) / 2.,
+            line_origin.y + (line_height - side) / 2.,
+        ),
+        size: size(side, side),
+    };
+    if !bounds.intersects(visible) {
+        return true;
+    }
+    let edge = (f32::from(side) * window.scale_factor()).round();
+    if !(1.0..=4096.0).contains(&edge) {
+        return false;
+    }
+    let Some(image) = super::emoji_images::image(range.image, edge as u32, cx) else {
+        return false;
+    };
+    window
+        .paint_image(bounds, bounds, Default::default(), image, 0, false)
+        .is_ok()
 }
 
 fn paint_line_background(
@@ -1391,6 +1516,7 @@ mod tests {
                 paint_line(
                     origin,
                     &wrapped.unwrapped_layout,
+                    Some(&wrapped.text),
                     line_height,
                     TextAlign::Left,
                     Some(px(16.)),

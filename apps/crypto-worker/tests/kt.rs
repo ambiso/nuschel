@@ -39,8 +39,8 @@ fn worker_executable() -> PathBuf {
 
 /// The worker as the desktop starts it: sandboxed when bubblewrap is there.
 fn crypto(directory: &Path) -> CryptoHandle {
-    let sandboxed =
-        nuschl_ipc::host::crypto_sandbox_command(&worker_executable(), directory).is_ok();
+    let role = nuschl_sandbox::Role::Crypto { directory };
+    let sandboxed = nuschl_sandbox::command(&worker_executable(), role, &[]).is_ok();
     if sandboxed {
         CryptoHandle::start(worker_executable(), directory.to_owned())
     } else {

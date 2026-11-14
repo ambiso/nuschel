@@ -291,6 +291,41 @@ fn altered_dtls_fingerprint_never_connects_both_peers() {
 }
 
 #[test]
+fn microphone_carries_the_largest_admitted_voice_frame_on_a_jittered_cadence() {
+    // 640 bytes per 20 ms is the largest frame voice admission accepts at the
+    // highest selectable target (256 kb/s); capture wakes up a ms early or late.
+    let mut pair = Pair::new(false, false);
+    pair.connect();
+    let frame: Arc<[u8]> = vec![0x5a; 640].into();
+    for index in 0..50 {
+        pair.write(0, Kind::Audio, index * 960, frame.clone());
+        let step = if index % 2 == 0 { 21 } else { 19 };
+        pair.advance(Duration::from_millis(step)).unwrap();
+    }
+    pair.advance(Duration::from_millis(500)).unwrap();
+    let audio: Vec<_> = pair.frames[1]
+        .iter()
+        .filter(|f| f.kind == Kind::Audio)
+        .collect();
+    assert_eq!(audio.len(), 50);
+    assert!(audio.iter().all(|f| f.data == frame));
+
+    // A sustained stream above the reservation is still refused.
+    let oversized: Arc<[u8]> = vec![0x5a; 960].into();
+    let track = pair.peers[0].track(Kind::Audio).unwrap();
+    let mut refused = false;
+    for index in 50..100 {
+        let now = pair.now;
+        refused |= matches!(
+            pair.peers[0].write(track, index * 960, now, oversized.clone()),
+            Err(Error::Backpressure)
+        );
+        pair.advance(Duration::from_millis(20)).unwrap();
+    }
+    assert!(refused);
+}
+
+#[test]
 fn video_backpressure_keeps_audio_available_and_does_not_queue_stale_frames() {
     let mut pair = Pair::new(true, false);
     pair.connect();

@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "license": "EUPL-1.2",
-  "description": "Web UI of nuschl-musicbot: Svelte app served by the bot at /u/<token>/",
+  "description": "Web UI of nuschl-musicbot: Svelte app served at the bot's public root, authenticated by the remembered-link cookie",
   "type": "module",
   "scripts": {
     "dev": "node node_modules/vite/bin/vite.js",

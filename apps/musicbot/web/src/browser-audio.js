@@ -96,11 +96,11 @@ export class BrowserAudio {
   #resetPending = false;
   #messageId = 0;
   #inFlight = null;
-  #namespaceAborted = () => this.stop(new Error("Browser listening stopped because the connection or library changed. Press Listen to start again."));
+  #namespaceAborted = () => this.stop(new Error("Browser listening stopped because the connection or library changed. Press the headphones button to start again."));
   #contextChanged = () => {
     const state = this.#context?.state;
     if (!this.#wanted || state === "running" || (this.#resuming && state === "suspended")) return;
-    this.stop(new Error(`Browser audio ${state === "closed" ? "closed" : "was suspended or interrupted"}. Press Listen to start again.`));
+    this.stop(new Error(`Browser audio ${state === "closed" ? "closed" : "was suspended or interrupted"}. Press the headphones button to start again.`));
   };
 
   constructor(onState, onError) {
@@ -119,7 +119,7 @@ export class BrowserAudio {
     if (this.#wanted && this.#ready) this.#replaceStream();
   }
 
-  // Call directly from the Listen click: context creation and resume happen
+  // Call directly from the headphones click: context creation and resume happen
   // before the first await, while the browser still has the user gesture.
   async start(player, namespace) {
     if (this.#wanted) return;
@@ -155,7 +155,7 @@ export class BrowserAudio {
         context.audioWorklet.addModule(new URL("./browser-audio-worklet.js?no-inline", import.meta.url).href),
       ]);
       if (!this.#wanted || session !== this.#session) return;
-      if (context.state !== "running") throw new Error("Browser audio could not start. Allow audio playback and press Listen again.");
+      if (context.state !== "running") throw new Error("Browser audio could not start. Allow audio playback and press the headphones button again.");
       const node = new AudioWorkletNode(context, "nuschl-browser-audio", {
         numberOfInputs: 0,
         numberOfOutputs: 1,
@@ -164,7 +164,7 @@ export class BrowserAudio {
         channelCountMode: "explicit",
       });
       this.#node = node;
-      node.onprocessorerror = () => this.stop(new Error("The browser audio processor failed. Press Listen to start again."));
+      node.onprocessorerror = () => this.stop(new Error("The browser audio processor failed. Press the headphones button to start again."));
       node.port.onmessage = (event) => this.#receive(event.data);
       this.#gain = context.createGain();
       this.setVolume(this.#volume);
@@ -255,7 +255,7 @@ export class BrowserAudio {
         if (!active()) break;
         if (done) {
           parser.finish();
-          throw new Error("The browser audio stream ended. Press Listen to start again.");
+          throw new Error("The browser audio stream ended. Press the headphones button to start again.");
         }
         parser.push(value);
       }

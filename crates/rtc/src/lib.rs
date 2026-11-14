@@ -29,6 +29,11 @@ pub const MAX_DATAGRAM_BYTES: usize = 2048;
 pub const MAX_OPUS_BYTES: usize = 1275;
 pub const MAX_VIDEO_BYTES: usize = 256 * 1024;
 const INITIAL_BITRATE: u64 = 2_000_000;
+/// The microphone role's reservation, including the overhead `write` charges:
+/// the largest frame the voice admission accepts at the highest selectable
+/// target (640 bytes per 20 ms at 256 kb/s, `nuschl_core::bitrate`) plus
+/// 80 bytes per packet, at 50 packets per second.
+const MICROPHONE_RESERVE_BPS: u64 = (640 + 80) * 8 * 50;
 mod pacing;
 mod signaling;
 use pacing::{Bucket, WINDOW};
@@ -455,11 +460,15 @@ impl Peer {
         {
             return Err(Error::Backpressure);
         }
-        let interval = Duration::from_secs_f64(bits / rate as f64).max(if kind == Kind::Audio {
+        // Audio frames arrive on the encoder's cadence, and constrained VBR
+        // varies their sizes around the target: the role's bucket bounds the
+        // rate and the burst (WINDOW), and the floor bounds the packet rate.
+        // Spacing each frame by its own size would refuse on-time frames.
+        let interval = if kind == Kind::Audio {
             Duration::from_micros(2500)
         } else {
-            Duration::from_millis(1)
-        });
+            Duration::from_secs_f64(bits / rate as f64).max(Duration::from_millis(1))
+        };
         if interval > WINDOW {
             return Err(Error::Backpressure);
         }
@@ -488,7 +497,7 @@ impl Peer {
     fn rates(&self, purpose: Purpose) -> (u64, u64, u64) {
         let total = self.bandwidth_bps.min(10_000_000) * 4 / 5;
         let microphone = if self.track_for(Purpose::Microphone).is_some() {
-            128_000
+            MICROPHONE_RESERVE_BPS
         } else {
             0
         };

@@ -6,15 +6,19 @@
 //! contract is described in docs/musicbot.md ("Web API").
 use crate::{
     Bot,
+    covers::CoverKey,
     player::{BrowserSubscription, Ducking, MAX_DUCK_HOLD},
-    subsonic::{self, Album, AlbumList, Artist, Library, Playlist, Track},
+    subsonic::{
+        self, Album, AlbumList, Artist, Library, LibraryIdentity, Playlist, SongDetails,
+        SonicMatch, Track,
+    },
     tokens::Owner,
 };
 use axum::{
     Json, Router,
     body::{Body, Bytes},
     extract::{Path, Query, State},
-    http::{HeaderName, HeaderValue, StatusCode, header},
+    http::{HeaderMap, HeaderName, HeaderValue, StatusCode, header},
     response::{
         Html, IntoResponse, Redirect, Response,
         sse::{Event, KeepAlive, Sse},
@@ -61,12 +65,16 @@ const PAGE_SIZE: u32 = 48;
 const COALESCE: Duration = Duration::from_millis(50);
 const INVALID_LINK: &str =
     "This link is not valid (any more). Send !web to the music bot in Mumble for a new one.";
+/// Remembers the browser's own link, so token-free shared URLs can open it.
+/// Over HTTPS the name carries the `__Host-` or `__Secure-` prefix.
+const LINK_COOKIE: &str = "musicbot_link";
+const LINK_COOKIE_MAX_AGE: u64 = 90 * 24 * 60 * 60;
 
 pub fn router(bot: Arc<Bot>) -> Router {
-    Router::new()
-        .route("/", get(index))
+    let links = Router::new()
+        .route("/", get(root))
         .route("/u/{token}", get(slash))
-        .route("/u/{token}/", get(app))
+        .route("/u/{token}/", get(remember))
         .route("/u/{token}/assets/{file}", get(asset))
         .route("/u/{token}/licenses", get(licenses))
         .route("/u/{token}/art/{library}/{id}", get(art))
@@ -83,8 +91,130 @@ pub fn router(bot: Arc<Bot>) -> Router {
         .route("/u/{token}/api/playlists", get(playlists))
         .route("/u/{token}/api/playlist", get(playlist))
         .route("/u/{token}/api/search", get(search))
+        .route("/u/{token}/api/song", get(song))
+        .route("/u/{token}/api/similar", get(similar))
+        .route("/u/{token}/api/path", get(sonic_path))
+        .route("/u/{token}/api/forget", post(forget))
+        .with_state(bot.clone());
+    // The outer router's layers run before the inner routing, so the page's
+    // token-free requests can reach the per-link handlers. The header layer
+    // is outermost so refused page requests get the same headers.
+    Router::new()
+        .fallback_service(links)
+        .layer(axum::middleware::map_request_with_state(bot, page_request))
         .layer(axum::middleware::map_response(headers))
-        .with_state(bot)
+}
+
+/// What the public address means for the page: its origin and how the
+/// remembered link is stored.
+struct Site {
+    /// `scheme://host[:port]`, lower case, without a default port.
+    origin: Option<String>,
+    cookie: &'static str,
+    path: String,
+    secure: bool,
+}
+
+impl Site {
+    fn new(public_url: &str) -> Self {
+        let uri = public_url.parse::<axum::http::Uri>().ok();
+        let secure = uri
+            .as_ref()
+            .and_then(|uri| uri.scheme_str())
+            .is_some_and(|scheme| scheme.eq_ignore_ascii_case("https"));
+        let path = uri
+            .as_ref()
+            .map(|uri| uri.path().trim_end_matches('/').to_owned() + "/")
+            .filter(|path| {
+                path.bytes()
+                    .all(|byte| byte.is_ascii_graphic() && !matches!(byte, b';' | b','))
+            })
+            .unwrap_or_else(|| "/".to_owned());
+        // `__Host-` needs Secure and `Path=/`; `__Secure-` needs Secure.
+        let cookie = match (secure, path.as_str()) {
+            (true, "/") => "__Host-musicbot_link",
+            (true, _) => "__Secure-musicbot_link",
+            (false, _) => LINK_COOKIE,
+        };
+        Self {
+            origin: uri.as_ref().and_then(origin_of),
+            cookie,
+            path,
+            secure,
+        }
+    }
+}
+
+/// The normalized origin of an absolute URI, or `None` for anything else.
+fn origin_of(uri: &axum::http::Uri) -> Option<String> {
+    let scheme = uri.scheme_str()?.to_ascii_lowercase();
+    let host = uri.host()?.to_ascii_lowercase();
+    let default = match scheme.as_str() {
+        "https" => 443,
+        "http" => 80,
+        _ => return None,
+    };
+    Some(match uri.port_u16() {
+        Some(port) if port != default => format!("{scheme}://{host}:{port}"),
+        _ => format!("{scheme}://{host}"),
+    })
+}
+
+/// The page runs at the token-free root and authenticates with the browser's
+/// remembered link; the address bar never shows the key. Its relative requests
+/// become the per-link routes. Without a usable cookie they name no link and
+/// fail like an unknown one. Explicit `/u/<token>/` paths never use the cookie.
+///
+/// The cookie is sent by the browser on its own, so page requests must come
+/// from the page itself: a `Sec-Fetch-Site` other than `same-origin` (or
+/// `none`, typed by the user) and an `Origin` other than the public one are
+/// refused. `SameSite=Lax` alone compares sites, not origins.
+async fn page_request(
+    State(bot): State<Arc<Bot>>,
+    mut request: axum::extract::Request,
+) -> Result<axum::extract::Request, ApiError> {
+    let path = request.uri().path();
+    let page_path = ["/api/", "/art/", "/assets/"]
+        .iter()
+        .any(|prefix| path.starts_with(prefix))
+        || path == "/licenses";
+    if !page_path {
+        return Ok(request);
+    }
+    let site = Site::new(&bot.config.web.public_url);
+    if !same_origin(request.headers(), &site) {
+        return Err(ApiError(
+            StatusCode::FORBIDDEN,
+            "requests from other sites cannot use this browser's link".to_owned(),
+        ));
+    }
+    let token = remembered_link(request.headers(), &site)
+        .flatten()
+        .unwrap_or(Uuid::nil());
+    let rewritten = match request.uri().query() {
+        Some(query) => format!("/u/{token}{path}?{query}"),
+        None => format!("/u/{token}{path}"),
+    };
+    if let Ok(uri) = rewritten.parse() {
+        *request.uri_mut() = uri;
+    }
+    Ok(request)
+}
+
+fn same_origin(headers: &HeaderMap, site: &Site) -> bool {
+    let fetch_site = headers
+        .get_all(HeaderName::from_static("sec-fetch-site"))
+        .iter()
+        .all(|value| matches!(value.as_bytes(), b"same-origin" | b"none"));
+    let origin = headers.get_all(header::ORIGIN).iter().all(|value| {
+        let origin = value
+            .to_str()
+            .ok()
+            .and_then(|value| value.parse::<axum::http::Uri>().ok())
+            .and_then(|uri| origin_of(&uri));
+        origin.is_some() && origin == site.origin
+    });
+    fetch_site && origin
 }
 
 /// The link is a secret: no referrer, nothing from elsewhere, and nothing
@@ -185,11 +315,69 @@ async fn ask<T: Send + 'static>(
     .await
 }
 
-async fn index() -> Html<&'static str> {
-    Html(
-        "<!DOCTYPE html><meta charset=\"utf-8\"><title>Music</title>\
-         <p>Send <code>!web</code> to the music bot in Mumble to get your link to this page.",
+/// The bot's public address: the page for a browser that opened its own link,
+/// otherwise how to get one. Shared views keep their URL fragment.
+async fn root(State(bot): State<Arc<Bot>>, headers: HeaderMap) -> Response {
+    let site = Site::new(&bot.config.web.public_url);
+    match remembered_link(&headers, &site) {
+        Some(Some(token)) if bot.tokens.is_valid(&token) => app_page(&bot).await,
+        remembered => {
+            let mut response = Html(
+                "<!DOCTYPE html><meta charset=\"utf-8\"><title>Music</title>\
+                 <p>Send <code>!web</code> to the music bot in Mumble to get your link to this page.\
+                 <p>Open it once in this browser; afterwards shared links work here as well.",
+            )
+            .into_response();
+            if remembered.is_some() {
+                response
+                    .headers_mut()
+                    .insert(header::SET_COOKIE, link_cookie(&site, None));
+            }
+            response
+        }
+    }
+}
+
+/// `None` without the cookie, `Some(None)` for a malformed value.
+fn remembered_link(headers: &HeaderMap, site: &Site) -> Option<Option<Uuid>> {
+    headers
+        .get_all(header::COOKIE)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(';'))
+        .find_map(|pair| {
+            let (name, value) = pair.trim().split_once('=')?;
+            (name == site.cookie).then(|| Uuid::parse_str(value).ok())
+        })
+}
+
+/// Remembers `token` (or forgets the link) below the configured public path.
+fn link_cookie(site: &Site, token: Option<&Uuid>) -> HeaderValue {
+    let secure = if site.secure { "; Secure" } else { "" };
+    let (value, max_age) = match token {
+        Some(token) => (token.to_string(), LINK_COOKIE_MAX_AGE),
+        None => (String::new(), 0),
+    };
+    HeaderValue::from_str(&format!(
+        "{}={value}; Path={}; Max-Age={max_age}; HttpOnly; SameSite=Lax{secure}",
+        site.cookie, site.path
+    ))
+    .expect("cookie built from a UUID and a checked path")
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Forget {}
+
+/// Forgets the link remembered in this browser; the link itself stays valid.
+/// JSON only, like the other POSTs.
+async fn forget(State(bot): State<Arc<Bot>>, Json(Forget {}): Json<Forget>) -> Response {
+    let site = Site::new(&bot.config.web.public_url);
+    (
+        StatusCode::NO_CONTENT,
+        [(header::SET_COOKIE, link_cookie(&site, None))],
     )
+        .into_response()
 }
 
 async fn slash(Path(token): Path<String>) -> Result<Redirect, ApiError> {
@@ -210,14 +398,29 @@ fn assets(bot: &Bot) -> Result<&PathBuf, ApiError> {
     })
 }
 
-async fn app(State(bot): State<Arc<Bot>>, Path(token): Path<String>) -> Response {
-    if owner(&bot, &token).is_err() {
+/// The link from `!web`: remember it in this browser, then show the page at the
+/// token-free root so the address bar can be copied safely.
+async fn remember(State(bot): State<Arc<Bot>>, Path(token): Path<String>) -> Response {
+    let Ok(token) = Uuid::parse_str(&token)
+        .map_err(drop)
+        .and_then(|token| bot.tokens.is_valid(&token).then_some(token).ok_or(()))
+    else {
         let page = format!(
             "<!DOCTYPE html><meta charset=\"utf-8\"><title>Unknown link</title><p>{INVALID_LINK}"
         );
         return (StatusCode::NOT_FOUND, Html(page)).into_response();
-    }
-    let directory = match assets(&bot) {
+    };
+    // Relative, like `slash`: the bot may be mounted below a proxy prefix.
+    let mut response = Redirect::to("../../").into_response();
+    let site = Site::new(&bot.config.web.public_url);
+    response
+        .headers_mut()
+        .insert(header::SET_COOKIE, link_cookie(&site, Some(&token)));
+    response
+}
+
+async fn app_page(bot: &Bot) -> Response {
+    let directory = match assets(bot) {
         Ok(directory) => directory,
         Err(error) => return error.into_response(),
     };
@@ -310,10 +513,27 @@ async fn asset(
 struct ArtQuery {
     #[serde(default = "default_art_size")]
     size: u32,
+    /// The library's `library_keys` entry from the state: proves the URL
+    /// names the current library, so the browser may keep the answer.
+    v: Option<String>,
 }
 
 fn default_art_size() -> u32 {
     300
+}
+
+/// The edge lengths covers are made in. A request gets the largest step that
+/// fits, so the page's few sizes share cache entries and worker jobs, and its
+/// check that pixels are no larger than asked still holds.
+const COVER_SIZES: [u32; 7] = [32, 64, 96, 128, 200, 300, 400];
+
+fn snap_cover_size(requested: u32) -> u32 {
+    let wanted = requested.min(nuschl_ipc::MAX_THUMBNAIL_EDGE);
+    COVER_SIZES
+        .into_iter()
+        .rev()
+        .find(|size| *size <= wanted && *size <= nuschl_ipc::MAX_THUMBNAIL_EDGE)
+        .unwrap_or(COVER_SIZES[0])
 }
 
 #[derive(Serialize)]
@@ -339,25 +559,65 @@ fn content_worker_path(executable: &std::path::Path) -> Result<PathBuf, ApiError
 /// Only validated RGBA leaves this route. Never expose encoded library art to
 /// the browser's native image decoder. The owned task retains concurrency
 /// through worker completion/reaping even after its HTTP consumer disappears.
+/// Answers come from the shared cache when they can; only misses take a job.
 async fn art(
     State(bot): State<Arc<Bot>>,
     Path((token, library, id)): Path<(String, usize, String)>,
     Query(query): Query<ArtQuery>,
 ) -> Result<Response, ApiError> {
     owner(&bot, &token)?;
-    if library >= bot.libraries.len() {
+    let Some(source) = bot.libraries.get(library) else {
         return Err(ApiError(
             StatusCode::NOT_FOUND,
             "no such library".to_owned(),
         ));
-    }
+    };
+    // A URL for another library (the configuration changed) must not be
+    // kept by the browser under this library's covers.
+    let versioned = match query.v.as_deref() {
+        None => false,
+        Some(key) if key == source.key() => true,
+        Some(_) => {
+            return Err(ApiError(
+                StatusCode::NOT_FOUND,
+                "the library changed; reload the page".to_owned(),
+            ));
+        }
+    };
+    let size = snap_cover_size(query.size);
+    let key: CoverKey = (source.key().to_owned(), id, size);
+    let cached = bot.covers.get(&key).await;
+    let body = match cached {
+        Some(body) => body,
+        None => fetch_cover(&bot, library, key).await?,
+    };
+    owner(&bot, &token)?;
+    let caching = if versioned {
+        "private, max-age=86400"
+    } else {
+        "private, no-store"
+    };
+    Ok((
+        [
+            (header::CONTENT_TYPE, "application/json"),
+            (header::CACHE_CONTROL, caching),
+        ],
+        body,
+    )
+        .into_response())
+}
+
+/// Fetches and decodes a cover that is not cached, and caches it, even when
+/// the HTTP client has gone by then.
+async fn fetch_cover(bot: &Arc<Bot>, library: usize, key: CoverKey) -> Result<Bytes, ApiError> {
     let permit = COVER_JOBS.try_acquire().map_err(|_| {
         ApiError(
             StatusCode::SERVICE_UNAVAILABLE,
             "the artwork worker is busy".to_owned(),
         )
     })?;
-    let size = query.size.clamp(32, nuschl_ipc::MAX_THUMBNAIL_EDGE);
+    let size = key.2;
+    let id = key.1.clone();
     let worker = content_worker_path(&std::env::current_exe().map_err(|_| {
         ApiError(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -399,29 +659,35 @@ async fn art(
                 "the artwork worker returned invalid pixels".to_owned(),
             ));
         };
-        Ok::<_, ApiError>(CoverPixels {
-            width,
-            height,
-            rgba,
-        })
+        let body = Bytes::from(
+            serde_json::to_vec(&CoverPixels {
+                width,
+                height,
+                rgba,
+            })
+            .expect("cover pixels serialize"),
+        );
+        owned.covers.insert(&key, &body).await;
+        Ok::<_, ApiError>(body)
     });
-    let pixels = match tokio::time::timeout(LIBRARY_TIMEOUT + Duration::from_secs(10), task).await {
-        Ok(Ok(result)) => result?,
-        _ => {
-            return Err(ApiError(
-                StatusCode::GATEWAY_TIMEOUT,
-                "the artwork worker did not finish in time".to_owned(),
-            ));
-        }
-    };
-    owner(&bot, &token)?;
-    Ok(([(header::CACHE_CONTROL, "private, no-store")], Json(pixels)).into_response())
+    match tokio::time::timeout(LIBRARY_TIMEOUT + Duration::from_secs(10), task).await {
+        Ok(Ok(result)) => result,
+        _ => Err(ApiError(
+            StatusCode::GATEWAY_TIMEOUT,
+            "the artwork worker did not finish in time".to_owned(),
+        )),
+    }
 }
 
 #[derive(Serialize)]
 struct StateView {
     you: String,
     libraries: Vec<String>,
+    /// Per library, parallel to `libraries`: whether it is known to offer
+    /// sonic similarity. Read from what is already known, never asked.
+    sonic: Vec<bool>,
+    /// Per library: identifies it in shared links and cover URLs (`v`).
+    library_keys: Vec<String>,
     players: Vec<PlayerView>,
     channels: Vec<ChannelView>,
     rating_revision: u64,
@@ -534,6 +800,16 @@ fn snapshot(bot: &Bot, you: &str) -> StateView {
             .libraries
             .iter()
             .map(|library| library.name.clone())
+            .collect(),
+        sonic: bot
+            .libraries
+            .iter()
+            .map(|library| library.supports_sonic_similarity_cached())
+            .collect(),
+        library_keys: bot
+            .libraries
+            .iter()
+            .map(|library| library.key().to_owned())
             .collect(),
         players,
         channels,
@@ -855,6 +1131,10 @@ enum Kind {
     Song,
     Album,
     Playlist,
+    /// The songs that sound like `id`.
+    Similar,
+    /// The songs leading from `id` to `to` by sound.
+    Path,
 }
 
 #[derive(Deserialize)]
@@ -899,6 +1179,8 @@ enum Command {
         kind: Kind,
         library: usize,
         id: String,
+        /// The song a `path` ends with.
+        to: Option<String>,
         index: Option<usize>,
     },
     Attach {
@@ -956,15 +1238,39 @@ async fn command(
             kind,
             library,
             id,
+            to,
             index,
             ..
         } => {
+            let to = match kind {
+                Kind::Path => to.ok_or_else(|| bad("a sonic path needs the song it ends with"))?,
+                _ => String::new(),
+            };
+            let sonic = |matches: Vec<SonicMatch>| -> Vec<Track> {
+                matches.into_iter().map(|found| found.track).collect()
+            };
             let tracks = ask(&bot, library, move |library| match kind {
                 Kind::Album => library.album(&id).map(|(_, songs)| songs),
                 Kind::Playlist => library.playlist(&id).map(|(_, songs)| songs),
                 Kind::Song => library.song(&id).map(|song| vec![song]),
+                Kind::Similar => library
+                    .sonic_similar(&id)
+                    .map(|matches| sonic(without_identical(matches, &id))),
+                Kind::Path => library.sonic_path(&id, &to).map(sonic),
             })
             .await?;
+            let tracks = match kind {
+                Kind::Path => {
+                    let identity = bot.libraries[library].identity();
+                    let state = player.state();
+                    let playing = state
+                        .current
+                        .as_ref()
+                        .map(|playing| (playing.source.as_ref(), playing.entry.track.id.as_str()));
+                    continue_path(tracks, playing, &identity)
+                }
+                _ => tracks,
+            };
             let added = player.enqueue(tracks, &owner.name, index);
             tracing::info!("{} added {added} song(s) to {}", owner.name, player.name);
         }
@@ -978,6 +1284,35 @@ async fn command(
         }
     }
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Similar songs without those that sound exactly like the seed (other copies
+/// of the same recording) and without the seed itself, so adding them all
+/// does not queue the same song again and again.
+fn without_identical(matches: Vec<SonicMatch>, seed: &str) -> Vec<SonicMatch> {
+    matches
+        .into_iter()
+        .filter(|found| {
+            found.track.id != seed && found.similarity.is_none_or(|score| score < 1.0 - 1e-6)
+        })
+        .collect()
+}
+
+/// A path that starts with the song the queue is playing continues it: the
+/// first song is not queued again. `playing` is the current song's library
+/// identity and id.
+fn continue_path(
+    mut path: Vec<Track>,
+    playing: Option<(Option<&LibraryIdentity>, &str)>,
+    library: &LibraryIdentity,
+) -> Vec<Track> {
+    if let (Some((Some(source), id)), Some(first)) = (playing, path.first())
+        && source == library
+        && id == first.id
+    {
+        path.remove(0);
+    }
+    path
 }
 
 #[derive(Deserialize)]
@@ -1170,6 +1505,87 @@ async fn playlist(
     Ok(Json(PlaylistView { playlist, songs }))
 }
 
+#[derive(Serialize)]
+struct SongView {
+    song: Track,
+    details: SongDetails,
+    appearances: Vec<Track>,
+    /// The song still shows when searching for its albums fails.
+    appearances_error: Option<String>,
+}
+
+/// A song's page: its details and the albums it is on.
+async fn song(
+    State(bot): State<Arc<Bot>>,
+    Path(token): Path<String>,
+    Query(query): Query<ItemQuery>,
+) -> Result<Json<SongView>, ApiError> {
+    owner(&bot, &token)?;
+    let view = ask(&bot, query.library, move |library| {
+        let (song, details) = library.song_details(&query.id)?;
+        let (appearances, appearances_error) = match library.appearances(&song) {
+            Ok(appearances) => (appearances, None),
+            Err(error) => (Vec::new(), Some(error.public_message())),
+        };
+        Ok(SongView {
+            song,
+            details,
+            appearances,
+            appearances_error,
+        })
+    })
+    .await?;
+    Ok(Json(view))
+}
+
+#[derive(Serialize)]
+struct SimilarView {
+    song: Track,
+    matches: Vec<SonicMatch>,
+}
+
+/// The songs that sound like one song, and that song for the heading.
+async fn similar(
+    State(bot): State<Arc<Bot>>,
+    Path(token): Path<String>,
+    Query(query): Query<ItemQuery>,
+) -> Result<Json<SimilarView>, ApiError> {
+    owner(&bot, &token)?;
+    let (song, matches) = ask(&bot, query.library, move |library| {
+        // The extension check comes first: unsupported libraries get no other call.
+        let matches = library.sonic_similar(&query.id)?;
+        Ok((library.song(&query.id)?, matches))
+    })
+    .await?;
+    Ok(Json(SimilarView { song, matches }))
+}
+
+#[derive(Deserialize)]
+struct PathQuery {
+    #[serde(default)]
+    library: usize,
+    from: String,
+    to: String,
+}
+
+#[derive(Serialize)]
+struct SonicPathView {
+    matches: Vec<SonicMatch>,
+}
+
+async fn sonic_path(
+    State(bot): State<Arc<Bot>>,
+    Path(token): Path<String>,
+    Query(query): Query<PathQuery>,
+) -> Result<Json<SonicPathView>, ApiError> {
+    owner(&bot, &token)?;
+    let matches = ask(&bot, query.library, move |library| {
+        library.sonic_path(&query.from, &query.to)
+    })
+    .await?;
+    Ok(Json(SonicPathView { matches }))
+}
+
 #[derive(Deserialize)]
 struct SearchQuery {
     #[serde(default)]
@@ -1272,6 +1688,332 @@ mod tests {
             "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/"
         );
     }
+
+    #[tokio::test]
+    async fn the_page_runs_at_the_root_with_a_remembered_link_never_in_the_address() {
+        let (directory, mut bot, token) = test_bot("http://unused.invalid", 0);
+        std::fs::write(directory.path().join("index.html"), "<!DOCTYPE html><p>app").unwrap();
+        Arc::get_mut(&mut bot).unwrap().web_assets = Some(directory.path().to_owned());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let app = router(bot.clone());
+        let serving = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        // (status, Location, Set-Cookie, body) without following redirects.
+        async fn get(
+            url: String,
+            cookie: Option<String>,
+            body: Option<&'static str>,
+        ) -> (u16, Option<String>, Option<String>, String) {
+            tokio::task::spawn_blocking(move || {
+                let agent: ureq::Agent = ureq::Agent::config_builder()
+                    .http_status_as_error(false)
+                    .max_redirects(0)
+                    .timeout_global(Some(Duration::from_secs(2)))
+                    .build()
+                    .into();
+                let mut response = match body {
+                    Some(body) => {
+                        let mut request =
+                            agent.post(&url).header("Content-Type", "application/json");
+                        if let Some(cookie) = &cookie {
+                            request = request.header("Cookie", cookie);
+                        }
+                        request.send(body).unwrap()
+                    }
+                    None => {
+                        let mut request = agent.get(&url);
+                        if let Some(cookie) = &cookie {
+                            request = request.header("Cookie", cookie);
+                        }
+                        request.call().unwrap()
+                    }
+                };
+                let header = |name: &str| {
+                    response
+                        .headers()
+                        .get(name)
+                        .map(|value| value.to_str().unwrap().to_owned())
+                };
+                let (location, set_cookie) = (header("location"), header("set-cookie"));
+                let status = response.status().as_u16();
+                let body = response.body_mut().read_to_string().unwrap();
+                (status, location, set_cookie, body)
+            })
+            .await
+            .unwrap()
+        }
+        let cookie = format!("other=1; {LINK_COOKIE}={token}; more=2");
+
+        // The `!web` link only remembers itself and leaves for the root.
+        let (status, location, set_cookie, _) = get(format!("{base}/u/{token}/"), None, None).await;
+        assert_eq!((status, location.as_deref()), (303, Some("../../")));
+        let set_cookie = set_cookie.unwrap();
+        assert!(
+            set_cookie.starts_with(&format!("{LINK_COOKIE}={token}; Path=/; ")),
+            "{set_cookie}"
+        );
+        for attribute in ["HttpOnly", "SameSite=Lax", "Max-Age=7776000"] {
+            assert!(set_cookie.contains(attribute), "{set_cookie}");
+        }
+        assert!(!set_cookie.contains("Secure"), "plain HTTP public URL");
+
+        // The root shows the page only to the remembering browser.
+        let (status, _, _, page) = get(format!("{base}/"), Some(cookie.clone()), None).await;
+        assert_eq!((status, page.as_str()), (200, "<!DOCTYPE html><p>app"));
+        let (status, _, set_cookie, page) = get(format!("{base}/"), None, None).await;
+        assert!(status == 200 && page.contains("!web") && set_cookie.is_none());
+
+        // Token-free page requests use the cookie; without it they are unknown.
+        let (status, _, _, state) =
+            get(format!("{base}/api/state"), Some(cookie.clone()), None).await;
+        assert_eq!(status, 200);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&state).unwrap()["you"],
+            "Listener"
+        );
+        for missing in [None, Some(format!("{LINK_COOKIE}=not-a-uuid"))] {
+            let (status, _, _, body) = get(format!("{base}/api/state"), missing, None).await;
+            assert!(
+                status == 404 && body.contains(INVALID_LINK),
+                "{status} {body}"
+            );
+        }
+        // Commands reach the handler (no queues here) only with the cookie.
+        let command = r#"{"command":"pause","player":0}"#;
+        assert_eq!(
+            get(
+                format!("{base}/api/command"),
+                Some(cookie.clone()),
+                Some(command)
+            )
+            .await
+            .0,
+            400
+        );
+        assert_eq!(
+            get(format!("{base}/api/command"), None, Some(command))
+                .await
+                .0,
+            404
+        );
+        // An explicit link in the path never falls back to the cookie.
+        let nil = Uuid::nil();
+        assert_eq!(
+            get(
+                format!("{base}/u/{nil}/api/state"),
+                Some(cookie.clone()),
+                None
+            )
+            .await
+            .0,
+            404
+        );
+
+        // Page requests from another origin or site cannot use the cookie,
+        // for reading as well as for changes. The public origin is
+        // http://localhost; a default port is the same origin.
+        async fn status_with(
+            url: String,
+            headers: Vec<(&'static str, String)>,
+            body: Option<&'static str>,
+        ) -> u16 {
+            tokio::task::spawn_blocking(move || {
+                let agent: ureq::Agent = ureq::Agent::config_builder()
+                    .http_status_as_error(false)
+                    .timeout_global(Some(Duration::from_secs(2)))
+                    .build()
+                    .into();
+                match body {
+                    Some(body) => {
+                        let mut request =
+                            agent.post(&url).header("Content-Type", "application/json");
+                        for (name, value) in &headers {
+                            request = request.header(*name, value);
+                        }
+                        request.send(body).unwrap().status().as_u16()
+                    }
+                    None => {
+                        let mut request = agent.get(&url);
+                        for (name, value) in &headers {
+                            request = request.header(*name, value);
+                        }
+                        request.call().unwrap().status().as_u16()
+                    }
+                }
+            })
+            .await
+            .unwrap()
+        }
+        let from = |extra: &[(&'static str, &str)]| {
+            let mut headers = vec![("Cookie", cookie.clone())];
+            headers.extend(
+                extra
+                    .iter()
+                    .map(|(name, value)| (*name, (*value).to_owned())),
+            );
+            headers
+        };
+        for refused in [
+            &[("Origin", "https://evil.example")][..],
+            &[("Origin", "http://localhost:8080")],
+            &[("Origin", "null")],
+            &[("Sec-Fetch-Site", "cross-site")],
+            &[("Sec-Fetch-Site", "same-site")],
+            &[
+                ("Origin", "http://localhost"),
+                ("Sec-Fetch-Site", "same-site"),
+            ],
+        ] {
+            for (endpoint, body) in [
+                ("api/command", Some(command)),
+                ("api/state", None),
+                ("api/events", None),
+                ("api/listen?player=0", None),
+                ("api/rating", Some(r#"{"library":0,"id":"s","rating":5}"#)),
+                ("art/0/cover?size=32", None),
+                ("api/forget", Some("{}")),
+            ] {
+                assert_eq!(
+                    status_with(format!("{base}/{endpoint}"), from(refused), body).await,
+                    403,
+                    "{endpoint} {refused:?}"
+                );
+            }
+        }
+        for allowed in [
+            &[
+                ("Origin", "http://LOCALHOST:80"),
+                ("Sec-Fetch-Site", "same-origin"),
+            ][..],
+            &[("Sec-Fetch-Site", "none")],
+        ] {
+            assert_eq!(
+                status_with(format!("{base}/api/command"), from(allowed), Some(command)).await,
+                400,
+                "{allowed:?}"
+            );
+        }
+        // Scripts with the link in the path are not page requests.
+        assert_eq!(
+            status_with(
+                format!("{base}/u/{token}/api/state"),
+                vec![("Origin", "https://evil.example".to_owned())],
+                None
+            )
+            .await,
+            200
+        );
+        // Forgetting clears the cookie and needs JSON.
+        let (status, _, set_cookie, _) = get(
+            format!("{base}/api/forget"),
+            Some(cookie.clone()),
+            Some("{}"),
+        )
+        .await;
+        assert_eq!(status, 204);
+        assert!(
+            set_cookie
+                .unwrap()
+                .starts_with(&format!("{LINK_COOKIE}=; Path=/; Max-Age=0"))
+        );
+        assert_eq!(
+            status_with(
+                format!("{base}/api/forget"),
+                vec![("Cookie", cookie.clone())],
+                None
+            )
+            .await,
+            405,
+            "a GET does nothing"
+        );
+
+        // Renewal revokes the remembered link: the root forgets it.
+        let viewer = owner(&bot, &token).ok().unwrap();
+        bot.tokens.issue(viewer, true).unwrap();
+        let (status, _, set_cookie, page) =
+            get(format!("{base}/"), Some(cookie.clone()), None).await;
+        assert!(status == 200 && page.contains("!web"));
+        let set_cookie = set_cookie.unwrap();
+        assert!(
+            set_cookie.starts_with(&format!("{LINK_COOKIE}=; Path=/; Max-Age=0")),
+            "{set_cookie}"
+        );
+        assert_eq!(
+            get(format!("{base}/api/state"), Some(cookie), None).await.0,
+            404
+        );
+        let (status, _, set_cookie, _) = get(format!("{base}/u/{token}/"), None, None).await;
+        assert!(status == 404 && set_cookie.is_none());
+        serving.abort();
+        let _ = serving.await;
+    }
+
+    #[test]
+    fn the_remembered_link_stays_below_the_public_path_with_a_prefixed_name() {
+        let token = Uuid::from_u128(7);
+        for (public, name, path, secure, origin) in [
+            (
+                "https://music.example.org",
+                "__Host-musicbot_link",
+                "/",
+                true,
+                "https://music.example.org",
+            ),
+            (
+                "https://Music.example.org:443/bot",
+                "__Secure-musicbot_link",
+                "/bot/",
+                true,
+                "https://music.example.org",
+            ),
+            (
+                "HTTPS://music.example.org:8443/bot/",
+                "__Secure-musicbot_link",
+                "/bot/",
+                true,
+                "https://music.example.org:8443",
+            ),
+            (
+                "http://music.example.org",
+                "musicbot_link",
+                "/",
+                false,
+                "http://music.example.org",
+            ),
+            (
+                "https://music.example.org/a;b",
+                "__Host-musicbot_link",
+                "/",
+                true,
+                "https://music.example.org",
+            ),
+        ] {
+            let site = Site::new(public);
+            assert_eq!(site.origin.as_deref(), Some(origin), "{public}");
+            let cookie = link_cookie(&site, Some(&token))
+                .to_str()
+                .unwrap()
+                .to_owned();
+            assert!(
+                cookie.starts_with(&format!("{name}={token}; Path={path}; ")),
+                "{public}: {cookie}"
+            );
+            assert_eq!(cookie.ends_with("; Secure"), secure, "{public}: {cookie}");
+            let mut headers = HeaderMap::new();
+            let cookies = format!("other=x; {name}={token}");
+            headers.insert(header::COOKIE, cookies.parse().unwrap());
+            assert_eq!(remembered_link(&headers, &site), Some(Some(token)));
+        }
+    }
+
+    #[test]
+    fn covers_are_made_in_a_few_sizes_never_larger_than_asked() {
+        let snapped: Vec<_> = [0, 31, 32, 63, 96, 127, 250, 300, 399, 400, 4000]
+            .into_iter()
+            .map(snap_cover_size)
+            .collect();
+        assert_eq!(snapped, [32, 32, 32, 32, 96, 96, 200, 300, 300, 400, 400]);
+    }
     use subsonic::tests::Server;
 
     // These API tests share the production admission pool; the overload test
@@ -1288,15 +2030,23 @@ mod tests {
             "channel": [],
         }))
         .unwrap();
+        let identities: Vec<_> = config
+            .libraries
+            .iter()
+            .map(crate::subsonic::LibraryIdentity::new)
+            .collect();
+        let keys = crate::library_keys::load(directory.path(), &identities).unwrap();
         let libraries = config
             .libraries
             .iter()
+            .zip(keys)
             .enumerate()
-            .map(|(index, library)| {
+            .map(|(index, (library, key))| {
                 Library::new(
                     index,
                     library,
                     crate::config::Credentials::ApiKey("private-key".into()),
+                    key,
                 )
             })
             .collect();
@@ -1323,6 +2073,8 @@ mod tests {
             tokens,
             changes: crate::Changes::default(),
             persistence: std::sync::Mutex::new(()),
+            covers: crate::covers::CoverCache::open(directory.path().join("covers"), 1 << 20)
+                .unwrap(),
             rating_revision: std::sync::atomic::AtomicU64::new(0),
         });
         (directory, bot, token)
@@ -1844,7 +2596,7 @@ mod tests {
         let response = art(
             State(bot.clone()),
             Path((token.clone(), 0, "cover".into())),
-            Query(ArtQuery { size: 300 }),
+            Query(ArtQuery { size: 300, v: None }),
         )
         .await
         .err()
@@ -1865,7 +2617,7 @@ mod tests {
             art(
                 State(bot.clone()),
                 Path((token.clone(), 0, "cover".into())),
-                Query(ArtQuery { size: 300 }),
+                Query(ArtQuery { size: 300, v: None }),
             ),
         )
         .await
@@ -1897,6 +2649,62 @@ mod tests {
             "the music library is busy"
         );
         drop(occupied);
+    }
+
+    #[tokio::test]
+    async fn cached_covers_skip_the_library_and_only_versioned_urls_may_be_kept() {
+        let _exclusive = API_TESTS.lock().await;
+        let server = Server::reply(
+            "application/json",
+            br#"{"subsonic-response":{"status":"failed","error":{"code":0}}}"#,
+        );
+        let (_directory, bot, token) = test_bot(&server.url, 1);
+        let art_key = bot.libraries[0].key().to_owned();
+        assert_eq!(snapshot(&bot, "x").library_keys, [art_key.as_str()]);
+        let body = Bytes::from_static(br#"{"width":1,"height":1,"rgba":"AAAAAA=="}"#);
+        bot.covers
+            .insert(&(art_key.clone(), "cover".into(), 300), &body)
+            .await;
+        // A hit needs no artwork job.
+        let jobs = COVER_JOBS
+            .acquire_many(MAX_COVER_JOBS as u32)
+            .await
+            .unwrap();
+        let request = |v: Option<&str>| {
+            art(
+                State(bot.clone()),
+                Path((token.clone(), 0, "cover".into())),
+                Query(ArtQuery {
+                    size: 300,
+                    v: v.map(str::to_owned),
+                }),
+            )
+        };
+        for (v, caching) in [
+            (Some(art_key.as_str()), "private, max-age=86400"),
+            (None, "private, no-store"),
+        ] {
+            let response = request(v).await.ok().unwrap();
+            assert_eq!(response.headers()[header::CACHE_CONTROL], caching);
+            let served = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            assert_eq!(served, body);
+        }
+        let stale = request(Some("0000000000000000")).await.err().unwrap();
+        assert_eq!(stale.0, StatusCode::NOT_FOUND);
+        // Not cached and no job free: the library is not asked either.
+        let missing = art(
+            State(bot.clone()),
+            Path((token.clone(), 0, "other".into())),
+            Query(ArtQuery { size: 300, v: None }),
+        )
+        .await
+        .err()
+        .unwrap();
+        assert_eq!(missing.0, StatusCode::SERVICE_UNAVAILABLE);
+        drop(jobs);
+        assert!(server.requests().is_empty());
     }
 
     #[tokio::test]
@@ -2109,6 +2917,39 @@ mod tests {
                 ..
             }
         ));
+        let similar: Command = serde_json::from_str(
+            r#"{"command":"add","player":0,"kind":"similar","library":1,"id":"s/1"}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            similar,
+            Command::Add {
+                kind: Kind::Similar,
+                library: 1,
+                to: None,
+                index: None,
+                ..
+            }
+        ));
+        let path: Command = serde_json::from_str(
+            r#"{"command":"add","player":0,"kind":"path","library":1,"id":"s1","to":"s 2","index":3}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            &path,
+            Command::Add {
+                kind: Kind::Path,
+                to: Some(to),
+                index: Some(3),
+                ..
+            } if to == "s 2"
+        ));
+        assert!(
+            serde_json::from_str::<Command>(
+                r#"{"command":"add","player":0,"kind":"sonic","library":0,"id":"s1"}"#
+            )
+            .is_err()
+        );
         let ducking: Command = serde_json::from_str(
             r#"{"command":"ducking","player":0,"enabled":true,"level":20,"hold_ms":500,"sensitivity":70}"#,
         )
@@ -2127,5 +2968,386 @@ mod tests {
         assert!(
             serde_json::from_str::<Command>(r#"{"command":"format_disk","player":0}"#).is_err()
         );
+    }
+
+    fn fixture_track(id: &str) -> Track {
+        serde_json::from_value(serde_json::json!({ "library": 0, "id": id, "title": id })).unwrap()
+    }
+
+    #[test]
+    fn a_path_from_the_playing_song_continues_it() {
+        let library = LibraryIdentity {
+            name: "Open".into(),
+            url: "https://open.example".into(),
+        };
+        let other = LibraryIdentity {
+            name: "Plain".into(),
+            url: "https://plain.example".into(),
+        };
+        let ids = |tracks: Vec<Track>| tracks.into_iter().map(|track| track.id).collect::<Vec<_>>();
+        let path = || vec![fixture_track("s1"), fixture_track("s2")];
+        assert_eq!(
+            ids(continue_path(
+                path(),
+                Some((Some(&library), "s1")),
+                &library
+            )),
+            ["s2"]
+        );
+        for playing in [
+            None,
+            Some((None, "s1")),
+            Some((Some(&other), "s1")),
+            Some((Some(&library), "s2")),
+        ] {
+            assert_eq!(ids(continue_path(path(), playing, &library)), ["s1", "s2"]);
+        }
+        assert!(continue_path(Vec::new(), Some((Some(&library), "s1")), &library).is_empty());
+    }
+
+    #[test]
+    fn adding_similar_songs_skips_identical_copies_and_the_seed() {
+        let found = |id: &str, similarity: Option<f64>| SonicMatch {
+            track: fixture_track(id),
+            similarity,
+        };
+        let matches = vec![
+            found("seed", Some(1.0)),
+            found("copy", Some(1.0)),
+            found("close", Some(0.999)),
+            found("unscored", None),
+            found("far", Some(0.4)),
+        ];
+        let kept: Vec<_> = without_identical(matches, "seed")
+            .into_iter()
+            .map(|found| found.track.id)
+            .collect();
+        assert_eq!(kept, ["close", "unscored", "far"]);
+    }
+
+    /// `open` offers sonic similarity; `plain` does not; `failing` offers it
+    /// but rejects every call with a message carrying the backend secret.
+    fn sonic_fixture(mode: &'static str) -> Server {
+        Server::new(move |request, socket| {
+            use std::io::Write;
+            let body = if request.starts_with("GET /rest/getOpenSubsonicExtensions") {
+                if mode == "plain" {
+                    r#"{"subsonic-response":{"status":"ok","openSubsonicExtensions":[{"name":"transcoding","versions":[1]}]}}"#
+                } else {
+                    r#"{"subsonic-response":{"status":"ok","openSubsonicExtensions":[{"name":"sonicSimilarity","versions":[1]}]}}"#
+                }
+            } else if mode == "failing" {
+                r#"{"subsonic-response":{"status":"failed","error":{"code":40,"message":"http://dj:secret@private.example/rest/findSonicPath?apiKey=private-key"}}}"#
+            } else if request.starts_with("GET /rest/ping") {
+                r#"{"subsonic-response":{"status":"ok"}}"#
+            } else if request.starts_with("GET /rest/getSong") {
+                r#"{"subsonic-response":{"status":"ok","song":{"id":"s1","title":"First"}}}"#
+            } else if request.starts_with("GET /rest/getSonicSimilarTracks") {
+                // The seed itself and another copy of it sound 100% alike.
+                r#"{"subsonic-response":{"status":"ok","sonicMatch":[{"entry":{"id":"s1","title":"First"},"similarity":1.0},{"entry":{"id":"s1-copy","title":"First"},"similarity":1.0},{"entry":{"id":"s2","title":"Second"},"similarity":0.8}]}}"#
+            } else if request.starts_with("GET /rest/findSonicPath") {
+                r#"{"subsonic-response":{"status":"ok","sonicMatch":[{"entry":{"id":"s1","title":"First"},"similarity":1.0},{"entry":{"id":"s2","title":"Second"},"similarity":0.5}]}}"#
+            } else {
+                r#"{"subsonic-response":{"status":"failed","error":{"code":0}}}"#
+            };
+            write!(socket, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).unwrap();
+            socket.write_all(body.as_bytes()).unwrap();
+        })
+    }
+
+    fn queue_ids(bot: &Bot) -> Vec<String> {
+        bot.players[0]
+            .state()
+            .queue
+            .iter()
+            .map(|entry| entry.track.id.clone())
+            .collect()
+    }
+
+    #[test]
+    fn snapshot_reports_only_already_known_sonic_support() {
+        let server = sonic_fixture("open");
+        let (_directory, bot, token) = test_bot(&server.url, 2);
+        let you = owner(&bot, &token).ok().unwrap().name;
+        assert_eq!(snapshot(&bot, &you).sonic, [false, false]);
+        assert!(server.requests().is_empty(), "snapshots never ask");
+        bot.libraries[1].ping().unwrap();
+        let asked = server.requests().len();
+        // Library 0 would answer the same, but nobody has asked it yet.
+        assert_eq!(snapshot(&bot, &you).sonic, [false, true]);
+        assert_eq!(server.requests().len(), asked);
+    }
+
+    #[tokio::test]
+    async fn a_song_page_lists_the_albums_with_the_same_song() {
+        let _exclusive = API_TESTS.lock().await;
+        for search_fails in [false, true] {
+            let server = Server::new(move |request, socket| {
+                use std::io::Write;
+                let body = if request.starts_with("GET /rest/getSong") {
+                    r#"{"subsonic-response":{"status":"ok","song":{"id":"s1","title":"Tide","artist":"Waves","album":"Sea","albumId":"a1","year":2021,"genre":"Ambient","bitRate":320,"discNumber":2,"playCount":7}}}"#
+                } else if search_fails {
+                    r#"{"subsonic-response":{"status":"failed","error":{"code":0,"message":"http://dj:secret@private.example/rest/search3"}}}"#
+                } else {
+                    // Same song on two other albums (one twice), a cover by
+                    // someone else, a near title and a song without album.
+                    r#"{"subsonic-response":{"status":"ok","searchResult3":{"song":[
+                        {"id":"s1","title":"Tide","artist":"Waves","albumId":"a1"},
+                        {"id":"s2","title":" tide ","artist":"WAVES","album":"Best of","albumId":"a2"},
+                        {"id":"s3","title":"Tide","artist":"Waves","album":"Best of","albumId":"a2"},
+                        {"id":"s4","title":"Tide","artist":"Someone","albumId":"a3"},
+                        {"id":"s5","title":"Tide (Live)","artist":"Waves","albumId":"a4"},
+                        {"id":"s6","title":"Tide","artist":"Waves"},
+                        {"id":"s7","title":"Tide","artist":"Waves","album":"Live","albumId":"a5"}]}}}"#
+                };
+                write!(socket, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).unwrap();
+                socket.write_all(body.as_bytes()).unwrap();
+            });
+            let (_directory, bot, token) = test_bot(&server.url, 1);
+            let view = song(
+                State(bot),
+                Path(token),
+                Query(ItemQuery {
+                    library: 0,
+                    id: "s1".into(),
+                }),
+            )
+            .await
+            .ok()
+            .unwrap()
+            .0;
+            assert_eq!(view.song.title, "Tide");
+            assert_eq!(
+                view.details,
+                SongDetails {
+                    year: Some(2021),
+                    genre: Some("Ambient".into()),
+                    bit_rate: Some(320),
+                    disc_number: Some(2),
+                    play_count: Some(7),
+                }
+            );
+            let albums: Vec<_> = view
+                .appearances
+                .iter()
+                .map(|track| track.album_id.as_deref().unwrap())
+                .collect();
+            if search_fails {
+                assert!(albums.is_empty());
+                let error = view.appearances_error.unwrap();
+                assert!(!error.contains("secret"), "{error}");
+            } else {
+                assert_eq!(albums, ["a1", "a2", "a5"]);
+                assert_eq!(
+                    view.appearances[0].id, "s1",
+                    "the song's own album comes first"
+                );
+                assert!(view.appearances_error.is_none());
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn sonic_lists_and_adds_follow_the_library_reply() {
+        let _exclusive = API_TESTS.lock().await;
+        let server = sonic_fixture("open");
+        let (_directory, mut bot, token) = test_bot(&server.url, 2);
+        let unique = Arc::get_mut(&mut bot).unwrap();
+        unique.players.push(Arc::new(crate::player::Player::new(
+            "Queue".into(),
+            50,
+            Ducking::default(),
+            unique.changes.clone(),
+        )));
+
+        let found = similar(
+            State(bot.clone()),
+            Path(token.clone()),
+            Query(ItemQuery {
+                library: 1,
+                id: "s1".into(),
+            }),
+        )
+        .await
+        .ok()
+        .unwrap()
+        .0;
+        assert_eq!((found.song.library, found.song.id.as_str()), (1, "s1"));
+        let found = serde_json::to_value(&found).unwrap();
+        // The list shows everything the library found.
+        let listed: Vec<_> = found["matches"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|found| found["track"]["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(listed, ["s1", "s1-copy", "s2"]);
+        assert_eq!(found["matches"][2]["track"]["library"], 1);
+        assert_eq!(found["matches"][2]["similarity"], 0.8);
+
+        let path = sonic_path(
+            State(bot.clone()),
+            Path(token.clone()),
+            Query(PathQuery {
+                library: 1,
+                from: "s1".into(),
+                to: "s2".into(),
+            }),
+        )
+        .await
+        .ok()
+        .unwrap()
+        .0;
+        assert_eq!(
+            path.matches
+                .iter()
+                .map(|found| (found.track.id.as_str(), found.similarity))
+                .collect::<Vec<_>>(),
+            [("s1", Some(1.0)), ("s2", Some(0.5))]
+        );
+        let missing = sonic_path(
+            State(bot.clone()),
+            Path(token.clone()),
+            Query(PathQuery {
+                library: 2,
+                from: "s1".into(),
+                to: "s2".into(),
+            }),
+        )
+        .await
+        .err()
+        .unwrap();
+        assert_eq!(
+            (missing.0, missing.1.as_str()),
+            (StatusCode::BAD_GATEWAY, "no such library")
+        );
+
+        let add = |kind, to: Option<&str>| Command::Add {
+            player: 0,
+            kind,
+            library: 1,
+            id: "s1".into(),
+            to: to.map(str::to_owned),
+            index: None,
+        };
+        let asked = server.requests().len();
+        let rejected = command(
+            State(bot.clone()),
+            Path(token.clone()),
+            Json(add(Kind::Path, None)),
+        )
+        .await
+        .err()
+        .unwrap();
+        assert_eq!(rejected.0, StatusCode::BAD_REQUEST);
+        assert_eq!(
+            server.requests().len(),
+            asked,
+            "rejected before the library"
+        );
+        command(
+            State(bot.clone()),
+            Path(token.clone()),
+            Json(add(Kind::Similar, None)),
+        )
+        .await
+        .ok()
+        .unwrap();
+        // Adding them all skips the seed and its identical copy.
+        assert_eq!(queue_ids(&bot), ["s2"]);
+        // Nothing plays, so the path is queued from its start.
+        command(
+            State(bot.clone()),
+            Path(token.clone()),
+            Json(add(Kind::Path, Some("s2"))),
+        )
+        .await
+        .ok()
+        .unwrap();
+        assert_eq!(queue_ids(&bot), ["s2", "s1", "s2"]);
+    }
+
+    #[tokio::test]
+    async fn sonic_endpoints_need_the_extension_redact_errors_and_reject_overload() {
+        let _exclusive = API_TESTS.lock().await;
+        async fn both(bot: &Arc<Bot>, token: &str) -> [ApiError; 2] {
+            let similar = similar(
+                State(bot.clone()),
+                Path(token.to_owned()),
+                Query(ItemQuery {
+                    library: 0,
+                    id: "s1".into(),
+                }),
+            );
+            let path = sonic_path(
+                State(bot.clone()),
+                Path(token.to_owned()),
+                Query(PathQuery {
+                    library: 0,
+                    from: "s1".into(),
+                    to: "s2".into(),
+                }),
+            );
+            let limit = Duration::from_secs(5);
+            [
+                tokio::time::timeout(limit, similar)
+                    .await
+                    .unwrap()
+                    .err()
+                    .unwrap(),
+                tokio::time::timeout(limit, path)
+                    .await
+                    .unwrap()
+                    .err()
+                    .unwrap(),
+            ]
+        }
+
+        let plain = sonic_fixture("plain");
+        let (_directory, bot, token) = test_bot(&plain.url, 1);
+        for error in both(&bot, &token).await {
+            assert_eq!(
+                (error.0, error.1.as_str()),
+                (
+                    StatusCode::BAD_GATEWAY,
+                    "this music library does not support sonic similarity"
+                )
+            );
+        }
+        let requests = plain.requests();
+        assert_eq!(requests.len(), 1);
+        assert!(requests[0].starts_with("GET /rest/getOpenSubsonicExtensions"));
+
+        let failing = sonic_fixture("failing");
+        let (_directory, bot, token) = test_bot(&failing.url, 1);
+        for error in both(&bot, &token).await {
+            assert_eq!(
+                (error.0, error.1.as_str()),
+                (
+                    StatusCode::BAD_GATEWAY,
+                    "the music library rejected the request (error 40)"
+                )
+            );
+        }
+        assert!(
+            failing
+                .requests()
+                .iter()
+                .any(|request| request.starts_with("GET /rest/findSonicPath"))
+        );
+
+        let occupied = LIBRARY_CALLS
+            .acquire_many(MAX_LIBRARY_CALLS as u32)
+            .await
+            .unwrap();
+        let asked = failing.requests().len();
+        for error in both(&bot, &token).await {
+            assert_eq!(
+                (error.0, error.1.as_str()),
+                (StatusCode::SERVICE_UNAVAILABLE, "the music library is busy")
+            );
+        }
+        assert_eq!(failing.requests().len(), asked);
+        drop(occupied);
     }
 }
