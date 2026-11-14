@@ -1768,7 +1768,8 @@ impl Desktop {
 
     /// While a dialog is open, keyboard focus stays inside it, so nothing
     /// behind it (the composer: Enter would send) takes keys; when it closes,
-    /// the composer gets focus back.
+    /// the composer gets focus back. Of stacked dialogs (a prompt over
+    /// Settings), the one in front keeps it: the last one drawn.
     fn keep_dialog_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let open = self.open_dialogs();
         let changed = std::mem::replace(&mut self.dialogs_seen, open) != open;
@@ -1779,8 +1780,15 @@ impl Desktop {
                 // (a prompt's input, the form's address) would look outside it
                 // and lose focus, so check again once the dialog is drawn.
                 window.request_animation_frame();
-            } else if !self.modal_focus.contains_focused(window, cx) {
-                window.focus(&self.modal_focus, cx);
+            } else if let Some(front) = self.modal_seen.get()
+                // The switcher, drawn over every dialog, keeps its own field
+                // focused (finder::overlay).
+                && !self.finder.is_open()
+            {
+                let scope = self.dialog_focus(front, cx);
+                if !scope.contains_focused(window, cx) {
+                    window.focus(&scope, cx);
+                }
             }
         } else if self.modal_seen.get().is_some() {
             self.composer
