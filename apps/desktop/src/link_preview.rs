@@ -15,6 +15,29 @@ pub struct ImageTicket {
     image: EmbeddedImage,
 }
 
+fn pixels_match_image(image: &EmbeddedImage, pixels: &nuschl_ipc::preview::Pixels) -> bool {
+    use nuschl_core::preview::{MAX_IMAGE_HEIGHT, MAX_IMAGE_WIDTH};
+
+    if pixels.width != image.width
+        || pixels.height != image.height
+        || pixels.width == 0
+        || pixels.height == 0
+        || pixels.width > MAX_IMAGE_WIDTH
+        || pixels.height > MAX_IMAGE_HEIGHT
+    {
+        return false;
+    }
+    let Some(bytes) = pixels
+        .width
+        .checked_mul(pixels.height)
+        .and_then(|pixels| pixels.checked_mul(4))
+        .and_then(|bytes| usize::try_from(bytes).ok())
+    else {
+        return false;
+    };
+    pixels.rgba.len() == bytes.div_ceil(3) * 4
+}
+
 #[derive(Default)]
 pub struct ComposerPreview {
     pub policy: Option<nuschl_session::config::LinkPreviewSettings>,
@@ -215,12 +238,11 @@ impl Desktop {
         }
         self.link_preview.pending = None;
         if self.preview_image_ticket().as_ref() == Some(&ticket) {
-            self.link_preview.pixels =
-                pixels
-                    .filter(|pixels| pixels.decode().is_some())
-                    .and_then(|pixels| {
-                        crate::document::render_image(pixels.width, pixels.height, &pixels.rgba)
-                    });
+            self.link_preview.pixels = pixels
+                .filter(|pixels| pixels_match_image(&ticket.image, pixels))
+                .and_then(|pixels| {
+                    crate::document::render_image(pixels.width, pixels.height, &pixels.rgba)
+                });
             self.link_preview.settled = Some(ticket);
         }
         self.sync_link_preview(cx);
@@ -382,13 +404,42 @@ pub fn settings(this: &Desktop, cx: &mut Context<Desktop>) -> AnyElement {
 #[cfg(test)]
 mod tests {
     // GPUI's prelude also exports a test attribute.
-    use super::{Mode, PolicyWrites, Settings};
+    use super::{EmbeddedImage, Mode, PolicyWrites, Settings, pixels_match_image};
+    use base64::Engine as _;
+    use nuschl_core::preview::ImageMime;
+    use nuschl_ipc::preview::Pixels;
 
     fn choice(mode: Mode) -> Settings {
         Settings {
             mode,
             ..Settings::default()
         }
+    }
+
+    #[test]
+    fn carried_pixels_match_the_exact_requested_dimensions_before_rendering() {
+        let image = EmbeddedImage {
+            mime: ImageMime::Png,
+            data: vec![1],
+            width: 80,
+            height: 40,
+            alt: "Owned fixture".into(),
+        };
+        let mut pixels = Pixels {
+            width: 40,
+            height: 80,
+            rgba: base64::engine::general_purpose::STANDARD.encode(vec![0; 80 * 40 * 4]),
+        };
+        assert!(pixels.is_bounded());
+        assert!(!pixels_match_image(&image, &pixels));
+        pixels.width = 80;
+        pixels.height = 40;
+        assert!(pixels_match_image(&image, &pixels));
+        pixels.rgba.pop();
+        assert!(!pixels_match_image(&image, &pixels));
+        pixels.width = u32::MAX;
+        pixels.height = u32::MAX;
+        assert!(!pixels_match_image(&image, &pixels));
     }
 
     #[test]
