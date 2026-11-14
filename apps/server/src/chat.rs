@@ -103,7 +103,6 @@ impl State {
             deleted_ms: row.deleted_ms.unwrap_or(0),
             delete_reason: row.delete_reason.unwrap_or(0),
             edits: row.edits,
-            preview: None,
         }
     }
 

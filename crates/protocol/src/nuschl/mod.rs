@@ -12,7 +12,6 @@ pub mod v1 {
     mod redacted;
 }
 
-pub mod preview;
 pub mod version;
 
 use v1::error::Code;

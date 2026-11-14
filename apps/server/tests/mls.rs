@@ -909,7 +909,6 @@ async fn a_direct_conversation_through_the_delivery_service() {
                 format: v1::Format::Text as i32,
                 content: "plaintext".into(),
                 reply_to: 0,
-                preview: None,
             },
             id,
         )
@@ -925,7 +924,6 @@ async fn a_direct_conversation_through_the_delivery_service() {
                 target: sent.seq,
                 format: v1::Format::Text as i32,
                 content: "edited".into(),
-                preview: None,
             },
             id,
         )
@@ -991,7 +989,6 @@ async fn the_end_to_end_switch_admits_only_what_can_take_part() {
                 format: v1::Format::Text as i32,
                 content: "hello".into(),
                 reply_to: 0,
-                preview: None,
             },
             id,
         )
@@ -1040,7 +1037,6 @@ async fn the_end_to_end_switch_admits_only_what_can_take_part() {
                 format: v1::Format::Text as i32,
                 content: "hello".into(),
                 reply_to: 0,
-                preview: None,
             },
             id,
         )

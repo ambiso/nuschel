@@ -914,7 +914,7 @@ pub fn random_key() -> [u8; 16] {
 pub enum NuschlEvent {
     Error(v1::Error),
     Ack(v1::ChatAck),
-    Chat(Box<v1::ChatEvent>),
+    Chat(v1::ChatEvent),
     Page(v1::HistoryPage),
     /// Local crypto-worker output, never decoded from a server frame.
     DecryptedPage {
@@ -955,7 +955,7 @@ fn nuschl_event(frame: &ControlFrame) -> Result<Option<NuschlEvent>, Error> {
             {
                 return Err(invalid());
             }
-            NuschlEvent::Chat(Box::new(event))
+            NuschlEvent::Chat(event)
         }
         kind::HISTORY_PAGE => {
             let page: v1::HistoryPage = decode(frame)?;
@@ -3543,7 +3543,6 @@ impl State {
                 format: v1::Format::Text as i32,
                 content: pending.content.clone(),
                 reply_to: 0,
-                preview: None,
             },
         );
         let attempts = self
@@ -7151,10 +7150,7 @@ mod tests {
                 ..Default::default()
             }),
         };
-        state
-            .nuschl(NuschlEvent::Chat(Box::new(chat)), &tx)
-            .await
-            .unwrap();
+        state.nuschl(NuschlEvent::Chat(chat), &tx).await.unwrap();
         let Ok(SessionEvent::Nuschl(NuschlEvent::Chat(_))) = rx.try_recv() else {
             panic!("no chat event")
         };

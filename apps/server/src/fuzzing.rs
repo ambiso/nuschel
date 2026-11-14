@@ -246,7 +246,6 @@ mod tests {
             format: 1,
             content: "x".into(),
             reply_to: 0,
-            preview: None,
         }
         .encode_to_vec();
         harness.run(&[&[1, 33, send.len() as u8][..], &send].concat());
@@ -289,7 +288,6 @@ mod tests {
                         format: 1,
                         content: "x".into(),
                         reply_to: 0,
-                        preview: None,
                     }
                     .encode_to_vec(),
                 ),
