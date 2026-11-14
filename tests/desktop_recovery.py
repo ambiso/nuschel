@@ -99,8 +99,11 @@ class RecoveryTest(DesktopTest):
             self.capture("reconnecting")
             murmur.start()
             self.peer = Client(self.args.binaries, "127.0.0.1", port, pin, "RecoveryPeer", self.root / "peer")
-            back = self.peer.wait(lambda e: e["kind"] == "user" and e["user"]["name"] == "RecoveryDesktop"
-                                  and e["user"]["channel"] == 1, timeout=60)["user"]
+            # The desktop can rejoin before the peer connects; the peer then learns
+            # of it while connecting, so read the peer's view of the users.
+            back = eventually(lambda: next((user for user in list(self.peer.users.values())
+                                            if user["name"] == "RecoveryDesktop" and user["channel"] == 1), None),
+                              "the desktop did not rejoin Lobby after the server restart", timeout=60)
             assert back["self_muted"], "reconnect lost the mute state"
             self.wait_for("list item", "Disconnected from", partial=True)
             self.capture("reconnected")
@@ -108,6 +111,7 @@ class RecoveryTest(DesktopTest):
 
             # Starting Nuschl again (no link) connects and rejoins the channel it was last in.
             terminate(self.app)
+            self.peer.wait(lambda e: e["kind"] == "user_removed" and e["session"] == back["session"])
             self.start_app()
             again = self.peer.wait(lambda e: e["kind"] == "user" and e["user"]["name"] == "RecoveryDesktop"
                                    and e["user"]["channel"] == 1, timeout=60)["user"]

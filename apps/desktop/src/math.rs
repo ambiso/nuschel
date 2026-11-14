@@ -299,7 +299,7 @@ fn evict(cache: &mut Cache) {
 /// The math worker's loop on the tokio runtime: one formula at a time,
 /// stopping the worker when idle.
 async fn serve(mut jobs: mpsc::Receiver<Job>) {
-    let executable = nuschl_session::workers::sibling("nuschl-math-worker")
+    let executable = nuschl_sandbox::sibling("nuschl-math-worker")
         .unwrap_or_else(|_| "nuschl-math-worker".into());
     let mut worker = MathWorker::new(executable);
     loop {
@@ -324,7 +324,9 @@ async fn serve(mut jobs: mpsc::Receiver<Job>) {
             .map_err(|error| match error {
                 nuschl_ipc::host::Error::Rejected(reason) => reason,
                 nuschl_ipc::host::Error::Timeout => "it took too long".into(),
-                nuschl_ipc::host::Error::MissingSandboxHelper(helper) => {
+                nuschl_ipc::host::Error::Sandbox(nuschl_sandbox::Error::MissingSandboxHelper(
+                    helper,
+                )) => {
                     format!("{helper} is missing")
                 }
                 _ => "the math worker failed".into(),

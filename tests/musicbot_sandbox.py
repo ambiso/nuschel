@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: EUPL-1.2
-"""Exercise the exact IPC musicbot launcher against owned file/network canaries.
+"""Exercise the exact musicbot codec launcher against owned file/network canaries.
 
-Compile musicbot_sandbox.rs with the packaged bot's nuschl-ipc rlib and its
+Compile musicbot_sandbox.rs with the packaged bot's nuschl-sandbox rlib and its
 normal dependency search paths; this script never opens host devices/profiles.
 This proves the launch profile, not the whole decoder or systemd integration.
 """

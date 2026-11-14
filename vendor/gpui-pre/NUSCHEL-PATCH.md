@@ -1,8 +1,9 @@
 # gpui-pre (vendored from crates.io, Apache-2.0)
 
 Patched for a window zoom, Nuschel's Ctrl+= / Ctrl+- / Ctrl+0 (see the
-`Nuschel patch` comments in `src/window.rs` and `src/platform.rs`), and so
-that custom elements can handle accessibility actions (`src/element.rs`). The
+`Nuschel patch` comments in `src/window.rs` and `src/platform.rs`), so
+that custom elements can handle accessibility actions (`src/element.rs`), and
+so that applications can draw emoji as their own images (`src/text_system`). The
 examples and benchmarks were removed.
 
 `Window::set_zoom(zoom, cx)` scales the whole window like a browser's page
@@ -48,6 +49,30 @@ need dev-dependencies that are not in `Cargo.lock` (proptest, postage,
 futures-concurrency) and Zed's assets. They run in a throwaway build that
 gates every other test module out of its own copy of the source; the source
 here keeps all of upstream's tests.
+
+Emoji drawn as the application's images (`src/text_system/emoji_images.rs`,
+`paint_line` in `src/text_system/line.rs`). An application registers one
+`EmojiImages` source per process (`set_emoji_images`); Nuschel's is the
+desktop's Twemoji (`apps/desktop/src/emoji.rs`). When GPUI paints a
+`ShapedLine` or `WrappedLine` (labels, `StyledText`, text inputs), it asks the
+source which byte ranges of the line's text are emoji to draw as images, and
+paints each as one square image, centred over the advance its glyphs were
+shaped with, instead of those glyphs. Shaping, wrapping, hit testing,
+selection and underlines are unchanged; a bare `LineLayout::paint` has no
+text and keeps its glyphs. The decision is made from the text, not from which
+font shaped it, so text presentation (U+FE0E, and characters such as ™ that
+are text by default) stays text whatever fonts are installed, and DejaVu
+Sans's black-and-white smileys no longer win over colour emoji. Ranges the
+source returns are checked (ascending, disjoint, on character boundaries).
+Images are rasterised with GPUI's SVG renderer on first paint and kept in a
+process-wide cache of at most 4096 (image, size) entries and edges up to 512
+device pixels; beyond those bounds, or if an image does not render, the
+glyphs are painted as before. ASCII-only lines skip the lookup.
+
+The emoji painting has no test in this crate (see above: its test target does
+not build here). The desktop tests the source's decisions
+(`emoji::tests`), and `tests/emoji_smoke.py` checks the painted result in a
+real window.
 
 `WindowDecorations::Compositor` (`src/platform.rs`) asks for no decoration
 mode, so the compositor picks one. xdg-decoration has three requests,

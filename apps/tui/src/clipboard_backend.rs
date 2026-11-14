@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! Focus-free clipboard providers. Never run wl-clipboard's core-protocol
 //! popup fallback: only the reviewed Rust helper can read native Wayland.
-use crate::clipboard::{ReadError, png_from};
 use std::{process::Stdio, time::Duration};
 use tokio::{io::AsyncReadExt, process::Command};
 
 const PROBE_BYTES: u64 = 16 * 1024;
 const PROBE_TIME: Duration = Duration::from_secs(2);
+const PNG_BYTES: u64 = 8 * 1024 * 1024;
+const PNG_TIME: Duration = Duration::from_secs(3);
 
 pub struct ClipboardImage {
     pub bytes: Vec<u8>,
@@ -75,9 +76,7 @@ async fn read_provider() -> Result<ClipboardImage, String> {
         if offered.ext || offered.wlr {
             let version = probe("wl-paste", &["--version"]).await;
             if version.as_deref().is_ok_and(known_native_helper) {
-                let bytes = png_from("wl-paste", &["--type", "image/png", "--no-newline"])
-                    .await
-                    .map_err(ReadError::message)?;
+                let bytes = read_png("wl-paste", &["--type", "image/png", "--no-newline"]).await?;
                 return Ok(ClipboardImage {
                     bytes,
                     provider: "Wayland data-control",
@@ -118,12 +117,11 @@ async fn read_provider() -> Result<ClipboardImage, String> {
             }
             return Err("The local clipboard does not provide a PNG image through the X11 clipboard connection.".into());
         }
-        let bytes = png_from(
+        let bytes = read_png(
             "xclip",
             &["-selection", "clipboard", "-target", "image/png", "-out"],
         )
-        .await
-        .map_err(ReadError::message)?;
+        .await?;
         return Ok(ClipboardImage {
             bytes,
             provider: if wayland {
@@ -136,7 +134,22 @@ async fn read_provider() -> Result<ClipboardImage, String> {
     Err("No local Wayland or X11 clipboard connection is available.".into())
 }
 
-async fn probe(program: &str, arguments: &[&str]) -> Result<Vec<u8>, ()> {
+enum Failure {
+    Unavailable,
+    TooLarge,
+    Failed,
+    Timeout,
+}
+
+/// `program` with fixed `arguments` under prlimit (256 MiB, 3 CPU seconds):
+/// at most `limit` bytes of its output within `deadline`. A helper that
+/// writes more, fails or is late is killed.
+async fn run(
+    program: &str,
+    arguments: &[&str],
+    limit: u64,
+    deadline: Duration,
+) -> Result<Vec<u8>, Failure> {
     let mut child = Command::new("prlimit")
         .args(["--as=268435456", "--cpu=3", "--", program])
         .args(arguments)
@@ -145,29 +158,48 @@ async fn probe(program: &str, arguments: &[&str]) -> Result<Vec<u8>, ()> {
         .stderr(Stdio::null())
         .kill_on_drop(true)
         .spawn()
-        .map_err(|_| ())?;
-    let mut output = child.stdout.take().ok_or(())?;
-    let result = tokio::time::timeout(PROBE_TIME, async {
+        .map_err(|_| Failure::Unavailable)?;
+    let mut output = child.stdout.take().ok_or(Failure::Failed)?;
+    let result = tokio::time::timeout(deadline, async {
         let mut bytes = Vec::new();
-        (&mut output)
-            .take(PROBE_BYTES + 1)
+        let mut output = (&mut output).take(limit + 1);
+        output
             .read_to_end(&mut bytes)
             .await
-            .map_err(|_| ())?;
-        if bytes.len() as u64 > PROBE_BYTES {
-            return Err(());
+            .map_err(|_| Failure::Failed)?;
+        if bytes.len() as u64 > limit {
+            return Err(Failure::TooLarge);
         }
-        if !child.wait().await.map_err(|_| ())?.success() {
-            return Err(());
+        match child.wait().await {
+            Ok(status) if status.success() => Ok(bytes),
+            _ => Err(Failure::Failed),
         }
-        Ok(bytes)
     })
     .await
-    .unwrap_or(Err(()));
+    .unwrap_or(Err(Failure::Timeout));
     if result.is_err() {
         let _ = child.kill().await;
     }
     result
+}
+
+async fn probe(program: &str, arguments: &[&str]) -> Result<Vec<u8>, ()> {
+    run(program, arguments, PROBE_BYTES, PROBE_TIME)
+        .await
+        .map_err(|_| ())
+}
+
+/// Encoded PNG for the content worker; this process never decodes it.
+async fn read_png(program: &str, arguments: &[&str]) -> Result<Vec<u8>, String> {
+    match run(program, arguments, PNG_BYTES, PNG_TIME).await {
+        Ok(bytes) if !bytes.is_empty() => Ok(bytes),
+        Err(Failure::Unavailable) => Err(format!(
+            "{program} is unavailable; install it to read PNG clipboard images."
+        )),
+        Err(Failure::TooLarge) => Err("The clipboard image exceeds 8 MiB.".into()),
+        Err(Failure::Timeout) => Err("The clipboard read timed out; no image was attached.".into()),
+        Ok(_) | Err(Failure::Failed) => Err("The clipboard does not provide a PNG image.".into()),
+    }
 }
 
 #[cfg(test)]

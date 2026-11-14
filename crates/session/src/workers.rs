@@ -6,68 +6,40 @@ use nuschl_ipc::{
     Envelope, LiveMediaEvent, LiveMediaRequest, MAX_FRAME_BYTES, PROTOCOL_VERSION, StorageRequest,
     StorageResponse, TransferEvent, TransferRequest, write_frame,
 };
+use nuschl_sandbox::{Role, Worker};
 use serde::{Serialize, de::DeserializeOwned};
-use std::{
-    path::{Path, PathBuf},
-    process::Stdio,
-};
+use std::path::Path;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
-    process::{Child, ChildStdin, ChildStdout},
+    process::{ChildStdin, ChildStdout},
     sync::mpsc,
     time::{Duration, timeout},
 };
 
-pub fn sibling(name: &str) -> std::io::Result<PathBuf> {
-    let current = std::env::current_exe()?;
-    let parent = current
-        .parent()
-        .ok_or_else(|| std::io::Error::other("executable has no directory"))?;
-    Ok(parent.join(format!("{name}{}", std::env::consts::EXE_SUFFIX)))
+/// The sibling executable `name`, started confined as `role`.
+fn start(name: &str, role: Role) -> Result<Worker, Error> {
+    let command = nuschl_sandbox::command(&nuschl_sandbox::sibling(name)?, role, &[]);
+    let worker = command.and_then(nuschl_sandbox::spawn);
+    worker.map_err(|error| Error::Worker(error.to_string()))
 }
 
 pub struct Storage {
-    child: Child,
-    input: ChildStdin,
-    output: ChildStdout,
+    worker: Worker,
     request_id: u64,
-    _containment: nuschl_ipc::host::Containment,
 }
 impl Storage {
     pub fn start(directory: &Path) -> Result<Self, Error> {
-        let executable = sibling("nuschl-storage-worker")?;
-        let mut command = nuschl_ipc::host::storage_sandbox_command(&executable, directory)
-            .map_err(|e| Error::Worker(e.to_string()))?;
-        let mut child = command
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .kill_on_drop(true)
-            .spawn()?;
-        let containment =
-            nuschl_ipc::host::contain(&child).map_err(|e| Error::Worker(e.to_string()))?;
-        let input = child
-            .stdin
-            .take()
-            .ok_or_else(|| Error::Worker("storage stdin missing".into()))?;
-        let output = child
-            .stdout
-            .take()
-            .ok_or_else(|| Error::Worker("storage stdout missing".into()))?;
         Ok(Self {
-            child,
-            input,
-            output,
+            worker: start("nuschl-storage-worker", Role::Storage { directory })?,
             request_id: 0,
-            _containment: containment,
         })
     }
     async fn request(&mut self, payload: StorageRequest) -> Result<StorageResponse, Error> {
         self.request_id += 1;
         let id = self.request_id;
         let exchange = async {
-            send(&mut self.input, &Envelope::new(id, payload)).await?;
-            let response: Envelope<StorageResponse> = receive(&mut self.output).await?;
+            send(&mut self.worker.input, &Envelope::new(id, payload)).await?;
+            let response: Envelope<StorageResponse> = receive(&mut self.worker.output).await?;
             if response.request_id != id {
                 return Err(Error::Worker("storage response ID mismatch".into()));
             }
@@ -79,7 +51,7 @@ impl Storage {
         match timeout(Duration::from_secs(5), exchange).await {
             Ok(Ok(response)) => Ok(response),
             result => {
-                let _ = self.child.kill().await;
+                let _ = self.worker.child.kill().await;
                 match result {
                     Ok(Err(error)) => Err(error),
                     _ => Err(Error::Timeout("waiting for local history")),
@@ -247,7 +219,7 @@ impl Storage {
         }
     }
     pub async fn stop(mut self) {
-        let _ = self.child.kill().await;
+        let _ = self.worker.child.kill().await;
     }
 }
 
@@ -280,25 +252,12 @@ impl Media {
     }
 
     pub fn start() -> Result<Self, Error> {
-        let executable = sibling("nuschl-media-worker")?;
-        let mut command = nuschl_ipc::host::media_sandbox_command(&executable)
-            .map_err(|e| Error::Worker(e.to_string()))?;
-        let mut child = command
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .kill_on_drop(true)
-            .spawn()?;
-        let containment =
-            nuschl_ipc::host::contain(&child).map_err(|e| Error::Worker(e.to_string()))?;
-        let mut input = child
-            .stdin
-            .take()
-            .ok_or_else(|| Error::Worker("media stdin missing".into()))?;
-        let mut output = child
-            .stdout
-            .take()
-            .ok_or_else(|| Error::Worker("media stdout missing".into()))?;
+        let Worker {
+            mut child,
+            mut input,
+            mut output,
+            containment,
+        } = start("nuschl-media-worker", Role::Media)?;
         // One worker plays every server's voice: room for a burst of packets
         // from several talkers without crowding out control requests.
         let (tx, mut rx) = mpsc::channel(256);
@@ -359,20 +318,12 @@ impl Transfer {
     }
 
     pub fn start(file: Option<&Path>) -> Result<Self, Error> {
-        let executable = sibling("nuschl-transfer-worker")?;
-        let mut command = nuschl_ipc::host::transfer_sandbox_command(&executable, file)
-            .map_err(|e| Error::Worker(e.to_string()))?;
-        let mut child = command
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .kill_on_drop(true)
-            .spawn()?;
-        let containment =
-            nuschl_ipc::host::contain(&child).map_err(|e| Error::Worker(e.to_string()))?;
-        let (Some(mut input), Some(mut output)) = (child.stdin.take(), child.stdout.take()) else {
-            return Err(Error::Worker("transfer worker pipes missing".into()));
-        };
+        let Worker {
+            mut child,
+            mut input,
+            mut output,
+            containment,
+        } = start("nuschl-transfer-worker", Role::Transfer { file })?;
         let (commands, mut requests) = mpsc::channel(4);
         // Few events in flight: a slow disk slows the worker, and the sender with it.
         let (events_tx, events) = mpsc::channel(8);

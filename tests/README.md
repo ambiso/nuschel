@@ -9,6 +9,10 @@ The test runs the actual GPUI client under Xvfb against a stock Mumble server,
 with synthetic audio on a private PulseAudio daemon. It never opens the host microphone.
 Screenshots are copied into the test result.
 
+Steps listed in `quarantine.txt` are known to be flaky: they still run, and a
+failure is logged as `QUARANTINED FAIL` with its issue and does not fail the
+check (`quarantine.py`). A feature that relies on a quarantined step needs its own proof.
+
 Flake checks run their VMs inside the Nix daemon. Built drivers run by hand go
 through `tests/vm_driver.py` ([development.md](../docs/development.md#recipes)),
 which places all VM state in a fresh owned disk root and runs
@@ -82,7 +86,7 @@ matched frame-time performance. No host clipboard or devices are used.
 | --- | --- |
 | `udp_voice.py` | Encrypted OCB2 UDP voice, forced TCP and mixed relay; jitter and 5% loss with netem; inbound UDP blocked (IPv4 and IPv6) falls back to the TLS tunnel and recovers |
 | `protocol_features.py` | Whisper/shout isolation, channel listening, permissions, user stats, comments and avatars, self-registration, SuperUser administration (registered users, bans, ACL, kick), OpenSSL-made PKCS#12 import (channel links are not yet covered) |
-| `media_live.py` | Live media worker on a private PulseAudio: jitter-buffer continuity, reuse of a system echo canceller with playback routed to its reference, echo modes and overrides, the Settings echo test at -31 dB coupling with and without Nuschl's canceller, clipping detection that leaves system levels untouched |
+| `media_live.py` | Live media worker on a private PulseAudio: jitter-buffer continuity, reuse of a system echo canceller with playback routed to its reference, echo modes and overrides, the Settings echo test at -31 dB coupling with Nuschl's canceller on and off and double talk, in a room on one clock (the speakers reach the microphone 30 ms later through the LADSPA SDK's delay line), clipping detection that leaves system levels untouched |
 | `pipewire_recovery.py` | A private PipeWire + WirePlumber + pipewire-pulse session with virtual nodes only: playback, PipeWire restart with the replacement worker pinned to PipeWire (no ALSA fallback), pipewire-pulse restart, PipeWire echo-cancel reuse without touching session defaults, device lists without other applications' streams, an RNNoise filter-chain behind echo-cancel (both of Nuschl's stages off, playback to the canceller) |
 | `opus_eval.py` | opus-pure against reference libopus: decoder conformance in SILK, Hybrid and CELT, encoder interop both ways, 5,000 hostile packets |
 | `stock_client.py` | The real stock Mumble GUI with a certificate exported by Nuschl; voice in both directions |
@@ -107,7 +111,12 @@ mentions and text-only jumps over AT-SPI, with screenshots. Against a loopback `
 (edits, deletions and their authorisation, typing, direct conversations, with
 `nuschl-cli`) and `conversation_screenshots.py` (the desktop with edits, tombstones,
 the typing line, a direct conversation from server history, keyboard links, and the
-local cache it leaves, in a private headless GNOME Shell). The client SDK without a
+local cache it leaves, in a private headless GNOME Shell) and `emoji_smoke.py
+<binaries> --output DIR` (Twemoji in messages and the composer, checked by pixel
+colours: `™` stays text and `™️` is an image; the picker's search, skin tone,
+Shift+Enter, Shift+click and click insert the expected text, and it is what is sent;
+short codes type emoji; an emoji in a message shows its tooltip and card;
+docs/emoji.md). The client SDK without a
 UI: `with_local_nuschld.py <binaries> sdk_headless.py <binaries> --port PORT` runs
 `crates/client/examples/headless.rs` (three people connect, register, meet in a
 channel, send, receive, edit, and load the server's history through the SDK alone).
@@ -174,7 +183,7 @@ the inside (docs/windows-sandbox.md). Cross-build it with the workers
 confinement --no-run`), copy the test executable and the six worker executables
 into one folder in the guest (`windows_vm.py push`, then `Get-NuschlTestFile -Name NAME -OutFile PATH`), and
 run `confinement.exe --workers <folder>` there. It starts itself through
-`nuschl_ipc::host`'s real commands as each worker kind; inside, it must fail to read
+`nuschl_sandbox`'s real commands as each worker kind; inside, it must fail to read
 a file it creates in Documents, list or write the profile, `C:\Users\Public` or the
 user's TEMP, connect to 10.0.2.100:80 (only transfer may), start a process, open the
 test's own process to query or terminate it, commit more memory than its job
@@ -199,6 +208,9 @@ Result on 2026-11-11 (Windows 11 25H2): all checks passed for every worker kind,
 including both transfer directions; the desktop, run in the VM against a stock Murmur
 on host loopback, rendered an image message, stored history and captured from the
 microphone with its workers in AppContainers.
+On 2026-11-14 the confinement checks ran again through `nuschl_sandbox` (revision
+e6076e2a, docs/windows-sandbox.md): all passed for every worker kind, nested and not,
+including both transfer directions.
 
 The VM also checks worker confinement, SQLite/PostgreSQL pagination and the NixOS
 module's hardened database preflight. `vm-server` runs the protocol suites against

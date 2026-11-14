@@ -289,6 +289,9 @@ DOM, so a Web Worker can host it.
   with an app-opening explanation until the browser implements that negotiation;
   they must never silently fall back to legacy Mumble. Malformed or ambiguous
   security options also fail closed. `npm test` covers these fragment rules.
+- Emoji in messages are Twemoji images served from the same origin, and the smiley
+  button beside the composer (or Ctrl+.) opens the picker; the composer stays a
+  plain textarea ([emoji.md](emoji.md)).
 - Tests: `cargo test -p nuschl-client-wasm` runs the Session through the real relay
   to a TLS server (and to Murmur with `NUSCHL_TEST_MURMUR`); `tests/web_client.py
   <binaries> --murmur <mumble-server>` runs the WebAssembly build in Node.js (the
