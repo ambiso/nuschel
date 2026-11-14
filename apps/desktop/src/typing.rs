@@ -20,6 +20,7 @@ impl Desktop {
         let empty = self.composer.read(cx).value().trim().is_empty();
         self.client.set_time(crate::state::monotonic_ms());
         self.client.composing(!empty && self.editing.is_none());
+        self.sync_link_preview(cx);
     }
 
     /// Typing indicators and temporary notices fade even on an idle connection.

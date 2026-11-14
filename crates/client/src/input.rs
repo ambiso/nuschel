@@ -26,6 +26,19 @@ use std::collections::BTreeMap;
 #[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug)]
 pub enum Input {
+    /// Local wire-queue/refusal receipt, not remote-server delivery proof.
+    LinkPreviewSendResult {
+        server: String,
+        generation: u64,
+        id: crate::preview::SendId,
+        result: Result<(), String>,
+    },
+    /// A sender fetch result. The SDK retains all original destination,
+    /// source and policy authority; this ID cannot select a new target.
+    LinkPreview {
+        id: crate::preview::RequestId,
+        result: Result<crate::preview::Card, crate::preview::Unavailable>,
+    },
     /// What a server said on this connection.
     Server {
         server: String,

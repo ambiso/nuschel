@@ -38,6 +38,7 @@ use tokio::{
     sync::{mpsc, watch},
 };
 
+mod link_preview;
 mod media;
 
 /// Answers a driver's connections wait for: history pages and edits or
@@ -865,7 +866,10 @@ fn scoped_connection<'a>(
         .get(server)
         .filter(|connection| connection.generation == generation)
         .ok_or("This action belongs to an older connection.")?;
-    if !matches!(command, Command::Scoped { .. }) {
+    if !matches!(
+        command,
+        Command::Scoped { .. } | Command::SendPreview { .. }
+    ) {
         return Err("Missing action authority.".into());
     }
     if matches!(command,Command::Scoped { command,.. } if matches!(command.as_ref(),
@@ -944,6 +948,7 @@ pub struct Driver {
     plugin_data: watch::Sender<bool>,
     /// The media worker every connection shares.
     media: media::Hub,
+    previews: link_preview::Hub,
     render_permits: std::sync::Arc<tokio::sync::Semaphore>,
     storage_task: tokio::task::JoinHandle<()>,
     content_task: tokio::task::JoinHandle<()>,
@@ -1065,6 +1070,7 @@ impl Driver {
             sender.clone(),
             (settings.subscribe(), voice_keys.subscribe()),
         );
+        let previews = link_preview::Hub::new(&handle, sender.clone());
         let backend = Self {
             handle,
             crypto,
@@ -1079,6 +1085,7 @@ impl Driver {
             voice_keys,
             plugin_data: watch::Sender::new(false),
             media,
+            previews,
             render_permits: std::sync::Arc::new(tokio::sync::Semaphore::new(2)),
             storage_task,
             content_task,
@@ -2020,6 +2027,13 @@ async fn connect_once(
                 if let Some(session) = own_session { mark_talking(events, &id, generation, &mut speaking, session, !end).await; }
             },
             Some(event) = incoming.recv() => match event {
+                SessionEvent::LinkPreviewSendResult { id: send, result } => {
+                    if let Some(send) = crate::preview::SendId::from_raw(send) {
+                        let _ = events.send(Event::Input(Input::LinkPreviewSendResult {
+                            server: id.clone(), generation, id: send, result,
+                        })).await;
+                    }
+                },
                 SessionEvent::ChatPending(pending) => {
                     if restore.unacked.len() < 256 { restore.unacked.push(pending); }
                 },
@@ -3373,6 +3387,36 @@ fn pinned_host(audio_host: &(Option<String>, tokio::time::Instant)) -> Option<St
 }
 
 impl Platform for Driver {
+    fn send_link_preview(&self, request: crate::preview::PreviewSend) -> Result<(), String> {
+        let (server, generation, command) = link_preview::scoped_send(request)?;
+        let mut command = Some(command);
+        if let Some((expected, scoped)) =
+            scoped_command(self as *const Self as usize, &server, &mut command)?
+        {
+            if expected != generation {
+                return Err("The preview action belongs to an older connection.".into());
+            }
+            return self.command_scoped(&server, generation, scoped);
+        }
+        self.command_scoped(
+            &server,
+            generation,
+            command.ok_or("Missing preview send authority.")?,
+        )
+    }
+
+    fn link_preview(
+        &self,
+        settings: nuschl_link_preview::policy::Settings,
+        ticket: crate::preview::FetchTicket,
+    ) -> Result<(), nuschl_link_preview::metadata::Unavailable> {
+        self.previews.fetch(settings, ticket)
+    }
+
+    fn cancel_link_preview(&self, id: nuschl_link_preview::draft::RequestId) {
+        self.previews.cancel(id);
+    }
+
     fn connect(
         &self,
         bookmark: ServerBookmark,
@@ -3821,6 +3865,7 @@ fn server_event(event: SessionEvent) -> Result<ServerEvent, Option<Unmodelled>> 
         SessionEvent::Identity(event) => return Err(Some(Unmodelled::Identity(Box::new(event)))),
         SessionEvent::Mls(event) => return Err(Some(Unmodelled::Mls(Box::new(event)))),
         SessionEvent::Nuschl(_)
+        | SessionEvent::LinkPreviewSendResult { .. }
         | SessionEvent::ChatPending(_)
         | SessionEvent::Text(_)
         | SessionEvent::Audio(_) => return Err(None),

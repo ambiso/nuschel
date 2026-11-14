@@ -165,6 +165,12 @@ mod tests {
             })
             .is_none()
         );
+        for operation in [
+            crate::PreviewOperation::Prepare,
+            crate::PreviewOperation::Fetch,
+        ] {
+            assert!(policy(Role::Preview { operation }).is_none());
+        }
         for policy in [&content, &math, &storage, &keys, &media, &send, &receive] {
             // Only transfers reach the network; only storage and crypto get
             // a directory; every worker has a memory limit.

@@ -183,8 +183,9 @@ assert lib.assertMsg (
 ) "programs.nuschl.package does not default to this flake's package";
 assert lib.assertMsg (accepted == [ ]) "invalid bookmarks were accepted: ${toString accepted}";
 assert lib.assertMsg (lib.length settingFields > 15) "could not read ClientSettings' fields";
+# link_previews is the user's own choice: managed settings drop it.
 assert lib.assertMsg (accepts {
-  programs.nuschl.settings = lib.genAttrs settingFields (_: null);
+  programs.nuschl.settings = lib.genAttrs (lib.remove "link_previews" settingFields) (_: null);
 }) "programs.nuschl.settings refuses a field of ClientSettings: update settingNames";
 {
   files =
@@ -370,7 +371,7 @@ assert lib.assertMsg (accepts {
       machine.wait_for_unit("murmur.service")
 
       with subtest("the package is on the user's PATH with its desktop entry and icons"):
-          machine.succeed("su - alice -c 'nuschl --version' | grep -Fx 'nuschl 0.1.0'")
+          machine.succeed("su - alice -c 'nuschl --version' | grep -Fx 'nuschl ${(builtins.fromTOML (builtins.readFile ../Cargo.toml)).workspace.package.version}'")
           machine.succeed("test \"$(su - alice -c 'readlink -f \"$(command -v nuschl)\"')\" = ${nuschl}/bin/nuschl")
           machine.succeed("test -e /etc/profiles/per-user/alice/share/applications/org.nuschl.Nuschl.desktop")
           machine.succeed("test -e /etc/profiles/per-user/alice/share/icons/hicolor/scalable/apps/org.nuschl.Nuschl.svg")

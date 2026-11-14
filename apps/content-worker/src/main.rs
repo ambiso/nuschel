@@ -9,10 +9,21 @@ use nuschl_ipc::{
     write_frame,
 };
 
+mod preview;
+mod preview_fetch;
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // On Windows, the launch stage starts this worker again in its AppContainer.
     #[cfg(windows)]
     nuschl_sandbox_windows::launch_if_requested();
+    let mut arguments = std::env::args_os().skip(1);
+    match (arguments.next(), arguments.next()) {
+        (None, None) => {}
+        (Some(role), None) if role == "--preview-fetch" => {
+            return Ok(preview_fetch::run()?);
+        }
+        _ => return Err(io::Error::new(io::ErrorKind::InvalidInput, "invalid worker role").into()),
+    }
     let renderer = ContentRenderer::new()?;
     let mut input = io::stdin().lock();
     let mut output = io::stdout().lock();
@@ -39,6 +50,7 @@ fn answer(renderer: &ContentRenderer, request: ContentRequest) -> Result<Content
             .map_err(|_| "invalid base64".to_owned())
     };
     match request {
+        ContentRequest::Preview(request) => Ok(ContentResponse::Preview(preview::answer(request))),
         ContentRequest::Render { text } => renderer
             .render(&text)
             .map(ContentResponse::Rendered)

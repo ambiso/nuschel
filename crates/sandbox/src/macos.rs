@@ -205,6 +205,12 @@ mod tests {
         ] {
             assert_eq!(launch(role), expected, "{role:?}");
         }
+        for operation in [
+            crate::PreviewOperation::Prepare,
+            crate::PreviewOperation::Fetch,
+        ] {
+            assert!(super::command(me, Role::Preview { operation }).is_err());
+        }
         let media = launch(Role::Media);
         assert_eq!(media[..2], ["-p", MEDIA]);
         assert_eq!(media[media.len() - 2..], [&me_text, "--live"]);
