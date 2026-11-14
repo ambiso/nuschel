@@ -371,7 +371,7 @@ assert lib.assertMsg (accepts {
       machine.wait_for_unit("murmur.service")
 
       with subtest("the package is on the user's PATH with its desktop entry and icons"):
-          machine.succeed("su - alice -c 'nuschl --version' | grep -Fx 'nuschl 0.1.0'")
+          machine.succeed("su - alice -c 'nuschl --version' | grep -Fx 'nuschl ${(builtins.fromTOML (builtins.readFile ../Cargo.toml)).workspace.package.version}'")
           machine.succeed("test \"$(su - alice -c 'readlink -f \"$(command -v nuschl)\"')\" = ${nuschl}/bin/nuschl")
           machine.succeed("test -e /etc/profiles/per-user/alice/share/applications/org.nuschl.Nuschl.desktop")
           machine.succeed("test -e /etc/profiles/per-user/alice/share/icons/hicolor/scalable/apps/org.nuschl.Nuschl.svg")

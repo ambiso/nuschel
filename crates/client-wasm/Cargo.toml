@@ -53,7 +53,7 @@ web-sys = { version = "0.3.107", features = [
 # The session through the real relay to a TLS Mumble server on loopback (and to
 # Murmur with NUSCHL_TEST_MURMUR), natively.
 [dev-dependencies]
-nuschl-web-relay = { path = "../../apps/web-relay", version = "0.1.0" }
+nuschl-web-relay = { path = "../../apps/web-relay", version = "0.2.0" }
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 rcgen = { version = "0.14.10", default-features = false, features = ["ring", "pem"] }
 tempfile = "3.27.0"

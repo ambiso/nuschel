@@ -140,9 +140,10 @@
         # Twemoji images and emojibase names for both clients; the sources
         # are pinned together in nix/emoji.nix.
         emojiAssets = import ./nix/emoji.nix { inherit pkgs; };
+        version = (builtins.fromTOML (builtins.readFile ./Cargo.toml)).workspace.package.version;
         common = {
           pname = "nuschl";
-          version = "0.1.0";
+          inherit version;
           inherit src nativeBuildInputs buildInputs;
           strictDeps = true;
           cargoExtraArgs = "--workspace";
@@ -244,7 +245,7 @@
           mkdir -p "$out/share/licenses/nuschl"
           cp -R ${nativeNoticeBundle}/share/licenses/nuschl/. "$out/share/licenses/nuschl/"
         '';
-        witnessPackage = pkgs.runCommand "nuschl-witness-0.1.0" { meta.mainProgram = "nuschl-witness"; } ''
+        witnessPackage = pkgs.runCommand "nuschl-witness-${version}" { meta.mainProgram = "nuschl-witness"; } ''
           install -Dm755 ${crates.project.workspaceMembers.nuschl-witness.build}/bin/nuschl-witness "$out/bin/nuschl-witness"
           install -Dm644 ${./LICENSE} "$out/share/licenses/nuschl/EUPL-1.2"
           ${installNativeNotices}
@@ -252,7 +253,7 @@
         musicbotNoticeScope = "musicbot-${pkgs.stdenv.hostPlatform.rust.rustcTarget}";
         musicbotNotices = releaseNotices.forScope musicbotNoticeScope;
         musicbotPackage =
-          pkgs.runCommand "nuschl-musicbot-0.1.0"
+          pkgs.runCommand "nuschl-musicbot-${version}"
             {
               nativeBuildInputs = [ pkgs.makeWrapper ];
               meta.mainProgram = "nuschl-musicbot";
@@ -400,7 +401,7 @@
             )
           );
         package =
-          pkgs.runCommand "nuschl-0.1.0"
+          pkgs.runCommand "nuschl-${version}"
             {
               nativeBuildInputs = [ pkgs.makeWrapper ];
               meta.mainProgram = "nuschl";
@@ -435,7 +436,7 @@
           };
         desktopCrates = "-p nuschl -p nuschl-content-worker -p nuschl-crypto-worker -p nuschl-math-worker -p nuschl-media-worker -p nuschl-storage-worker -p nuschl-transfer-worker";
         crossCommon = {
-          version = "0.1.0";
+          inherit version;
           inherit src dummySrc;
           strictDeps = true;
           doCheck = false; # Tests run natively, never under an emulator.
