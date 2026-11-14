@@ -693,6 +693,7 @@ impl App {
             return self
                 .warn("Voice is off (--no-audio): this session neither speaks nor listens.");
         }
+        let unmuting = !deafen && (server.muted || server.deafened);
         if let Some(ask) = self.client.set_mute(index, deafen) {
             // Your voice goes to another server already (docs/clients.md,
             // "Voice on several servers").
@@ -706,12 +707,21 @@ impl App {
                 elsewhere.join(" and ")
             ));
         }
-        let server = &self.client.servers[index];
-        self.say(match (server.muted, server.deafened) {
+        let server = &mut self.client.servers[index];
+        // A refused unmute (#199): the client's notice says why, every time.
+        if unmuting
+            && server.muted
+            && let Some(reason) = server.notice.clone()
+        {
+            server.dismiss_notice();
+            return self.warn(reason);
+        }
+        let line = match (server.muted, server.deafened) {
             (_, true) => "Deafened (and muted).",
             (true, false) => "Muted.",
             (false, false) => "Unmuted: others hear you.",
-        });
+        };
+        self.say(line);
     }
 
     // Conversations.

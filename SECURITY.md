@@ -23,7 +23,7 @@ or raw pointers also needs review. Dependency changes must include that assessme
 
 | Component | Reason | Required boundary |
 | --- | --- | --- |
-| GPUI and graphics/font/window backends | Native desktop rendering and accessibility | Desktop shell only; never parse message HTML in the renderer |
+| GPUI and graphics/font/window backends | Native desktop rendering and accessibility | Desktop shell only; never parse message HTML in the renderer. Its SVG renderer draws only compiled-in drawings: the interface icons and the pinned Twemoji images, which the build checks to be small and static (docs/emoji.md); message text only selects among them |
 | Terminal graphics and clipboard adapters | Terminal capabilities, OS clipboard services, rendering verified worker pixels | TUI only: image-format decoding and formula evaluation remain in workers. The reviewed ratatui-image patch uses scalar base64 and safe Rust palette/SIXEL encoding, without libchafa, base64-simd or icy_sixel/quantette. Existing image buffer operations, PNG/zlib checksums and Windows terminal calls retain unsafe internals under the rendering/system-service exception; this is not a memory-safe transitive graph. Only bounded, validated raw bitmaps reach these rendering APIs. Clipboard helpers receive fixed argv on explicit local paste, with byte/time bounds; SSH never reads the remote host clipboard |
 | CPAL and OS audio bindings | Access to PipeWire/PulseAudio/CoreAudio/WASAPI | Media worker; device handles and audio only |
 | Codec and DSP SIMD in Rust dependencies | Optimized processing still contains unsafe internals | Media worker; no session credentials, arbitrary files, or network |

@@ -147,6 +147,14 @@ impl Route {
         }
     }
 
+    /// A new route joins only once its Join's self-state is confirmed (or its
+    /// retries ran out), so that echo cannot replace the first joined view;
+    /// a joined route stays joined while later changes settle.
+    pub fn observe(&mut self, present: bool, settling: bool, muted: bool, deafened: bool) {
+        let joined = present && (!settling || self.view.as_ref().is_some_and(|v| v.joined));
+        self.policy(joined, muted, deafened);
+    }
+
     /// Revoke queued work/readiness when the effective target changes (a
     /// request or the destination's budget). Playback and explicit capture
     /// consent are otherwise independent. A request the budget still caps
@@ -483,6 +491,35 @@ mod tests {
         );
         route.clear();
         assert!(route.view().is_none());
+    }
+    #[test]
+    fn a_new_route_is_joined_only_after_its_own_self_state_is_confirmed() {
+        let mut route = Route::default();
+        route.select("one".into(), 1, 2);
+        let selected = route.view().unwrap().voice_generation;
+        // Present in the channel, but Join's self-state request is unconfirmed.
+        route.observe(true, true, true, true);
+        let view = route.view().unwrap();
+        assert!(!view.joined);
+        assert_eq!(
+            view.voice_generation, selected,
+            "holding back is no new view"
+        );
+        route.observe(true, false, true, false);
+        let joined = route.view().unwrap();
+        assert!(joined.joined && joined.muted && !joined.deafened && !joined.can_transmit);
+        assert_ne!(joined.voice_generation, selected);
+        // A later explicit change keeps the route joined; only the media
+        // gates follow it.
+        route.observe(true, true, true, false);
+        assert_eq!(route.view().unwrap(), joined);
+        // Leaving the channel always unjoins.
+        route.observe(false, false, true, false);
+        assert!(!route.view().unwrap().joined);
+        // A fresh selection is confirmed again.
+        route.select("one".into(), 1, 2);
+        route.observe(true, true, true, true);
+        assert!(!route.view().unwrap().joined);
     }
     #[test]
     fn context_and_sequences_are_strict_and_bounded() {

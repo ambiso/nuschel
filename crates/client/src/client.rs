@@ -13,8 +13,9 @@ use crate::{
     input::{Input, ServerEvent},
     model::{Presence, RejectKind, TextTarget, User},
     names::{self, Preferences},
+    navigation::PageOwner,
     platform::{CacheKey, ChangeRequest, Platform, RenderKey, Request, request_id},
-    server::{CertificatePrompt, ServerState, Status},
+    server::{CertificatePrompt, HistoryProgress, ServerState, Status},
     timeline::{Change, MAX_TIMELINE, Page},
     voice::{self, Seat, Unmute, Voice},
 };
@@ -25,6 +26,10 @@ use nuschl_core::{
 };
 use nuschl_protocol::nuschl::{self, v1};
 use std::collections::{BTreeMap, BTreeSet};
+
+const MAX_RECOVERY_BYTES: usize = 4 * 1024 * 1024;
+/// The notice for a microphone that stopped by itself (#199).
+const MICROPHONE_STOPPED: &str = "Microphone stopped.";
 
 /// Cosmetic labels never change account IDs or ACL completeness. Bound scan,
 /// deduplication, command count and attempts for both legacy and draft replies.
@@ -272,7 +277,12 @@ pub enum SendError {
     Refused(String),
 }
 
+mod plugin;
 mod share;
+pub use plugin::{
+    MAX_PLUGIN_QUEUE, MAX_PLUGIN_QUEUE_BYTES, MAX_PLUGIN_RECEIVERS, PluginDataEvent,
+    ReceivedPluginData,
+};
 
 /// Unmuting would make a second talk server: the user is asked "Speak on
 /// two servers?" first, and answers with [`Client::speak_here`].
@@ -352,6 +362,23 @@ fn seats(servers: &[ServerState]) -> impl Fn(&str) -> Seat + '_ {
     }
 }
 
+/// A direct conversation asked for (`OpenDirect`): the server and the
+/// generation of the connection that asked, the peer's session, and whether
+/// to open it once known.
+struct DirectRequest {
+    server: String,
+    generation: u64,
+    session: u32,
+    open: bool,
+}
+
+impl DirectRequest {
+    /// Whether `server`'s current connection made this request.
+    fn made_on(&self, server: &ServerState) -> bool {
+        self.server == server.id && self.generation == server.generation
+    }
+}
+
 pub struct Client {
     /// Live servers in stable runtime-index order; use ordered_servers() for display.
     pub servers: Vec<ServerState>,
@@ -365,9 +392,8 @@ pub struct Client {
     pub preferences: Preferences,
     platform: Box<dyn Platform>,
     sending: Option<PendingSend>,
-    /// Direct conversations asked for (`OpenDirect`), by request id: the
-    /// server, the peer's session, and whether to open it once known.
-    direct_requests: BTreeMap<u64, (String, u32, bool)>,
+    /// Direct conversations asked for (`OpenDirect`), by request id.
+    direct_requests: BTreeMap<u64, DirectRequest>,
     /// Share links asked for, by request id.
     share_requests: BTreeMap<u64, share::ShareRequest>,
     /// When we last said we type, where (the platform's monotonic ms).
@@ -378,6 +404,8 @@ pub struct Client {
     comment_interest: Option<CommentInterest>,
     pub(crate) updates: Vec<Update>,
     now_ms: u64,
+    /// Received plugin data and our sends' admissions, for all servers.
+    plugin_data: plugin::PluginQueue,
 }
 
 impl Client {
@@ -404,6 +432,7 @@ impl Client {
             comment_interest: None,
             updates: Vec::new(),
             now_ms: 0,
+            plugin_data: Default::default(),
         }
     }
 
@@ -421,6 +450,63 @@ impl Client {
                 && server.notice.as_ref() == Some(&expired)
             {
                 server.dismiss_notice();
+                expired_any = true;
+            }
+        }
+        for server in &mut self.servers {
+            let expired = server.history_progress.values().any(|progress| {
+                progress.request.is_some()
+                    && progress
+                        .started_ms
+                        .is_some_and(|started| now_ms.saturating_sub(started) >= 30_000)
+            });
+            if expired {
+                server.page_epoch = server.page_epoch.wrapping_add(1);
+                self.platform.cancel_history(&server.id, server.page_epoch);
+                let mut stalled = false;
+                for progress in server.history_progress.values_mut() {
+                    if progress.ready_epoch.is_some() {
+                        progress.ready_epoch = Some(server.page_epoch);
+                    }
+                    if progress.request.take().is_some() {
+                        progress.response_end = None;
+                        if progress.through > progress.batch_start {
+                            progress.resume_at_ms = Some(now_ms.saturating_add(250));
+                        } else {
+                            progress.paused = true;
+                            stalled = true;
+                        }
+                    }
+                }
+                for channel in &mut server.channels {
+                    channel.timeline.loading = false;
+                }
+                if stalled {
+                    self.updates.push(Update::HistoryFailed("History recovery timed out without progress; reopen the conversation to retry.".into()));
+                }
+                expired_any = true;
+            }
+        }
+        if let Some((index, position)) = self.selected_indices() {
+            let server = &mut self.servers[index];
+            let channel = server.channels[position].id;
+            let due = server
+                .history_progress
+                .get(&channel)
+                .is_some_and(|progress| progress.resume_at_ms.is_some_and(|at| now_ms >= at));
+            if due {
+                let progress = server
+                    .history_progress
+                    .get_mut(&channel)
+                    .expect("checked above");
+                progress.resume_at_ms = None;
+                progress.pages = 0;
+                progress.batch_bytes = 0;
+                progress.started_ms = None;
+                progress.batch_start = progress.through;
+                if let Err(error) = self.resume_history(index, position, false) {
+                    self.updates.push(Update::HistoryFailed(error));
+                }
                 expired_any = true;
             }
         }
@@ -488,6 +574,7 @@ impl Client {
         self.platform.disconnect(id);
         self.voice.disconnected(id, None);
         self.passwords.remove(id);
+        self.forget_plugin_data(id);
         self.servers.retain(|server| server.id != id);
         self.catalog.synchronize(&self.servers);
     }
@@ -527,6 +614,7 @@ impl Client {
                 server.dismiss_notice();
                 // It joins the channel you were last in there.
                 let id = server.id.clone();
+                self.forget_plugin_data(&id);
                 let seats = seats(&self.servers);
                 self.voice.connecting(&id, &seats);
             }
@@ -562,6 +650,7 @@ impl Client {
     /// identity. Forget the view, never the persisted history in its old scope.
     fn forget_server_history(&mut self, index: usize) {
         let server = &mut self.servers[index];
+        server.history_progress.clear();
         for channel in &mut server.channels {
             channel.timeline = Default::default();
             channel.activity.clear();
@@ -582,9 +671,11 @@ impl Client {
 
     pub fn disconnect(&mut self, index: usize) {
         self.forget_document_requests(index);
-        let Some(server) = self.servers.get_mut(index) else {
+        let Some(id) = self.servers.get(index).map(|server| server.id.clone()) else {
             return;
         };
+        self.forget_plugin_data(&id);
+        let server = &mut self.servers[index];
         self.platform.disconnect(&server.id);
         clear_welcome(server, &mut self.updates);
         if server.status == Status::Connected && !server.deafened {
@@ -610,6 +701,9 @@ impl Client {
             channel.typing.clear();
         }
         // Offline, the timeline is local observations again.
+        // Explicit disconnection switches to the existing offline cache path;
+        // automatic reconnect retains its recovery cursor instead.
+        server.history_progress.clear();
         if server.history_source == HistorySource::ServerArchive {
             server.history_source = HistorySource::LocalObserved;
             for channel in &mut server.channels {
@@ -657,6 +751,14 @@ impl Client {
                 muted: !deafened || muted,
                 deafened: !deafened,
             }]
+        } else if (muted || deafened) && self.refuses_unmute(index) {
+            // A refused unmute keeps its undeafen on a connected server.
+            let connected = self.servers[index].status == Status::Connected;
+            vec![voice::Change {
+                server: id,
+                muted: true,
+                deafened: deafened && !connected,
+            }]
         } else if muted || deafened {
             let decision = self.voice.unmute(&id, &seats(&self.servers));
             match decision {
@@ -695,6 +797,9 @@ impl Client {
         if !self.servers[index].has_mumble_voice() {
             self.servers[index]
                 .set_notice("End-to-end voice is not available yet on this server.".into());
+            return;
+        }
+        if self.refuses_unmute(index) {
             return;
         }
         let id = self.servers[index].id.clone();
@@ -737,9 +842,10 @@ impl Client {
                 self.apply_voice(changes);
                 None
             }
-            Unmute::Ask => fallback
-                .and_then(|id| self.server_index(&id))
-                .map(|index| self.second_server(index)),
+            Unmute::Ask => {
+                let index = self.server_index(&fallback?)?;
+                (!self.refuses_unmute(index)).then(|| self.second_server(index))
+            }
         }
     }
 
@@ -749,17 +855,51 @@ impl Client {
         self.voice.role(&server.id, seat(server))
     }
 
+    /// Mute server `index` because the microphone stopped or the server
+    /// stopped us from speaking, and return whether it was unmuted. Only an
+    /// explicit Unmute opens it again (#199); the server sees us self-muted.
+    fn hold_voice(&mut self, index: usize) -> bool {
+        let server = &self.servers[index];
+        if server.muted {
+            return false;
+        }
+        let change = voice::Change {
+            server: server.id.clone(),
+            muted: true,
+            deafened: server.deafened,
+        };
+        self.apply_voice(vec![change]);
+        true
+    }
+
+    /// Whether an unmute on server `index` stays muted (#199): only a
+    /// connected server that lets us speak opens the microphone. The notice
+    /// says why.
+    fn refuses_unmute(&mut self, index: usize) -> bool {
+        let server = &mut self.servers[index];
+        let reason = if server.status == Status::Connected {
+            server.speech_blocked()
+        } else {
+            Some(crate::server::NOT_CONNECTED)
+        };
+        let Some(reason) = reason else {
+            return false;
+        };
+        server.set_notice(reason.into());
+        true
+    }
+
     /// Send what the voice policy decided.
     fn apply_voice(&mut self, changes: Vec<voice::Change>) {
         for change in changes {
-            let Some(server) = self
-                .servers
-                .iter_mut()
-                .find(|server| server.id == change.server)
-            else {
+            let Some(index) = self.server_index(&change.server) else {
                 continue;
             };
-            let muted = change.muted || change.deafened;
+            let mut muted = change.muted || change.deafened;
+            // #199: only an explicit Unmute opens the microphone, and only
+            // where you may speak. Anywhere else it keeps just its undeafen.
+            muted |= !muted && self.servers[index].muted && self.refuses_unmute(index);
+            let server = &mut self.servers[index];
             if (server.muted, server.deafened) == (muted, change.deafened) {
                 continue;
             }
@@ -810,16 +950,26 @@ impl Client {
             server: server.id.clone(),
             channel,
         };
+        self.pause_history();
         self.navigation
             .browse(conversation, HistorySource::LocalObserved);
         self.focus.following = true;
-        let entry = self.servers[index]
+        let position = self.servers[index]
             .channels
-            .iter_mut()
-            .find(|entry| entry.id == channel)
+            .iter()
+            .position(|entry| entry.id == channel)
             .expect("checked above");
         let mut result = Ok(true);
-        if entry.timeline.loaded {
+        if self.servers[index]
+            .history_progress
+            .get(&channel)
+            .is_some_and(|progress| progress.needed)
+        {
+            if let Err(error) = self.resume_history(index, position, true) {
+                result = Err(error);
+            }
+        } else if self.servers[index].channels[position].timeline.loaded {
+            let entry = &mut self.servers[index].channels[position];
             entry.timeline.trim_oldest(MAX_TIMELINE);
             entry.new_messages = 0;
         } else if let Err(error) = self.load_history(None) {
@@ -1039,6 +1189,28 @@ impl Client {
     /// Load `page` of conversation `position` of server `index`; answers
     /// for an earlier request of it are dropped.
     pub fn load_page(&mut self, index: usize, position: usize, page: Page) -> Result<(), String> {
+        let channel = self.servers[index].channels[position].id;
+        if page == Page::Before(None)
+            && self.servers[index]
+                .history_progress
+                .get(&channel)
+                .is_some_and(|progress| progress.needed)
+        {
+            return self.resume_history(index, position, true);
+        }
+        // Explicit navigation may interrupt catch-up; its durable cursor
+        // stays where the last accepted page left it.
+        self.pause_history();
+        self.request_page(index, position, page, false)
+    }
+
+    fn request_page(
+        &mut self,
+        index: usize,
+        position: usize,
+        page: Page,
+        catchup: bool,
+    ) -> Result<(), String> {
         let server = &mut self.servers[index];
         let Some(identity) = server.history_identity() else {
             return Ok(());
@@ -1051,13 +1223,24 @@ impl Client {
         if page == Page::Before(None) {
             channel.new_messages = 0;
         }
-        let ticket = self.navigation.browse(
+        let mut ticket = self.navigation.browse(
             Conversation {
                 server: server.id.clone(),
                 channel: channel.id,
             },
             source,
         );
+        ticket.catchup = catchup;
+        ticket.owner = Some(PageOwner {
+            generation: server.generation,
+            epoch: server.page_epoch,
+            archive: channel.conversation.filter(|_| archived),
+            identity: identity.clone(),
+        });
+        if catchup && let Some(progress) = server.history_progress.get_mut(&channel.id) {
+            progress.response_end = None;
+            progress.request = Some(ticket.clone());
+        }
         let requested = match channel.conversation.filter(|_| archived) {
             // A Nuschl server's history: everything this member may read.
             Some(conversation) => {
@@ -1092,8 +1275,120 @@ impl Client {
         };
         if requested.is_err() {
             channel.timeline.loading = false;
+            if catchup && let Some(progress) = server.history_progress.get_mut(&channel.id) {
+                progress.request = None;
+                progress.paused = true;
+            }
         }
         requested
+    }
+
+    fn pause_history(&mut self) {
+        let Some((index, position)) = self.selected_indices() else {
+            return;
+        };
+        let server = &mut self.servers[index];
+        let channel = &mut server.channels[position];
+        if let Some(progress) = server.history_progress.get_mut(&channel.id)
+            && progress.request.take().is_some()
+        {
+            channel.timeline.loading = false;
+        }
+    }
+
+    fn resume_history(
+        &mut self,
+        index: usize,
+        position: usize,
+        explicit: bool,
+    ) -> Result<(), String> {
+        const MAX_RECOVERY_PAGES: u8 = 16; // At most 800 raw rows per batch.
+        const RECOVERY_MS: u64 = 30_000;
+        let server = &mut self.servers[index];
+        let channel = &mut server.channels[position];
+        if explicit {
+            // An explicit reopening chooses the newest stream, rather than
+            // continuing a detached search window. Its messages stay intact.
+            channel.timeline.next_after = None;
+            channel.timeline.missed_live = false;
+        }
+        let selected = self
+            .navigation
+            .selection()
+            .is_some_and(|selected| selected.server == server.id && selected.channel == channel.id);
+        let Some(progress) = server.history_progress.get_mut(&channel.id) else {
+            return Ok(());
+        };
+        if explicit {
+            progress.pages = 0;
+            progress.batch_bytes = 0;
+            progress.started_ms = None;
+            progress.batch_start = progress.through;
+            progress.resume_at_ms = None;
+            progress.paused = false;
+        }
+        if !selected
+            || !progress.needed
+            || progress.paused
+            || progress.request.is_some()
+            || progress.resume_at_ms.is_some()
+            || server.status != Status::Connected
+            || server.history_source != HistorySource::ServerArchive
+            || channel.conversation != Some(progress.conversation)
+            || progress.ready_epoch != Some(server.page_epoch)
+            || channel.timeline.next_after.is_some()
+        {
+            return Ok(());
+        }
+        let started = *progress.started_ms.get_or_insert(self.now_ms);
+        // The next page can contain an allowed large singleton. Reserve the
+        // existing whole-frame maximum before asking, so actual canonical
+        // page bodies cannot exceed 4 MiB in one batch, including metadata.
+        if progress.pages >= MAX_RECOVERY_PAGES
+            || progress
+                .batch_bytes
+                .checked_add(nuschl::server_limit(nuschl::kind::HISTORY_PAGE))
+                .is_none_or(|bytes| bytes > MAX_RECOVERY_BYTES)
+            || self.now_ms.saturating_sub(started) >= RECOVERY_MS
+        {
+            progress.resume_at_ms = Some(self.now_ms.saturating_add(250));
+            return Ok(());
+        }
+        progress.pages += 1;
+        let after = progress.through;
+        self.request_page(index, position, Page::After(after), true)
+    }
+
+    fn remember_latest(
+        &mut self,
+        index: usize,
+        position: usize,
+        ticket: &crate::HistoryTicket,
+        messages: &[crate::timeline::IncomingMessage],
+    ) {
+        let Some(conversation) = ticket.owner.as_ref().and_then(|owner| owner.archive) else {
+            return;
+        };
+        // A completed latest snapshot is contiguous up to this conservative
+        // visible endpoint. Live rows and ACKs must never move the scan cursor.
+        // Trailing mutation/void rows may be replayed next time, safely.
+        let through = messages
+            .iter()
+            .filter_map(|message| message.seq)
+            .filter_map(|seq| i64::try_from(seq).ok())
+            .max()
+            .unwrap_or(0);
+        let server = &mut self.servers[index];
+        // Removed/recreated views cannot accumulate old recovery records.
+        server.history_progress.retain(|id, progress| {
+            server.channels.iter().any(|channel| {
+                channel.id == *id && channel.conversation == Some(progress.conversation)
+            })
+        });
+        server.history_progress.insert(
+            server.channels[position].id,
+            HistoryProgress::new(conversation, through, server.page_epoch),
+        );
     }
 
     /// Whether our previous message is still on its way.
@@ -1247,6 +1542,13 @@ impl Client {
         let archive = self.servers[server].history_source == HistorySource::ServerArchive;
         let server = &mut self.servers[server];
         let channel = &mut server.channels[channel];
+        if server
+            .history_progress
+            .get(&channel.id)
+            .is_some_and(|progress| progress.needed)
+        {
+            return;
+        }
         channel.unread = 0;
         channel.unread_mention = false;
         let newest = channel
@@ -1318,8 +1620,15 @@ impl Client {
         while self.direct_requests.len() >= 16 {
             self.direct_requests.pop_first();
         }
-        self.direct_requests
-            .insert(request_id, (server.id.clone(), peer.session, true));
+        self.direct_requests.insert(
+            request_id,
+            DirectRequest {
+                server: server.id.clone(),
+                generation: server.generation,
+                session: peer.session,
+                open: true,
+            },
+        );
         true
     }
 
@@ -1418,6 +1727,97 @@ impl Client {
         }
     }
 
+    fn catchup_page(
+        &mut self,
+        index: usize,
+        position: usize,
+        ticket: crate::HistoryTicket,
+        page: Page,
+        messages: Vec<crate::timeline::IncomingMessage>,
+        next_after: Option<i64>,
+    ) {
+        let server = &mut self.servers[index];
+        let channel = &mut server.channels[position];
+        let Some(progress) = server.history_progress.get_mut(&channel.id) else {
+            return;
+        };
+        if progress.request.as_ref() != Some(&ticket) || page != Page::After(progress.through) {
+            return;
+        }
+        progress.request = None;
+        channel.timeline.loading = false;
+        let Some(end) = progress.response_end.take() else {
+            progress.paused = true;
+            self.updates.push(Update::HistoryFailed(
+                "History recovery omitted its scan cursor.".into(),
+            ));
+            return;
+        };
+        let Some(target) = progress.target_head else {
+            progress.paused = true;
+            return;
+        };
+        if end < progress.through
+            || next_after.is_some_and(|next| next != end || next <= progress.through)
+            || (end < target && end == progress.through)
+            || messages.len() > 50
+            || messages.iter().any(|message| {
+                message
+                    .seq
+                    .is_none_or(|seq| seq <= progress.through as u64 || seq > end as u64)
+            })
+        {
+            progress.paused = true;
+            self.updates.push(Update::HistoryFailed(
+                "History recovery returned a non-advancing page.".into(),
+            ));
+            return;
+        }
+        channel.timeline.merge_catchup(messages);
+        progress.through = end;
+        progress.needed = end < target;
+        self.updates.push(Update::PageShown { page, used: true });
+        if progress.needed
+            && let Err(error) = self.resume_history(index, position, false)
+        {
+            self.updates.push(Update::HistoryFailed(error));
+        }
+    }
+
+    /// A page is valid through its last asynchronous stage, including a
+    /// worker rendering that had already left the native reply registry.
+    fn history_target(
+        &self,
+        server: &str,
+        ticket: &crate::HistoryTicket,
+    ) -> Option<(usize, usize)> {
+        if server != ticket.conversation.server || !self.navigation.accepts(ticket) {
+            return None;
+        }
+        if ticket.source == HistorySource::ServerArchive && ticket.owner.is_none() {
+            return None;
+        }
+        let index = self.server_index(server)?;
+        let state = &self.servers[index];
+        let position = state
+            .channels
+            .iter()
+            .position(|channel| channel.id == ticket.conversation.channel)?;
+        if let Some(owner) = &ticket.owner
+            && (owner.generation != state.generation
+                || owner.epoch != state.page_epoch
+                || state.history_identity().as_ref() != Some(&owner.identity)
+                || owner.archive.is_some_and(|id| {
+                    ticket.source != HistorySource::ServerArchive
+                        || state.history_source != HistorySource::ServerArchive
+                        || state.channels[position].conversation != Some(id)
+                }))
+        {
+            return None;
+        }
+        Some((index, position))
+    }
+
     // What the platform reports.
 
     /// Apply what the platform reported; call [`Client::settle`] after a batch.
@@ -1470,31 +1870,75 @@ impl Client {
                 next_before,
                 next_after,
             } => {
-                if !self.navigation.accepts(&ticket) {
-                    return;
-                }
-                let Some(channel) = self
-                    .servers
-                    .iter_mut()
-                    .find(|entry| entry.id == server)
-                    .and_then(|server| {
-                        server
-                            .channels
-                            .iter_mut()
-                            .find(|entry| entry.id == ticket.conversation.channel)
-                    })
-                else {
+                let Some((index, position)) = self.history_target(&server, &ticket) else {
                     return;
                 };
+                if ticket.catchup {
+                    self.catchup_page(index, position, ticket, page, messages, next_after);
+                    return;
+                }
+                let channel = &mut self.servers[index].channels[position];
                 channel.timeline.loading = false;
                 let used = channel
                     .timeline
                     .take_window(page, messages, (next_before, next_after));
+                if ticket
+                    .owner
+                    .as_ref()
+                    .is_some_and(|owner| owner.archive.is_some())
+                {
+                    channel.timeline.order_archive();
+                }
                 if used && matches!(page, Page::Around(_)) {
                     channel.new_messages = 0;
                     self.focus.following = false;
                 }
                 self.updates.push(Update::PageShown { page, used });
+            }
+            Input::HistoryChanges {
+                server,
+                ticket,
+                scanned_through,
+                scanned_bytes,
+                head,
+                changes,
+            } => {
+                let Some((index, _)) = self.history_target(&server, &ticket) else {
+                    return;
+                };
+                let Some(conversation) = ticket.owner.as_ref().and_then(|owner| owner.archive)
+                else {
+                    return;
+                };
+                if !ticket.catchup
+                    || changes.len() > 50
+                    || self.servers[index]
+                        .history_progress
+                        .get(&ticket.conversation.channel)
+                        .is_none_or(|progress| progress.request.as_ref() != Some(&ticket))
+                {
+                    return;
+                }
+                let progress = self.servers[index]
+                    .history_progress
+                    .get_mut(&ticket.conversation.channel)
+                    .expect("checked above");
+                if scanned_through < progress.through
+                    || progress.response_end.is_some()
+                    || scanned_bytes > nuschl::server_limit(nuschl::kind::HISTORY_PAGE)
+                    || scanned_bytes > MAX_RECOVERY_BYTES.saturating_sub(progress.batch_bytes)
+                    || head < scanned_through
+                    || head < progress.through
+                    || progress.target_head.is_some_and(|target| head < target)
+                {
+                    return;
+                }
+                progress.target_head.get_or_insert(head);
+                progress.response_end = Some(scanned_through);
+                progress.batch_bytes += scanned_bytes;
+                for (seq, change) in changes {
+                    self.apply_change(&server, conversation, seq, change);
+                }
             }
             Input::HistoryRecovered => self.updates.push(Update::HistoryRecovered),
             Input::Edited {
@@ -1537,13 +1981,17 @@ impl Client {
                 ticket,
                 reason,
             } => {
-                if let Some(server) = self.servers.iter_mut().find(|entry| entry.id == server)
-                    && let Some(channel) = server
-                        .channels
-                        .iter_mut()
-                        .find(|entry| entry.id == ticket.conversation.channel)
+                let Some((index, position)) = self.history_target(&server, &ticket) else {
+                    return;
+                };
+                self.servers[index].channels[position].timeline.loading = false;
+                if ticket.catchup
+                    && let Some(progress) = self.servers[index]
+                        .history_progress
+                        .get_mut(&ticket.conversation.channel)
                 {
-                    channel.timeline.loading = false;
+                    progress.request = None;
+                    progress.paused = true;
                 }
                 self.updates
                     .push(Update::HistoryFailed(format!("Server history: {reason}")));
@@ -1574,17 +2022,20 @@ impl Client {
                 messages,
                 next_before,
             } => {
-                if !self.navigation.accepts(&ticket) {
-                    return;
-                }
-                if let Some(server) = self.servers.iter_mut().find(|entry| entry.id == server)
-                    && let Some(channel) = server
-                        .channels
-                        .iter_mut()
-                        .find(|entry| entry.id == ticket.conversation.channel)
-                {
+                if let Some((index, position)) = self.history_target(&server, &ticket) {
+                    if before.is_none() {
+                        self.remember_latest(index, position, &ticket, &messages);
+                    }
+                    let channel = &mut self.servers[index].channels[position];
                     channel.timeline.loading = false;
                     channel.timeline.take_page(before, messages, next_before);
+                    if ticket
+                        .owner
+                        .as_ref()
+                        .is_some_and(|owner| owner.archive.is_some())
+                    {
+                        channel.timeline.order_archive();
+                    }
                     if before.is_none() {
                         // A conversation opens at its newest message.
                         self.focus.following = true;
@@ -1613,6 +2064,7 @@ impl Client {
             } => {
                 if let Some(index) = self.current(&server, generation) {
                     self.forget_document_requests(index);
+                    self.forget_plugin_data(&server);
                     let server = &mut self.servers[index];
                     server.status = Status::Disconnected;
                     clear_welcome(server, &mut self.updates);
@@ -1656,9 +2108,21 @@ impl Client {
             } => {
                 if let Some(index) = self.current(&server, generation) {
                     self.forget_document_requests(index);
+                    self.forget_plugin_data(&server);
                     let server = &mut self.servers[index];
                     if server.status == Status::Connected && !server.deafened {
                         self.platform.chime(Sound::Disconnected);
+                    }
+                    server.page_epoch = server.page_epoch.wrapping_add(1);
+                    self.platform.cancel_history(&server.id, server.page_epoch);
+                    // The driver reconnects muted: only an explicit Unmute
+                    // opens the microphone again (#199).
+                    server.muted = true;
+                    for channel in &mut server.channels {
+                        channel.timeline.loading = false;
+                    }
+                    for progress in server.history_progress.values_mut() {
+                        progress.disconnected();
                     }
                     server.clear_acl_cache();
                     server.limits = None;
@@ -1825,6 +2289,13 @@ impl Client {
             } => {
                 if let Some(index) = self.current(&server, generation) {
                     self.servers[index].audio_status = message;
+                }
+            }
+            Input::MicrophoneStopped { server, generation } => {
+                if let Some(index) = self.current(&server, generation)
+                    && self.hold_voice(index)
+                {
+                    self.servers[index].set_notice(MICROPHONE_STOPPED.into());
                 }
             }
             Input::Message {
@@ -2036,6 +2507,7 @@ impl Client {
                 self.platform.play_sound(&server.id, sound);
             }
         }
+        let archived_order = server.archived(&server.channels[position]);
         let channel = &mut server.channels[position];
         // Their message is here: they stopped typing it.
         let users = &server.users;
@@ -2064,6 +2536,9 @@ impl Client {
         // the newer pages.
         let received = channel.timeline.receive_with_receipt(message);
         let added = received.added;
+        if archived_order {
+            channel.timeline.order_archive();
+        }
         let selected = self
             .navigation
             .selection()
@@ -2108,10 +2583,29 @@ impl Client {
     }
 
     fn server_event(&mut self, index: usize, event: ServerEvent) {
+        if matches!(
+            event,
+            ServerEvent::PluginData(_) | ServerEvent::PluginDataAdmission { .. }
+        ) {
+            return self.plugin_event(index, event);
+        }
         let fetch_description = matches!(
             &event,
             ServerEvent::Connected { .. } | ServerEvent::Channel(_)
         );
+        let refresh_history = matches!(
+            &event,
+            ServerEvent::Connected { .. }
+                | ServerEvent::ChannelInfo { .. }
+                | ServerEvent::DirectList(_)
+        );
+        let fresh_directs: Vec<_> = match &event {
+            ServerEvent::DirectList(directs) => directs
+                .iter()
+                .filter_map(|direct| nuschl::id(&direct.conversation))
+                .collect(),
+            _ => Vec::new(),
+        };
         let refresh_comment = matches!(&event, ServerEvent::User(_) | ServerEvent::UserRemoved(_));
         let render_comment = match &event {
             ServerEvent::User(user)
@@ -2201,6 +2695,13 @@ impl Client {
                     );
                 }
                 let encryption = conversation.and_then(|id| server.encryption.get(&id).cloned());
+                if let Some(progress) = server.history_progress.get_mut(&channel) {
+                    if conversation == Some(progress.conversation) {
+                        progress.ready_epoch = Some(server.page_epoch);
+                    } else {
+                        server.history_progress.remove(&channel);
+                    }
+                }
                 if let Some(view) = server.channel_view(channel) {
                     view.conversation = conversation;
                     view.encryption = encryption;
@@ -2657,6 +3158,28 @@ impl Client {
             }
             ServerEvent::Welcome { .. } => {}
             ServerEvent::Transport(stats) => server.transport = Some(stats),
+            // Handled above.
+            ServerEvent::PluginData(_) | ServerEvent::PluginDataAdmission { .. } => {}
+        }
+        // The server stopping us from speaking mutes us: lifting it later
+        // leaves us muted until an explicit Unmute (#199).
+        let server = &self.servers[index];
+        if server.status == Status::Connected && server.speech_blocked().is_some() {
+            self.hold_voice(index);
+        }
+        if refresh_history {
+            let server = &mut self.servers[index];
+            for progress in server.history_progress.values_mut() {
+                if fresh_directs.contains(&progress.conversation) {
+                    progress.ready_epoch = Some(server.page_epoch);
+                }
+            }
+            if let Some((selected, position)) = self.selected_indices()
+                && selected == index
+                && let Err(error) = self.resume_history(index, position, false)
+            {
+                self.updates.push(Update::HistoryFailed(error));
+            }
         }
         if fetch_description {
             self.request_selected_description(index);
@@ -2668,6 +3191,15 @@ impl Client {
 
     /// The server named one of our direct conversations (opened by us).
     fn direct_opened(&mut self, index: usize, opened: v1::DirectOpened) {
+        // Another connection's request waits for its own answer; this one
+        // changes nothing. Without a request, the conversation is only noted.
+        if self
+            .direct_requests
+            .get(&opened.request_id)
+            .is_some_and(|request| !request.made_on(&self.servers[index]))
+        {
+            return;
+        }
         let request = self.direct_requests.remove(&opened.request_id);
         let Some(direct) = opened.direct else {
             return;
@@ -2683,7 +3215,7 @@ impl Client {
             .unwrap_or_else(|| direct.name.clone());
         server.directs.insert(id, direct);
         let channel = server.direct_view(id, &name, peer);
-        if request.is_some_and(|(_, _, open)| open) {
+        if request.is_some_and(|request| request.open) {
             self.updates.push(Update::Browse {
                 server: server.id.clone(),
                 channel: server.channels[channel].id,
@@ -2769,12 +3301,25 @@ impl Client {
     }
 
     fn direct_failed(&mut self, index: usize, error: v1::Error) {
-        let Some((server_id, session, open)) = self.direct_requests.remove(&error.request_id)
+        // Only this connection's request fails; another's waits on.
+        if self
+            .direct_requests
+            .get(&error.request_id)
+            .is_none_or(|request| !request.made_on(&self.servers[index]))
+        {
+            return;
+        }
+        let Some(DirectRequest {
+            server: server_id,
+            session,
+            open,
+            ..
+        }) = self.direct_requests.remove(&error.request_id)
         else {
             return;
         };
         let server = &self.servers[index];
-        if server.id != server_id || !open {
+        if !open {
             return;
         }
         if let Some(peer) = server.users.get(&session).cloned() {
@@ -2806,6 +3351,7 @@ pub fn preview(body: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::server::{CANT_SPEAK_HERE, NO_BANDWIDTH};
     use crate::{
         HistoryTicket,
         model::{Channel, User},
@@ -3821,6 +4367,233 @@ mod tests {
         assert_eq!(client.voice.talk(), [b]);
     }
 
+    /// Our own presence as the server reports it (session 1, channel 2).
+    fn own(id: &str, user: User) -> Input {
+        Input::Server {
+            server: id.into(),
+            generation: 1,
+            event: ServerEvent::User(User {
+                session: 1,
+                name: "andi".into(),
+                ..user
+            }),
+        }
+    }
+
+    /// #199: only an explicit Unmute opens the microphone. The server
+    /// stopping us from speaking mutes us (and says so to the server);
+    /// lifting it, or the server claiming we unmuted, leaves us muted.
+    #[test]
+    fn a_server_restriction_mutes_and_only_an_explicit_unmute_reopens() {
+        for restriction in [
+            User {
+                channel: 2,
+                suppressed: true,
+                ..User::default()
+            },
+            User {
+                channel: 2,
+                muted: true,
+                ..User::default()
+            },
+            User {
+                channel: 2,
+                deafened: true,
+                ..User::default()
+            },
+        ] {
+            let (mut client, recorder, id) = connected();
+            assert_eq!(client.set_mute(0, false), None);
+            assert_eq!(self_states(&recorder), [(id.clone(), false, false)]);
+            client.handle(own(&id, restriction.clone()));
+            assert!(client.servers[0].muted, "{restriction:?}");
+            assert_eq!(self_states(&recorder), [(id.clone(), true, false)]);
+            // Unmuting where the server stops us is refused, with a notice.
+            assert_eq!(client.set_mute(0, false), None);
+            assert_eq!(client.toggle_voice(false), None);
+            assert!(self_states(&recorder).is_empty());
+            assert!(client.servers[0].muted);
+            assert_eq!(client.servers[0].notice.as_deref(), Some(CANT_SPEAK_HERE));
+            // Moved into a channel where we may speak: still muted.
+            client.handle(own(
+                &id,
+                User {
+                    channel: 3,
+                    self_muted: true,
+                    ..User::default()
+                },
+            ));
+            // An echo claiming we unmuted ourselves leaves us muted as well.
+            client.handle(own(
+                &id,
+                User {
+                    channel: 3,
+                    ..User::default()
+                },
+            ));
+            assert!(client.servers[0].muted);
+            assert!(self_states(&recorder).is_empty());
+            // Only the explicit Unmute opens it.
+            assert_eq!(client.set_mute(0, false), None);
+            assert_eq!(self_states(&recorder), [(id.clone(), false, false)]);
+        }
+    }
+
+    /// #199: Unmute where the server stops us from speaking keeps us muted
+    /// and still undeafens, as the deafen toggle does.
+    #[test]
+    fn a_refused_unmute_still_undeafens() {
+        let (mut client, recorder, id) = connected();
+        assert_eq!(client.set_mute(0, true), None);
+        assert_eq!(self_states(&recorder), [(id.clone(), true, true)]);
+        let suppressed = User {
+            channel: 2,
+            suppressed: true,
+            ..User::default()
+        };
+        client.handle(own(&id, suppressed));
+        assert_eq!(client.set_mute(0, false), None);
+        assert_eq!(self_states(&recorder), [(id, true, false)]);
+        assert!(client.servers[0].muted && !client.servers[0].deafened);
+        assert_eq!(client.servers[0].notice.as_deref(), Some(CANT_SPEAK_HERE));
+    }
+
+    /// #199: with your voice live on alpha, beta where you can't speak
+    /// refuses the unmute before asking "Speak on two servers?", and so does
+    /// the answer: alpha keeps your voice. Joining a channel on beta moves
+    /// the voice there, muted.
+    #[test]
+    fn a_blocked_server_refuses_the_question_and_its_answer() {
+        let recorder = Arc::new(Recorder::default());
+        let bookmarks: Vec<_> = ["alpha", "beta"]
+            .into_iter()
+            .map(|name| ServerBookmark::new(name, "localhost", 64738, "andi").unwrap())
+            .collect();
+        let (a, b) = (bookmarks[0].id.clone(), bookmarks[1].id.clone());
+        let mut client = Client::new(
+            Box::new(recorder.clone()),
+            bookmarks,
+            Preferences::default(),
+        );
+        client.connect(0, None, false);
+        client.connect(1, None, false);
+        for id in [&a, &b] {
+            client.handle(Input::Server {
+                server: id.clone(),
+                generation: 1,
+                event: ServerEvent::Connected { session: 1 },
+            });
+        }
+        client.join(0, 2);
+        assert_eq!(client.set_mute(0, false), None);
+        client.handle(own(
+            &b,
+            User {
+                channel: 2,
+                suppressed: true,
+                ..User::default()
+            },
+        ));
+        self_states(&recorder);
+        assert_eq!(
+            client.set_mute(1, false),
+            None,
+            "asked where it can't speak"
+        );
+        client.speak_here(1, false);
+        assert!(self_states(&recorder).is_empty());
+        assert_eq!(client.voice.talk(), std::slice::from_ref(&a));
+        assert!(!client.servers[0].muted);
+        assert_eq!(client.servers[1].notice.as_deref(), Some(CANT_SPEAK_HERE));
+        client.join(1, 3);
+        assert_eq!(self_states(&recorder), [(a, true, false)]);
+        assert_eq!(client.voice.talk(), std::slice::from_ref(&b));
+        assert!(client.servers[1].muted);
+    }
+
+    #[test]
+    fn no_voice_budget_mutes_and_its_return_does_not_unmute() {
+        let (mut client, recorder, id) = connected();
+        client.set_mute(0, false);
+        self_states(&recorder);
+        let limits = |max_bandwidth| Input::Server {
+            server: id.clone(),
+            generation: 1,
+            event: ServerEvent::Limits(nuschl_core::model::ServerLimits {
+                max_bandwidth: Some(max_bandwidth),
+                ..nuschl_core::model::ServerLimits::default()
+            }),
+        };
+        client.handle(limits(1_000));
+        assert!(client.servers[0].muted);
+        assert_eq!(self_states(&recorder), [(id.clone(), true, false)]);
+        assert_eq!(client.set_mute(0, false), None);
+        assert_eq!(client.servers[0].notice.as_deref(), Some(NO_BANDWIDTH));
+        client.handle(limits(72_000));
+        assert!(client.servers[0].muted);
+        assert!(self_states(&recorder).is_empty());
+    }
+
+    #[test]
+    fn a_reconnect_comes_back_muted() {
+        let (mut client, recorder, id) = connected();
+        client.set_mute(0, false);
+        self_states(&recorder);
+        client.handle(Input::Reconnecting {
+            server: id.clone(),
+            generation: 1,
+            attempt: 1,
+            delay_secs: 1,
+            reason: "lost".into(),
+        });
+        assert!(client.servers[0].muted);
+        // While reconnecting we stay muted.
+        assert_eq!(client.set_mute(0, false), None);
+        assert!(self_states(&recorder).is_empty());
+        client.handle(Input::Server {
+            server: id.clone(),
+            generation: 1,
+            event: ServerEvent::Connected { session: 1 },
+        });
+        client.handle(own(
+            &id,
+            User {
+                channel: 2,
+                self_muted: true,
+                ..User::default()
+            },
+        ));
+        assert!(client.servers[0].muted);
+        assert!(self_states(&recorder).is_empty());
+        assert_eq!(client.set_mute(0, false), None);
+        assert_eq!(self_states(&recorder), [(id, false, false)]);
+    }
+
+    #[test]
+    fn a_stopped_microphone_mutes_its_own_connection_only() {
+        let (mut client, recorder, id) = connected();
+        client.set_mute(0, false);
+        self_states(&recorder);
+        // A report for an earlier connection leaves this one as it is.
+        client.handle(Input::MicrophoneStopped {
+            server: id.clone(),
+            generation: 0,
+        });
+        assert!(!client.servers[0].muted);
+        client.handle(Input::MicrophoneStopped {
+            server: id.clone(),
+            generation: 1,
+        });
+        assert!(client.servers[0].muted);
+        assert_eq!(self_states(&recorder), [(id.clone(), true, false)]);
+        assert_eq!(
+            client.servers[0].notice.as_deref(),
+            Some(MICROPHONE_STOPPED)
+        );
+        assert_eq!(client.set_mute(0, false), None);
+        assert_eq!(self_states(&recorder), [(id, false, false)]);
+    }
+
     #[test]
     fn what_arrives_out_of_sight_is_unread_and_a_mention_notifies() {
         let (mut client, recorder, id) = connected();
@@ -4766,5 +5539,655 @@ mod tests {
             }),
         ));
         assert_eq!(blob_requests(&recorder).len(), 1);
+    }
+    fn recovery_row(seq: u64) -> IncomingMessage {
+        let Input::Message { mut message, .. } =
+            message("fixture", 2, &format!("row {seq}"), seq as i64)
+        else {
+            unreachable!()
+        };
+        message.seq = Some(seq);
+        message
+    }
+
+    fn recovery_client() -> (Client, Arc<Recorder>, String) {
+        let (mut client, recorder, id) = connected();
+        client.handle(Input::Server {
+            server: id.clone(),
+            generation: 1,
+            event: ServerEvent::Negotiated {
+                capabilities: vec!["history/1".into()],
+                policy: None,
+            },
+        });
+        client.handle(Input::Server {
+            server: id.clone(),
+            generation: 1,
+            event: ServerEvent::ChannelInfo {
+                channel: 2,
+                conversation: Some([2; 16]),
+            },
+        });
+        client.open(0, 2).unwrap();
+        let ticket = recorder.pages.lock().unwrap().last().unwrap().1.clone();
+        client.handle(Input::History {
+            server: id.clone(),
+            ticket,
+            before: None,
+            messages: (1..=3).map(recovery_row).collect(),
+            next_before: None,
+        });
+        (client, recorder, id)
+    }
+
+    fn recovery_reconnect(client: &mut Client, id: &str, connected_first: bool) {
+        client.handle(Input::Reconnecting {
+            server: id.into(),
+            generation: 1,
+            attempt: 1,
+            delay_secs: 1,
+            reason: "synthetic transport loss".into(),
+        });
+        let connected = || Input::Server {
+            server: id.into(),
+            generation: 1,
+            event: ServerEvent::Connected { session: 1 },
+        };
+        let named = || Input::Server {
+            server: id.into(),
+            generation: 1,
+            event: ServerEvent::ChannelInfo {
+                channel: 2,
+                conversation: Some([2; 16]),
+            },
+        };
+        if connected_first {
+            client.handle(connected());
+            client.handle(named());
+        } else {
+            client.handle(named());
+            client.handle(connected());
+        }
+    }
+
+    fn recovery_answer(
+        client: &mut Client,
+        recorder: &Recorder,
+        end: i64,
+        head: i64,
+        rows: Vec<IncomingMessage>,
+        next: Option<i64>,
+        changes: Vec<(u64, Change)>,
+    ) {
+        let (server, ticket, page) = recorder.pages.lock().unwrap().last().unwrap().clone();
+        assert!(ticket.catchup);
+        client.handle(Input::HistoryChanges {
+            server: server.clone(),
+            ticket: ticket.clone(),
+            scanned_through: end,
+            scanned_bytes: 1024,
+            head,
+            changes,
+        });
+        client.handle(Input::HistoryWindow {
+            server,
+            ticket,
+            page,
+            messages: rows,
+            next_before: None,
+            next_after: next,
+        });
+    }
+
+    fn recovery_sized_answer(
+        client: &mut Client,
+        recorder: &Recorder,
+        raw: v1::HistoryPage,
+        rows: Vec<IncomingMessage>,
+    ) {
+        let (server, ticket, page) = recorder.pages.lock().unwrap().last().unwrap().clone();
+        let end = raw.messages.last().unwrap().seq as i64;
+        client.handle(Input::HistoryChanges {
+            server: server.clone(),
+            ticket: ticket.clone(),
+            scanned_through: end,
+            scanned_bytes: nuschl::history_page_bytes(&raw),
+            head: raw.head as i64,
+            changes: vec![],
+        });
+        client.handle(Input::HistoryWindow {
+            server,
+            ticket,
+            page,
+            messages: rows,
+            next_before: None,
+            next_after: raw.more_after.then_some(end),
+        });
+    }
+
+    #[test]
+    fn recovery_large_singletons_keep_later_rows_reachable_within_the_same_byte_budget() {
+        for encrypted in [false, true] {
+            let (mut client, recorder, id) = recovery_client();
+            recovery_reconnect(&mut client, &id, false);
+            let message = if encrypted {
+                v1::Message {
+                    seq: 4,
+                    kind: v1::message::Kind::Void as i32,
+                    format: v1::Format::MlsHandshake as i32,
+                    mls: vec![0; nuschl::MAX_MLS_HANDSHAKE_BYTES],
+                    ..Default::default()
+                }
+            } else {
+                v1::Message {
+                    seq: 4,
+                    format: v1::Format::LegacyHtml as i32,
+                    content: "x".repeat(nuschl::MAX_LEGACY_CONTENT_BYTES),
+                    ..Default::default()
+                }
+            };
+            assert!(nuschl::valid_message(&message));
+            let mut shown = recovery_row(4);
+            shown.message.body.clone_from(&message.content);
+            recovery_sized_answer(
+                &mut client,
+                &recorder,
+                v1::HistoryPage {
+                    messages: vec![message],
+                    head: 5,
+                    more_after: true,
+                    ..Default::default()
+                },
+                if encrypted { vec![] } else { vec![shown] },
+            );
+            let progress = &client.servers[0].history_progress[&2];
+            assert_eq!(progress.through, 4);
+            assert!(progress.needed && !progress.paused);
+            assert!(progress.batch_bytes <= MAX_RECOVERY_BYTES);
+            if encrypted {
+                assert_eq!(progress.resume_at_ms, Some(250));
+                assert!(progress.request.is_none());
+                client.set_time(249);
+                assert!(client.servers[0].history_progress[&2].request.is_none());
+                client.set_time(250);
+            }
+            assert_eq!(
+                recorder.pages.lock().unwrap().last().unwrap().2,
+                Page::After(4)
+            );
+            recovery_sized_answer(
+                &mut client,
+                &recorder,
+                v1::HistoryPage {
+                    messages: vec![v1::Message {
+                        seq: 5,
+                        content: "later small row".into(),
+                        ..Default::default()
+                    }],
+                    head: 5,
+                    ..Default::default()
+                },
+                vec![recovery_row(5)],
+            );
+            let progress = &client.servers[0].history_progress[&2];
+            assert_eq!(progress.through, 5);
+            assert!(!progress.needed);
+            let (_, position) = client.selected_indices().unwrap();
+            assert!(
+                client.servers[0].channels[position]
+                    .timeline
+                    .messages
+                    .iter()
+                    .any(|row| row.seq == Some(5))
+            );
+        }
+    }
+
+    #[test]
+    fn recovery_reserves_each_possible_page_and_rejects_excess_or_duplicate_byte_accounting() {
+        let (mut client, recorder, id) = recovery_client();
+        recovery_reconnect(&mut client, &id, false);
+        let (_, ticket, _) = recorder.pages.lock().unwrap().last().unwrap().clone();
+        let report = |scanned_bytes| Input::HistoryChanges {
+            server: id.clone(),
+            ticket: ticket.clone(),
+            scanned_through: 4,
+            scanned_bytes,
+            head: 5,
+            changes: vec![],
+        };
+        client.handle(report(nuschl::server_limit(nuschl::kind::HISTORY_PAGE) + 1));
+        assert_eq!(client.servers[0].history_progress[&2].batch_bytes, 0);
+        assert!(
+            client.servers[0].history_progress[&2]
+                .response_end
+                .is_none()
+        );
+        let maximum = nuschl::server_limit(nuschl::kind::HISTORY_PAGE);
+        client.handle(report(maximum));
+        client.handle(report(maximum));
+        assert_eq!(client.servers[0].history_progress[&2].batch_bytes, maximum);
+        client.handle(Input::HistoryWindow {
+            server: id,
+            ticket: ticket.clone(),
+            page: Page::After(3),
+            messages: vec![recovery_row(4)],
+            next_before: None,
+            next_after: Some(4),
+        });
+        let progress = &client.servers[0].history_progress[&2];
+        assert!(progress.batch_bytes <= MAX_RECOVERY_BYTES);
+        assert!(progress.request.is_none());
+        assert_eq!(progress.resume_at_ms, Some(250));
+        client.set_time(250);
+        assert_eq!(client.servers[0].history_progress[&2].batch_bytes, 0);
+        assert_eq!(
+            recorder.pages.lock().unwrap().last().unwrap().2,
+            Page::After(4)
+        );
+    }
+
+    #[test]
+    fn reconnect_pages_fill_multiple_windows_without_using_live_or_ack_maxima() {
+        for connected_first in [false, true] {
+            let (mut client, recorder, id) = recovery_client();
+            recovery_reconnect(&mut client, &id, connected_first);
+            assert_eq!(
+                recorder.pages.lock().unwrap().last().unwrap().2,
+                Page::After(3)
+            );
+            // A later live row is real, but it is no proof that 4..120 were scanned.
+            let (_, position) = client.selected_indices().unwrap();
+            client.servers[0].channels[position]
+                .timeline
+                .merge(recovery_row(121));
+            recovery_answer(
+                &mut client,
+                &recorder,
+                53,
+                120,
+                (4..=53).map(recovery_row).collect(),
+                Some(53),
+                vec![],
+            );
+            assert_eq!(
+                recorder.pages.lock().unwrap().last().unwrap().2,
+                Page::After(53)
+            );
+            recovery_answer(
+                &mut client,
+                &recorder,
+                103,
+                121,
+                (54..=103).map(recovery_row).collect(),
+                Some(103),
+                vec![],
+            );
+            recovery_answer(
+                &mut client,
+                &recorder,
+                121,
+                200,
+                (104..=121).map(recovery_row).collect(),
+                Some(121),
+                vec![],
+            );
+            let progress = &client.servers[0].history_progress[&2];
+            assert_eq!(
+                progress.target_head,
+                Some(120),
+                "later heads cannot extend this recovery"
+            );
+            assert_eq!(progress.through, 121);
+            assert!(!progress.needed);
+            let shown = &client.servers[0].channels[position].timeline.messages;
+            assert_eq!(shown.len(), 121);
+            assert_eq!(shown.iter().filter(|row| row.seq == Some(121)).count(), 1);
+        }
+    }
+
+    #[test]
+    fn recovery_quota_yields_and_automatically_resumes_to_its_finite_head() {
+        let (mut client, recorder, id) = recovery_client();
+        recovery_reconnect(&mut client, &id, false);
+        for batch in 0..16 {
+            let start = 4 + batch * 50;
+            let end = start + 49;
+            recovery_answer(
+                &mut client,
+                &recorder,
+                end as i64,
+                1003,
+                (start..=end).map(recovery_row).collect(),
+                Some(end as i64),
+                vec![],
+            );
+        }
+        let before = recorder.pages.lock().unwrap().len();
+        let progress = &client.servers[0].history_progress[&2];
+        assert!(progress.needed && !progress.paused && progress.request.is_none());
+        assert_eq!((progress.through, progress.resume_at_ms), (803, Some(250)));
+        client.set_time(249);
+        assert_eq!(recorder.pages.lock().unwrap().len(), before);
+        client.set_time(250);
+        assert_eq!(recorder.pages.lock().unwrap().len(), before + 1);
+        assert_eq!(
+            recorder.pages.lock().unwrap().last().unwrap().2,
+            Page::After(803)
+        );
+        for start in [804, 854, 904, 954] {
+            let end = start + 49;
+            recovery_answer(
+                &mut client,
+                &recorder,
+                end as i64,
+                5000,
+                (start..=end).map(recovery_row).collect(),
+                Some(end as i64),
+                vec![],
+            );
+        }
+        assert!(!client.servers[0].history_progress[&2].needed);
+        assert_eq!(
+            client.servers[0].history_progress[&2].target_head,
+            Some(1003)
+        );
+        let (_, position) = client.selected_indices().unwrap();
+        assert_eq!(
+            client.servers[0].channels[position].timeline.messages.len(),
+            MAX_TIMELINE
+        );
+    }
+
+    #[test]
+    fn recovery_void_progress_and_outage_mutations_preserve_pending_keys_and_encryption() {
+        let (mut client, recorder, id) = recovery_client();
+        let (_, position) = client.selected_indices().unwrap();
+        let encryption = crate::conversation::EncryptionState {
+            security: SessionSecurity::MlsEstablished,
+            description: "established elsewhere".into(),
+            blocked: None,
+            epoch: 9,
+        };
+        client.servers[0]
+            .encryption
+            .insert([2; 16], encryption.clone());
+        let mut pending = recovery_row(4);
+        pending.id = None;
+        pending.seq = None;
+        pending.pending = Some([9; 16]);
+        pending.outgoing = true;
+        client.servers[0].channels[position].timeline.merge(pending);
+        client.servers[0].acked.insert([8; 16], Some(90));
+        recovery_reconnect(&mut client, &id, false);
+        recovery_answer(
+            &mut client,
+            &recorder,
+            53,
+            54,
+            vec![],
+            Some(53),
+            vec![
+                (
+                    1,
+                    Change::Deleted(crate::timeline::Deletion {
+                        at_ms: 20,
+                        moderator: true,
+                    }),
+                ),
+                (
+                    2,
+                    Change::Edited {
+                        source: "edited during loss".into(),
+                        document: MessageDocument { blocks: vec![] },
+                        edited_ms: 21,
+                    },
+                ),
+            ],
+        );
+        assert_eq!(
+            recorder.pages.lock().unwrap().last().unwrap().2,
+            Page::After(53),
+            "void rows advance the raw cursor"
+        );
+        recovery_answer(
+            &mut client,
+            &recorder,
+            54,
+            54,
+            vec![recovery_row(54)],
+            None,
+            vec![],
+        );
+        let server = &client.servers[0];
+        let timeline = &server.channels[position].timeline;
+        assert!(
+            timeline
+                .messages
+                .iter()
+                .any(|row| row.seq == Some(1) && row.deleted.is_some())
+        );
+        assert!(
+            timeline
+                .messages
+                .iter()
+                .any(|row| row.seq == Some(2) && row.source == "edited during loss")
+        );
+        assert!(
+            timeline
+                .messages
+                .iter()
+                .any(|row| row.pending == Some([9; 16]))
+        );
+        assert_eq!(server.acked.get(&[8; 16]), Some(&Some(90)));
+        assert_eq!(server.encryption.get(&[2; 16]), Some(&encryption));
+        assert!(!server.history_progress[&2].needed);
+    }
+
+    #[test]
+    fn old_attempt_pages_changes_and_failures_cannot_mutate_the_reconnected_view() {
+        let (mut client, recorder, id) = recovery_client();
+        recovery_reconnect(&mut client, &id, false);
+        let old = recorder.pages.lock().unwrap().last().unwrap().clone();
+        recovery_reconnect(&mut client, &id, false);
+        let current = recorder.pages.lock().unwrap().last().unwrap().1.clone();
+        assert_ne!(
+            old.1.owner.as_ref().unwrap().epoch,
+            current.owner.as_ref().unwrap().epoch
+        );
+        client.handle(Input::HistoryChanges {
+            server: id.clone(),
+            ticket: old.1.clone(),
+            scanned_through: 999,
+            scanned_bytes: 1024,
+            head: 999,
+            changes: vec![(
+                1,
+                Change::Deleted(crate::timeline::Deletion {
+                    at_ms: 99,
+                    moderator: false,
+                }),
+            )],
+        });
+        client.handle(Input::HistoryWindow {
+            server: id.clone(),
+            ticket: old.1.clone(),
+            page: old.2,
+            messages: vec![recovery_row(999)],
+            next_before: None,
+            next_after: None,
+        });
+        client.handle(Input::HistoryFailed {
+            server: id.clone(),
+            ticket: old.1,
+            reason: "obsolete failure".into(),
+        });
+        let (_, position) = client.selected_indices().unwrap();
+        let timeline = &client.servers[0].channels[position].timeline;
+        assert_eq!(timeline.messages.len(), 3);
+        assert!(timeline.loading && timeline.messages.iter().all(|row| row.deleted.is_none()));
+        assert_eq!(
+            client.servers[0].history_progress[&2].request.as_ref(),
+            Some(&current)
+        );
+    }
+
+    #[test]
+    fn recovery_timeout_without_progress_is_visible_and_keeps_a_retryable_gap() {
+        let (mut client, recorder, id) = recovery_client();
+        recovery_reconnect(&mut client, &id, false);
+        client.set_time(30_000);
+        let progress = &client.servers[0].history_progress[&2];
+        assert!(progress.needed && progress.paused && progress.request.is_none());
+        assert_eq!(progress.through, 3);
+        assert!(client.take_updates().iter().any(|update| matches!(update, Update::HistoryFailed(reason) if reason.contains("without progress"))));
+        let before = recorder.pages.lock().unwrap().len();
+        client.set_time(60_000);
+        assert_eq!(recorder.pages.lock().unwrap().len(), before);
+        client.open(0, 2).unwrap();
+        assert_eq!(recorder.pages.lock().unwrap().len(), before + 1);
+        assert_eq!(
+            recorder.pages.lock().unwrap().last().unwrap().2,
+            Page::After(3)
+        );
+    }
+
+    #[test]
+    fn recovery_batch_deadline_with_progress_yields_then_resumes_the_same_cursor() {
+        let (mut client, recorder, id) = recovery_client();
+        recovery_reconnect(&mut client, &id, false);
+        recovery_answer(
+            &mut client,
+            &recorder,
+            53,
+            100,
+            (4..=53).map(recovery_row).collect(),
+            Some(53),
+            vec![],
+        );
+        let old = recorder.pages.lock().unwrap().last().unwrap().1.clone();
+        client.set_time(30_000);
+        assert_eq!(
+            client.servers[0].history_progress[&2].resume_at_ms,
+            Some(30_250)
+        );
+        assert!(!client.servers[0].history_progress[&2].paused);
+        client.set_time(30_250);
+        let current = recorder.pages.lock().unwrap().last().unwrap().clone();
+        assert_eq!(current.2, Page::After(53));
+        assert_ne!(current.1.owner, old.owner);
+    }
+
+    #[test]
+    fn empty_or_inconsistent_recovery_before_the_target_does_not_claim_completion() {
+        for head in [100, 2] {
+            let (mut client, recorder, id) = recovery_client();
+            recovery_reconnect(&mut client, &id, false);
+            recovery_answer(&mut client, &recorder, 3, head, vec![], None, vec![]);
+            let progress = &client.servers[0].history_progress[&2];
+            assert!(progress.needed && progress.paused);
+            assert_eq!(progress.through, 3);
+            assert!(
+                client
+                    .take_updates()
+                    .iter()
+                    .any(|update| matches!(update, Update::HistoryFailed(_)))
+            );
+        }
+    }
+    #[test]
+    fn old_latest_completion_during_reconnect_is_rejected_before_new_navigation_exists() {
+        let (mut client, recorder, id) = recovery_client();
+        let old = recorder.pages.lock().unwrap().last().unwrap().1.clone();
+        client.handle(Input::Reconnecting {
+            server: id.clone(),
+            generation: 1,
+            attempt: 1,
+            delay_secs: 1,
+            reason: "synthetic early loss".into(),
+        });
+        assert!(
+            client.navigation.accepts(&old),
+            "navigation generation alone cannot reject this completion"
+        );
+        client.handle(Input::History {
+            server: id,
+            ticket: old,
+            before: None,
+            messages: vec![recovery_row(999)],
+            next_before: None,
+        });
+        let (_, position) = client.selected_indices().unwrap();
+        assert_eq!(
+            client.servers[0].channels[position].timeline.messages.len(),
+            3
+        );
+        assert!(client.servers[0].history_progress[&2].needed);
+    }
+
+    #[test]
+    fn archive_recovery_and_later_live_rows_keep_a_retried_own_send_in_server_sequence_order() {
+        let (mut client, recorder, id) = recovery_client();
+        let (_, position) = client.selected_indices().unwrap();
+        let mut pending = recovery_row(20);
+        pending.id = None;
+        pending.seq = None;
+        pending.pending = Some([7; 16]);
+        pending.outgoing = true;
+        pending.message.observed_at_ms = -1000; // composed before Bob, stored after him
+        client.servers[0].channels[position].timeline.merge(pending);
+        recovery_reconnect(&mut client, &id, false);
+        recovery_answer(
+            &mut client,
+            &recorder,
+            6,
+            6,
+            (4..=6).map(recovery_row).collect(),
+            None,
+            vec![],
+        );
+        client.handle(Input::Server {
+            server: id.clone(),
+            generation: 1,
+            event: ServerEvent::ChatAcked {
+                key: [7; 16],
+                seq: 6,
+            },
+        });
+        let mut live = recovery_row(7);
+        live.message.observed_at_ms = -2000; // arrival must not undo the archive's sequence order
+        let source = live.message.body.clone();
+        let receipt = client
+            .receive_message(&id, 1, TextTarget::Channel(2), "2".into(), None, live)
+            .unwrap();
+        let shown = &client.servers[0].channels[position].timeline.messages;
+        assert_eq!(
+            shown.iter().filter_map(|row| row.seq).collect::<Vec<_>>(),
+            (1..=7).collect::<Vec<_>>()
+        );
+        let admitted = shown.last().unwrap();
+        assert_eq!(admitted.serial, receipt.serial);
+        assert_eq!(admitted.revision, receipt.revision);
+        assert_eq!(admitted.source, source);
+        assert_eq!(admitted.source_format, None);
+        assert_eq!(receipt.server, id);
+        assert_eq!(receipt.channel, 2);
+        assert_eq!(
+            receipt.channel_instance,
+            client.servers[0].channels[position].instance
+        );
+    }
+    #[test]
+    fn explicit_disconnect_during_recovery_can_still_open_local_offline_history() {
+        let (mut client, recorder, id) = recovery_client();
+        recovery_reconnect(&mut client, &id, false);
+        client.disconnect(0);
+        assert!(client.servers[0].history_progress.is_empty());
+        let before = recorder.pages.lock().unwrap().len();
+        client.open(0, 2).unwrap();
+        let pages = recorder.pages.lock().unwrap();
+        assert_eq!(pages.len(), before + 1);
+        assert_eq!(pages.last().unwrap().1.source, HistorySource::LocalObserved);
+        assert!(!pages.last().unwrap().1.catchup);
     }
 }

@@ -23,6 +23,7 @@ assert
   || (sourceNarHash != null && builtins.match "sha256-[A-Za-z0-9+/]{43}=" sourceNarHash != null);
 assert !(pkgs.lib.hasInfix "\n" maintainer || pkgs.lib.hasInfix "\r" maintainer);
 let
+  emojiAssets = import (projectRoot + "/nix/emoji.nix") { inherit pkgs; };
   vendor = craneLib.vendorCargoDeps { cargoLock = projectRoot + "/Cargo.lock"; };
   metadataArgs = pkgs.lib.escapeShellArgs (
     [
@@ -66,6 +67,11 @@ pkgs.runCommand
     chmod -R u+w "nuschl-${version}"
     cd "nuschl-${version}"
     test ! -e .git && test ! -e .jj && test ! -e target && test ! -e node_modules
+    # The pinned emoji images and data the desktop compiles in, where
+    # apps/desktop/build.rs looks without NUSCHL_EMOJI_ASSETS.
+    test ! -e emoji-assets
+    cp -R ${emojiAssets} emoji-assets
+    chmod -R u+w emoji-assets
     mkdir -p .cargo/registry-source
     cp -aL ${vendor}/*/. .cargo/registry-source/
     chmod -R u+w .cargo

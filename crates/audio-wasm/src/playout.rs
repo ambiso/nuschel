@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! Sample-clock-driven receiver; all codec work stays in the isolated worker.
 use super::{MAX_DECODED_SAMPLES, OUTPUT_CHANNELS, VoiceDecoder};
-use nuschl_audio_jitter::{JitterBuffer, MAX_SEQUENCE, Pull};
+use nuschl_audio_jitter::{JitterBuffer, MAX_SEQUENCE, Pull, UnderrunFade};
 use opus_pure::{MAX_PACKET_SAMPLES, OpusDecoder, packet};
 use std::time::Duration;
 #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
@@ -25,6 +25,7 @@ pub struct VoicePlayout {
     gain: f32,
     last_input: Option<Duration>,
     last_kind: u8,
+    fade: UnderrunFade,
 }
 
 #[cfg_attr(all(target_arch = "wasm32", target_os = "unknown"), wasm_bindgen)]
@@ -43,6 +44,7 @@ impl VoicePlayout {
             gain: 1.,
             last_input: None,
             last_kind: 0,
+            fade: UnderrunFade::default(),
         })
     }
 
@@ -109,8 +111,10 @@ impl VoicePlayout {
     pub fn render(&mut self) -> Result<Vec<f32>, String> {
         self.last_kind = 0;
         if self.cursor == self.ready {
+            let was_playing = self.jitter.is_playing();
             let count = match self.jitter.pull() {
                 Pull::Packet { opus: queued, end } => {
+                    let plays = !end || self.fade.end();
                     let count = self
                         .decoder
                         .decode(&queued.opus, MAX_PACKET_SAMPLES, &mut self.pcm)
@@ -122,7 +126,12 @@ impl VoicePlayout {
                         self.decoder
                             .reset_state()
                             .map_err(|error| error.to_string())?;
+                        if !plays {
+                            self.last_kind = 0;
+                            return Ok(Vec::new());
+                        }
                     }
+                    self.fade.play(&mut self.pcm[..count * OUTPUT_CHANNELS]);
                     count
                 }
                 Pull::Lost { fec, frames } => {
@@ -138,6 +147,19 @@ impl VoicePlayout {
                     if count != wanted {
                         return Err("concealed duration mismatch".into());
                     }
+                    self.fade.play(&mut self.pcm[..count * OUTPUT_CHANNELS]);
+                    count
+                }
+                Pull::Idle if self.fade.ran_dry(was_playing) => {
+                    self.last_kind = 3;
+                    let count = self
+                        .decoder
+                        .decode(&[], PLAYOUT_FRAMES, &mut self.pcm)
+                        .map_err(|error| error.to_string())?;
+                    if count != PLAYOUT_FRAMES {
+                        return Err("concealed duration mismatch".into());
+                    }
+                    self.fade.fade_out(&mut self.pcm[..count * OUTPUT_CHANNELS]);
                     count
                 }
                 Pull::Idle => return Ok(Vec::new()),
@@ -190,6 +212,7 @@ impl VoicePlayout {
         self.gain = 1.;
         self.last_input = None;
         self.last_kind = 0;
+        self.fade = UnderrunFade::default();
         Ok(())
     }
 }
@@ -216,6 +239,62 @@ mod tests {
             })
             .collect()
     }
+
+    #[test]
+    fn an_underrun_fades_out_and_back_in_and_a_late_terminator_stays_silent() {
+        // A 0.5 sine: packets 0..15 arrive on time, the sender stalls for
+        // 300 ms, sends 15..30 and runs dry again, and its terminator comes
+        // last. Playout fades to silence and back instead of stepping, and the
+        // terminator only ends audio that has already faded out (issue #206).
+        let mut encoder =
+            OpusEncoder::new(crate::SAMPLE_RATE as i32, 1, Application::Audio).unwrap();
+        let mut bytes = [0; MAX_PACKET_BYTES];
+        let packets: Vec<Vec<u8>> = (0..31)
+            .map(|index| {
+                let pcm: Vec<f32> = (0..960)
+                    .map(|n| {
+                        let t = (index * 960 + n) as f32 / 48_000.;
+                        0.5 * (std::f32::consts::TAU * 440. * t).sin()
+                    })
+                    .collect();
+                let size = encoder.encode(&pcm, 960, &mut bytes).unwrap();
+                bytes[..size].to_vec()
+            })
+            .collect();
+        let mut receiver = VoicePlayout::new().unwrap();
+        let mut left = Vec::new();
+        for tick in 0..140 {
+            for (index, opus) in packets.iter().enumerate() {
+                let at = match index {
+                    0..15 => 20 * index,
+                    15..30 => 20 * index + 300,
+                    _ => 1200,
+                };
+                if at == 10 * tick {
+                    let (sequence, arrival) = (2 * index as u64, 1000 * at as u64);
+                    receiver
+                        .push(sequence, opus, index == 30, 1., arrival)
+                        .unwrap();
+                }
+            }
+            let block = receiver.render().unwrap();
+            left.extend(block.iter().step_by(OUTPUT_CHANNELS));
+            left.resize(PLAYOUT_FRAMES * (tick + 1), 0.);
+        }
+        let silent = left
+            .chunks(PLAYOUT_FRAMES)
+            .filter(|frame| frame.iter().all(|v| *v == 0.));
+        assert!(silent.count() > 40, "the stream must run dry twice");
+        // A 0.5 sine at 440 Hz changes by at most 0.029 per sample.
+        let step = left
+            .windows(2)
+            .map(|pair| (pair[1] - pair[0]).abs())
+            .fold(0., f32::max);
+        assert!(step < 0.05, "{step}");
+        let after = &left[110 * PLAYOUT_FRAMES..];
+        assert!(after.iter().all(|v| *v == 0.), "terminator played");
+    }
+
     #[test]
     fn reorder_keeps_gain_with_packets_and_end_never_extends_plc() {
         let packets = packets();
