@@ -181,36 +181,6 @@ message Author {
   string name = 3;
 }
 
-// Carried, inert metadata, not instructions to fetch. Requires preview/1;
-// content remains the original text. Version/provider zero are invalid.
-message Preview {
-  enum Provider {
-    PROVIDER_UNSPECIFIED = 0;
-    OPEN_GRAPH_V1 = 1;
-  }
-  uint32 version = 1;
-  Provider provider = 2;
-  string url = 3;
-  string title = 4;
-  string description = 5;
-  PreviewImage image = 6;
-}
-
-message PreviewImage {
-  enum Mime {
-    MIME_UNSPECIFIED = 0;
-    PNG = 1;
-    JPEG = 2;
-  }
-  Mime mime = 1;
-  // At most 32 KiB. Decoding and checking actual dimensions belongs to the
-  // content worker; these advertised dimensions confer no rendering authority.
-  bytes data = 2;
-  uint32 width = 3;
-  uint32 height = 4;
-  string alt = 5;
-}
-
 message Message {
   enum Kind {
     MESSAGE = 0;
@@ -242,8 +212,6 @@ message Message {
   // With MLS_APPLICATION: the archive record the sender sealed under the
   // conversation's history key (docs/e2ee.md §6.6), for members who join later.
   bytes archive = 14;
-  // preview/1, plaintext messages only; never beside MLS ciphertext.
-  Preview preview = 15;
 }
 
 // 0x4E01 -> ChatAck or Error.
@@ -256,8 +224,6 @@ message ChatSend {
   string content = 5;
   // A `seq` in the same conversation, at most its head; 0 for none.
   uint64 reply_to = 6;
-  // preview/1. Text and encoded preview share the existing 64 KiB body cap.
-  Preview preview = 7;
 }
 
 // 0x4E02, once the message (or edit, deletion) is durably stored.
@@ -337,8 +303,6 @@ message ChatEdit {
   uint64 target = 3;
   Format format = 4;
   string content = 5;
-  // preview/1. Absence removes the previous preview with the replaced text.
-  Preview preview = 6;
 }
 
 // 0x4E0B -> ChatAck or Error.
