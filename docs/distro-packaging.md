@@ -209,7 +209,9 @@ The underlying library interfaces are:
   orig/Debian tarballs and `_source.changes`; its `debian/rules` compiles all nine
   executables offline, with verifier features built separately. Original icons
   and required corresponding-source archives are explicit quilt binary inputs;
-  no prebuilt application/helper is used as source.
+  no prebuilt application/helper is used as source. The orig tarball also carries
+  `emoji-assets/`, the pinned Twemoji images and picker data with their notices
+  (nix/emoji.nix, docs/emoji.md), where the desktop's build script reads them.
 
 The source upload redistributes more than a runtime package. `SOURCE-NOTICES.json`
 inventories every registry source, including build/dev and unselected-platform

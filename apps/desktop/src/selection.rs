@@ -148,7 +148,7 @@ pub struct HoveredLink {
     pub deceptive: bool,
 }
 
-/// Message text state: the selection, the hovered link, the message a context
+/// Message text state: the selection, the hovered link and emoji, the message a context
 /// menu is for, the code last copied with a code block's button (shown as a
 /// check for a moment), the focus target that takes Ctrl+C while text is
 /// selected, and while dragging, the caret offered for the pointer and the
@@ -156,6 +156,7 @@ pub struct HoveredLink {
 pub struct TextState {
     pub selection: Option<TextSelection>,
     pub hovered: Option<HoveredLink>,
+    pub hovered_emoji: Option<crate::emoji::HoveredEmoji>,
     pub menu: Option<MessageMenu>,
     pub copied: Option<SharedString>,
     pub focus: FocusHandle,
@@ -168,6 +169,7 @@ impl TextState {
         Self {
             selection: None,
             hovered: None,
+            hovered_emoji: None,
             menu: None,
             copied: None,
             // The timeline's: a tab stop, so the keyboard reaches its entries.
@@ -1046,6 +1048,26 @@ pub(crate) fn link_at(
     Some((index, link))
 }
 
+/// The text (by index) and the emoji under the pointer, with its range, and
+/// skin tone; none over a link, which keeps its own hover and click.
+fn emoji_under(
+    texts: &[TextBox],
+    hitboxes: &[Hitbox],
+    position: Point<Pixels>,
+    window: &Window,
+) -> Option<(usize, Range<usize>, &'static crate::emoji::Emoji, usize)> {
+    if link_at(texts, hitboxes, position, window).is_some() {
+        return None;
+    }
+    let index = hitboxes
+        .iter()
+        .position(|hitbox| hitbox.is_hovered(window))?;
+    let text = &texts[index];
+    let offset = text.layout.index_for_position(position).ok()?;
+    let (range, emoji, tone) = crate::emoji::emoji_at(&text.text, offset)?;
+    Some((index, range, emoji, tone))
+}
+
 /// Whether a link's text names its address ("example.com/" for
 /// "https://example.com" does); otherwise its address shows on hover.
 fn names_target(text: &str, url: &str) -> bool {
@@ -1118,7 +1140,8 @@ pub fn timeline_handlers(
 /// Wraps a message's blocks: a press on its text starts a selection (a double
 /// click takes a word, a triple click a line), dragging extends it, into
 /// other messages too, and any other press clears it (see
-/// [`timeline_handlers`]). A click on a link without dragging opens it.
+/// [`timeline_handlers`]). A click on a link without dragging opens it; one
+/// on an emoji shows its card, and the pointer over one shows its name.
 pub struct SelectionArea {
     desktop: WeakEntity<Desktop>,
     message: Order,
@@ -1127,6 +1150,8 @@ pub struct SelectionArea {
     candidate: Rc<Cell<Option<Candidate>>>,
     /// The block and link under the pointer, if in this message.
     hovered: Option<(usize, usize)>,
+    /// The block and range of the emoji under the pointer, if in this message.
+    hovered_emoji: Option<(usize, Range<usize>)>,
     texts: Rc<[TextBox]>,
     child: AnyElement,
 }
@@ -1147,9 +1172,86 @@ impl SelectionArea {
             dragging: selection.is_some_and(|selection| selection.dragging),
             candidate: state.candidate.clone(),
             hovered,
+            hovered_emoji: state
+                .hovered_emoji
+                .as_ref()
+                .filter(|hovered| hovered.message == message.serial)
+                .map(|hovered| (hovered.block, hovered.range.clone())),
             texts: texts.into(),
             child: child.into_any_element(),
         }
+    }
+
+    /// Follow the emoji under the pointer (its name shows, see
+    /// `emoji::tooltip`), and show the card of one clicked without dragging.
+    fn track_emoji(&self, boxes: &Rc<[Hitbox]>, window: &mut Window) {
+        let (desktop, texts, hitboxes) = (self.desktop.clone(), self.texts.clone(), boxes.clone());
+        let (message, shown) = (self.message.serial, self.hovered_emoji.clone());
+        window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
+            if phase != DispatchPhase::Bubble {
+                return;
+            }
+            // Not while selecting.
+            let found = emoji_under(&texts, &hitboxes, event.position, window)
+                .filter(|_| event.pressed_button.is_none());
+            let at = found
+                .as_ref()
+                .map(|(index, range, ..)| (texts[*index].block, range.clone()));
+            if at == shown {
+                return;
+            }
+            let hovered = found.map(|(index, range, emoji, tone)| crate::emoji::HoveredEmoji {
+                message,
+                block: texts[index].block,
+                range,
+                emoji,
+                tone,
+                position: event.position,
+            });
+            let _ = desktop.update(cx, |this, cx| {
+                let mine = |hovered: &crate::emoji::HoveredEmoji| hovered.message == message;
+                if hovered.is_some() || this.text.hovered_emoji.as_ref().is_some_and(mine) {
+                    this.text.hovered_emoji = hovered;
+                    cx.notify();
+                }
+            });
+        });
+        let (desktop, texts, hitboxes) = (self.desktop.clone(), self.texts.clone(), boxes.clone());
+        let message = self.message;
+        window.on_mouse_event(move |event: &MouseUpEvent, phase, window, cx| {
+            if phase != DispatchPhase::Bubble || event.button != MouseButton::Left {
+                return;
+            }
+            let Some((index, range, emoji, tone)) =
+                emoji_under(&texts, &hitboxes, event.position, window)
+            else {
+                return;
+            };
+            let block = texts[index].block;
+            let _ = desktop.update(cx, |this, cx| {
+                // Only a click: pressed on this emoji and released unmoved.
+                let pressed = this.text.selection.is_some_and(|selection| {
+                    let (start, end) = selection.range();
+                    start == end
+                        && start.message == message
+                        && start.caret.block == block
+                        && range.contains(&start.caret.offset)
+                });
+                if pressed {
+                    let hovered = crate::emoji::HoveredEmoji {
+                        message: message.serial,
+                        block,
+                        range,
+                        emoji,
+                        tone,
+                        position: event.position,
+                    };
+                    this.text.hovered_emoji = None;
+                    this.open_emoji_card(&hovered, window, cx);
+                    cx.notify();
+                }
+            });
+        });
     }
 
     /// Follow the link under the pointer: underline it, change the cursor and
@@ -1278,7 +1380,11 @@ impl Element for SelectionArea {
     ) {
         self.child.paint(window, cx);
         for (text, hitbox) in self.texts.iter().zip(hitboxes.iter()) {
-            let on_link = self.hovered.is_some_and(|(block, _)| block == text.block);
+            let on_link = self.hovered.is_some_and(|(block, _)| block == text.block)
+                || self
+                    .hovered_emoji
+                    .as_ref()
+                    .is_some_and(|(block, _)| *block == text.block);
             let cursor = if on_link {
                 CursorStyle::PointingHand
             } else {
@@ -1288,6 +1394,10 @@ impl Element for SelectionArea {
         }
         if self.texts.iter().any(|text| text.links.is_some()) {
             self.track_links(hitboxes, window);
+        }
+        // Every emoji is outside ASCII.
+        if self.texts.iter().any(|text| !text.text.is_ascii()) {
+            self.track_emoji(hitboxes, window);
         }
         let message = self.message;
         if self.dragging {

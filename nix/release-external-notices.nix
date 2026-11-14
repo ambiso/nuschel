@@ -39,6 +39,11 @@ let
       path = "${native.${name}}/${name}/${file}";
     }) files;
   };
+  # Twemoji graphics (CC-BY 4.0), emojibase-data (MIT) and the Unicode
+  # License v3 of the CLDR data it derives from, compiled into the desktop
+  # and served by the web client; pinned together in nix/emoji.nix.
+  emojiAssets = import ./emoji.nix { inherit pkgs; };
+  emojiPins = emojiAssets.passthru.pins;
   newcm = projectRoot + "/release/licenses/newcm";
   syntect = projectRoot + "/release/licenses/syntect-assets";
   syntax =
@@ -108,6 +113,25 @@ in
               sha256 = customSyntax.sha256;
             }
           ];
+      }
+    ]
+    ++ [
+      {
+        name = "emoji-assets";
+        version = "twemoji-v${emojiPins.twemoji.version}+emojibase-data-${emojiPins.emojibase.version}+cldr-${emojiPins.cldr.version}";
+        source = with emojiAssets.passthru.sources; "${twemoji}; ${emojibase}; ${cldr}";
+        files =
+          map
+            (file: {
+              name = file;
+              path = "${emojiAssets}/${file}";
+            })
+            [
+              "ATTRIBUTION.txt"
+              "LICENSE-GRAPHICS"
+              "LICENSE-emojibase"
+              "LICENSE-unicode-cldr"
+            ];
       }
     ]
     ++ pkgs.lib.optional (webRuntimeNotices != null) {

@@ -15,7 +15,8 @@
       "newcm-math-font",
       "syntect-default-assets",
       "web-runtime-assets",
-      "musicbot-web-runtime-assets"
+      "musicbot-web-runtime-assets",
+      "emoji-assets"
     ],
     "root_group": "all"
   },
@@ -26,7 +27,8 @@
     "external_components": [
       "rust-standard-library",
       "newcm-math-font",
-      "syntect-default-assets"
+      "syntect-default-assets",
+      "emoji-assets"
     ]
   },
   "windows-x86_64": {
@@ -38,7 +40,8 @@
       "gcc-runtime",
       "mingw-w64-runtime",
       "newcm-math-font",
-      "syntect-default-assets"
+      "syntect-default-assets",
+      "emoji-assets"
     ]
   },
   "macos-universal": {
@@ -49,7 +52,8 @@
     "external_components": [
       "rust-standard-library",
       "newcm-math-font",
-      "syntect-default-assets"
+      "syntect-default-assets",
+      "emoji-assets"
     ]
   },
   "web": {
@@ -59,7 +63,8 @@
     "external_components": [
       "rust-standard-library",
       "syntect-default-assets",
-      "web-runtime-assets"
+      "web-runtime-assets",
+      "emoji-assets"
     ]
   },
   "linux-aarch64-nix": {
@@ -69,7 +74,8 @@
     "external_components": [
       "rust-standard-library",
       "newcm-math-font",
-      "syntect-default-assets"
+      "syntect-default-assets",
+      "emoji-assets"
     ]
   },
   "rtc-probe-x86_64-unknown-linux-gnu": {
