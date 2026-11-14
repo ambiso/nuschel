@@ -229,6 +229,28 @@ pub struct Media {
     task: tokio::task::JoinHandle<()>,
 }
 impl Media {
+    /// A worker reached in memory, a test double for the supervisor: two
+    /// channels carry the requests it is sent and the events it reports.
+    #[doc(hidden)]
+    pub fn in_memory() -> (
+        Self,
+        mpsc::Receiver<LiveMediaRequest>,
+        mpsc::Sender<LiveMediaEvent>,
+    ) {
+        let (commands, requests) = mpsc::channel(256);
+        let (replies, events) = mpsc::channel(32);
+        let task = tokio::spawn(async {});
+        (
+            Self {
+                commands,
+                events,
+                task,
+            },
+            requests,
+            replies,
+        )
+    }
+
     pub fn start() -> Result<Self, Error> {
         let Worker {
             mut child,

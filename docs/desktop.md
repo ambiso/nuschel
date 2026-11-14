@@ -22,8 +22,8 @@ exports it as PKCS#12.
   fingerprint and the server's policy (`mumble://…?fp=sha256:…&policy=nuschl`), which
   pins them before the first connection.
 - Server passwords stay in memory for the connection attempt only.
-- Lost connections reconnect with backoff, rejoin your channel with its mute state,
-  and mark the gap in the timeline.
+- Lost connections reconnect with backoff, rejoin your channel muted, and mark the
+  gap in the timeline.
 - Unread messages outside the visible part of the server rail or channel list show
   an **↑ unread** or **↓ unread** button, red when they include mentions. Click it
   to open the nearest unread conversation in that direction. It browses text and

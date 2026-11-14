@@ -1081,7 +1081,13 @@ fn user_row(
             "{full_name}{}{}{}{}",
             if friend.is_some() { ", friend" } else { "" },
             if talking { ", talking" } else { "" },
-            if muted { ", muted" } else { "" },
+            if user.suppressed {
+                ", can't speak here"
+            } else if muted {
+                ", muted"
+            } else {
+                ""
+            },
             if deafened { ", deafened" } else { "" }
         ))
         .when(full_name != name, |row| {
@@ -1151,22 +1157,23 @@ fn user_row(
                     .child(icon("star", 14., color(WARNING))),
             )
         })
-        .when(muted, |row| {
+        .when(user.suppressed, |row| {
+            // No Speak permission in this channel: its own mark.
             row.child(
                 div()
-                    .text_color(color(if user.muted || user.suppressed {
-                        DANGER
-                    } else {
-                        TEXT_FAINT
-                    }))
+                    .id(("cant-speak", session as usize))
+                    .tooltip(|_, cx| cx.new(|_| Tooltip("Can't speak here".into())).into())
+                    .child(icon("mic-lock", 14., color(DANGER))),
+            )
+        })
+        .when(muted && !user.suppressed, |row| {
+            row.child(
+                div()
+                    .text_color(color(if user.muted { DANGER } else { TEXT_FAINT }))
                     .child(icon(
                         "mic-off",
                         14.,
-                        color(if user.muted || user.suppressed {
-                            DANGER
-                        } else {
-                            TEXT_FAINT
-                        }),
+                        color(if user.muted { DANGER } else { TEXT_FAINT }),
                     )),
             )
         })
