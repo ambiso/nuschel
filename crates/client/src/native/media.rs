@@ -839,7 +839,7 @@ mod tests {
             move || {
                 let (media, requests, replies) = Media::in_memory();
                 let _ = started.send((requests, replies));
-                Ok(media)
+                std::future::ready(Ok(media))
             },
         ));
         let wait = std::time::Duration::from_secs(2);
