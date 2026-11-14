@@ -3,7 +3,7 @@
 Initial legacy delivery, 2026-11-14. Native Linux has the sender-side Open Graph
 pipeline, composer card and removal, global policy settings, and one-message Mumble
 HTML projection. Parsing and image conversion run in confined content workers.
-The default is Off. New preview fetching fails closed on other native platforms
+The default is Direct. New preview fetching fails closed on other native platforms
 until their process-lifetime adapters are implemented and tested.
 
 The negotiated typed-message contract and encrypted structured body below remain
@@ -47,55 +47,21 @@ in one compatible message, within its server limits, or text alone.
 
 ## Global fetch policy
 
-Choose the global mode in **Settings → Link previews** on Linux. The initial
-default is **Off**, and the setting applies to every server in the current profile.
-There is no default public proxy or DNS service. The web adapter displays metadata
-and embedded images carried in messages, with sender-side preview generation disabled.
+Choose **Off** or **Direct** in **Settings → Link previews** on Linux. The default
+is **Direct**, and the setting applies to every server in the current profile. The
+web adapter displays metadata and embedded images carried in messages, with
+sender-side preview generation disabled.
 
 | Mode | Behavior |
 |---|---|
 | Off | No automatic network request, DNS lookup or fetch worker. |
-| Direct | Explicit opt-in to resolving and connecting to public target addresses directly. |
-| ProxyRequired | No fetching until an explicit proxy and proxied DNS/bootstrap configuration are complete; no direct or local target-DNS fallback. |
+| Direct | Resolving and connecting to public target addresses directly. |
 
-The mode selector does not edit proxy or resolver addresses. To use **Proxy
-required**, close Nuschl and add a `link_previews` object to your existing
-`settings.json`: normally `~/.config/nuschl/settings.json` on Linux (or
-`$XDG_CONFIG_HOME/nuschl/settings.json` when set). With `--profile-dir DIR`,
-use `DIR/config/settings.json`. Preserve the file's other settings. For example:
-
-```json
-{
-  "link_previews": {
-    "mode": "proxy_required",
-    "proxy": "socks5://127.0.0.1:9050",
-    "dns": {
-      "url": "https://resolver.example/dns-query",
-      "bootstrap": ["192.0.2.53"]
-    }
-  }
-}
-```
-
-Replace the proxy address, resolver URL and bootstrap IP with services you have
-configured; the resolver values above are documentation placeholders. The proxy
-must use `socks5://` with an IP literal and explicit port, without authentication.
-The resolver must support DNS-over-HTTPS JSON GET requests using `name` and
-`type` query parameters for A and AAAA records, not only binary DNS wire responses.
-Supply one to four bootstrap IP addresses for the resolver: Nuschl reaches those
-through the proxy while verifying TLS against the resolver URL's hostname and
-built-in WebPKI roots. It resolves page and image hosts through that resolver
-rather than system DNS.
-Restart Nuschl after editing the file; **Active policy** and any configuration
-problem appear below the mode selector. Missing or invalid proxy configuration
-fetches nothing and never falls back to Direct. Switching modes preserves valid
-proxy and DNS settings. Preview policy is user-owned; `managed.json` does not
-supply or enable it. There are no dedicated preview sidecars.
-
-An absent `link_previews` field means Off. The exact default is omitted when saving;
-explicit choices or configured services use the new field. Older Nuschl releases
-with strict settings schemas can reject files containing this field; this change
-does not provide a downgrade migration.
+Preview policy is user-owned; `managed.json` does not supply or enable it. An
+absent `link_previews` field means Direct. A `settings.json` that Nuschl sets aside
+as invalid leaves previews Off until you choose again. The exact default is omitted
+when saving. Older Nuschl releases with strict settings schemas can reject files
+containing this field; this change does not provide a downgrade migration.
 
 The policy covers the HTML document, its redirects, the selected image, image
 redirects and future metadata providers. A change invalidates late results and

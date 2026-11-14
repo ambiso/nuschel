@@ -176,7 +176,7 @@ impl<K: Clone + Eq> Default for DraftPreviews<K> {
 }
 
 impl<K: Clone + Eq> DraftPreviews<K> {
-    /// Starts disabled (the default policy is Off).
+    /// Starts disabled until the first policy.
     pub fn new() -> Self {
         Self {
             enabled: false,
@@ -869,7 +869,10 @@ mod tests {
         assert!(previews.update(draft(&1, &text, Some(URL)), 0).is_empty());
         assert_eq!(previews.status(&1), Status::Disabled);
         for settings in [
-            Settings::default(),
+            Settings {
+                mode: Mode::Off,
+                ..Settings::default()
+            },
             Settings {
                 mode: Mode::ProxyRequired,
                 ..Settings::default()
@@ -1155,7 +1158,10 @@ mod tests {
         assert!(previews.update(draft(&2, &text, Some(URL)), 0).is_empty());
         assert_eq!(previews.status(&2), Status::Removed);
         // Off: nothing pending, nothing sent.
-        let effects = previews.set_policy(&Settings::default());
+        let effects = previews.set_policy(&Settings {
+            mode: Mode::Off,
+            ..Settings::default()
+        });
         assert_eq!(cancelled(&effects).len(), 1);
         assert!(previews.update(draft(&1, &text, Some(URL)), 0).is_empty());
         assert_eq!(previews.status(&1), Status::Disabled);

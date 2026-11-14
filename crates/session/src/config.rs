@@ -277,7 +277,7 @@ pub struct ClientSettings {
     pub notifications: bool,
     /// Show each server's website icon, fetched over HTTPS from its address.
     pub server_icons: bool,
-    /// Sender preview routes chosen in this profile; Off is the default.
+    /// Sender preview routes chosen in this profile; Direct is the default.
     #[serde(
         deserialize_with = "deserialize_preview_settings",
         skip_serializing_if = "preview_settings_default"
@@ -1322,7 +1322,11 @@ impl Profile {
         let (mut settings, managed_settings) =
             self.load_settings(&declared).unwrap_or_else(|error| {
                 problems.push(self.set_aside(SETTINGS_FILE, &error, "default settings"));
-                declared.settings_over(Map::new())
+                let (mut settings, managed) = declared.settings_over(Map::new());
+                // The user's preview choice is unknown: fetch nothing until
+                // they choose again.
+                settings.link_previews.mode = nuschl_link_preview::policy::Mode::Off;
+                (settings, managed)
             });
         // Its own file, never set aside: a problem costs only the bitrate.
         match self.load_voice_quality() {
@@ -3061,7 +3065,10 @@ mod tests {
         profile.save_servers(&[servers]).unwrap();
         write(&profile, "settings.json", r#"{"enter_sends": false,"#);
         let loaded = profile.load();
-        assert_eq!(loaded.settings, ClientSettings::default());
+        // The preview choice in the broken file is unknown, so previews stay off.
+        let mut expected = ClientSettings::default();
+        expected.link_previews.mode = nuschl_link_preview::policy::Mode::Off;
+        assert_eq!(loaded.settings, expected);
         assert_eq!(loaded.servers.len(), 1);
         assert_eq!(loaded.problems.len(), 1);
         assert!(
@@ -3764,7 +3771,7 @@ mod tests {
             .save_settings(&settings, &ManagedSettings::default())
             .unwrap();
         assert_eq!(settings_keys(&profile), released_keys());
-        assert_eq!(profile.load().settings.link_previews.mode, Mode::Off);
+        assert_eq!(profile.load().settings.link_previews.mode, Mode::Direct);
         let obsolete = ["link-previews.json", "managed-link-previews.json"];
         for name in obsolete {
             fs::write(
@@ -3773,7 +3780,7 @@ mod tests {
             )
             .unwrap();
         }
-        assert_eq!(profile.load().settings.link_previews.mode, Mode::Off);
+        assert_eq!(profile.load().settings.link_previews.mode, Mode::Direct);
         settings.link_previews = preview_services();
         let services = settings.link_previews.clone();
         for mode in [
@@ -3814,7 +3821,7 @@ mod tests {
         .unwrap();
         let (settings, keys) = profile.load_settings(&managed).unwrap();
         assert!(settings.relay_only);
-        assert_eq!(settings.link_previews.mode, Mode::Off);
+        assert_eq!(settings.link_previews.mode, Mode::Direct);
         assert!(!keys.contains("link_previews"));
         let malformed = Managed::parse(
             br#"{"settings":{"relay_only":true,"link_previews":{"mode":"invalid","proxy":123}}}"#,
@@ -3822,7 +3829,7 @@ mod tests {
         .unwrap();
         let (mut settings, keys) = profile.load_settings(&malformed).unwrap();
         assert!(settings.relay_only);
-        assert_eq!(settings.link_previews.mode, Mode::Off);
+        assert_eq!(settings.link_previews.mode, Mode::Direct);
         settings.link_previews = preview_services();
         profile.save_settings(&settings, &keys).unwrap();
         assert_eq!(

@@ -472,7 +472,7 @@ impl Desktop {
             if cfg!(target_os = "linux") {
                 settings.link_previews.clone()
             } else {
-                Default::default()
+                crate::link_preview::off()
             },
             monotonic_ms(),
         );

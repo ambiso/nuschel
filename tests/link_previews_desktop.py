@@ -249,16 +249,15 @@ def desktop(args):
                 if line.startswith("welcome_text =") else line for line in lines) + "\n")
 
     def configure(_shell, root, output):
-        # Configured services make an omitted mode's Off behavior discriminating.
+        # Configured services make an explicit Off discriminating; the Direct
+        # default is unit-tested.
         path = root / "profile/config/settings.json"
         settings = json.loads(path.read_text())
         assert "link_previews" not in settings
-        settings["link_previews"] = PREVIEW_SERVICES
-        assert "mode" not in settings["link_previews"]
+        settings["link_previews"] = {**PREVIEW_SERVICES, "mode": "off"}
         path.write_text(json.dumps(settings))
         (output / "initial-preview-settings.json").write_text(json.dumps({
             "link_previews": settings["link_previews"],
-            "default_control": "omitted mode with services; whole-field absence is separate unit coverage",
         }) + "\n")
         return {}
 
@@ -658,10 +657,9 @@ def desktop(args):
             plain = f"off-{uuid.uuid4().hex[:8]} http://93.184.215.14/page "
             type_message(plain)
             time.sleep(1.1)  # More than the actual750ms debounce, not a success retry.
-            assert len(events()) == initial, "default Off contacted a peer"
+            assert len(events()) == initial, "Off contacted a peer"
             send_and_receive(plain, False)
-            mark("default_off_no_fetch_text_send", omitted_mode=True,
-                configured_services=True, omitted_whole_field_runtime=False)
+            mark("off_no_fetch_text_send", configured_services=True)
 
             config = root / "profile/config"
             settings_path = config / "settings.json"
@@ -950,17 +948,6 @@ def desktop(args):
             mark("late_response_cannot_undo_remove")
 
             # The real UI switch retains the user services loaded at startup.
-            choose("Proxy required")
-            before = events()
-            proxy_text = f"proxy-{uuid.uuid4().hex[:8]} http://page.preview.example/page "
-            type_message(proxy_text)
-            wait("Link preview unavailable")
-            after = events()[len(before):]
-            assert any(event.get("kind") == "socks" and event.get("destination") == "93.184.215.53" for event in after), after
-            assert not any(event.get("kind") in ("dns", "doh") or event.get("destination") == "93.184.215.14" for event in after), after
-            send_and_receive(proxy_text, False)
-            mark("production_doh_untrusted_ca_refused_without_direct_or_dns_fallback")
-
             choose("Off")
             saved = json.loads(settings_path.read_text())["link_previews"]
             assert saved["mode"] == "off"

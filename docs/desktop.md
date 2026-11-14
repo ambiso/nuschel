@@ -111,7 +111,7 @@ The design and its measurements: [architecture.md](architecture.md#audio-configu
   Tab/Shift+Tab and Enter, and screen-reader activation. They use the same URL
   policy as message links; rendering a document does not fetch its links.
 - **Settings → Link previews** controls sender-side previews on Linux, initially
-  Off. A ready preview shows the actual domain and available title, description
+  Direct. A ready preview shows the actual domain and available title, description
   and image. **Remove link preview** keeps it out of this message. Legacy Mumble
   servers carry the card and text in one compatible message. Receivers fetch nothing.
   [Preview settings](link-previews.md#global-fetch-policy) also explain the

@@ -313,7 +313,8 @@ impl Client {
     }
 
     pub fn set_link_preview_settings(&mut self, settings: Settings, now: u64) {
-        if self.previews.settings == settings {
+        // The first settings always apply: the drafts start disabled.
+        if self.previews.drafts.policy_generation() != 0 && self.previews.settings == settings {
             return;
         }
         self.previews.settings = settings;

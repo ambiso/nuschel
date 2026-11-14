@@ -12,8 +12,8 @@ pub const MAX_URL_BYTES: usize = 2048;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Mode {
-    #[default]
     Off,
+    #[default]
     Direct,
     ProxyRequired,
 }
@@ -321,7 +321,12 @@ mod tests {
     use super::*;
     #[test]
     fn settings_never_fall_back_from_off_or_an_incomplete_proxy() {
-        assert_eq!(Settings::default().route(), Err(Error::Off));
+        assert_eq!(Settings::default().mode, Mode::Direct);
+        let off = Settings {
+            mode: Mode::Off,
+            ..Default::default()
+        };
+        assert_eq!(off.route(), Err(Error::Off));
         let mut settings = Settings {
             mode: Mode::ProxyRequired,
             ..Default::default()
