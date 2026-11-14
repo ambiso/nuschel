@@ -27,6 +27,12 @@ import types
 import uuid
 
 
+PREVIEW_SERVICES = {
+    "proxy": "socks5://127.0.0.1:1080",
+    "dns": {"url": "https://resolver.preview.example/dns-query", "bootstrap": ["93.184.215.53"]},
+}
+
+
 def control(operation, port=39211):
     from link_preview_fetch import exact
     payload = json.dumps({"operation": operation}).encode()
@@ -242,9 +248,18 @@ def desktop(args):
             self.config.write_text("\n".join("welcome_text = " + json.dumps(welcome)
                 if line.startswith("welcome_text =") else line for line in lines) + "\n")
 
-    def configure(_shell, root, _output):
-        # Exercise the missing-file default, not an explicitly configured Off.
-        assert not (root / "profile/config/link-previews.json").exists()
+    def configure(_shell, root, output):
+        # Configured services make an omitted mode's Off behavior discriminating.
+        path = root / "profile/config/settings.json"
+        settings = json.loads(path.read_text())
+        assert "link_previews" not in settings
+        settings["link_previews"] = PREVIEW_SERVICES
+        assert "mode" not in settings["link_previews"]
+        path.write_text(json.dumps(settings))
+        (output / "initial-preview-settings.json").write_text(json.dumps({
+            "link_previews": settings["link_previews"],
+            "default_control": "omitted mode with services; whole-field absence is separate unit coverage",
+        }) + "\n")
         return {}
 
     def actions(_args, root, shell, application, receiver, _server):
@@ -381,7 +396,7 @@ def desktop(args):
             observation["typed_body_verified"] = True
             shell.chord("Control_L", "End")
             return node
-        def choose(mode):
+        def choose(mode, *, expected_active=None, expected_error=None):
             observation.update(stage="choose", last_requested_mode=mode, requested_radio_focused_before_space=None)
             observation.pop("requested_radio_focus_error", None)
             activate("Settings")
@@ -404,10 +419,15 @@ def desktop(args):
                 observation["requested_radio_focus_error"] = type(error).__name__
             eventually(lambda: node.focused, f"{mode} radio did not acquire keyboard focus")
             observation["requested_radio_focused_before_space"] = node.focused
+            if expected_error is not None:
+                assert expected_error not in labels(), "save-failure notice must be fresh"
             shell.key("space")
-            eventually(lambda: not any("Saving preference" in label for label in labels())
-                and any(label.startswith(f"Active policy: {mode}.") for label in labels()),
-                f"{mode} preference did not complete")
+            active = mode if expected_active is None else expected_active
+            def applied():
+                current = labels()
+                return (any(label.startswith(f"Active policy: {active}.") for label in current)
+                    and (expected_error is None or expected_error in current))
+            eventually(applied, f"{mode} preference did not complete with active policy {active}")
             last_policy_labels[:] = [label[:512] for label in labels()
                 if label.startswith("Active policy:")][:4]
             activate("Done")
@@ -634,14 +654,38 @@ def desktop(args):
         try:
             initial = len(events())
             assert initial == scene_start, "startup/receiver display unexpectedly contacted a synthetic peer"
-            assert not (root / "profile/config/link-previews.json").exists(), "startup wrote a default policy instead of preserving absence"
             assert image_pixels(sender_pid, args.output / "before-preview.png") < 300, "image pixel control is not discriminating"
             plain = f"off-{uuid.uuid4().hex[:8]} http://93.184.215.14/page "
             type_message(plain)
             time.sleep(1.1)  # More than the actual750ms debounce, not a success retry.
             assert len(events()) == initial, "default Off contacted a peer"
             send_and_receive(plain, False)
-            mark("default_off_no_fetch_text_send")
+            mark("default_off_no_fetch_text_send", omitted_mode=True,
+                configured_services=True, omitted_whole_field_runtime=False)
+
+            config = root / "profile/config"
+            settings_path = config / "settings.json"
+            before_settings = settings_path.read_bytes()
+            original_permissions = config.stat().st_mode & 0o7777
+            before_failed_save = len(events())
+            save_error = "Link preview settings could not be saved; previews remain off."
+            try:
+                config.chmod(0o500)
+                choose("Direct", expected_active="Off", expected_error=save_error)
+                assert settings_path.read_bytes() == before_settings, "failed save changed user settings"
+                refused = f"save-failed-{uuid.uuid4().hex[:8]} http://93.184.215.14/page?save=failed "
+                type_message(refused)
+                time.sleep(1.1)  # Exercise the same real debounce while effective policy stays Off.
+                assert len(events()) == before_failed_save, "failed policy save enabled network requests"
+                send_and_receive(refused, False)
+                assert settings_path.read_bytes() == before_settings, "text send changed the refused settings"
+            finally:
+                config.chmod(original_permissions)
+            assert config.stat().st_mode & 0o7777 == original_permissions
+            activate("Dismiss notice")
+            eventually(lambda: save_error not in labels(), "save-failure notice did not dismiss")
+            mark("failed_policy_save_keeps_off_and_original_text",
+                settings_sha256=hashlib.sha256(before_settings).hexdigest())
 
             choose("Direct")
             body = f"card-{uuid.uuid4().hex[:8]} http://93.184.215.14/redirect "
@@ -905,14 +949,7 @@ def desktop(args):
             send_and_receive(delayed, False)
             mark("late_response_cannot_undo_remove")
 
-            # Explicit fixture operator services, not ambient proxy settings. The
-            # real UI save reloads this managed policy before applying the choice.
-            managed_path = root / "profile/config/managed-link-previews.json"
-            managed_bytes = json.dumps({
-                "version": 1, "mode": "proxy_required", "proxy": "socks5://127.0.0.1:1080",
-                "dns": {"url": "https://resolver.preview.example/dns-query", "bootstrap": ["93.184.215.53"]},
-            }).encode()
-            managed_path.write_bytes(managed_bytes)
+            # The real UI switch retains the user services loaded at startup.
             choose("Proxy required")
             before = events()
             proxy_text = f"proxy-{uuid.uuid4().hex[:8]} http://page.preview.example/page "
@@ -924,15 +961,12 @@ def desktop(args):
             send_and_receive(proxy_text, False)
             mark("production_doh_untrusted_ca_refused_without_direct_or_dns_fallback")
 
-            # The saved user mode remains visible; repeated choices are real UI
-            # actions, while active policy only resumes after its serialized save.
             choose("Off")
-            sidecar = json.loads((root / "profile/config/link-previews.json").read_text())
-            assert sidecar["mode"] == "off"
-            assert sidecar.get("proxy") is None and sidecar.get("dns") is None, "managed services were copied into user authority"
-            assert managed_path.read_bytes() == managed_bytes, "UI save changed the operator's route"
-            events()  # No synthetic peer assertion may hide at the scenario's end.
-            mark("policy_persisted_without_copying_or_losing_service_settings")
+            saved = json.loads(settings_path.read_text())["link_previews"]
+            assert saved["mode"] == "off"
+            assert {key: saved[key] for key in PREVIEW_SERVICES} == PREVIEW_SERVICES, "mode changes lost user services"
+            events()  # Keep the final synthetic-peer assertion oracle.
+            mark("policy_persisted_with_user_service_settings")
             return {"server": args.server, "cases": cases, "modern_typed_preview": False,
                 "production_tls_bypass": False, "host_devices": False}
         except BaseException as failure:
