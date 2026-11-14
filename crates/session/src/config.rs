@@ -278,7 +278,10 @@ pub struct ClientSettings {
     /// Show each server's website icon, fetched over HTTPS from its address.
     pub server_icons: bool,
     /// Sender preview routes chosen in this profile; Off is the default.
-    #[serde(skip_serializing_if = "preview_settings_default")]
+    #[serde(
+        deserialize_with = "deserialize_preview_settings",
+        skip_serializing_if = "preview_settings_default"
+    )]
     pub link_previews: nuschl_link_preview::policy::Settings,
     /// Sound effects for your channel, mute and deafen, push-to-talk, messages
     /// and the connection.
@@ -386,6 +389,16 @@ impl AppearanceSettings {
         self.zoom = clamp(self.zoom, ZOOM, 1.);
         self
     }
+}
+
+fn deserialize_preview_settings<'de, D>(
+    deserializer: D,
+) -> Result<nuschl_link_preview::policy::Settings, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    nuschl_link_preview::policy::Settings::deserialize(deserializer)
+        .map_err(|_| serde::de::Error::custom("invalid link preview settings"))
 }
 
 fn preview_settings_default(settings: &nuschl_link_preview::policy::Settings) -> bool {
@@ -3894,5 +3907,36 @@ mod tests {
             previous
         );
         assert!(!profile.config_dir.join(VOICE_QUALITY_FILE).exists());
+    }
+    #[test]
+    fn malformed_preview_settings_report_fixed_errors_and_start_off() {
+        use nuschl_link_preview::policy::Mode;
+
+        let root = tempfile::tempdir_in(".").unwrap();
+        let profile = Profile::open(Some(root.path().to_owned())).unwrap();
+        let sentinel = "private-resolver-route.example";
+        let bytes = serde_json::to_vec(&serde_json::json!({
+            "link_previews": {"mode":"proxy_required", "dns":sentinel}
+        }))
+        .unwrap();
+        fs::write(profile.config_dir.join(SETTINGS_FILE), &bytes).unwrap();
+        let loaded = profile.load();
+        assert_eq!(loaded.settings.link_previews.mode, Mode::Off);
+        assert!(
+            loaded
+                .problems
+                .iter()
+                .any(|problem| problem.contains("invalid link preview settings"))
+        );
+        assert!(
+            loaded
+                .problems
+                .iter()
+                .all(|problem| !problem.contains(sentinel))
+        );
+        assert_eq!(
+            fs::read(profile.config_dir.join("settings.json.invalid")).unwrap(),
+            bytes
+        );
     }
 }
