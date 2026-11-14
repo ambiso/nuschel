@@ -496,6 +496,13 @@ impl Session {
         }
     }
 
+    /// An explicit self-state request the server has not confirmed yet while
+    /// its bounded retries still run. An exhausted budget ends this; capture
+    /// stays blocked by [`Self::voice_policy`] either way.
+    pub fn self_state_settling(&self) -> bool {
+        self.self_change_pending && self.self_retry.is_some()
+    }
+
     /// Server acknowledgement AND local intent gate the transport itself.
     pub fn voice_policy(&self) -> (bool, bool) {
         let Some(own) = self.own_session().and_then(|id| self.users.get(&id)) else {
@@ -1251,6 +1258,33 @@ impl Session {
             _ => {}
         }
     }
+}
+
+/// browser.rs `reconcile_voice` once the route's server, generation and
+/// channel match; shared so native tests run it. Without a session every
+/// gate stays closed and a new route does not join.
+#[cfg(any(test, all(target_arch = "wasm32", target_os = "unknown")))]
+pub(crate) fn reconcile_voice_route(
+    route: &mut crate::voice::Route,
+    server: &nuschl_client::server::ServerState,
+    channel_id: u32,
+    session: Option<&Session>,
+) {
+    let (muted, deafened, settling) = session.map_or((true, true, true), |session| {
+        let (muted, deafened) = session.voice_policy();
+        (muted, deafened, session.self_state_settling())
+    });
+    let requested = route.requested();
+    route.set_target(session.map_or_else(
+        || nuschl_core::bitrate::VoiceBitrate::resolve(requested, 0),
+        |session| session.voice_target(requested),
+    ));
+    route.observe(
+        server.voice_channel() == Some(channel_id),
+        settling,
+        muted || server.muted,
+        deafened || server.deafened,
+    );
 }
 
 /// Server text shown as plain text: one bounded line.
@@ -2796,5 +2830,139 @@ mod tests {
             .into(),
         );
         assert!(session.users[&7].self_muted && session.users[&7].self_deafened);
+    }
+
+    /// The shared client model of `voice_session`'s connection after Join:
+    /// the own user is present in its channel, sound is requested on and the
+    /// microphone stays muted.
+    fn joined_server(s: &Session) -> nuschl_client::server::ServerState {
+        use nuschl_client::server::{ServerState, Status};
+        let mut server = ServerState::new(
+            crate::snapshot::bookmark("owned", "127.0.0.1", 64738, "rpc", None).unwrap(),
+        );
+        server.generation = 2;
+        server.status = Status::Connected;
+        server.own_session = Some(3);
+        server.users.insert(
+            3,
+            User {
+                instance: 1,
+                ..s.users[&3].clone()
+            },
+        );
+        // Join's shared-SDK intent: sound on, microphone still muted.
+        server.muted = true;
+        server.deafened = false;
+        server
+    }
+
+    /// The page's mute toggle carries the voice view it was shown
+    /// (actions.rs). The first view that offers it after Join must not be
+    /// replaced by the server's echo of the self-state Join itself requested:
+    /// an explicit Unmute right after joining was refused as stale
+    /// (tests/sdk_rpc.browser.mjs). The steps follow browser.rs `join`; the
+    /// route is reconciled by the same function as browser.rs
+    /// `reconcile_voice`, which only builds for wasm32.
+    #[test]
+    fn first_joined_voice_view_survives_the_joins_own_self_state_echo() {
+        use crate::actions::{Catalog, ServerRef, validate};
+        use crate::voice::{Route, VoiceView};
+        use serde_json::json;
+
+        // Logged in to channel 0; the server echoed the login's muted and
+        // deafened self-state.
+        let mut s = voice_session();
+        let own = s.users.get_mut(&3).unwrap();
+        own.channel = 0;
+        own.self_muted = true;
+        own.self_deafened = true;
+        let servers = [joined_server(&s)];
+        let mut catalog = Catalog::default();
+        let stamp = catalog.reserve(0, None).unwrap();
+        catalog.commit(0, stamp);
+        let mut route = Route::default();
+        route.select(servers[0].id.clone(), servers[0].generation, 0);
+        s.set_self(true, false);
+        let reconcile = |route: &mut Route, s: Option<&Session>| {
+            reconcile_voice_route(route, &servers[0], 0, s);
+            route.view().unwrap()
+        };
+        let mut published = vec![reconcile(&mut route, Some(&s))];
+        s.control(
+            kind::USER_STATE,
+            proto::UserState {
+                session: Some(3),
+                self_mute: Some(true),
+                self_deaf: Some(false),
+                ..Default::default()
+            }
+            .encode_to_vec()
+            .into(),
+        );
+        published.push(reconcile(&mut route, Some(&s)));
+        let current = route.view().unwrap();
+        let proof = |view: &VoiceView| {
+            json!({
+                "server": ServerRef::capture(&servers[0], catalog.get(0).unwrap()),
+                "voice": {"server_id": view.server_id,
+                    "connection_generation": view.connection_generation,
+                    "voice_generation": view.voice_generation, "channel_id": view.channel_id,
+                    "muted": view.muted, "deafened": view.deafened},
+            })
+            .to_string()
+        };
+        let toggle = json!({"method": "toggle_mute", "index": 0}).to_string();
+        let admits = |view: &VoiceView| {
+            validate(
+                &servers,
+                &catalog,
+                None,
+                Some(&current),
+                &toggle,
+                &proof(view),
+            )
+        };
+        let shown = published.iter().find(|view| view.joined).expect("joined");
+        assert_eq!(admits(shown), Ok(()));
+        // Nothing was offered before the echo, and the echo grants nothing:
+        // capture still needs an explicit unmute and current readiness.
+        assert!(!published[0].joined && !published[0].can_transmit);
+        assert!(current.joined && current.muted && !current.deafened && !current.can_transmit);
+        assert!(s.voice_policy().0);
+        // Without a live session every gate stays closed, and a route that
+        // has not joined yet does not join.
+        let gone = reconcile(&mut route, None);
+        assert!(gone.muted && gone.deafened && !gone.can_transmit);
+        let mut fresh = Route::default();
+        fresh.select(servers[0].id.clone(), servers[0].generation, 0);
+        let fresh = reconcile(&mut fresh, None);
+        assert!(!fresh.joined && fresh.muted && fresh.deafened && !fresh.can_transmit);
+    }
+
+    #[test]
+    fn an_unconfirmed_join_self_state_joins_muted_once_retries_are_exhausted() {
+        use crate::voice::Route;
+        let mut s = voice_session();
+        let own = s.users.get_mut(&3).unwrap();
+        own.self_muted = true;
+        own.self_deafened = true;
+        let server = joined_server(&s);
+        let mut route = Route::default();
+        route.select(server.id.clone(), server.generation, 1);
+        let mut observe = |s: &Session| {
+            reconcile_voice_route(&mut route, &server, 1, Some(s));
+            route.view().unwrap()
+        };
+        s.set_self(true, false);
+        assert!(s.self_state_settling());
+        assert!(!observe(&s).joined);
+        for tick in 1..=7 {
+            s.tick(tick as f64 * SELF_RETRY_MS);
+        }
+        assert!(!s.self_state_settling());
+        // The notice asks for a manual retry, so the toggle is offered again;
+        // without an acknowledgement capture and sound stay blocked.
+        let view = observe(&s);
+        assert!(view.joined && view.muted && view.deafened && !view.can_transmit);
     }
 }

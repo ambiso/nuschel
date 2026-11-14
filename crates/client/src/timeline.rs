@@ -363,6 +363,61 @@ impl Timeline {
         }
     }
 
+    /// Archive-only total order. Stable sorting preserves the relative order
+    /// and identity of unknown pending rows, after confirmed server rows.
+    pub(crate) fn order_archive(&mut self) {
+        self.messages
+            .sort_by_key(|message| message.seq.map_or((1u8, 0), |seq| (0, seq)));
+    }
+
+    /// Merge an authenticated forward recovery page without replacing a
+    /// search window or removing messages still waiting for a real ACK.
+    pub(crate) fn merge_catchup(&mut self, messages: Vec<IncomingMessage>) {
+        for message in messages {
+            if let Some(seq) = message.seq
+                && self.messages.iter().any(|shown| shown.seq == Some(seq))
+            {
+                if let Some(deletion) = message.deleted {
+                    let _ = self.apply_change(seq, Change::Deleted(deletion));
+                } else if let Some(edited_ms) = message.edited_ms {
+                    let _ = self.apply_change(
+                        seq,
+                        Change::Edited {
+                            source: message.message.body,
+                            document: message.document,
+                            edited_ms,
+                        },
+                    );
+                }
+            } else {
+                self.merge(message);
+            }
+        }
+        self.order_archive();
+        // An outage never grows the retained view without a bound. Pending
+        // rows have their own bounded outbox; trimming cannot discard keys.
+        let mut drop = self
+            .messages
+            .iter()
+            .filter(|message| message.pending.is_none())
+            .count()
+            .saturating_sub(MAX_TIMELINE);
+        let mut oldest = None;
+        self.messages.retain(|message| {
+            if drop > 0 && message.pending.is_none() {
+                drop -= 1;
+                oldest = message.id.or(oldest);
+                false
+            } else {
+                true
+            }
+        });
+        if oldest.is_some() {
+            self.next_before = self.messages.iter().find_map(|message| message.id);
+            self.beginning = false;
+        }
+    }
+
     /// Drop the oldest messages beyond `cap`; they load again from history.
     pub fn trim_oldest(&mut self, cap: usize) {
         if self.messages.len() <= cap {
@@ -387,19 +442,51 @@ impl Timeline {
     /// Our message with idempotency key `key` was acknowledged as `seq`, or
     /// refused (`None`). Returns whether the timeline shows it.
     pub fn settle(&mut self, key: [u8; 16], seq: Option<u64>) -> bool {
-        let Some(message) = self
+        let Some(serial) = self
             .messages
-            .iter_mut()
+            .iter()
             .find(|message| message.pending == Some(key))
+            .map(|message| message.serial)
         else {
             return false;
         };
+        // A history page can beat the ACK. Only the ACK's confirmed seq can
+        // identify that row as ours; equal text, author or time never can.
+        let duplicate = seq.and_then(|seq| {
+            self.messages
+                .iter()
+                .find(|message| message.serial != serial && message.seq == Some(seq))
+                .cloned()
+        });
+        if let Some(duplicate) = &duplicate {
+            self.messages
+                .retain(|message| message.serial != duplicate.serial);
+        }
+        let message = self
+            .messages
+            .iter_mut()
+            .find(|message| message.serial == serial)
+            .expect("pending row retained");
         message.pending = None;
         match seq {
             Some(seq) => {
                 message.id = Some(seq as i64);
                 message.seq = Some(seq);
                 message.status = MessageStatus::Sent;
+                if let Some(duplicate) = duplicate {
+                    let change = if let Some(deletion) = duplicate.deleted {
+                        Some(Change::Deleted(deletion))
+                    } else {
+                        duplicate.edited_ms.map(|edited_ms| Change::Edited {
+                            source: duplicate.source,
+                            document: duplicate.document,
+                            edited_ms,
+                        })
+                    };
+                    if let Some(change) = change {
+                        let _ = self.apply_change(seq, change);
+                    }
+                }
             }
             None => message.status = MessageStatus::NotSent,
         }
@@ -810,5 +897,75 @@ mod tests {
         });
         assert_eq!(offered.len(), WaitingChanges::MAX);
         assert_eq!(offered[0], 10, "the oldest went first");
+    }
+    #[test]
+    fn a_later_real_ack_coalesces_its_paged_seq_without_text_deduplication() {
+        let mut timeline = Timeline::default();
+        let mut pending = message(None, 10);
+        pending.pending = Some([7; 16]);
+        pending.outgoing = true;
+        timeline.merge(pending);
+        let serial = timeline.messages[0].serial;
+        let mut paged = message(Some(42), 11);
+        paged.seq = Some(42);
+        timeline.merge_catchup(vec![paged]);
+        assert_eq!(
+            timeline.messages.len(),
+            2,
+            "unknown keys cannot be guessed from content"
+        );
+        assert!(!timeline.settle([8; 16], Some(42)));
+        assert_eq!(timeline.messages.len(), 2);
+        assert!(timeline.settle([7; 16], Some(42)));
+        assert_eq!(timeline.messages.len(), 1);
+        assert_eq!(timeline.messages[0].serial, serial);
+        assert_eq!(timeline.messages[0].seq, Some(42));
+        assert_eq!(timeline.messages[0].status, MessageStatus::Sent);
+    }
+
+    #[test]
+    fn recovery_trim_keeps_pending_keys_and_paged_tombstones_win_after_ack() {
+        let mut timeline = Timeline::default();
+        let mut pending = message(None, 0);
+        pending.pending = Some([9; 16]);
+        pending.outgoing = true;
+        timeline.merge(pending);
+        let rows = (1..=1100)
+            .map(|seq| {
+                let mut row = message(Some(seq), seq);
+                row.seq = Some(seq as u64);
+                row
+            })
+            .collect();
+        timeline.merge_catchup(rows);
+        assert_eq!(timeline.messages.len(), MAX_TIMELINE + 1);
+        assert!(
+            timeline
+                .messages
+                .iter()
+                .any(|row| row.pending == Some([9; 16]))
+        );
+        let mut deleted = message(Some(1101), 1101);
+        deleted.seq = Some(1101);
+        deleted.deleted = Some(Deletion {
+            at_ms: 1234,
+            moderator: true,
+        });
+        timeline.merge_catchup(vec![deleted]);
+        assert!(timeline.settle([9; 16], Some(1101)));
+        let shown = timeline
+            .messages
+            .iter()
+            .find(|row| row.seq == Some(1101))
+            .unwrap();
+        assert!(shown.deleted.is_some() && shown.source.is_empty());
+        assert_eq!(
+            timeline
+                .messages
+                .iter()
+                .filter(|row| row.seq == Some(1101))
+                .count(),
+            1
+        );
     }
 }
