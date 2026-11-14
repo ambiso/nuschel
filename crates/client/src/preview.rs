@@ -292,15 +292,7 @@ impl Client {
     /// A bounded timer wake, not a render-frame polling hook.
     pub fn poll_link_preview(&mut self, now: u64) {
         self.validate_link_preview(now);
-        if self
-            .previews
-            .pending
-            .as_ref()
-            .is_none_or(|pending| now < pending.due)
-        {
-            return;
-        }
-        let Some(pending) = self.previews.pending.take() else {
+        let Some(pending) = self.previews.pending.take_if(|pending| now >= pending.due) else {
             return;
         };
         self.previews.admitted = Some(pending.ticket.id);
