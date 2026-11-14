@@ -570,7 +570,6 @@ impl State {
                                 conversation: conversation.to_vec(),
                                 seq,
                                 server_ms: now_ms(),
-                                edits: None,
                             },
                         );
                         self.end_request(session, request_id);

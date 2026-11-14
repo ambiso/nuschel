@@ -4316,7 +4316,6 @@ mod reply_owner_tests {
             conversation: conversation.to_vec(),
             seq: 9,
             server_ms: 1234,
-            edits: None,
         }
     }
     fn error(request_id: u64) -> v1::Error {
