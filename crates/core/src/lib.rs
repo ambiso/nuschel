@@ -7,6 +7,7 @@ pub mod admin;
 pub mod audio;
 pub mod bitrate;
 pub mod bookmark;
+pub mod history;
 pub mod model;
 pub mod network;
 pub mod preview;
@@ -14,6 +15,7 @@ pub mod search;
 pub mod share;
 pub mod transfer;
 
+pub use history::{HistoryEdit, HistorySnapshot, history_replacement_allowed};
 pub use search::{SearchCursor, SearchPage};
 
 /// Parsing limits are separate from UI collapsing. Storage retains the original body.

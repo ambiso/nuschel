@@ -17,6 +17,7 @@ html5ever = "0.40.1"
 image = { version = "0.25", optional = true, default-features = false, features = ["png", "jpeg", "gif", "bmp", "ico", "webp"] }
 markup5ever_rcdom = "0.40.1"
 nuschl-core.workspace = true
+nuschl-link-preview.workspace = true
 pulldown-cmark = { version = "0.13.6", default-features = false }
 syntect = { version = "5.3.0", default-features = false, features = [
   "parsing",

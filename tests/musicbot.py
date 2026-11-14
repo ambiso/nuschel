@@ -34,7 +34,7 @@ import urllib.request
 import wave
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from fake_subsonic import API_KEY, COVER_PNG, PASSWORD, Library  # noqa: E402
+from fake_subsonic import API_KEY, COVER, COVER_PNG, PASSWORD, Library  # noqa: E402
 from mumble_client import Client, ReferenceOpus, certificate_pin  # noqa: E402
 
 MUSIC, LOBBY = 6, 1  # local_murmur.py's channels
@@ -196,8 +196,27 @@ def browse(link):
             assert pixels["width"] == pixels["height"] == 1, pixels
             assert base64.b64decode(pixels["rgba"], validate=True) == bytes([200, 80, 40, 255]), pixels
             assert response.headers.get_content_type() == "application/json", dict(response.headers)
-            assert response.headers["Cache-Control"].startswith("private"), dict(response.headers)
+            assert response.headers["Cache-Control"] == "private, no-store", dict(response.headers)
+        # The same cover again comes from the bot's cache. With the state's art
+        # key the browser may keep it; a key for another library is refused.
+        asked = [seen for seen in Library.seen if seen[1] == "getCoverArt"]
+        key = api(link)["library_keys"][library]
+        with urllib.request.urlopen(link + cover + f"?size=300&v={key}", timeout=HTTP_TIMEOUT) as response:
+            assert response.headers["Cache-Control"] == "private, max-age=86400", dict(response.headers)
+            assert json.load(response) == pixels
+        assert [seen for seen in Library.seen if seen[1] == "getCoverArt"] == asked, "the cover was fetched again"
+        expect_error(link + cover + "?size=300&v=0000000000000000", 404)
         expect_error(link + f"art/{library}/missing", 404)
+    # Only Open (index 1) advertises sonicSimilarity; Plain refuses before asking.
+    expect_error(link + "api/similar?library=0&id=s1", 502, json_error=True)
+    expect_error(link + "api/path?library=0&from=s1&to=s2", 502, json_error=True)
+    similar = api(link, "similar", library=1, id="s1")
+    assert similar["song"]["id"] == "s1" and similar["song"]["library"] == 1, similar
+    assert [(found["track"]["id"], found["track"]["library"], found["similarity"])
+            for found in similar["matches"]] == [("s2", 1, 0.8)], similar
+    path = api(link, "path", library=1, **{"from": "s1", "to": "s2"})
+    assert [(found["track"]["id"], found["similarity"]) for found in path["matches"]] == [("s1", 1.0), ("s2", 0.5)], path
+    assert api(link)["sonic"] == [False, True]
     results = api(link, "search", q="sine")["results"]
     assert [result["name"] for result in results] == ["Plain", "Open"], results
     for result in results:
@@ -216,6 +235,44 @@ def expect_error(url, status, data=None, headers=None, json_error=False):
             assert isinstance(json.load(error)["error"], str)
         return
     raise AssertionError(f"{url} accepted an invalid request")
+
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *_):
+        return None
+
+
+def remembered_link(link):
+    """The `!web` link remembers itself in a cookie and sends the browser to
+    the token-free root, whose requests use the cookie from the same origin only."""
+    root = link.split("/u/")[0] + "/"
+    opener = urllib.request.build_opener(NoRedirect)
+    try:
+        opener.open(link, timeout=HTTP_TIMEOUT)
+        raise AssertionError("the link did not redirect")
+    except urllib.error.HTTPError as response:
+        assert response.code == 303 and response.headers["Location"] == "../../", dict(response.headers)
+        set_cookie = response.headers["Set-Cookie"]
+    token = link.rstrip("/").rsplit("/", 1)[1]
+    assert set_cookie.startswith(f"musicbot_link={token}; Path=/; "), set_cookie
+    assert "HttpOnly" in set_cookie and "SameSite=Lax" in set_cookie, set_cookie
+    cookie = {"Cookie": f"musicbot_link={token}"}
+    with urllib.request.urlopen(urllib.request.Request(root + "api/state", headers=cookie),
+                                timeout=HTTP_TIMEOUT) as response:
+        assert json.load(response)["you"] == "alice"
+    expect_error(root + "api/state", 404)
+    pause = b'{"command":"pause","player":999}'
+    origin = root.rstrip("/")
+    for headers, status in (({"Origin": origin, "Sec-Fetch-Site": "same-origin"}, 400),
+                            ({"Origin": "http://evil.example"}, 403),
+                            ({"Sec-Fetch-Site": "cross-site"}, 403)):
+        expect_error(root + "api/command", status, data=pause, json_error=True,
+                     headers={**cookie, **headers, "Content-Type": "application/json"})
+    request = urllib.request.Request(root + "api/forget", data=b"{}", method="POST",
+                                     headers={**cookie, "Content-Type": "application/json"})
+    with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT) as response:
+        assert response.status == 204
+        assert response.headers["Set-Cookie"].startswith("musicbot_link=; Path=/; Max-Age=0")
 
 
 SILENT_OPUS = [0xf8, 0xff, 0xfe]
@@ -659,6 +716,7 @@ def main():
                 with urllib.request.urlopen(link, timeout=HTTP_TIMEOUT) as response:
                     assert response.status == 200
                     assert response.headers["Referrer-Policy"] == "no-referrer", dict(response.headers)
+                remembered_link(link)
                 invalid = link.split("/u/")[0] + "/u/00000000-0000-0000-0000-000000000000/"
                 for endpoint in ("", "api/state", "api/events", "api/history?player=0", "api/search?q=sine", "art/0/missing"):
                     expect_error(invalid + endpoint, 404)
@@ -768,6 +826,13 @@ def main():
                 eventually(lambda: api(link), lambda state: not state["players"][0]["ducked"], "VAD release")
                 assert not ducked_while_talking(link, alice, speech), "disabled VAD ducked"
                 command(link, "clear")
+                # History keeps a skipped song once it has sent audio. Let the
+                # ducking songs end, then skip a new song while it is audible.
+                eventually(lambda: api(link), lambda state: state["players"][0]["current"] is None,
+                           "ducking songs finished")
+                command(link, "add", kind="song", library=0, id="s1", index=None)
+                eventually(lambda: api(link), lambda state: (state["players"][0]["current"] or {})
+                           .get("position_ms", 0) > 0, "song audible")
                 command(link, "skip")
                 audio_from(alice, dj, 15)
 
@@ -784,6 +849,10 @@ def main():
                 command(link, "add", kind="album", library=1, id="a1", index=None)
                 heard_alice = audio_from(alice, dj, 20)
                 heard_bob = audio_from(bob, dj2, 5)
+                # The lobby may first end the transmission it had before it
+                # switched to this queue: a lone terminator, then the song.
+                if len(heard_bob) == 1 and heard_bob[0]["end"]:
+                    heard_bob = audio_from(bob, dj2, 5)
                 assert len(heard_alice) >= 280 and len(heard_bob) >= 280, (len(heard_alice), len(heard_bob))
                 assert heard_alice[-1]["end"] and heard_bob[-1]["end"]
                 packets = [Counter(bytes(packet["opus"]) for packet in heard) for heard in (heard_alice, heard_bob)]
@@ -882,6 +951,13 @@ def main():
                 watchers.append(Events(bob_link))
                 after = api(link)
                 assert after["libraries"] == ["Open", "Plain"], after
+                # Covers decoded before the restart come from disk. The art key
+                # belongs to the library, so the swapped index does not matter.
+                asked = [seen for seen in Library.seen if seen[1] == "getCoverArt"]
+                cover = f"art/1/{urllib.parse.quote(COVER, safe='')}?size=300&v={after['library_keys'][1]}"
+                with urllib.request.urlopen(link + cover, timeout=HTTP_TIMEOUT) as response:
+                    assert response.headers["Cache-Control"] == "private, max-age=86400", dict(response.headers)
+                assert [seen for seen in Library.seen if seen[1] == "getCoverArt"] == asked, "covers were not kept on disk"
                 music = next(index for index, player in enumerate(after["players"]) if player["name"] == "music")
                 restored = after["players"][music]
                 assert restored["paused"] and restored["volume"] == 63 and restored["ducking"] == settings, restored

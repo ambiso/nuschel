@@ -22,8 +22,8 @@ exports it as PKCS#12.
   fingerprint and the server's policy (`mumble://…?fp=sha256:…&policy=nuschl`), which
   pins them before the first connection.
 - Server passwords stay in memory for the connection attempt only.
-- Lost connections reconnect with backoff, rejoin your channel with its mute state,
-  and mark the gap in the timeline.
+- Lost connections reconnect with backoff, rejoin your channel muted, and mark the
+  gap in the timeline.
 - Unread messages outside the visible part of the server rail or channel list show
   an **↑ unread** or **↓ unread** button, red when they include mentions. Click it
   to open the nearest unread conversation in that direction. It browses text and
@@ -110,6 +110,12 @@ The design and its measurements: [architecture.md](architecture.md#audio-configu
 - Links in welcome cards, channel descriptions and user comments support clicking,
   Tab/Shift+Tab and Enter, and screen-reader activation. They use the same URL
   policy as message links; rendering a document does not fetch its links.
+- **Settings → Link previews** controls sender-side previews on Linux, initially
+  Off. A ready preview shows the actual domain and available title, description
+  and image. **Remove link preview** keeps it out of this message. Legacy Mumble
+  servers carry the card and text in one compatible message. Receivers fetch nothing.
+  [Preview settings](link-previews.md#global-fetch-policy) also explain the
+  file-based proxy configuration.
 - Long messages collapse by measured height behind **Show more**.
 - Emoji are drawn with Twemoji's images, in messages, the composer and everywhere
   else; `™` stays text and `™️` is the emoji ([emoji.md](emoji.md)). The smiley

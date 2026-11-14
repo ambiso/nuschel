@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! Test-only real/faulting content-worker harness; uses the production supervisor.
+//! Link it against the nuschl-core, nuschl-ipc and nuschl-sandbox rlibs.
 use nuschl_core::{ContentBlock, MessageDocument};
 use nuschl_ipc::{ContentRequest, ContentResponse, Envelope};
 use std::{
@@ -119,7 +120,9 @@ fn main() {
         }) => ("accepted", width, height),
         Ok(_) => panic!("worker authority/shape escaped validation"),
         Err(nuschl_ipc::host::Error::Frame(nuschl_ipc::Error::TooLarge)) => ("too_large", 0, 0),
-        Err(nuschl_ipc::host::Error::MissingSandboxHelper(_)) => ("missing_helper", 0, 0),
+        Err(nuschl_ipc::host::Error::Sandbox(nuschl_sandbox::Error::MissingSandboxHelper(_))) => {
+            ("missing_helper", 0, 0)
+        }
         Err(nuschl_ipc::host::Error::Timeout) => ("timeout", 0, 0),
         Err(_) => ("rejected", 0, 0),
     };

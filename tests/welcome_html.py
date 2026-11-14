@@ -213,13 +213,20 @@ def run(args):
                     row["name"] + "\n" + row["text"] for row in rows
                 ).replace("\ufffc", "")
 
+            welcome = (
+                "bNuschl/b screenshot server."
+                if args.expect_markers
+                else "Welcome to the Nuschl screenshot server.\nSecond line: Welcome help"
+            )
             rows = eventually(
                 lambda: (
-                    (value if "Normal control Nuschl" in visible(value) else None)
+                    value
                     if (value := contents())
+                    and "Normal control Nuschl" in (shown := visible(value))
+                    and welcome in shown
                     else None
                 ),
-                "normal chat HTML control missing",
+                "normal chat HTML control or welcome text missing",
             )
             time.sleep(0.4)
             rows = contents()

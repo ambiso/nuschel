@@ -201,6 +201,9 @@ class AccessibilityTest:
             runtime.mkdir(mode=0o700)
             env["XDG_RUNTIME_DIR"] = str(runtime)
         registry = start_registry(self.args.at_spi, env, self.spawn)
+        if self.args.pulse_bin:
+            env["NUSCHL_AUDIO_BACKEND"] = "pulse"
+            self.start_audio(env)
 
         port = free_port()
         (self.root / "murmur").mkdir()
@@ -392,6 +395,11 @@ class AccessibilityTest:
         cancel.call("Action", "DoAction", "i", "0")
         eventually(lambda: any(name == "Record Toggle mute shortcut" for _, _, _, name in snapshot(nuschl)),
                    "cancelling did not restore the Record button", timeout=10)
+        # Like the pointer and keys, a screen reader cannot press a button behind the dialog.
+        self.find(snapshot(nuschl), "push button", "Server settings").call("Action", "DoAction", "i", "0")
+        time.sleep(1)
+        assert not any(role == "dialog" and name == "Add or connect to a Mumble server"
+                       for _, _, role, name in snapshot(nuschl)), "Server settings acted behind Settings"
         self.find(snapshot(nuschl), "push button", "Done").call("Action", "DoAction", "i", "0")
         eventually(lambda: not any(name == "Done" for _, _, _, name in snapshot(nuschl)),
                    "Settings did not close", timeout=10)
@@ -571,6 +579,22 @@ class AccessibilityTest:
             "the voice card is not named"
         self.find(nodes, "push button", "Go to Accessible server #Development")
 
+    def start_audio(self, env):
+        """A private PulseAudio with null speakers and a null microphone, where
+        the media worker looks for it ($XDG_RUNTIME_DIR/pulse/native)."""
+        pulse = Path(env["XDG_RUNTIME_DIR"]) / "pulse"
+        pulse.mkdir(mode=0o700)
+        script = self.root / "default.pa"
+        script.write_text(f"load-module module-native-protocol-unix socket={pulse / 'native'} auth-anonymous=1\n"
+                          "load-module module-null-sink sink_name=speakers\n"
+                          "load-module module-null-sink sink_name=microphone\n"
+                          "set-default-sink speakers\nset-default-source microphone.monitor\n")
+        self.spawn([str(self.args.pulse_bin / "pulseaudio"), "--daemonize=no", "--use-pid-file=no",
+                    "--exit-idle-time=-1", "-n", f"--file={script}"],
+                   env | {"PULSE_RUNTIME_PATH": str(pulse), "PULSE_STATE_PATH": str(self.root / "pulse-state")},
+                   "pulse.log")
+        eventually((pulse / "native").exists, "the private audio daemon did not start")
+
     def close(self):
         for process in reversed(self.processes):
             if process.poll() is None:
@@ -589,6 +613,7 @@ def main():
     parser.add_argument("--murmur", type=Path, required=True)
     parser.add_argument("--at-spi", type=Path, required=True, help="at-spi2-core package (bus launcher, registry)")
     parser.add_argument("--gnome-shell", type=Path, help="run inside a private headless GNOME Shell")
+    parser.add_argument("--pulse-bin", type=Path, help="pulseaudio bin directory, for a null microphone")
     parser.add_argument("--output", type=Path, default=Path(tempfile.gettempdir()))
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)

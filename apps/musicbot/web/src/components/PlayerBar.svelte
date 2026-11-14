@@ -1,22 +1,8 @@
 <!-- SPDX-License-Identifier: EUPL-1.2 -->
-<script>
-  import { store } from "../store.svelte.js";
-  import { buildRoute } from "../logic.js";
-  import { carriesItem, droppedItem } from "../dnd.js";
-  import Cover from "./Cover.svelte";
-  import Icon from "./Icon.svelte";
-  import Progress from "./Progress.svelte";
-  import DuckingPanel from "./DuckingPanel.svelte";
-  import SongRating from "./SongRating.svelte";
-  import BrowserListen from "./BrowserListen.svelte";
-
-  const index = $derived(store.selected);
-  const player = $derived(store.player);
-  const players = $derived(store.snapshot?.players ?? []);
-  const current = $derived(player?.current ?? null);
-  const track = $derived(current?.entry.track ?? null);
-  const volume = $derived(store.volume(index));
-  const status = $derived.by(() => {
+<script module>
+  /** What the selected queue is doing, when that is worth a line; shared with the big screen. */
+  export function playerStatus(player) {
+    const current = player?.current ?? null;
     if (!player) return null;
     if (player.error) return `Playback error: ${player.error}`;
     if (!current) return null;
@@ -25,7 +11,32 @@
     if (current.buffering) return "Buffering…";
     if (player.ducked) return "Mumble quieter while someone talks";
     return null;
-  });
+  }
+</script>
+
+<script>
+  import { store } from "../store.svelte.js";
+  import { buildRoute } from "../logic.js";
+  import { carriesItem, droppedItem } from "../dnd.js";
+  import { listening } from "../listening.svelte.js";
+  import Cover from "./Cover.svelte";
+  import Icon from "./Icon.svelte";
+  import Progress from "./Progress.svelte";
+  import DuckingPanel from "./DuckingPanel.svelte";
+  import SongRating from "./SongRating.svelte";
+  import BrowserListen from "./BrowserListen.svelte";
+
+  let { onexpand } = $props();
+  const index = $derived(store.selected);
+  const player = $derived(store.player);
+  const players = $derived(store.snapshot?.players ?? []);
+  const current = $derived(player?.current ?? null);
+  const track = $derived(current?.entry.track ?? null);
+  const volume = $derived(store.volume(index));
+  const queueStatus = $derived(playerStatus(player));
+  // Browser listening only gets the line when the queue has nothing to report.
+  const status = $derived(queueStatus ?? listening.status);
+  const statusError = $derived(queueStatus === null && !!listening.error);
   let dropping = $state(false);
 
   function dragover(event) {
@@ -58,7 +69,7 @@
     {#if track}
       <Cover library={track.library} art={track.cover_art} size={128} px={64} />
       <div class="text">
-        <div class="title" title={track.title}>{track.title}</div>
+        <div class="title" title={track.title}><a href={buildRoute({ view: "song", library: track.library, id: track.id, namespace: store.browseKey })}>{track.title}</a></div>
         {#if track.artist}
           <div class="sub">
             {#if track.artist_id}
@@ -82,6 +93,7 @@
 
   <div class="center">
     <div class="controls">
+      <div class="controls-start"><BrowserListen player={index} /></div>
       <button
         class="play"
         disabled={!player}
@@ -91,12 +103,17 @@
       >
         <Icon name={player?.paused ? "play" : "pause"} size={24} />
       </button>
-      <button class="icon-button" disabled={!current} aria-label="Skip" title="Skip" onclick={() => store.skip(index)}>
-        <Icon name="skip" />
-      </button>
+      <div class="controls-end">
+        <button class="icon-button" disabled={!current} aria-label="Skip" title="Skip" onclick={() => store.skip(index)}>
+          <Icon name="skip" />
+        </button>
+        <button class="icon-button" aria-label="Open big screen" aria-haspopup="dialog" title="Big screen" onclick={onexpand}>
+          <Icon name="expand" />
+        </button>
+      </div>
     </div>
     <Progress player={index} {current} />
-    <span class="status" role="status" title={status ?? ""}>{status ?? ""}</span>
+    <span class="status" class:error={statusError} role="status" title={status ?? ""}>{status ?? ""}</span>
   </div>
 
   <div class="side">
@@ -110,7 +127,6 @@
         </select>
       </label>
     {/if}
-    <BrowserListen player={index} />
     {#if player}
       <label class="volume" title="Mumble volume {volume}%; does not change browser volume">
         <Icon name="volume" />
@@ -139,9 +155,12 @@
   .title { font-weight: 600; }
   .title, .sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .sub { font-size: 0.85rem; color: var(--muted); }
-  .sub a { color: inherit; }
+  .title a, .sub a { color: inherit; }
   .center { display: grid; justify-items: center; gap: 0.2rem; min-width: 0; }
-  .controls { position: relative; display: flex; align-items: center; gap: 0.5rem; max-width: 100%; }
+  /* Play stays centred; the side groups use the otherwise empty width of the row. */
+  .controls { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; gap: 0.5rem; width: 100%; max-width: 32rem; }
+  .controls-start { display: flex; justify-content: flex-end; min-width: 0; }
+  .controls-end { display: flex; align-items: center; gap: 0.25rem; min-width: 0; }
   .play {
     width: 40px;
     height: 40px;
@@ -156,6 +175,7 @@
   }
   .play:disabled { opacity: 0.4; cursor: default; }
   .status { width: 100%; height: 1.25rem; line-height: 1.25rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: center; font-size: 0.8rem; color: var(--muted); }
+  .status.error { color: var(--danger); }
   .side { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 0.5rem; min-width: 0; }
   .queue-select select { max-width: 10rem; }
   .volume { display: flex; align-items: center; gap: 0.35rem; color: var(--muted); }

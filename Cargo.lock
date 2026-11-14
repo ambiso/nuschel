@@ -7050,6 +7050,7 @@ dependencies = [
  "nuschl-core",
  "nuschl-ipc",
  "nuschl-protocol",
+ "nuschl-sandbox",
  "nuschl-session",
  "nuschl-update",
  "serde_json",
@@ -7080,6 +7081,7 @@ dependencies = [
  "clap",
  "nuschl-ipc",
  "nuschl-protocol",
+ "nuschl-sandbox",
  "nuschl-session",
  "nuschld",
  "serde",
@@ -7095,7 +7097,9 @@ dependencies = [
  "nuschl-core",
  "nuschl-ipc",
  "nuschl-legacy-html",
+ "nuschl-link-preview",
  "nuschl-protocol",
+ "nuschl-sandbox",
  "nuschl-session",
  "serde",
  "serde_json",
@@ -7141,6 +7145,7 @@ dependencies = [
  "image",
  "markup5ever_rcdom 0.40.1+unofficial",
  "nuschl-core",
+ "nuschl-link-preview",
  "pulldown-cmark",
  "syntect",
  "thiserror 2.0.21",
@@ -7167,6 +7172,7 @@ dependencies = [
  "nuschl-ipc",
  "nuschl-sandbox-windows",
  "tokio",
+ "ureq-proto",
 ]
 
 [[package]]
@@ -7190,6 +7196,7 @@ dependencies = [
  "nuschl-ipc",
  "nuschl-kt",
  "nuschl-protocol",
+ "nuschl-sandbox",
  "nuschl-sandbox-windows",
  "nuschl-session",
  "nuschl-witness",
@@ -7252,11 +7259,11 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "nuschl-core",
+ "nuschl-sandbox",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
  "tokio",
- "win32job",
 ]
 
 [[package]]
@@ -7289,8 +7296,8 @@ version = "0.1.0"
 dependencies = [
  "ipnet",
  "nuschl-core",
+ "nuschl-legacy-html",
  "serde",
- "serde_json",
  "thiserror 2.0.21",
  "url",
 ]
@@ -7408,12 +7415,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "nuschl-sandbox"
+version = "0.1.0"
+dependencies = [
+ "thiserror 2.0.21",
+ "tokio",
+ "win32job",
+]
+
+[[package]]
 name = "nuschl-sandbox-windows"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "nuschl-core",
  "nuschl-ipc",
+ "nuschl-sandbox",
  "serde",
  "serde_json",
  "tokio",
@@ -7429,7 +7446,9 @@ dependencies = [
  "nuschl-core",
  "nuschl-ipc",
  "nuschl-legacy-html",
+ "nuschl-link-preview",
  "nuschl-protocol",
+ "nuschl-sandbox",
  "p12-keystore",
  "prost",
  "rcgen",
@@ -7453,6 +7472,7 @@ dependencies = [
  "base64 0.22.1",
  "nuschl-core",
  "nuschl-ipc",
+ "serde_json",
  "sqlx",
  "tempfile",
  "thiserror 2.0.21",
@@ -7497,6 +7517,7 @@ dependencies = [
  "nuschl-client",
  "nuschl-core",
  "nuschl-ipc",
+ "nuschl-sandbox",
  "nuschl-session",
  "ratatui",
  "ratatui-image",
@@ -7509,7 +7530,7 @@ name = "nuschl-update"
 version = "0.1.0"
 dependencies = [
  "cap-std",
- "nuschl-ipc",
+ "nuschl-sandbox",
  "semver",
  "serde",
  "serde_json",

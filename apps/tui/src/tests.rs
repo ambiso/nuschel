@@ -712,6 +712,59 @@ fn the_switcher_opens_and_joins_and_commands_do_the_same() {
     );
 }
 
+/// #199: where the server stops you from speaking, each unmute says "You
+/// can't speak here." once, and the people list says it in words.
+#[test]
+fn unmuting_where_you_cannot_speak_says_so() {
+    let (mut app, _, id) = connected();
+    app.client.handle(Input::Server {
+        server: id,
+        generation: 1,
+        event: ServerEvent::User(User {
+            session: 1,
+            name: "Ada".into(),
+            channel: 1,
+            user_id: Some(11),
+            suppressed: true,
+            ..Default::default()
+        }),
+    });
+    app.command("mute");
+    app.command("mute");
+    let said = app
+        .notes
+        .iter()
+        .filter(|note| note.text.contains("speak") || note.text.contains("hear you"))
+        .map(|note| note.text.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(said, ["You can't speak here.", "You can't speak here."]);
+    let server = &app.client.servers[0];
+    assert!(
+        view::person_label(&app.client, server, &server.users[&1]).contains("can't speak here")
+    );
+}
+
+/// #199: unmuting while reconnecting says so, and leaves another notice
+/// where it is.
+#[test]
+fn unmuting_while_reconnecting_says_not_connected() {
+    let (mut app, _, id) = connected();
+    app.client.handle(Input::Reconnecting {
+        server: id,
+        generation: 1,
+        attempt: 1,
+        delay_secs: 1,
+        reason: "lost".into(),
+    });
+    app.client.servers[0].set_notice("Some messages were lost.".into());
+    app.command("mute");
+    assert_eq!(
+        app.notes.back().map(|note| note.text.as_str()),
+        Some("Not connected.")
+    );
+    assert!(!app.notes.iter().any(|note| note.text.contains("lost")));
+}
+
 #[test]
 fn without_audio_voice_stays_off() {
     let (mut app, recorder, _) = connected();

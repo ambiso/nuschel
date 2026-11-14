@@ -80,31 +80,24 @@ pub use supervisor::MathWorker;
 mod supervisor {
     use std::{
         path::PathBuf,
-        process::Stdio,
         time::{Duration, Instant},
     };
 
+    use nuschl_sandbox::{Role, Worker};
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
-        process::{Child, ChildStdin, ChildStdout},
+        process::ChildStdout,
         time::timeout,
     };
 
     use super::{MAX_TEX_BYTES, MathImage, MathRequest, MathResponse};
-    use crate::{
-        Envelope, MAX_FRAME_BYTES, PROTOCOL_VERSION,
-        host::{Containment, Error, contain, math_sandbox_command},
-        write_frame,
-    };
+    use crate::{Envelope, MAX_FRAME_BYTES, PROTOCOL_VERSION, host::Error, write_frame};
 
     /// How long one formula may take, start-up included.
     const DEADLINE: Duration = Duration::from_secs(3);
 
     struct Process {
-        child: Child,
-        input: ChildStdin,
-        output: ChildStdout,
-        _containment: Containment,
+        worker: Worker,
         /// Formulas this process answered.
         served: u64,
     }
@@ -162,21 +155,21 @@ mod supervisor {
 
         /// Stop the worker; the next formula starts it again.
         pub async fn stop(&mut self) {
-            if let Some(mut process) = self.process.take() {
+            if let Some(Process { mut worker, .. }) = self.process.take() {
                 // Closing its input lets it exit; kill it if it does not.
-                drop(process.input);
-                if timeout(Duration::from_secs(1), process.child.wait())
+                drop(worker.input);
+                if timeout(Duration::from_secs(1), worker.child.wait())
                     .await
                     .is_err()
                 {
-                    process.child.kill().await.ok();
+                    worker.child.kill().await.ok();
                 }
             }
         }
 
         async fn attempt(&mut self, request: &MathRequest) -> Result<MathImage, Error> {
             if self.process.is_none() {
-                self.process = Some(self.start()?);
+                self.process = Some(self.start().await?);
             }
             self.request_id += 1;
             let id = self.request_id;
@@ -186,9 +179,9 @@ mod supervisor {
                 return Err(Error::InvalidResponse);
             };
             let exchange = async {
-                process.input.write_all(&frame).await?;
-                process.input.flush().await?;
-                read_reply(&mut process.output).await
+                process.worker.input.write_all(&frame).await?;
+                process.worker.input.flush().await?;
+                read_reply(&mut process.worker.output).await
             };
             let reply = match timeout(DEADLINE, exchange).await {
                 Ok(Ok(reply)) if reply.request_id == id => reply,
@@ -214,29 +207,17 @@ mod supervisor {
             }
         }
 
-        fn start(&self) -> Result<Process, Error> {
-            let mut child = math_sandbox_command(&self.executable)?
-                .stdin(Stdio::piped())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::null())
-                .kill_on_drop(true)
-                .spawn()?;
-            let containment = contain(&child)?;
-            let (Some(input), Some(output)) = (child.stdin.take(), child.stdout.take()) else {
-                return Err(Error::InvalidResponse);
-            };
+        async fn start(&self) -> Result<Process, Error> {
+            let command = nuschl_sandbox::command(&self.executable, Role::Math)?;
             Ok(Process {
-                child,
-                input,
-                output,
-                _containment: containment,
+                worker: nuschl_sandbox::spawn(command).await?,
                 served: 0,
             })
         }
 
         async fn kill(&mut self) {
             if let Some(mut process) = self.process.take() {
-                process.child.kill().await.ok();
+                process.worker.child.kill().await.ok();
             }
         }
     }
@@ -278,47 +259,5 @@ mod tests {
         let mut garbled = image(1, 1, 0, 1);
         garbled.coverage = "!!".into();
         assert_eq!(garbled.decode(), None);
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn the_linux_sandbox_has_no_network_files_or_environment() {
-        let executable = std::env::current_exe().unwrap();
-        let command = crate::host::math_sandbox_command(&executable).unwrap();
-        let arguments: Vec<String> = command
-            .as_std()
-            .get_args()
-            .map(|argument| argument.to_string_lossy().into())
-            .collect();
-        assert_eq!(arguments[..3], ["--as=536870912", "--cpu=120", "--"]);
-        assert_eq!(arguments.last().map(String::as_str), Some("/worker"));
-        for option in ["--die-with-parent", "--unshare-all", "--clearenv"] {
-            assert!(arguments.iter().any(|a| a == option), "{option}");
-        }
-        assert!(
-            !arguments
-                .iter()
-                .any(|a| a == "--share-net" || a == "--bind")
-        );
-        // Nothing is bound from outside the system directories but the worker.
-        let bound: Vec<&String> = arguments
-            .windows(3)
-            .filter(|window| window[0] == "--ro-bind")
-            .map(|window| &window[2])
-            .collect();
-        for target in bound {
-            assert!(
-                [
-                    "/nix/store",
-                    "/usr/lib",
-                    "/usr/lib64",
-                    "/lib",
-                    "/lib64",
-                    "/worker"
-                ]
-                .contains(&target.as_str()),
-                "{target}"
-            );
-        }
     }
 }

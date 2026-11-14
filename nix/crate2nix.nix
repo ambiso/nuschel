@@ -45,6 +45,11 @@ let
       nativeBuildInputs = [ pkgs.protobuf ];
       PROTOC = "${pkgs.protobuf}/bin/protoc";
     };
+    # Server integration tests read the unchanged workspace import fixture.
+    # Isolated crate sources do not contain the repository's tests directory.
+    nuschld = _: {
+      NUSCHL_TEST_MURMUR_FIXTURE = "${../tests/fixtures/murmur-1.5.json}";
+    };
     # The probe embeds the actual workspace fixture; isolated crate sources do
     # not contain ../../../tests. Keep identical frame bytes as an explicit input.
     nuschl-rtc-probe = _: {

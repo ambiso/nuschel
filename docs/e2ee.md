@@ -1321,7 +1321,7 @@ settled, beyond the refinements marked "as implemented" above:
 
 - **Processes.** `apps/crypto-worker` (`nuschl-crypto-worker`) owns every identity
   secret and key-transparency decision. It runs in the shared bubblewrap sandbox
-  (`crypto_sandbox_command`: its own directory at `/data`, no network), one per
+  (`nuschl_sandbox::Role::Crypto`: its own directory at `/data`, no network), one per
   profile, shared by all connections; the session (`nuschl_session::identity`) only
   moves bytes between it and the server and never links `nuschl-kt` (cargo-deny
   confines `nuschl-kt` to the worker and `nuschld`, `nuschl-identity` to them and

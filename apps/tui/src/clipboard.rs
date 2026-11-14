@@ -6,11 +6,8 @@ use nuschl_client::{
     Conversation, input::Input, model::TextTarget, platform::Request, server::Status,
 };
 use nuschl_ipc::EncodedImage;
-use std::{process::Stdio, time::Duration};
-use tokio::{io::AsyncReadExt, process::Command, sync::oneshot};
-
-const MAX_BYTES: u64 = 8 * 1024 * 1024;
-const DEADLINE: Duration = Duration::from_secs(3);
+use std::time::Duration;
+use tokio::sync::oneshot;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Destination {
@@ -364,66 +361,6 @@ impl App {
             self.say("Image sent to the server.");
         }
     }
-}
-
-#[derive(Debug, PartialEq, Eq)]
-pub(super) enum ReadError {
-    Timeout,
-    Other(String),
-}
-
-impl ReadError {
-    pub(super) fn message(self) -> String {
-        match self {
-            Self::Timeout => "The clipboard read timed out; no image was attached.".into(),
-            Self::Other(reason) => reason,
-        }
-    }
-}
-
-pub(super) async fn png_from(program: &str, arguments: &[&str]) -> Result<Vec<u8>, ReadError> {
-    let mut child = Command::new("prlimit")
-        .args(["--as=268435456", "--cpu=3", "--", program])
-        .args(arguments)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .kill_on_drop(true)
-        .spawn()
-        .map_err(|_| {
-            ReadError::Other(format!(
-                "{program} is unavailable; install it to read PNG clipboard images."
-            ))
-        })?;
-    let mut output = child
-        .stdout
-        .take()
-        .ok_or_else(|| ReadError::Other("Clipboard helper has no output.".into()))?;
-    let result = tokio::time::timeout(DEADLINE, async {
-        let mut bytes = Vec::new();
-        (&mut output)
-            .take(MAX_BYTES + 1)
-            .read_to_end(&mut bytes)
-            .await
-            .map_err(|error| error.to_string())?;
-        if bytes.len() as u64 > MAX_BYTES {
-            return Err("The clipboard image exceeds 8 MiB.".into());
-        }
-        let status = child.wait().await.map_err(|error| error.to_string())?;
-        if !status.success() || bytes.is_empty() {
-            return Err("The clipboard does not provide a PNG image.".into());
-        }
-        Ok(bytes)
-    })
-    .await;
-    let result = match result {
-        Ok(result) => result.map_err(ReadError::Other),
-        Err(_) => Err(ReadError::Timeout),
-    };
-    if result.is_err() {
-        let _ = child.kill().await;
-    }
-    result
 }
 
 #[cfg(test)]

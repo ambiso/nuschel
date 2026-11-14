@@ -17,7 +17,7 @@ magic-wormhole = { version = "0.8.1", default-features = false, features = ["tra
 nuschl-ipc.workspace = true
 
 # The launch stage: on Windows the worker starts itself again inside its
-# AppContainer (nuschl_ipc::windows_sandbox).
+# AppContainer (nuschl_sandbox::windows_policy).
 [target.'cfg(windows)'.dependencies]
 nuschl-sandbox-windows.workspace = true
 

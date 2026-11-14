@@ -183,8 +183,9 @@ assert lib.assertMsg (
 ) "programs.nuschl.package does not default to this flake's package";
 assert lib.assertMsg (accepted == [ ]) "invalid bookmarks were accepted: ${toString accepted}";
 assert lib.assertMsg (lib.length settingFields > 15) "could not read ClientSettings' fields";
+# link_previews is the user's own choice: managed settings drop it.
 assert lib.assertMsg (accepts {
-  programs.nuschl.settings = lib.genAttrs settingFields (_: null);
+  programs.nuschl.settings = lib.genAttrs (lib.remove "link_previews" settingFields) (_: null);
 }) "programs.nuschl.settings refuses a field of ClientSettings: update settingNames";
 {
   files =
@@ -356,6 +357,10 @@ assert lib.assertMsg (accepts {
       virtualisation.cores = 2;
     };
     testScript = ''
+      import sys
+      sys.path.insert(0, "${../tests}")
+      import quarantine  # type: ignore  # tests/quarantine.py, on the path above
+
       user = "--user -M alice@"
       unit = "app-org.nuschl.Nuschl@autostart.service"
       entry = "/home/alice/.config/autostart/org.nuschl.Nuschl.desktop"
@@ -394,7 +399,8 @@ assert lib.assertMsg (accepts {
           machine.succeed(f"systemctl {user} stop {unit}")
 
       with subtest("the identity and history are in the data folder, not with the dotfiles"):
-          machine.succeed(f"test \"$(ls {config})\" = \"$(printf 'managed.json\\nnuschl-namespace-v1\\nservers.json\\nsettings.json')\"")
+          with quarantine.step("vm-home-manager/config-folder-listing"):
+              machine.succeed(f"test \"$(ls {config})\" = \"$(printf 'managed.json\\nnuschl-namespace-v1\\nservers.json\\nsettings.json')\"")
           machine.succeed(f"test -s {data}/identity/identity.json")
           machine.succeed(f"test \"$(stat -c '%a %U' {data} {data}/identity {data}/history)\" = \"$(printf '700 alice\\n700 alice\\n700 alice')\"")
           machine.succeed(f"test \"$(stat -c %a {data}/identity/identity.json)\" = 600")

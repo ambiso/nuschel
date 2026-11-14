@@ -9,6 +9,9 @@
 listen = "127.0.0.1:8474"
 # Where people reach the page. The links the bot sends start with it.
 public_url = "https://music.example.org"
+# Disk space for decoded covers in the state directory's covers/ folder, in MiB
+# (at most 4096). Covers are kept for a day; 0 turns the cache off and empties it.
+# cover_cache_mib = 64
 
 [audio]
 # Opus bitrate in bit/s; lowered automatically where a server allows less.

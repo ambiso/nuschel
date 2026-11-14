@@ -10,7 +10,7 @@ use crate::{
     },
     platform::RenderKey,
     server::AudioHealth,
-    timeline::{Deletion, IncomingMessage, Page},
+    timeline::{Change, Deletion, IncomingMessage, Page},
 };
 use nuschl_core::{
     MessageDocument, SearchPage,
@@ -26,6 +26,19 @@ use std::collections::BTreeMap;
 #[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug)]
 pub enum Input {
+    /// Local wire-queue/refusal receipt, not remote-server delivery proof.
+    LinkPreviewSendResult {
+        server: String,
+        generation: u64,
+        id: crate::preview::SendId,
+        result: Result<(), String>,
+    },
+    /// A sender fetch result. The SDK retains all original destination,
+    /// source and policy authority; this ID cannot select a new target.
+    LinkPreview {
+        id: crate::preview::RequestId,
+        result: Result<crate::preview::Card, crate::preview::Unavailable>,
+    },
     /// What a server said on this connection.
     Server {
         server: String,
@@ -108,6 +121,17 @@ pub enum Input {
         next_before: Option<i64>,
         next_after: Option<i64>,
     },
+    /// Changes scanned by a catch-up page, bound to that page through the
+    /// final application. Live edits and deletions retain their own path.
+    HistoryChanges {
+        server: String,
+        ticket: HistoryTicket,
+        scanned_through: i64,
+        /// Canonical decoded protobuf bytes, measured by the native adapter.
+        scanned_bytes: usize,
+        head: i64,
+        changes: Vec<(u64, Change)>,
+    },
     /// A server history page could not be loaded.
     HistoryFailed {
         server: String,
@@ -172,6 +196,9 @@ pub enum Input {
         generation: u64,
         message: String,
     },
+    /// The microphone stopped by itself (the media worker or the device
+    /// failed). The connection is muted until an explicit Unmute.
+    MicrophoneStopped { server: String, generation: u64 },
     AudioDevices {
         server: String,
         generation: u64,
@@ -292,4 +319,11 @@ pub enum ServerEvent {
         document: MessageDocument,
     },
     Transport(TransportStats),
+    /// Plugin data another client sent us, with its sender as known when it arrived.
+    PluginData(crate::client::ReceivedPluginData),
+    /// Whether our plugin data `request` was admitted locally (not delivered).
+    PluginDataAdmission {
+        request: u64,
+        result: Result<(), nuschl_protocol::plugin::Refusal>,
+    },
 }

@@ -3,9 +3,10 @@
 
 Two libraries live under one HTTP server: `/plain` is a plain Subsonic server
 (password token authentication, original files) and `/open` an OpenSubsonic
-one (API key, the transcoding extension). Both have two three-second sine
-songs on one album. Ratings (`setRating`, `userRating`) and playback reports
-(`scrobble`) are kept per library account. Run directly, it serves on the given port.
+one (API key, the transcoding and sonicSimilarity extensions). Both have two
+three-second sine songs on one album. Ratings (`setRating`, `userRating`) and
+playback reports (`scrobble`) are kept per library account. Run directly, it
+serves on the given port.
 """
 import argparse
 import hashlib
@@ -126,7 +127,8 @@ class Library(http.server.BaseHTTPRequestHandler):
             else:
                 self.reply({"openSubsonic": True, "openSubsonicExtensions": [
                     {"name": "apiKeyAuthentication", "versions": [1]},
-                    {"name": "transcoding", "versions": [1]}]})
+                    {"name": "transcoding", "versions": [1]},
+                    {"name": "sonicSimilarity", "versions": [1]}]})
         elif endpoint == "ping":
             self.reply({})
         elif endpoint == "search3":
@@ -187,6 +189,15 @@ class Library(http.server.BaseHTTPRequestHandler):
         elif endpoint == "getTranscodeStream" and library == "open":
             assert query["transcodeParams"] == ["fake-" + query["mediaId"][0]], query
             self.audio(query["mediaId"][0])
+        elif endpoint == "getSonicSimilarTracks" and library == "open":
+            matches = [{"entry": SONGS["s2"], "similarity": 0.8}] if query.get("id") == ["s1"] else []
+            self.reply({"sonicMatch": matches})
+        elif endpoint == "findSonicPath" and library == "open":
+            if query.get("startSongId") == ["s1"] and query.get("endSongId") == ["s2"]:
+                matches = [{"entry": SONGS["s1"], "similarity": 1.0}, {"entry": SONGS["s2"], "similarity": 0.5}]
+            else:
+                matches = []
+            self.reply({"sonicMatch": matches})
         else:
             self.send_error(400)
 
