@@ -37,3 +37,17 @@ dialog{color:var(--text);background:var(--surface);border:1px solid var(--border
 
 /* Browser-reported microphone processing (Settings); unknown is never shown as on. */
 .processing-list{display:grid;gap:6px;margin:0 0 10px;font-size:.78rem}.processing-list div{display:flex;justify-content:space-between;gap:12px;min-width:0}.processing-list dt{color:var(--muted);font-weight:600}.processing-list dd{margin:0;text-align:end;overflow-wrap:anywhere}.processing-list dd[data-state="on"]{color:var(--good)}.settings-section .processing-hint{color:var(--text)}
+/* Emoji (emoji.js, EmojiPicker.svelte): Twemoji in messages, the picker above the composer. */
+.emoji{display:inline-block;width:1.375em;height:1.375em;line-height:1.375em;vertical-align:-.3em;margin:0 .05em;overflow:hidden;white-space:nowrap;text-align:center;color:transparent;background:center/contain no-repeat}.emoji::selection{color:transparent}
+.composer{position:relative}.emoji-toggle:disabled{opacity:.45}
+.emoji-picker{position:absolute;right:24px;bottom:calc(100% + 8px);z-index:20;display:flex;flex-direction:column;width:min(372px,calc(100vw - 20px));height:min(420px,60dvh);background:var(--surface-raised);border:1px solid var(--border);border-radius:12px;box-shadow:var(--shadow);overflow:hidden}
+.emoji-tabs{display:flex;gap:4px;padding:8px 8px 0}.emoji-tabs button{border:0;background:none;color:var(--muted);font-size:.78rem;padding:.35rem .7rem;border-radius:6px}.emoji-tabs button.selected{color:var(--text);background:color-mix(in srgb,var(--text) 10%,transparent)}
+.emoji-panel{flex:1;min-height:0;display:flex;flex-direction:column}
+.emoji-search,.emoji-tones{display:flex;gap:6px;align-items:center;margin:8px}.emoji-search input{flex:1;padding:7px 10px;font-size:.85rem}
+.emoji-tones{justify-content:space-between;padding:4px;border:1px solid var(--border);border-radius:8px;background:var(--chat)}
+.emoji-tone,.emoji-tones button,.emoji-cells button{display:grid;place-items:center;padding:0;border:0;background:none;border-radius:6px}.emoji-tone,.emoji-tones button{width:36px;height:36px;flex:none}
+.emoji-tones button.selected,.emoji-cells button:hover,.emoji-tone:hover,.emoji-tones button:hover{background:color-mix(in srgb,var(--text) 10%,transparent)}
+.emoji-grid{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;padding:0 8px 6px}.emoji-grid h3{margin:8px 4px 4px;font-size:.68rem;font-weight:650;color:var(--subtle)}
+.emoji-cells{display:grid;grid-template-columns:repeat(auto-fill,minmax(38px,1fr))}.emoji-cells button{height:38px}
+.emoji-soon{margin:auto;padding:16px;text-align:center;color:var(--muted);font-size:.8rem}.emoji-hint{padding:5px 10px 7px;border-top:1px solid var(--border);color:var(--subtle);font-size:.6rem}
+@media(max-width:760px){.emoji-picker{right:10px;left:10px;width:auto}}

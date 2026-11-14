@@ -21,7 +21,7 @@ landlock = "0.4.4"
 tempfile = "3.27.0"
 
 # The launch stage: on Windows the worker starts itself again inside its
-# AppContainer (nuschl_ipc::windows_sandbox).
+# AppContainer (nuschl_sandbox::windows_policy).
 [target.'cfg(windows)'.dependencies]
 nuschl-sandbox-windows.workspace = true
 

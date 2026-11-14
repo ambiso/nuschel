@@ -17,7 +17,7 @@ nuschl-ipc.workspace = true
 tokio = { version = "1.54.1", features = ["macros", "rt"] }
 
 # The launch stage: on Windows the worker starts itself again inside its
-# AppContainer (nuschl_ipc::windows_sandbox).
+# AppContainer (nuschl_sandbox::windows_policy).
 [target.'cfg(windows)'.dependencies]
 nuschl-sandbox-windows.workspace = true
 
