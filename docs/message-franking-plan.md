@@ -1,7 +1,8 @@
 # Message franking for reports
 
-Planning document, 2026-11-13, on main (`b8ca83ab`). Nothing here is
-implemented. Part of #272; it grants no approval beyond that issue.
+Planning document, 2026-11-13, on main (`b8ca83ab`), with the owner's
+decisions of 2026-11-14 (§11). Nothing here is implemented. Part of #272;
+it grants no approval beyond that issue.
 
 Goal: a recipient reports an end-to-end encrypted message or a sticker. The
 moderator verifies that the reported content is what the sender sent, who
@@ -54,7 +55,7 @@ itself, and a moderator who distrusts the operator gains nothing from it.
 
 Moderators of a conversation: holders of the channel's moderation right
 (`Policy.moderators_delete` and Write, docs/extension.md) for channels, and
-server administrators for direct conversations (D8). They act with existing
+server administrators for direct conversations (§11). They act with existing
 tools: moderator deletion (tombstone), kick, ban, and the server's MLS
 removals (docs/e2ee.md "Phase 4c").
 
@@ -151,7 +152,7 @@ the archive record's envelope, so archived messages are reportable too.
 
 1. The user picks "Report" on a message, a reason (abuse, illegal content,
    spam, other) and up to 1,000 characters of text, and may tick earlier
-   messages of the conversation as context (D5).
+   messages of the conversation as context (§11).
 2. The client sends `MessageReport { request_id, conversation, reason,
    text, items[] }`, each item `{ seq, frank, credential, env' }`, to the
    conversation's server over the existing session, in the moderation block
@@ -183,17 +184,17 @@ open reports per server (oldest dismissed reports dropped first).
 Message and sticker reports stay with the conversation's operator.
 reports.nuschl.eu holds no `K_s` of other operators, has no authority over
 their users, and #205 excludes message content. Servers run by the Nuschl
-project show their reports in triage.nuschl.eu (D11).
+project show their reports in triage.nuschl.eu (D3).
 
 ## 6. Edits, deletions, attachments, stickers, history
 
 - **Edits** (encrypted edits are still to be built): an edit is a durable
   envelope naming its target's envelope hash, franked like any other. A
   report of an edited message carries the original and every edit up to the
-  shown version (D7). Recipients keep superseded openings for 30 days.
+  shown version (§11). Recipients keep superseded openings for 30 days.
 - **Deletions:** the delete envelope is franked; the server purge removes
   the row and `com`. Recipients keep the opening of a deleted message,
-  hidden, for 30 days so that "Report" stays available (D6). Server
+  hidden, for 30 days so that "Report" stays available (§11). Server
   verification needs no row.
 - **Attachments:** `env'` carries the files/1 key and pieces root. The
   report reveals that one key; `R` binds key, length and ciphertext, so one
@@ -229,15 +230,15 @@ Deniable reporting needs deniable message authentication. Asymmetric
 message franking [TGLMR19] gives moderator-only verifiability and
 forgeability for everyone else. MLS's per-message signatures already
 transfer authentication, so AMF on top of MLS gains nothing; it needs a
-replacement for MLS sender authentication, a protocol change outside MLS
-(D3). Source tracing of
-forwarded messages (Hecate [IAV22]) is out of scope.
+replacement for MLS sender authentication. The owner decided on no
+deniability (§11). Source tracing of forwarded messages (Hecate [IAV22]) is
+out of scope.
 
 ## 8. Stock Mumble and plaintext servers
 
 - **Stock Mumble:** the server receives every text message in plaintext and
   Mumble has no report message. Nuschl offers local ignore and hides
-  "Report" (D10). Plugin data (#93) is unauthenticated, so there is nothing
+  "Report" (§11). Plugin data (#93) is unauthenticated, so there is nothing
   to verify.
 - **`history/1` servers (compatible mode, no E2EE):** the server stores
   plaintext rows with `seq` and author. A plaintext `MessageReport` names
@@ -256,7 +257,7 @@ forwarded messages (Hecate [IAV22]) is out of scope.
 5. Attachments and stickers (files/1 objects) in reports.
 6. Edits and deletions, with the encrypted edit and delete envelopes.
 7. Plaintext reports on `history/1` servers; triage.nuschl.eu for
-   project-run servers (D11).
+   project-run servers (D3).
 
 ## 10. Tests
 
@@ -283,33 +284,32 @@ forwarded messages (Hecate [IAV22]) is out of scope.
 - Moderator client renders report bodies through the content worker.
 - `history/1` report by `seq`; stock Mumble shows no "Report".
 
-## 11. Decisions for the owner
+## 11. Decided (owner, 2026-11-14)
+
+1. **No deniability** ("this was already decided"): messages are
+   non-deniable, as MLS signatures make them. Reports carry franking
+   material and no MLS signatures.
+2. **Franking is required** in every E2EE group (`franking/1`); recipients
+   refuse messages that fail the franking check.
+3. **Context:** up to 19 earlier messages chosen by the reporter.
+4. **Deleted messages** stay reportable for 30 days; openings are kept
+   hidden for that time.
+5. **Edits:** a report carries the original and every edit.
+6. **Moderators:** channel moderators for channels, administrators for
+   direct conversations.
+7. **Retention:** servers keep reports for one year after closing.
+8. **Stock Mumble:** no "Report" option.
+
+## 12. Open decisions
 
 1. **Destination:** message and sticker reports to the conversation's
    server; reports.nuschl.eu stays for #205 (recommended).
 2. **Server binding:** HMAC-SHA256 with a server key (recommended; MIMI's
    `server_frank`) or a signature with the server's KT key, which anyone can
    verify and which makes server statements transferable.
-3. **Deniability:** accept the non-deniability MLS signatures already give;
-   reports carry franking material and no MLS signatures (recommended). Or
-   add MLS signatures for third-party verification, or start a deniable
-   authentication design (AMF), a protocol change.
-4. **Franking required** in every E2EE group, with unfrankable messages
-   refused (recommended), or optional per conversation.
-5. **Context:** up to 19 earlier messages chosen by the reporter
-   (recommended), or the reported message alone.
-6. **Deleted messages:** openings kept hidden for 30 days for reporting
-   (recommended), or deleted with the message.
-7. **Edits:** a report carries the original and every edit (recommended),
-   or the shown version alone.
-8. **Moderators:** channel moderators for channels and administrators for
-   direct conversations (recommended), or administrators alone.
-9. **Retention of reports** on servers: one year after closing, or longer.
-10. **Stock Mumble:** hide "Report" (recommended) or offer an unverified
-    local export.
-11. **Project-run servers:** their reports in triage.nuschl.eu
-    (recommended), or in the desktop moderator view alone.
-12. **`K_s` rotation:** yearly, old keys kept while tagged history exists.
+3. **Project-run servers:** their reports in triage.nuschl.eu
+   (recommended), or in the desktop moderator view alone.
+4. **`K_s` rotation:** yearly, old keys kept while tagged history exists.
 
 ## References
 
