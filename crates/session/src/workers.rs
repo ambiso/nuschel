@@ -17,10 +17,10 @@ use tokio::{
 };
 
 /// The sibling executable `name`, started confined as `role`.
-fn start(name: &str, role: Role) -> Result<Worker, Error> {
-    let command = nuschl_sandbox::command(&nuschl_sandbox::sibling(name)?, role, &[]);
-    let worker = command.and_then(nuschl_sandbox::spawn);
-    worker.map_err(|error| Error::Worker(error.to_string()))
+async fn start(name: &str, role: Role<'_>) -> Result<Worker, Error> {
+    let failed = |error: nuschl_sandbox::Error| Error::Worker(error.to_string());
+    let command = nuschl_sandbox::command(&nuschl_sandbox::sibling(name)?, role).map_err(failed)?;
+    nuschl_sandbox::spawn(command).await.map_err(failed)
 }
 
 pub struct Storage {
@@ -28,9 +28,9 @@ pub struct Storage {
     request_id: u64,
 }
 impl Storage {
-    pub fn start(directory: &Path) -> Result<Self, Error> {
+    pub async fn start(directory: &Path) -> Result<Self, Error> {
         Ok(Self {
-            worker: start("nuschl-storage-worker", Role::Storage { directory })?,
+            worker: start("nuschl-storage-worker", Role::Storage { directory }).await?,
             request_id: 0,
         })
     }
@@ -251,13 +251,13 @@ impl Media {
         )
     }
 
-    pub fn start() -> Result<Self, Error> {
+    pub async fn start() -> Result<Self, Error> {
         let Worker {
             mut child,
             mut input,
             mut output,
             containment,
-        } = start("nuschl-media-worker", Role::Media)?;
+        } = start("nuschl-media-worker", Role::Media).await?;
         // One worker plays every server's voice: room for a burst of packets
         // from several talkers without crowding out control requests.
         let (tx, mut rx) = mpsc::channel(256);
@@ -317,13 +317,13 @@ impl Transfer {
         self.task.abort_handle()
     }
 
-    pub fn start(file: Option<&Path>) -> Result<Self, Error> {
+    pub async fn start(file: Option<&Path>) -> Result<Self, Error> {
         let Worker {
             mut child,
             mut input,
             mut output,
             containment,
-        } = start("nuschl-transfer-worker", Role::Transfer { file })?;
+        } = start("nuschl-transfer-worker", Role::Transfer { file }).await?;
         let (commands, mut requests) = mpsc::channel(4);
         // Few events in flight: a slow disk slows the worker, and the sender with it.
         let (events_tx, events) = mpsc::channel(8);
