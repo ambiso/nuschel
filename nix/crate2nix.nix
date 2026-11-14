@@ -57,15 +57,6 @@ let
           '"${../tests/fixtures/rtc-keyframe.vp8}"'
       '';
     };
-    # Its integration tests read Murmur fixtures from the workspace's
-    # tests/fixtures, which the isolated crate source does not contain.
-    nuschld = _: {
-      postPatch = ''
-        substituteInPlace tests/protocol.rs --replace-fail \
-          '.join("../../tests/fixtures")' \
-          '.join("${../tests/fixtures}")'
-      '';
-    };
     nuschl = withLibraries;
     nuschl-media-worker = withLibraries;
     nuschl-cli = withLibraries;
