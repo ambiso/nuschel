@@ -267,18 +267,32 @@ impl Media {
     }
 
     /// Kill the worker at once; the handle completes once it has exited and
-    /// been reaped.
+    /// been reaped, on Linux once its whole sandbox has exited.
     pub fn stop(self) -> tokio::task::JoinHandle<()> {
         self.task
     }
 
     pub async fn start() -> Result<Self, Error> {
+        let failed = |error: nuschl_sandbox::Error| Error::Worker(error.to_string());
         let Worker {
             mut child,
             mut input,
             mut output,
             containment,
-        } = start("nuschl-media-worker", Role::Media).await?;
+        } = nuschl_sandbox::spawn_media(&nuschl_sandbox::sibling("nuschl-media-worker")?)
+            .await
+            .map_err(failed)?;
+        // The receipt names the sandbox's original init before any input.
+        #[cfg(target_os = "linux")]
+        let retirement = {
+            let mut retirement = nuschl_ipc::host::preview_lifecycle::Retirement::new(&mut child);
+            if let Err(error) = retirement.ready().await {
+                let _ = child.start_kill();
+                retirement.retire(&mut child).await;
+                return Err(Error::Worker(error.to_string()));
+            }
+            retirement
+        };
         let (tx, mut rx) = mpsc::channel(MEDIA_REQUESTS);
         let (events_tx, events) = mpsc::channel(MEDIA_EVENTS);
         let (stop, stopped) = tokio::sync::oneshot::channel();
@@ -314,7 +328,12 @@ impl Media {
                 reader.abort();
                 let _ = reader.await;
             }
-            let _ = child.kill().await;
+            let _ = child.start_kill();
+            // Exited means the whole sandbox, not only its wrapper.
+            #[cfg(target_os = "linux")]
+            retirement.retire(&mut child).await;
+            #[cfg(not(target_os = "linux"))]
+            nuschl_sandbox::reap(&mut child).await;
         });
         Ok(Self {
             commands: tx,
