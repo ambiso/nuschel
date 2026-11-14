@@ -41,20 +41,58 @@ for that URL until the URL changes or the sender explicitly requests a preview.
 Late worker replies cannot undo removal. A failed or unfinished preview never blocks
 the original text from being sent.
 
-One message owns its text and preview: one idempotency key, sequence number, storage
-transaction, edit and deletion. A preview is not a second image message. Modern
+The planned negotiated format gives text and preview one idempotency key, sequence
+number, storage transaction, edit and deletion. A preview is not a second image message. Modern
 clients use typed, versioned metadata; the legacy projection is ordinary Mumble HTML
 in one compatible message, within its server limits, or text alone.
 
 ## Global fetch policy
 
-The initial default is **Off**. There is no default public proxy or DNS service.
+Choose the global mode in **Settings → Link previews** on Linux. The initial
+default is **Off**, and the setting applies to every connected server. There is no
+default public proxy or DNS service. The web adapter displays metadata and embedded
+images carried in messages, with sender-side preview generation disabled.
 
 | Mode | Behavior |
 |---|---|
 | Off | No automatic network request, DNS lookup or fetch worker. |
 | Direct | Explicit opt-in to resolving and connecting to public target addresses directly. |
 | ProxyRequired | No fetching until an explicit proxy and proxied DNS/bootstrap configuration are complete; no direct or local target-DNS fallback. |
+
+The mode selector does not edit proxy or resolver addresses. To use **Proxy
+required**, close Nuschl and create or edit `link-previews.json` beside
+`settings.json`: normally `~/.config/nuschl/link-previews.json` on Linux (or
+`$XDG_CONFIG_HOME/nuschl/link-previews.json` when set). With `--profile-dir DIR`,
+use `DIR/config/link-previews.json`. For example:
+
+```json
+{
+  "version": 1,
+  "mode": "proxy_required",
+  "proxy": "socks5://127.0.0.1:9050",
+  "dns": {
+    "url": "https://resolver.example/dns-query",
+    "bootstrap": ["192.0.2.53"]
+  }
+}
+```
+
+Replace the proxy address, resolver URL and bootstrap IP with services you have
+configured; the resolver values above are documentation placeholders. The proxy
+must use `socks5://` with an IP literal and explicit port, without authentication.
+The resolver must support DNS-over-HTTPS JSON responses, not only binary DNS wire
+responses. Bootstrap addresses are the resolver's IP addresses: Nuschl reaches
+those through the proxy while verifying TLS against the resolver URL's hostname.
+It resolves page and image hosts through that resolver rather than system DNS.
+Restart Nuschl after editing the file; **Active policy** and any configuration
+problem appear below the mode selector. Missing or invalid proxy configuration
+fetches nothing and never falls back to Direct.
+
+An optional `managed-link-previews.json` uses the same format to restrict the
+user's choice and, when requiring a proxy, supply its route. It can sit beside the
+user file or in the system Nuschl configuration directory. It cannot enable
+fetching when the user's mode is Off. The active policy may therefore be stricter
+than the saved selection.
 
 The policy covers the HTML document, its redirects, the selected image, image
 redirects and future metadata providers. A change invalidates late results and
