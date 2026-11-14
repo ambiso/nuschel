@@ -586,8 +586,59 @@ struct Connection {
     generation: u64,
     voice_route: std::sync::Arc<nuschl_session::connection::VoiceRoute>,
     commands: mpsc::Sender<Command>,
+    /// Mute and deafen as last set (muted includes deafened): state, not a
+    /// queued request, so neither a busy connection nor a reconnection loses
+    /// a mute or deafen (see `next_command`).
+    self_state: watch::Sender<(bool, bool)>,
     sounds: mpsc::Sender<Sound>,
     task: tokio::task::JoinHandle<()>,
+}
+
+/// Queue a request for a connection; mute and deafen replace its state.
+fn enqueue(connection: &Connection, command: Command) -> Result<(), String> {
+    if let Command::SetSelf { muted, deafened } = command {
+        connection
+            .self_state
+            .send_replace((muted || deafened, deafened));
+        return Ok(());
+    }
+    connection
+        .commands
+        .try_send(command)
+        .map_err(|_| "Connection is busy or has ended; reconnect to try again.".into())
+}
+
+/// A connection's next request. A change of mute or deafen comes first,
+/// ahead of the queued requests, unless it opens (an unmute or undeafen,
+/// against `now`): that waits until the queue is empty, so it never
+/// overtakes a move. The latest state is taken: an older one never follows
+/// a newer one.
+async fn next_command(
+    commands: &mut mpsc::Receiver<Command>,
+    self_state: &mut watch::Receiver<(bool, bool)>,
+    now: (bool, bool),
+) -> Option<Command> {
+    tokio::select! {
+        biased;
+        Ok(()) = self_state.changed() => {
+            // Decided when the change is taken, not when the wait began.
+            let (muted, deafened) = *self_state.borrow();
+            let opens = (!muted && now.0) || (!deafened && now.1);
+            if !opens || commands.is_empty() {
+                return Some(Command::SetSelf { muted, deafened });
+            }
+            self_state.mark_changed();
+            commands.recv().await
+        }
+        command = commands.recv() => command,
+    }
+}
+
+/// Whether a connection holds back our voice: muted or deafened, or with a
+/// change of either not taken yet. A mute and the unmute after it can merge
+/// into one such change; nothing captured in between leaves.
+fn holds_voice(muted: bool, self_state: &watch::Receiver<(bool, bool)>) -> bool {
+    muted || self_state.has_changed().unwrap_or(true)
 }
 /// Synchronous UI callback scope only. No async task inherits this thread-local
 /// value. The guard restores the prior scope even when a callback unwinds.
@@ -1056,6 +1107,7 @@ impl Driver {
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
             + 1;
         let (commands, receiver) = mpsc::channel(32);
+        let (self_state, self_changes) = watch::channel((true, deafened));
         let (sounds, sound_requests) = mpsc::channel(8);
         let id = server.id.clone();
         let voice_route = std::sync::Arc::new(nuschl_session::connection::VoiceRoute::default());
@@ -1065,7 +1117,7 @@ impl Driver {
             (password, deafened),
             generation,
             voice_route.clone(),
-            (receiver, sound_requests),
+            (receiver, sound_requests, self_changes),
             (self.sender.clone(), self.media.clone()),
             (
                 self.content.clone(),
@@ -1084,6 +1136,7 @@ impl Driver {
                 generation,
                 voice_route,
                 commands,
+                self_state,
                 sounds,
                 task,
             },
@@ -1219,12 +1272,12 @@ impl Driver {
             );
         }
 
-        self.connections()
-            .get(server)
-            .ok_or("Server is not connected.")?
-            .commands
-            .try_send(command)
-            .map_err(|_| "Connection is busy or has ended; reconnect to try again.".into())
+        enqueue(
+            self.connections()
+                .get(server)
+                .ok_or("Server is not connected.")?,
+            command,
+        )
     }
     /// A new explicit local voice intent suspends before trying the bounded
     /// queue. Its revision prevents an older queued action from resuming audio.
@@ -1544,6 +1597,15 @@ struct Restore {
     /// with their keys after a reconnect.
     unacked: Vec<PendingChat>,
 }
+impl Restore {
+    /// A mute or deafen made while reconnecting applies to the next
+    /// connection; an unmute made meanwhile does not.
+    fn keep_closed(&mut self, self_state: &mut watch::Receiver<(bool, bool)>) {
+        let (muted, deafened) = *self_state.borrow_and_update();
+        self.muted |= muted;
+        self.deafened |= deafened;
+    }
+}
 
 enum Outcome {
     Ended(Result<Result<(), Error>, tokio::task::JoinError>),
@@ -1562,7 +1624,11 @@ async fn connection_loop(
     (password, deafened): (Option<String>, bool),
     generation: u64,
     voice_route: std::sync::Arc<nuschl_session::connection::VoiceRoute>,
-    (mut commands, mut sounds): (mpsc::Receiver<Command>, mpsc::Receiver<Sound>),
+    (mut commands, mut sounds, mut self_state): (
+        mpsc::Receiver<Command>,
+        mpsc::Receiver<Sound>,
+        watch::Receiver<(bool, bool)>,
+    ),
     (events, hub): (mpsc::Sender<Event>, media::Hub),
     (content, storage, pending): (
         mpsc::Sender<ContentWork>,
@@ -1586,13 +1652,14 @@ async fn connection_loop(
     };
     let mut attempt = 0_u32;
     loop {
+        restore.keep_closed(&mut self_state);
         let started = tokio::time::Instant::now();
         let outcome = connect_once(
             (&profile, &crypto),
             &server,
             password.clone(),
             generation,
-            (&mut commands, &mut sounds),
+            (&mut commands, &mut sounds, &mut self_state),
             (&events, &hub),
             (&content, &storage, &pending),
             (&mut settings, &mut voice_keys, &mut plugin_data),
@@ -1735,7 +1802,11 @@ async fn connect_once(
     server: &ServerBookmark,
     password: Option<String>,
     generation: u64,
-    (commands, sounds): (&mut mpsc::Receiver<Command>, &mut mpsc::Receiver<Sound>),
+    (commands, sounds, self_state): (
+        &mut mpsc::Receiver<Command>,
+        &mut mpsc::Receiver<Sound>,
+        &mut watch::Receiver<(bool, bool)>,
+    ),
     (events, hub): (&mpsc::Sender<Event>, &media::Hub),
     (content, storage, pending): (
         &mpsc::Sender<ContentWork>,
@@ -1902,7 +1973,7 @@ async fn connect_once(
                 if deafened { continue; }
                 hub.send(media::Control::Sound(sound));
             },
-            Some(command) = commands.recv() => {
+            Some(command) = next_command(commands, self_state, (muted, deafened)) => {
                 if let Command::Mls(open @ (nuschl_session::mls::MlsCommand::OpenChannel { .. } | nuschl_session::mls::MlsCommand::OpenDirect { .. })) = match &command { Command::Scoped { command, .. } => command.as_ref(), command => command } {
                     let authority = match &command { Command::Scoped { authority, .. } => Some(authority.clone()), _ => None };
                     pending_encrypted_open = Some((open.clone(), authority));
@@ -1930,8 +2001,8 @@ async fn connect_once(
             outgoing = async { voice.as_mut().unwrap().0.recv().await }, if voice.is_some() => {
                 let Some(media::Outgoing { revision, opus, end }) = outgoing else { voice = None; continue };
                 // Only unmuted, as the worker's supervisor routes it; nothing
-                // captured before a mute leaves.
-                if !voice_allowed || revision != voice_revision || muted || deafened || voice_keys.borrow().mute || !voice_frame_fits(bitrate, opus.len()) { continue; }
+                // captured before a mute leaves, nor while one waits.
+                if !voice_allowed || revision != voice_revision || holds_voice(muted || deafened, self_state) || voice_keys.borrow().mute || !voice_frame_fits(bitrate, opus.len()) { continue; }
                 let packet = nuschl_protocol::voice::VoicePacket { sender: 0, sequence, opus, end, volume: 1. };
                 sequence += 2;
                 transmitting = !end;
@@ -4069,6 +4140,7 @@ mod action_scope_tests {
             generation: 7,
             voice_route: Default::default(),
             commands,
+            self_state: watch::channel((true, false)).0,
             sounds,
             task: tokio::spawn(async {}),
         };
@@ -4125,6 +4197,72 @@ mod action_scope_tests {
         missing.users.clear();
         assert!(metadata_command(10, "a", missing, request()).is_err());
     }
+    /// The mute and deafen a connection's next request sets, if it does.
+    fn set_self(command: Option<Command>) -> Option<(bool, bool)> {
+        match command? {
+            Command::SetSelf { muted, deafened } => Some((muted, deafened)),
+            _ => None,
+        }
+    }
+    #[tokio::test]
+    async fn a_mute_is_neither_refused_nor_lost_while_the_connection_is_busy_or_reconnecting() {
+        let (commands, mut queued) = mpsc::channel(1);
+        let (sounds, _) = mpsc::channel(1);
+        let (self_state, mut changes) = watch::channel((true, false));
+        let connection = Connection {
+            generation: 7,
+            voice_route: Default::default(),
+            commands,
+            self_state,
+            sounds,
+            task: tokio::spawn(async {}),
+        };
+        let set = |muted, deafened| enqueue(&connection, Command::SetSelf { muted, deafened });
+        let (unmuted, muted) = ((false, false), (true, false));
+        // The connection is busy: its queue is full.
+        enqueue(&connection, Command::RequestStats(2)).unwrap();
+        assert!(enqueue(&connection, Command::RequestStats(3)).is_err());
+        // A mute and the unmute after it merge, yet hold back voice until
+        // the connection takes them, ahead of the queue (a new revision).
+        assert!(!holds_voice(false, &changes));
+        set(true, false).unwrap();
+        set(false, false).unwrap();
+        assert!(holds_voice(false, &changes), "voice from the muted moment");
+        let next = next_command(&mut queued, &mut changes, unmuted).await;
+        assert_eq!(set_self(next), Some(unmuted));
+        assert!(!holds_voice(false, &changes));
+        // A mute comes first; an unmute waits until the queue is empty.
+        set(true, false).unwrap();
+        let next = next_command(&mut queued, &mut changes, unmuted).await;
+        assert_eq!(set_self(next), Some(muted));
+        set(false, false).unwrap();
+        let next = next_command(&mut queued, &mut changes, muted).await;
+        assert!(matches!(next, Some(Command::RequestStats(2))));
+        let next = next_command(&mut queued, &mut changes, muted).await;
+        assert_eq!(set_self(next), Some(unmuted));
+        // Also when both arrive while the connection is already waiting.
+        {
+            let mut next = std::pin::pin!(next_command(&mut queued, &mut changes, muted));
+            let waiting = tokio::time::timeout(std::time::Duration::ZERO, next.as_mut()).await;
+            assert!(waiting.is_err());
+            enqueue(&connection, Command::RequestStats(4)).unwrap();
+            set(false, false).unwrap();
+            assert!(matches!(next.await, Some(Command::RequestStats(4))));
+        }
+        let next = next_command(&mut queued, &mut changes, muted).await;
+        assert_eq!(set_self(next), Some(unmuted));
+        // A mute made while reconnecting applies to the next connection; an
+        // unmute made meanwhile does not.
+        let mut restore = Restore::default();
+        set(false, false).unwrap();
+        restore.keep_closed(&mut changes);
+        assert!(!restore.muted);
+        set(true, false).unwrap();
+        restore.keep_closed(&mut changes);
+        set(false, false).unwrap();
+        restore.keep_closed(&mut changes);
+        assert!(restore.muted);
+    }
     #[tokio::test]
     async fn queue_full_new_voice_intent_stays_suspended_with_its_new_revision() {
         let (commands, mut queued) = mpsc::channel(1);
@@ -4136,6 +4274,7 @@ mod action_scope_tests {
                 generation: 7,
                 voice_route: route.clone(),
                 commands,
+                self_state: watch::channel((true, false)).0,
                 sounds,
                 task: tokio::spawn(async {}),
             },
@@ -4495,6 +4634,7 @@ mod reply_owner_tests {
             generation,
             voice_route: Default::default(),
             commands,
+            self_state: watch::channel((true, false)).0,
             sounds,
             task: tokio::spawn(async {}),
         };
@@ -4701,6 +4841,7 @@ mod reply_owner_tests {
                 generation: 7,
                 voice_route: Default::default(),
                 commands,
+                self_state: watch::channel((true, false)).0,
                 sounds,
                 task: runtime.spawn(async {}),
             },
