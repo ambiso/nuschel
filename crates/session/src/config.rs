@@ -1229,6 +1229,14 @@ impl Profile {
         let (places, migration) = crate::layout::migrate(&profile.layout, &profile);
         profile.places = places;
         profile.migration = Arc::new(migration);
+        let layout = &profile.layout;
+        remove_stale_temporaries(&[
+            &layout.config,
+            &layout.state,
+            &layout.cache,
+            &profile.places.identity,
+            &profile.places.policy,
+        ]);
         // The storage worker's sandbox binds it, so it must exist.
         crate::layout::create_private_dir(&profile.places.history)?;
         Ok(profile)
@@ -1892,7 +1900,74 @@ pub(crate) fn read_bounded(path: &Path, limit: u64) -> io::Result<Vec<u8>> {
     Ok(bytes)
 }
 
+/// The process's private file writes: open until [`end_writes`].
+struct Writes {
+    open: Mutex<bool>,
+}
+
+impl Writes {
+    /// Held by one write until its rename; an error once writes have ended.
+    fn start(&self) -> io::Result<MutexGuard<'_, bool>> {
+        let open = self.open.lock().unwrap_or_else(PoisonError::into_inner);
+        if *open {
+            Ok(open)
+        } else {
+            Err(io::Error::other(
+                "Nuschl is quitting and saves no more files",
+            ))
+        }
+    }
+
+    /// Wait for a write in progress, then end writes.
+    fn end(&self) {
+        *self.open.lock().unwrap_or_else(PoisonError::into_inner) = false;
+    }
+}
+
+static WRITES: Writes = Writes {
+    open: Mutex::new(true),
+};
+
+/// Wait for a private file being written to be renamed into place, and make
+/// later writes fail. Call it just before the process exits: no temporary
+/// file is left behind.
+pub fn end_writes() {
+    WRITES.end();
+}
+
+/// Remove `<name>.<UUID>.tmp` files that a killed process left in
+/// `directories`. A live write holds a lock on its file from creation to
+/// rename; the minute covers the moment between creating and locking it.
+fn remove_stale_temporaries(directories: &[&Path]) {
+    let entries = directories
+        .iter()
+        .filter_map(|directory| fs::read_dir(directory).ok());
+    for entry in entries.flatten().flatten() {
+        let name = entry.file_name();
+        let temporary = name
+            .to_str()
+            .and_then(|name| name.strip_suffix(".tmp")?.rsplit_once('.'))
+            .is_some_and(|(_, id)| Uuid::parse_str(id).is_ok());
+        let stale = || {
+            entry.metadata().is_ok_and(|metadata| {
+                metadata.is_file()
+                    && metadata
+                        .modified()
+                        .is_ok_and(|time| time.elapsed().is_ok_and(|age| age.as_secs() > 60))
+            })
+        };
+        if temporary
+            && stale()
+            && let Ok(file) = fs::File::open(entry.path())
+            && file.try_lock().is_ok()
+        {
+            let _ = fs::remove_file(entry.path());
+        }
+    }
+}
+
 pub(crate) fn atomic_private_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    let _writing = WRITES.start()?;
     let temporary = path.with_extension(format!("{}.tmp", Uuid::new_v4()));
     let result = (|| {
         let mut options = fs::OpenOptions::new();
@@ -1903,6 +1978,7 @@ pub(crate) fn atomic_private_write(path: &Path, bytes: &[u8]) -> io::Result<()> 
             options.mode(0o600);
         }
         let mut file = options.open(&temporary)?;
+        file.lock()?;
         file.write_all(bytes)?;
         file.sync_all()?;
         fs::rename(&temporary, path)?;
@@ -1917,6 +1993,7 @@ pub(crate) fn atomic_private_write(path: &Path, bytes: &[u8]) -> io::Result<()> 
 /// Publish a complete private file only if its destination is still absent.
 /// Migration never replaces a sidecar another version or process created.
 fn atomic_private_create(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    let _writing = WRITES.start()?;
     let temporary = path.with_extension(format!("{}.tmp", Uuid::new_v4()));
     let mut options = fs::OpenOptions::new();
     options.write(true).create_new(true);
@@ -1924,6 +2001,7 @@ fn atomic_private_create(path: &Path, bytes: &[u8]) -> io::Result<()> {
     std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
     let mut file = options.open(&temporary)?;
     let result = (|| {
+        file.lock()?;
         file.write_all(bytes)?;
         file.sync_all()?;
         match fs::hard_link(&temporary, path) {
@@ -2461,6 +2539,64 @@ mod tests {
             ["nuschl-namespace-v1", "servers.json"]
         );
         fs::remove_dir_all(root).unwrap();
+    }
+
+    /// A write killed between creating its temporary file and the rename
+    /// leaves `<name>.<UUID>.tmp`; opening the profile removes it once it is
+    /// over a minute old and unlocked, and keeps a younger one, a locked one,
+    /// the user's own files and a symbolic link.
+    #[test]
+    fn opening_removes_what_a_killed_write_left() {
+        let (root, profile) = temporary_profile("killed-write");
+        let layout = profile.layout().clone();
+        fs::create_dir(&layout.state).unwrap();
+        let temporary = |folder: &Path, name: &str| {
+            folder
+                .join(name)
+                .with_extension(format!("{}.tmp", Uuid::new_v4()))
+        };
+        let killed = [
+            temporary(&layout.config, "servers.json"),
+            temporary(&layout.state, "last-channels.json"),
+        ];
+        let writing = temporary(&layout.config, "settings.json");
+        let stalled = temporary(&layout.config, "voice-quality.json");
+        let notes = layout.config.join("notes.tmp");
+        let minute_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(61);
+        for path in killed.iter().chain([&writing, &stalled, &notes]) {
+            let file = fs::File::create(path).unwrap();
+            if *path != writing {
+                file.set_modified(minute_ago).unwrap();
+            }
+        }
+        // A live write's lock, through another handle: its file stays at any age.
+        let lock = fs::File::open(&stalled).unwrap();
+        lock.lock().unwrap();
+        #[cfg(unix)]
+        let link = {
+            let link = temporary(&layout.config, "link");
+            std::os::unix::fs::symlink(&notes, &link).unwrap();
+            link
+        };
+        drop(profile);
+        Profile::open(Some(root.clone())).unwrap();
+        assert!(killed.iter().all(|path| !path.exists()));
+        assert!(writing.exists() && stalled.exists() && notes.exists());
+        #[cfg(unix)]
+        assert!(fs::symlink_metadata(&link).is_ok());
+        drop(lock);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn writes_fail_after_they_end() {
+        let writes = Writes {
+            open: Mutex::new(true),
+        };
+        drop(writes.start().unwrap());
+        writes.end();
+        writes.end();
+        assert!(writes.start().is_err());
     }
 
     /// The real XDG variables, in a child process (changing the environment

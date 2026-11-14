@@ -4,4 +4,3 @@
 # step                                  issue  reason
 vm-smoke/pipewire-own-playback-echo     #275   the canceller's reduction of its own playback falls below 30 dB under load
 vm-smoke/pipewire-other-app-gate        #275   the gate opens for another application's sound under load
-vm-home-manager/config-folder-listing   #254   an extra file appeared in the config folder once (#261)
