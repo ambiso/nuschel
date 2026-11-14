@@ -213,7 +213,8 @@ The `legacy-preview` scene in `tests/web_broker.browser.mjs` checks a real brows
 recipient through stock Murmur and the web relay using a message exported by the
 native fixture. It checks metadata inside the quote card, embedded image pixels,
 one message, 1280px/390px layouts and forbidden browser requests. The coordinated
-Linux VM and headless Chromium runs passed on `6f8b185e`; this does not establish
+Linux VM and headless Chromium runs passed on `cffb6d7e`, including the user-settings
+save-failure checks; this does not establish
 physical Windows/macOS/iOS/Safari behavior or kernel-wide browser egress containment.
 Browser codec/content workers retain the browser isolation limitations described
 in the architecture documentation. Final required CI remains a separate merge gate.
