@@ -413,10 +413,7 @@ fn scan(text: &str) -> Found {
     let mut rest = text;
     let mut stopped = false;
     while !rest.is_empty() {
-        let mut end = rest.len().min(CHUNK_BYTES);
-        while !rest.is_char_boundary(end) {
-            end -= 1;
-        }
+        let end = rest.floor_char_boundary(CHUNK_BYTES);
         input.push_back(StrTendril::from(&rest[..end]));
         rest = &rest[end..];
         let _ = tokenizer.feed(&input);
@@ -435,20 +432,13 @@ fn scan(text: &str) -> Found {
 }
 
 fn clip(value: &str) -> &str {
-    let mut end = value.len().min(MAX_VALUE_BYTES);
-    while !value.is_char_boundary(end) {
-        end -= 1;
-    }
-    &value[..end]
+    &value[..value.floor_char_boundary(MAX_VALUE_BYTES)]
 }
 
 /// Append what fits of `text` within [`MAX_VALUE_BYTES`], at a character
 /// boundary.
 fn push_clipped(out: &mut String, text: &str) {
-    let mut end = text.len().min(MAX_VALUE_BYTES.saturating_sub(out.len()));
-    while !text.is_char_boundary(end) {
-        end -= 1;
-    }
+    let end = text.floor_char_boundary(MAX_VALUE_BYTES.saturating_sub(out.len()));
     out.push_str(&text[..end]);
 }
 

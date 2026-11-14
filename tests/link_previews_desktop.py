@@ -284,6 +284,17 @@ def desktop(args):
             return json.loads(shell.eval("JSON.stringify((()=>{const w=global.get_window_actors().map(a=>a.meta_window)"
                 f".find(w=>w.get_pid()==={pid});const b=w.{'get_frame_rect' if frame else 'get_buffer_rect'}();"
                 "return [b.x,b.y,b.width,b.height];})())"))
+        def resize_window(pid, width, height):
+            shell.eval("(()=>{const w=global.get_window_actors().map(a=>a.meta_window)"
+                f".find(w=>w.get_pid()==={pid});if(w.is_maximized())w.unmaximize();"
+                f"w.move_resize_frame(true,40,40,{width},{height});return true;}})()")
+            eventually(lambda: window_rect(pid, frame=True)[2:] == [width, height],
+                f"owned window actual frame did not reach {width} by {height}")
+        def saved_zoom(profile=root / "profile"):
+            return json.loads((profile / "config/settings.json").read_text()).get("appearance", {}).get("zoom", 1.0)
+        def wait_zoom(percent, profile=root / "profile"):
+            eventually(lambda: abs(saved_zoom(profile) - percent / 100) < .001,
+                f"actual saved zoom did not reach {percent} percent")
         def image_pixels(pid, path):
             focus_window(pid)
             shell.screenshot(path)
@@ -417,47 +428,6 @@ def desktop(args):
             content = message["content"]
             assert isinstance(content, str), "CLI archive content must be a JSON string"
             return content
-        def capture_recipient_failure(failure, pixel_count):
-            diagnostic = dict(error_type=type(failure).__name__, last_cyan_pixels=pixel_count,
-                nodes=[], nodes_truncated=False)
-            def expired(_signal, _frame):
-                raise TimeoutError("recipient failure capture exceeded 12 seconds")
-            previous_handler = signal.signal(signal.SIGALRM, expired)
-            previous_timer = signal.setitimer(signal.ITIMER_REAL, 12)
-            started = time.monotonic()
-            try:
-                diagnostic["frame"] = window_rect(recipient.pid, frame=True)
-                diagnostic["buffer"] = window_rect(recipient.pid)
-                observed = items(recipient_ui)
-                diagnostic["node_count"] = len(observed)
-                diagnostic["nodes_truncated"] = len(observed) > 1024
-                retained_bytes = 0
-                for node, role, name, states in observed[:1024]:
-                    row = dict(role=role[:64], name=name[:256], states=states)
-                    if role in ("image", "list", "list item"):
-                        try:
-                            row["extents"] = node.extents()
-                        except (RuntimeError, ValueError, TypeError, KeyError, IndexError) as error:
-                            row["extents_error"] = f"{type(error).__name__}: {error}"[:512]
-                    retained_bytes += len(json.dumps(row).encode())
-                    if retained_bytes > 128 * 1024:
-                        diagnostic["nodes_truncated"] = True
-                        break
-                    diagnostic["nodes"].append(row)
-                shell.screenshot(args.output / "recipient-failure.png")
-            except (AssertionError, EOFError, OSError, RuntimeError, ValueError,
-                    TypeError, KeyError, IndexError, subprocess.SubprocessError) as error:
-                diagnostic["capture_error"] = f"{type(error).__name__}: {error}"[:512]
-            finally:
-                signal.setitimer(signal.ITIMER_REAL, 0)
-                signal.signal(signal.SIGALRM, previous_handler)
-                if previous_timer[0]:
-                    signal.setitimer(signal.ITIMER_REAL,
-                        max(.001, previous_timer[0] - (time.monotonic() - started)), previous_timer[1])
-                diagnostic["capture_seconds"] = time.monotonic() - started
-                encoded = json.dumps(diagnostic, separators=(",", ":")).encode()
-                assert len(encoded) <= 256 * 1024
-                (args.output / "recipient-failure.json").write_bytes(encoded + b"\n")
         def recipient_card(marker, contained=False):
             timelines = [node for node, role, name, _ in items(recipient_ui)
                 if role == "list" and name == "Messages in #Root"]
@@ -552,19 +522,12 @@ def desktop(args):
                         "carried image was not actually painted in independent recipient")
                     focus_window(recipient.pid)
                     shell.chord("Control_L", "0")
-                    def recipient_zoom(percent):
-                        settings = json.loads((recipient_profile / "config/settings.json").read_text())
-                        return abs(settings.get("appearance", {}).get("zoom", 1.0) - percent / 100) < .001
-                    eventually(lambda: recipient_zoom(100), "recipient zoom did not reset to 100 percent")
-                    shell.eval("(()=>{const w=global.get_window_actors().map(a=>a.meta_window)"
-                        f".find(w=>w.get_pid()==={recipient.pid});if(w.is_maximized())w.unmaximize();"
-                        "w.move_resize_frame(true,40,40,900,800);return true;})()")
-                    eventually(lambda: window_rect(recipient.pid, frame=True)[2:] == [900, 800],
-                        "recipient actual frame did not reach 900 by 800")
+                    wait_zoom(100, recipient_profile)
+                    resize_window(recipient.pid, 900, 800)
                     for _ in range(5):
                         shell.chord("Control_L", "equal")
                         time.sleep(.1)
-                    eventually(lambda: recipient_zoom(200), "recipient zoom did not reach 200 percent")
+                    wait_zoom(200, recipient_profile)
                     card = eventually(lambda: recipient_card(marker, contained=True),
                         "complete recipient card left the narrow 200 percent timeline")
                     def narrow_image_painted():
@@ -576,13 +539,10 @@ def desktop(args):
                         marker=marker, frame=window_rect(recipient.pid, frame=True), zoom=200,
                         card=card, cyan_pixels=pixel_count)
                     shell.chord("Control_L", "0")
-                    eventually(lambda: recipient_zoom(100), "recipient zoom did not return to 100 percent")
-                    shell.eval("(()=>{const w=global.get_window_actors().map(a=>a.meta_window)"
-                        f".find(w=>w.get_pid()==={recipient.pid});w.move_resize_frame(true,40,40,1280,800);return true;}})()")
-                    eventually(lambda: window_rect(recipient.pid, frame=True)[2:] == [1280, 800],
-                        "recipient actual frame did not return to 1280 by 800")
+                    wait_zoom(100, recipient_profile)
+                    resize_window(recipient.pid, 1280, 800)
                 except AssertionError as failure:
-                    capture_recipient_failure(failure, pixel_count)
+                    capture_failure(failure, recipient_view=True, pixel_count=pixel_count)
                     raise
                 focus_window(sender_pid)
                 if args.server == "nuschld":
@@ -601,58 +561,59 @@ def desktop(args):
                 wire_sha256=hashlib.sha256(wire.encode()).hexdigest())
             return wire
 
-        def capture_failure(failure):
-            diagnostic = dict(observation, error_type=type(failure).__name__,
-                error=str(failure)[:2048],
-                last_observed_policy_labels=last_policy_labels[:], nodes=[], nodes_truncated=False)
+        def capture_failure(failure, *, recipient_view=False, pixel_count=None):
+            prefix = "recipient-failure" if recipient_view else "failure"
+            diagnostic = dict({} if recipient_view else observation,
+                error_type=type(failure).__name__, error=str(failure)[:2048],
+                nodes=[], nodes_truncated=False)
+            if recipient_view:
+                diagnostic["last_cyan_pixels"] = pixel_count
+            else:
+                diagnostic["last_observed_policy_labels"] = last_policy_labels[:]
             def expired(_signal, _frame):
-                raise TimeoutError("scene failure capture exceeded 12 seconds")
+                raise TimeoutError("preview failure capture exceeded 12 seconds")
             previous_handler = signal.signal(signal.SIGALRM, expired)
             previous_timer = signal.setitimer(signal.ITIMER_REAL, 12)
             started = time.monotonic()
             try:
-                observed = items(application)
+                if recipient_view:
+                    diagnostic["frame"] = window_rect(recipient.pid, frame=True)
+                    diagnostic["buffer"] = window_rect(recipient.pid)
+                observed = items(recipient_ui if recipient_view else application)
                 diagnostic["node_count"] = len(observed)
                 diagnostic["nodes_truncated"] = len(observed) > 1024
                 retained_bytes = 0
-                composer_node = None
                 for node, role, name, states in observed[:1024]:
-                    row = {"role": role[:64], "name": name[:256], "states": states}
+                    row = dict(role=role[:64], name=name[:256], states=states)
+                    if recipient_view and role in ("image", "list", "list item"):
+                        try:
+                            row["extents"] = node.extents()
+                        except (RuntimeError, ValueError, TypeError, KeyError, IndexError) as error:
+                            row["extents_error"] = f"{type(error).__name__}: {error}"[:512]
                     retained_bytes += len(json.dumps(row).encode())
                     if retained_bytes > 128 * 1024:
                         diagnostic["nodes_truncated"] = True
                         break
                     diagnostic["nodes"].append(row)
-                    if name == "Message" and role in ("entry", "text"):
-                        composer_node = node
-                rows = diagnostic["nodes"]
-                diagnostic["preview_labels"] = [row["name"] for row in rows
-                    if "preview" in row["name"].lower() or row["name"].startswith("Text only")][:64]
-                diagnostic["policy_labels"] = [row["name"] for row in rows
-                    if row["name"].startswith("Active policy:")][:4]
-                diagnostic["send_labels"] = [row["name"] for row in rows
-                    if row["name"] in ("Send", "Sending…")]
-                diagnostic["focused"] = [row for row in rows if row["states"] & (1 << 12)][:16]
-                diagnostic["notice_and_status_labels"] = [row["name"] for row in rows
-                    if row["role"] == "status bar" or any(term in row["name"].lower()
-                        for term in ("notice", "not sent", "changed", "unavailable", "cannot"))][:64]
-                if composer_node is not None:
-                    try:
-                        count = composer_node.bus("get-property", composer_node.destination, composer_node.path,
-                            "org.a11y.atspi.Text", "CharacterCount")
-                        assert type(count) is int and count >= 0
-                        diagnostic["composer_character_count"] = count
-                        diagnostic["composer_text"] = composer_node.call("Text", "GetText", "ii", "0", str(min(count, 4096)))[0]
-                    except (AssertionError, RuntimeError, ValueError, TypeError, KeyError, IndexError) as error:
-                        diagnostic["composer_error"] = f"{type(error).__name__}: {error}"[:512]
-                diagnostic["frame"] = window_rect(sender_pid, frame=True)
-                diagnostic["saved_zoom"] = json.loads((root / "profile/config/settings.json").read_text()).get("appearance", {}).get("zoom", 1.0)
-                diagnostic["focused_window_pid"] = json.loads(shell.eval(
-                    "JSON.stringify(global.display.focus_window?.get_pid()??null)"))
-                snapshot = json.dumps(control("snapshot"), separators=(",", ":")).encode()
-                assert len(snapshot) <= 512 * 1024
-                (args.output / "failure-peers.json").write_bytes(snapshot + b"\n")
-                shell.screenshot(args.output / "failure.png")
+                if not recipient_view:
+                    rows = diagnostic["nodes"]
+                    diagnostic["preview_labels"] = [row["name"] for row in rows
+                        if "preview" in row["name"].lower() or row["name"].startswith("Text only")][:64]
+                    diagnostic["policy_labels"] = [row["name"] for row in rows
+                        if row["name"].startswith("Active policy:")][:4]
+                    diagnostic["send_labels"] = [row["name"] for row in rows
+                        if row["name"] in ("Send", "Sending…")]
+                    diagnostic["focused"] = [row for row in rows if row["states"] & (1 << 12)][:16]
+                    diagnostic["notice_and_status_labels"] = [row["name"] for row in rows
+                        if row["role"] == "status bar" or any(term in row["name"].lower()
+                            for term in ("notice", "not sent", "changed", "unavailable", "cannot"))][:64]
+                    diagnostic["frame"] = window_rect(sender_pid, frame=True)
+                    diagnostic["saved_zoom"] = saved_zoom()
+                    diagnostic["focused_window_pid"] = focused_window_pid()
+                    snapshot = json.dumps(control("snapshot"), separators=(",", ":")).encode()
+                    assert len(snapshot) <= 512 * 1024
+                    (args.output / "failure-peers.json").write_bytes(snapshot + b"\n")
+                shell.screenshot(args.output / f"{prefix}.png")
             except (AssertionError, EOFError, OSError, RuntimeError, ValueError,
                     TypeError, KeyError, IndexError, subprocess.SubprocessError) as error:
                 diagnostic["capture_error"] = f"{type(error).__name__}: {error}"[:512]
@@ -665,7 +626,7 @@ def desktop(args):
                 diagnostic["capture_seconds"] = time.monotonic() - started
                 encoded = json.dumps(diagnostic, separators=(",", ":")).encode()
                 assert len(encoded) <= 256 * 1024
-                (args.output / "failure.json").write_bytes(encoded + b"\n")
+                (args.output / f"{prefix}.json").write_bytes(encoded + b"\n")
 
         try:
             initial = len(events())
@@ -690,24 +651,13 @@ def desktop(args):
             assert any(event.get("path") == "/image.png" for event in fetched)
             eventually(lambda: image_pixels(sender_pid, args.output / "sender-card.png") > 300,
                 "sender safe worker image was not actually painted")
-            def saved_zoom():
-                return json.loads((root / "profile/config/settings.json").read_text()).get("appearance", {}).get("zoom", 1.0)
-            def wait_zoom(percent):
-                eventually(lambda: abs(saved_zoom() - percent / 100) < .001,
-                    f"actual saved zoom did not reach {percent} percent")
             geometry = []
             for width, zoom, steps in [(1280, 100, 0), (900, 200, 5)]:
                 observation.update(stage="geometry", requested_width=width, requested_height=800, requested_zoom=zoom)
                 focus_window(sender_pid)
                 shell.chord("Control_L", "0")
                 wait_zoom(100)
-                # A maximized window ignores move_resize_frame. Match place(),
-                # selecting only our sender rather than the recipient's title.
-                shell.eval("(()=>{const w=global.get_window_actors().map(a=>a.meta_window)"
-                    f".find(w=>w.get_pid()==={sender_pid});if(w.is_maximized())w.unmaximize();"
-                    f"w.move_resize_frame(true,40,40,{width},800);return true;}})()")
-                eventually(lambda: window_rect(sender_pid, frame=True)[2:] == [width, 800],
-                    f"sender actual frame did not reach {width} by 800")
+                resize_window(sender_pid, width, 800)
                 for _ in range(steps):
                     shell.chord("Control_L", "equal")
                     time.sleep(.1)
@@ -754,11 +704,7 @@ def desktop(args):
             shell.press("Control_L", "Shift_L", "Right")
             selection = copied_input()
             assert 0 < len(selection) < len(compact_body) and compact_body.startswith(selection)
-            shell.eval("(()=>{const w=global.get_window_actors().map(a=>a.meta_window)"
-                f".find(w=>w.get_pid()==={sender_pid});if(w.is_maximized())w.unmaximize();"
-                "w.move_resize_frame(true,40,40,860,520);return true;})()")
-            eventually(lambda: window_rect(sender_pid, frame=True)[2:] == [860, 520],
-                "compact actual frame did not reach 860 by 520")
+            resize_window(sender_pid, 860, 520)
             for _ in range(7):
                 shell.chord("Control_L", "equal")
                 time.sleep(.1)
@@ -922,10 +868,7 @@ def desktop(args):
             send_and_receive(compact_body, False)
             shell.chord("Control_L", "0")
             wait_zoom(100)
-            shell.eval("(()=>{const w=global.get_window_actors().map(a=>a.meta_window)"
-                f".find(w=>w.get_pid()==={sender_pid});w.move_resize_frame(true,40,40,1280,800);return true;}})()")
-            eventually(lambda: window_rect(sender_pid, frame=True)[2:] == [1280, 800],
-                "wide actual frame did not reach 1280 by 800")
+            resize_window(sender_pid, 1280, 800)
             eventually(lambda: named("Channels", "tree") is not None and named("Channels", "push button") is None,
                 "wide window did not restore inline navigation")
             assert json.loads((root / "profile/config/settings.json").read_text()).get("sidebar_width", 248) == saved_pane

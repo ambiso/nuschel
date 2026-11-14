@@ -25,8 +25,6 @@ pub const MAX_CONVERSATIONS: usize = 64;
 pub const MAX_DRAFT_BYTES: usize = nuschl_core::MAX_CONTENT_BYTES;
 /// Draft text kept for exact matching, across all conversations.
 pub const MAX_KEPT_TEXT_BYTES: usize = 1024 * 1024;
-/// One fetch pipeline per client: a newer request cancels the older.
-pub const MAX_IN_FLIGHT: usize = 1;
 /// Results remembered by URL (memory only, cleared on every policy change).
 pub const MAX_CACHE_ENTRIES: usize = 16;
 pub const MAX_CACHE_BYTES: usize = 1024 * 1024;
@@ -138,7 +136,8 @@ struct State {
     connection: u64,
     text: String,
     target: Option<Target>,
-    suppressed: Option<String>,
+    /// Removal belongs to `target`; changing that target clears it.
+    removed: bool,
     phase: Phase,
     carry: Result<(), Ineligible>,
 }
@@ -209,7 +208,7 @@ impl<K: Clone + Eq> DraftPreviews<K> {
         self.policy = next;
         self.enabled = settings.route().is_ok();
         self.cache.clear();
-        let effects = self.cancel_in_flight();
+        let effects = self.cancel_in_flight().into_iter().collect();
         for (_, state) in &mut self.drafts {
             state.phase = Phase::Idle;
         }
@@ -244,14 +243,13 @@ impl<K: Clone + Eq> DraftPreviews<K> {
             state.revision = revision;
         }
         state.carry = draft.carry;
-        if state.connection != draft.connection {
+        let target_changed = state.target != target;
+        if state.connection != draft.connection || target_changed {
             effects.extend(self.cancel_phase(&state.phase));
             state.connection = draft.connection;
-            state.phase = Phase::Idle;
-        }
-        if state.target.as_ref().map(Target::as_str) != target.as_ref().map(Target::as_str) {
-            effects.extend(self.cancel_phase(&state.phase));
-            state.suppressed = None;
+            if target_changed {
+                state.removed = false;
+            }
             state.target = target;
             state.phase = Phase::Idle;
         }
@@ -271,7 +269,7 @@ impl<K: Clone + Eq> DraftPreviews<K> {
                     Ok(()) => Phase::Idle,
                 }
             }
-            (phase, Some(target)) if state.suppressed.as_deref() == Some(target.as_str()) => {
+            (phase, _) if state.removed => {
                 effects.extend(self.cancel_phase(&phase));
                 Phase::Removed
             }
@@ -351,14 +349,9 @@ impl<K: Clone + Eq> DraftPreviews<K> {
         let bound = state.connection == draft.connection
             && state.text == draft.text
             && state.target.as_ref().map(Target::as_str) == Some(target.as_str())
-            && state.suppressed.as_deref() != Some(target.as_str())
+            && !state.removed
             && card.is_for(target.as_str());
         bound.then_some(card)
-    }
-
-    /// The message was sent: removal ends and the draft starts over.
-    pub fn sent(&mut self, conversation: &K) -> Vec<Effect<K>> {
-        self.forget(conversation)
     }
 
     pub fn submission_token(
@@ -402,7 +395,7 @@ impl<K: Clone + Eq> DraftPreviews<K> {
     /// Navigation suspends pending work without forgetting a removed URL or
     /// a completed card. The platform still retains physical worker credit.
     pub fn pause(&mut self) -> Vec<Effect<K>> {
-        self.cancel_in_flight()
+        self.cancel_in_flight().into_iter().collect()
     }
 
     /// Explicitly retry this draft's unavailable target, without reviving a
@@ -433,7 +426,7 @@ impl<K: Clone + Eq> DraftPreviews<K> {
             return Vec::new();
         };
         let (_, state) = self.drafts.remove(index).expect("found");
-        self.cancel_phase(&state.phase)
+        self.cancel_phase(&state.phase).into_iter().collect()
     }
 
     /// The sender removed the card (×): no preview for this URL until it
@@ -451,15 +444,10 @@ impl<K: Clone + Eq> DraftPreviews<K> {
         };
         self.drafts[index].1.revision = revision;
         let phase = std::mem::replace(&mut self.drafts[index].1.phase, Phase::Idle);
-        let effects = self.cancel_phase(&phase);
+        let effects = self.cancel_phase(&phase).into_iter().collect();
         let state = &mut self.drafts[index].1;
-        match &state.target {
-            Some(target) => {
-                state.suppressed = Some(target.as_str().to_owned());
-                state.phase = Phase::Removed;
-            }
-            None => state.phase = phase,
-        }
+        state.removed = true;
+        state.phase = Phase::Removed;
         effects
     }
 
@@ -468,14 +456,14 @@ impl<K: Clone + Eq> DraftPreviews<K> {
         if let Some(index) = self
             .drafts
             .iter()
-            .position(|(key, state)| key == draft.conversation && state.suppressed.is_some())
+            .position(|(key, state)| key == draft.conversation && state.removed)
         {
             let Some(revision) = self.new_revision() else {
                 return Vec::new();
             };
             let state = &mut self.drafts[index].1;
             state.revision = revision;
-            state.suppressed = None;
+            state.removed = false;
             if matches!(state.phase, Phase::Removed) {
                 state.phase = Phase::Idle;
             }
@@ -524,7 +512,7 @@ impl<K: Clone + Eq> DraftPreviews<K> {
                     connection,
                     text: String::new(),
                     target: None,
-                    suppressed: None,
+                    removed: false,
                     phase: Phase::Idle,
                     carry: Ok(()),
                 },
@@ -601,25 +589,23 @@ impl<K: Clone + Eq> DraftPreviews<K> {
         Phase::Fetching(id)
     }
 
-    fn cancel_phase(&mut self, phase: &Phase) -> Vec<Effect<K>> {
+    fn cancel_phase(&mut self, phase: &Phase) -> Option<Effect<K>> {
         match phase {
             Phase::Fetching(id) if self.in_flight == Some(*id) => self.cancel_in_flight(),
-            _ => Vec::new(),
+            _ => None,
         }
     }
 
     /// Cancel the request in flight; its draft returns to Idle, so its next
     /// update asks again.
-    fn cancel_in_flight(&mut self) -> Vec<Effect<K>> {
-        let Some(id) = self.in_flight.take() else {
-            return Vec::new();
-        };
+    fn cancel_in_flight(&mut self) -> Option<Effect<K>> {
+        let id = self.in_flight.take()?;
         for (_, state) in &mut self.drafts {
             if matches!(state.phase, Phase::Fetching(pending) if pending == id) {
                 state.phase = Phase::Idle;
             }
         }
-        vec![Effect::Cancel(id)]
+        Some(Effect::Cancel(id))
     }
 
     fn cached(&mut self, url: &str, now: u64) -> Option<Result<Card, Unavailable>> {
@@ -1092,7 +1078,8 @@ mod tests {
         let card = ready(&mut previews, &1, &text, URL);
         assert!(previews.remove(&1).is_empty());
         assert_eq!(previews.for_send(draft(&1, &text, Some(URL))), None);
-        assert!(previews.sent(&1).is_empty());
+        let token = previews.submission_token(&1, 1, &text).unwrap();
+        assert!(previews.sent_if_current(&1, token).is_empty());
         assert!(previews.update(draft(&1, &text, Some(URL)), 1).is_empty());
         assert_eq!(previews.for_send(draft(&1, &text, Some(URL))), Some(&card));
 

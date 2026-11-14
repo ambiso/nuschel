@@ -71,11 +71,6 @@ pub enum Problem {
 }
 
 impl Problem {
-    /// Whether previews are off because of it (all but the notice).
-    pub fn disables_previews(&self) -> bool {
-        !matches!(self, Self::ManagedServices)
-    }
-
     /// The file could not be used at all.
     fn unusable(&self) -> bool {
         matches!(
@@ -133,12 +128,6 @@ impl Loaded {
             present,
             problem,
         }
-    }
-
-    /// Whether saving may replace the file without the user explicitly
-    /// choosing new settings: never over one that was not understood.
-    pub fn may_overwrite(&self) -> bool {
-        !self.problem.as_ref().is_some_and(Problem::unusable)
     }
 }
 
@@ -249,7 +238,30 @@ pub fn effective(user: &Loaded, managed: &Loaded) -> Loaded {
     if let Some(error) = invalid_services(&managed.settings) {
         return Loaded::off(true, Some(Problem::InvalidService(Origin::Managed, error)));
     }
-    let (settings, replaced) = narrow(&user.settings, &managed.settings);
+    let mode = match (user.settings.mode, managed.settings.mode) {
+        (Mode::Off, _) | (_, Mode::Off) => Mode::Off,
+        (Mode::ProxyRequired, _) | (_, Mode::ProxyRequired) => Mode::ProxyRequired,
+        (Mode::Direct, Mode::Direct) => Mode::Direct,
+    };
+    let (proxy, dns) = if managed.settings.mode == Mode::ProxyRequired {
+        (
+            managed.settings.proxy.as_ref(),
+            managed.settings.dns.as_ref(),
+        )
+    } else {
+        (None, None)
+    };
+    let replaced = proxy
+        .zip(user.settings.proxy.as_ref())
+        .is_some_and(|(managed, user)| managed != user)
+        || dns
+            .zip(user.settings.dns.as_ref())
+            .is_some_and(|(managed, user)| managed != user);
+    let settings = Settings {
+        mode,
+        proxy: proxy.or(user.settings.proxy.as_ref()).cloned(),
+        dns: dns.or(user.settings.dns.as_ref()).cloned(),
+    };
     let problem = match &user.problem {
         // The user's own file was not understood: it stays the notice.
         Some(problem) if problem.unusable() => Some(problem.clone()),
@@ -274,44 +286,6 @@ fn invalid_services(settings: &Settings) -> Option<PolicyError> {
         return Some(error);
     }
     None
-}
-
-/// The managed narrowing, kept apart so its rule is easy to change: the
-/// narrower mode wins, and only a managed file requiring a proxy supplies
-/// proxy settings (its own replace the user's). Also whether a user's own
-/// proxy or resolver was replaced.
-fn narrow(user: &Settings, managed: &Settings) -> (Settings, bool) {
-    fn exposure(mode: Mode) -> u8 {
-        match mode {
-            Mode::Off => 0,
-            Mode::ProxyRequired => 1,
-            Mode::Direct => 2,
-        }
-    }
-    let mode = if exposure(managed.mode) < exposure(user.mode) {
-        managed.mode
-    } else {
-        user.mode
-    };
-    if managed.mode != Mode::ProxyRequired {
-        return (
-            Settings {
-                mode,
-                ..user.clone()
-            },
-            false,
-        );
-    }
-    let replaced = (managed.proxy.is_some() && user.proxy.is_some() && managed.proxy != user.proxy)
-        || (managed.dns.is_some() && user.dns.is_some() && managed.dns != user.dns);
-    (
-        Settings {
-            mode,
-            proxy: managed.proxy.clone().or_else(|| user.proxy.clone()),
-            dns: managed.dns.clone().or_else(|| user.dns.clone()),
-        },
-        replaced,
-    )
 }
 
 #[cfg(test)]
@@ -426,7 +400,6 @@ mod tests {
             assert_eq!(loaded.settings, Settings::default(), "{text}");
             assert_eq!(loaded.problem, Some(problem), "{text}");
             assert!(loaded.present);
-            assert!(!loaded.may_overwrite());
         }
         // Problems name the file and never quote it.
         let shown = Problem::Malformed(Origin::User).to_string();
@@ -457,7 +430,6 @@ mod tests {
                 "{text}"
             );
             assert!(loaded.settings.route().is_err());
-            assert!(loaded.may_overwrite());
         }
         // Saved incomplete settings read back the same way.
         let incomplete = mode(Mode::ProxyRequired);
@@ -491,8 +463,11 @@ mod tests {
                 let managed = parse(Origin::Managed, Source::Bytes(&bytes(&mode(*cap))));
                 let effective = effective(user, &managed);
                 assert_eq!(
-                    effective.settings.mode,
-                    [caps[u], caps[c]][usize::from(c < u)]
+                    effective.settings,
+                    Settings {
+                        mode: [caps[u], caps[c]][usize::from(c < u)],
+                        ..user.settings.clone()
+                    }
                 );
             }
         }
@@ -527,7 +502,6 @@ mod tests {
             effective.problem,
             Some(Problem::Incomplete(PolicyError::MissingProxy))
         );
-        assert!(effective.problem.unwrap().disables_previews());
         // With the user's own complete proxy settings it works as they are.
         let user_proxy = parse(Origin::User, Source::Bytes(&bytes(&proxy_settings())));
         let narrowed = super::effective(&user_proxy, &managed_proxy_only);
@@ -555,8 +529,11 @@ mod tests {
         };
         assert_eq!(proxy.address(), "10.0.0.2:1080".parse().unwrap());
         assert_eq!(dns.url().as_str(), "https://resolver.example/dns-query");
+        assert_eq!(
+            dns.bootstrap(),
+            &["10.0.0.53".parse::<std::net::IpAddr>().unwrap()]
+        );
         assert_eq!(replaced.problem, Some(Problem::ManagedServices));
-        assert!(!Problem::ManagedServices.disables_previews());
         assert!(
             Problem::ManagedServices
                 .to_string()
