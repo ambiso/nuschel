@@ -36,6 +36,9 @@ pub(crate) fn command(executable: &Path, role: Role) -> Result<Command, Error> {
     }
     command.arg("--").arg(helper("bwrap")?);
     command.args(["--die-with-parent", "--new-session", "--unshare-all"]);
+    if matches!(role, Role::Preview { .. }) {
+        command.args(["--json-status-fd", "2"]);
+    }
     bind_existing(
         &mut command,
         &["/nix/store", "/usr/lib", "/usr/lib64", "/lib", "/lib64"],
@@ -133,6 +136,42 @@ mod tests {
         let command = super::command(&executable, role).unwrap();
         let arguments = command.as_std().get_args();
         arguments.map(|a| a.to_string_lossy().into()).collect()
+    }
+
+    #[test]
+    fn preview_roles_have_fixed_arguments_and_namespace_receipt() {
+        for (operation, suffix) in [
+            (crate::PreviewOperation::Prepare, vec!["/worker"]),
+            (
+                crate::PreviewOperation::Fetch,
+                vec!["/worker", "--preview-fetch"],
+            ),
+        ] {
+            let args = arguments(Role::Preview { operation });
+            assert_eq!(args[..3], ["--as=536870912", "--cpu=5", "--"]);
+            let end = args.iter().rposition(|arg| arg == "--").unwrap();
+            assert_eq!(args[end + 1..], suffix);
+            let status: Vec<_> = args
+                .windows(2)
+                .filter(|pair| pair[0] == "--json-status-fd")
+                .collect();
+            assert_eq!(status.len(), 1);
+            assert_eq!(status[0][1], "2");
+            for grant in [
+                "--share-net",
+                "--bind",
+                "--dev-bind",
+                "--setenv",
+                "--as-pid-1",
+            ] {
+                assert!(!args.iter().any(|arg| arg == grant), "{grant}: {args:?}");
+            }
+        }
+        let ordinary = arguments(Role::Content {
+            cpu_seconds: 5,
+            arguments: &[],
+        });
+        assert!(!ordinary.iter().any(|arg| arg == "--json-status-fd"));
     }
 
     #[test]

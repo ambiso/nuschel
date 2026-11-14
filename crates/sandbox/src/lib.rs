@@ -39,6 +39,9 @@ pub enum Error {
 /// A kind of worker and what it is given beyond its standard input and output.
 #[derive(Clone, Copy, Debug)]
 pub enum Role<'a> {
+    /// Bounded link-preview preparation or HTTP parsing, with a trusted Linux
+    /// namespace-init receipt on standard error.
+    Preview { operation: PreviewOperation },
     /// Untrusted message content, one-shot; CPU seconds over its whole life.
     /// `arguments` are the desktop's sandbox diagnostic's; workers get none.
     Content {
@@ -60,6 +63,15 @@ pub enum Role<'a> {
     Media,
     /// magic-wormhole: the network and, when offering, `file` read-only.
     Transfer { file: Option<&'a Path> },
+}
+
+/// Fixed content-worker entry points used by the preview supervisors.
+#[derive(Clone, Copy, Debug)]
+pub enum PreviewOperation {
+    /// One bounded content-protocol request, including document/image preparation.
+    Prepare,
+    /// Incremental HTTP response parsing through the preview-fetch protocol.
+    Fetch,
 }
 
 /// What a role's worker may use beyond its standard input and output, a
@@ -110,6 +122,7 @@ impl<'a> Role<'a> {
     #[rustfmt::skip]
     fn capabilities(self) -> Capabilities<'a> {
         match self {
+            Role::Preview { .. } => Capabilities { name: "preview", memory: 512 * MIB, cpu_seconds: Some(5), linux_only: true, ..NOTHING },
             Role::Content { cpu_seconds, .. } => Capabilities { name: "content", memory: 512 * MIB, cpu_seconds: Some(cpu_seconds), ..NOTHING },
             Role::Math => Capabilities { name: "math", memory: 512 * MIB, cpu_seconds: Some(120), ..NOTHING },
             Role::Update { post_quantum: true } => Capabilities { name: "update.mldsa44", memory: 256 * MIB, cpu_seconds: Some(5), ..NOTHING },
@@ -126,6 +139,12 @@ impl<'a> Role<'a> {
     /// directory and its readable file.
     fn arguments(self, data: &Path, input: Option<&Path>) -> Vec<OsString> {
         match self {
+            Role::Preview {
+                operation: PreviewOperation::Prepare,
+            } => Vec::new(),
+            Role::Preview {
+                operation: PreviewOperation::Fetch,
+            } => vec!["--preview-fetch".into()],
             Role::Content { arguments, .. } => arguments.to_vec(),
             Role::MusicbotCodec { operation } => vec!["--codec-worker".into(), operation.into()],
             Role::Storage { .. } => vec!["--database".into(), data.join("history.sqlite3").into()],
@@ -204,11 +223,29 @@ pub struct Worker {
 /// standard input and output, no standard error, killed when dropped, and
 /// contain it. A worker that cannot be contained is reaped before the error
 /// returns.
-pub async fn spawn(mut command: Command) -> Result<Worker, Error> {
+pub async fn spawn(command: Command) -> Result<Worker, Error> {
+    spawn_with_stderr(command, Stdio::null()).await
+}
+
+/// Start a fixed preview role with its trusted namespace-init receipt piped on
+/// standard error. Its owner acquires the receipt before input and retains the
+/// process permit through observed namespace retirement.
+pub async fn spawn_preview(
+    executable: &Path,
+    operation: PreviewOperation,
+) -> Result<Worker, Error> {
+    spawn_with_stderr(
+        command(executable, Role::Preview { operation })?,
+        Stdio::piped(),
+    )
+    .await
+}
+
+async fn spawn_with_stderr(mut command: Command, stderr: Stdio) -> Result<Worker, Error> {
     let mut child = command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(stderr)
         .kill_on_drop(true)
         .spawn()?;
     let parts =
