@@ -2,7 +2,7 @@
 // Live state from the bot, the commands that change it, and the client-side
 // guesses (optimistic values) shown until the server confirms them.
 import { getJSON, postJSON, HttpError } from "./api.js";
-import { applyMove, browseItemIsCurrent, buildRoute, clamp, debounce, libraryForNamespace, parseRoute, queueStorageKey, routeForLibrary, routeForNamespace, seekSettled, selectedQueue } from "./logic.js";
+import { addressRoute, adoptSharedRoute, applyMove, browseItemIsCurrent, clamp, debounce, libraryForNamespace, parseRoute, queueStorageKey, routeForLibrary, routeForNamespace, seekSettled, selectedQueue } from "./logic.js";
 
 const storageKey = queueStorageKey(location.pathname);
 
@@ -42,8 +42,9 @@ class Store {
 
   #browseSession = crypto.getRandomValues(new Uint32Array(4)).join("-");
   #browseController = null;
-  #libraryNames = [];
-  #libraryKey = null;
+  /** The latest state's `library_keys`, one per library. */
+  #libraryKeys = [];
+  #librarySignature = null;
   #source = null;
   #retry = null;
   #stateRequest = null;
@@ -91,22 +92,40 @@ class Store {
 
   #routeChanged() {
     let route = parseRoute(location.hash);
-    let library = typeof route.library === "number" ? route.library : this.library;
-    if (this.browseKey !== null && library >= this.#libraryNames.length) library = 0;
-    route = routeForNamespace(route, library, this.browseKey);
-    if (typeof route.library === "number") this.library = route.library;
-    this.#replaceRoute(route);
+    if (route.sharedLibrary != null) {
+      // A shared link carries its library key; it waits (loading nothing) until a state gives the namespace.
+      if (this.browseKey === null) {
+        this.route = route;
+        return;
+      }
+      route = adoptSharedRoute(route, this.#libraryKeys, this.browseKey);
+    }
+    this.#applyRoute(route, false);
   }
 
   navigate(route) {
-    const library = typeof route.library === "number" ? route.library : this.library;
-    location.hash = buildRoute(routeForNamespace(route, library, this.browseKey));
+    this.#applyRoute(route, true);
   }
 
-  #replaceRoute(route) {
+  /** Shows `route` under the namespace rules; `push` adds a history entry instead of replacing it. */
+  #applyRoute(route, push) {
+    let library = typeof route.library === "number" ? route.library : this.library;
+    if (this.browseKey !== null && library >= this.#libraryKeys.length) library = 0;
+    route = routeForNamespace(route, library, this.browseKey);
+    if (typeof route.library === "number") this.library = route.library;
+    this.#replaceRoute(route, push);
+  }
+
+  /**
+   * Sets the in-memory route (with library index and namespace) and writes
+   * its share-format hash to the address bar, so the URL is always safe to copy.
+   */
+  #replaceRoute(route, push = false) {
     this.route = route;
-    const hash = buildRoute(route);
-    if (location.hash !== hash) history.replaceState(history.state, "", hash);
+    const hash = addressRoute(route, this.#libraryKeys);
+    if (location.hash === hash) return;
+    if (push) history.pushState(history.state, "", hash);
+    else history.replaceState(history.state, "", hash);
   }
 
   #invalidateBrowse() {
@@ -122,7 +141,7 @@ class Store {
       delete overrides[key];
     }
     if (overrides) this.overrides = overrides;
-    this.#replaceRoute(routeForLibrary(this.route, this.library));
+    if (this.route.sharedLibrary == null) this.#replaceRoute(routeForLibrary(this.route, this.library));
   }
 
   #disconnected() {
@@ -135,7 +154,12 @@ class Store {
 
   browseItemCurrent(item) {
     return !this.invalid && this.connection === "open"
-      && browseItemIsCurrent(item, this.browseKey, this.#libraryNames.length);
+      && browseItemIsCurrent(item, this.browseKey, this.#libraryKeys.length);
+  }
+
+  /** True when the latest state says library `library` supports OpenSubsonic sonic similarity. */
+  supportsSonic(library) {
+    return this.snapshot?.sonic?.[library] === true;
   }
 
   #connect() {
@@ -187,15 +211,16 @@ class Store {
   }
 
   #receive(state) {
-    const libraryKey = JSON.stringify(state.libraries);
-    const newNamespace = this.browseKey === null || libraryKey !== this.#libraryKey;
+    const librarySignature = JSON.stringify(state.library_keys);
+    const newNamespace = this.browseKey === null || librarySignature !== this.#librarySignature;
+    const shared = newNamespace && this.route.sharedLibrary != null;
     if (newNamespace) {
-      const library = libraryForNamespace(this.#libraryNames, state.libraries, this.library);
+      const library = libraryForNamespace(this.#libraryKeys, state.library_keys, this.library);
       if (this.browseKey !== null) this.#invalidateBrowse();
-      this.#libraryNames = state.libraries;
-      this.#libraryKey = libraryKey;
+      this.#libraryKeys = state.library_keys;
+      this.#librarySignature = librarySignature;
       this.library = library;
-      this.#replaceRoute(routeForLibrary(this.route, library));
+      if (!shared) this.#replaceRoute(routeForLibrary(this.route, library));
     }
     this.#states++;
     this.snapshot = state;
@@ -205,6 +230,11 @@ class Store {
       this.#browseController = new AbortController();
       this.browseSignal = this.#browseController.signal;
       this.browseKey = `${this.#browseSession}:${this.browseEpoch}`;
+      if (shared) {
+        const route = adoptSharedRoute(this.route, this.#libraryKeys, this.browseKey);
+        if (typeof route.library === "number") this.library = route.library;
+        this.#replaceRoute(route);
+      }
     }
     let overrides = null;
     for (const [key, override] of Object.entries(this.overrides)) {
@@ -349,7 +379,8 @@ class Store {
       this.toast("There is no queue to add to.");
       return;
     }
-    this.command({ command: "add", player, kind: item.kind, library: item.library, id: item.id, index }, this.browseSignal);
+    const to = item.to == null ? {} : { to: item.to };
+    this.command({ command: "add", player, kind: item.kind, library: item.library, id: item.id, ...to, index }, this.browseSignal);
   }
 
   attach(channel, player) {

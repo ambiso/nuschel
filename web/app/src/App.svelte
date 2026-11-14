@@ -12,6 +12,9 @@
   import {observeMessageTimeLocale} from "./message-time.js";
   import Message from "./Message.svelte";
   import TypedDocument from "./TypedDocument.svelte";
+  import EmojiPicker from "./EmojiPicker.svelte";
+  import { loadEmoji } from "./emoji-state.svelte.js";
+  import { insertAt } from "./emoji.js";
   import { welcomeDocuments } from "./welcome.js";
   import { SdkRpc, SdkUnavailableError } from "./sdk-rpc.js";
   import { BrowserAudio } from "./audio.js";
@@ -27,6 +30,7 @@
   }
   let showAdd = $state(false), editingIndex = $state(null), showSettings = $state(false), drawer = $state(false), mobile = $state(false);
   let body = $state(""), expanded = $state(new Map()), search = $state(""), showSearch = $state(false);
+  let emojiOpen = $state(false), emojiRecent = $state([]);
   let messagesElement = $state(), composerElement = $state(), navigationButton = $state(), searchElement = $state();
   let settings = $state(appearance(null)), voice = $state(null), audioState = $state(null), audioActionPending = $state(null), capabilities = $state([]);
   // The requested voice bitrate (voice-bitrate.js); the SDK worker resolves it per server.
@@ -93,6 +97,7 @@
   const icons = {
     menu:"M4 6h16M4 12h16M4 18h16", close:"m6 6 12 12M6 18 18 6", plus:"M12 5v14M5 12h14", hash:"M10 3 8 21M17 3l-2 18M4 9h17M3 15h17",
     voice:"M11 5 6 9H3v6h3l5 4V5Zm4 3a6 6 0 0 1 0 8m3-11a10 10 0 0 1 0 14", mic:"M12 15a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v7a3 3 0 0 0 3 3Zm-6-4v1a6 6 0 0 0 12 0v-1M12 18v4M8 22h8",
+    smile:"M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18ZM8.5 14.5a4.5 4.5 0 0 0 7 0M9 9.5h.01M15 9.5h.01",
     headphones:"M4 14v-3a8 8 0 0 1 16 0v3M4 13h4v8H4v-8Zm12 0h4v8h-4v-8", search:"m21 21-5-5M10 18a8 8 0 1 0 0-16 8 8 0 0 0 0 16", people:"M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M16 3a4 4 0 0 1 0 8m6 10v-2a4 4 0 0 0-3-3.87M13 7a4 4 0 1 1-8 0 4 4 0 0 1 8 0",
     settings:"m9 3-.7 3-2.8 1-2.5-1.5-2 3.5 2.3 2V14L1 16l2 3.5L5.5 18l2.8 1L9 22h4l.7-3 2.8-1 2.5 1.5 2-3.5-2.3-2v-3L21 9l-2-3.5L16.5 7l-2.8-1L13 3H9ZM15 12a4 4 0 1 1-8 0 4 4 0 0 1 8 0", send:"m22 2-7 20-4-9-9-4 20-7ZM11 13 22 2", leave:"M10 17l5-5-5-5M15 12H3M15 3h5v18h-5", lock:"M5 10h14v11H5V10Zm3 0V6a4 4 0 0 1 8 0", unlock:"M5 10h14v11H5V10Zm3 0V6a4 4 0 0 1 7-3", chevron:"m9 5 7 7-7 7",
   };
@@ -115,6 +120,23 @@
     for (const value of drafts.values()) total += value.length;
     while (drafts.size > 30 || total > 131072) { const first = drafts.keys().next().value; total -= drafts.get(first).length; drafts.delete(first); }
   }
+  // Inserts at the textarea's cursor (replacing a selection); the picker stays
+  // open with Shift held. The composer stays a plain textarea: emoji show as
+  // the browser's own glyphs while typing, and as Twemoji in messages.
+  function insertEmoji(text, item, keepOpen) {
+    const element = composerElement;
+    if (!element || element.disabled || element.readOnly) return;
+    const { value, cursor } = insertAt(body, element.selectionStart, element.selectionEnd, text);
+    if (value.length > 65536) return;
+    body = value;
+    rememberDraft();
+    emojiRecent = [item, ...emojiRecent.filter((recent) => recent !== item)].slice(0, 18);
+    tick().then(() => {
+      element.setSelectionRange(cursor, cursor);
+      if (!keepOpen) { emojiOpen = false; element.focus(); }
+    });
+  }
+  function closeEmoji() { emojiOpen = false; composerElement?.focus(); }
   function persistSettings() {
     settings = appearance(settings);
     try { localStorage.setItem("nuschl.appearance.v1", JSON.stringify(settings)); } catch { setError("Appearance preferences could not be saved in this browser."); }
@@ -130,6 +152,7 @@
     document.documentElement.style.setProperty("--font-size", `${settings.fontSize}px`);
   });
   onMount(() => {
+    loadEmoji();
     const stopTimeLocale=observeMessageTimeLocale(window);
     let contentBridge;
     try { settings = appearance(JSON.parse(localStorage.getItem("nuschl.appearance.v1") || "null")); } catch { /* Defaults remain usable in private browsing. */ }
@@ -532,7 +555,8 @@
     {/if}
     {#if audioState?.message && voice}<div class="audio-notice" role="status">{audioState.message}</div>{/if}
     <form class="composer" onsubmit={send}>
-      <div class="composer-input"><label class="sr-only" for="message">Message</label><textarea id="message" bind:this={composerElement} bind:value={body} rows="2" maxlength="65536" oninput={rememberDraft} placeholder={timeline ? `Message ${timeline.name}` : "Choose a channel to start chatting"} readonly={clientUnavailable} disabled={!timeline || (selected?.status !== "connected" && !clientUnavailable)} onkeydown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === "Enter") { event.preventDefault(); send(); } }}></textarea><button class="send-button" type="submit" aria-label="Send" title="Send (Ctrl/⌘ Enter)" disabled={!body.trim() || !canSend}>{@render icon("send")}</button></div>
+      <div class="composer-input"><label class="sr-only" for="message">Message</label><textarea id="message" bind:this={composerElement} bind:value={body} rows="2" maxlength="65536" oninput={rememberDraft} placeholder={timeline ? `Message ${timeline.name}` : "Choose a channel to start chatting"} readonly={clientUnavailable} disabled={!timeline || (selected?.status !== "connected" && !clientUnavailable)} onkeydown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === "Enter") { event.preventDefault(); send(); } else if (event.ctrlKey && !event.altKey && (event.key === "." || event.key === ";")) { event.preventDefault(); emojiOpen = !emojiOpen; } }}></textarea><button type="button" class="icon-button emoji-toggle" aria-label="Emoji, stickers and GIFs" aria-haspopup="dialog" aria-expanded={emojiOpen} class:pressed={emojiOpen} title="Emoji, stickers and GIFs (Ctrl+.)" disabled={!timeline || clientUnavailable} onclick={() => emojiOpen ? closeEmoji() : emojiOpen = true}>{@render icon("smile")}</button><button class="send-button" type="submit" aria-label="Send" title="Send (Ctrl/⌘ Enter)" disabled={!body.trim() || !canSend}>{@render icon("send")}</button></div>
+      {#if emojiOpen}<EmojiPicker onpick={insertEmoji} onclose={closeEmoji} recent={emojiRecent} />{/if}
       <div class="composer-footer"><small>Enter adds a newline · Ctrl/⌘ Enter sends</small><span class="local-history">History stays in this browser</span></div>
     </form>
   </section>

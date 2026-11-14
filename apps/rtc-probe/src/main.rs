@@ -20,6 +20,7 @@ struct Endpoint {
     video_timestamp: Option<u64>,
     max_delay: Duration,
     estimates: usize,
+    sent_audio: u64,
     sent_video: usize,
     first_opus: Option<Arc<[u8]>>,
 }
@@ -39,6 +40,7 @@ impl Endpoint {
             video_timestamp: None,
             max_delay: Duration::ZERO,
             estimates: 0,
+            sent_audio: 0,
             sent_video: 0,
             first_opus: None,
         })
@@ -154,7 +156,6 @@ fn run(opus: Arc<[u8]>) -> Result<()> {
     let answer = right.peer.accept_offer(&offer)?;
     left.peer.accept_answer(&answer)?;
     let mut started = None;
-    let mut sent = 0;
     let deadline = now + Duration::from_secs(10);
     loop {
         let now = Instant::now();
@@ -165,32 +166,41 @@ fn run(opus: Arc<[u8]>) -> Result<()> {
         right.step(now, started, &opus, &video)?;
         if left.peer.is_connected() && right.peer.is_connected() {
             let start = *started.get_or_insert(now);
-            if sent < 50 && now.duration_since(start) >= Duration::from_millis(sent * 20) {
-                for endpoint in [&mut left, &mut right] {
-                    let peer = &mut endpoint.peer;
-                    peer.write(
-                        peer.track(Kind::Audio).ok_or("missing Opus track")?,
-                        sent * 960,
+            for endpoint in [&mut left, &mut right] {
+                let sent = endpoint.sent_audio;
+                if sent == 50 || now.duration_since(start) < Duration::from_millis(sent * 20) {
+                    continue;
+                }
+                let peer = &mut endpoint.peer;
+                // A stall can make several frames due at once, and the transport
+                // admits one audio packet per 2.5 ms. A refused frame waits for a
+                // later turn; its delay counts against the 500 ms bound.
+                match peer.write(
+                    peer.track(Kind::Audio).ok_or("missing Opus track")?,
+                    sent * 960,
+                    now,
+                    opus.clone(),
+                ) {
+                    Ok(()) => endpoint.sent_audio += 1,
+                    Err(Error::Backpressure) => continue,
+                    Err(error) => return Err(error.into()),
+                }
+                if sent % 3 == 0 {
+                    match peer.write(
+                        peer.track(Kind::Video).ok_or("missing VP8 track")?,
+                        sent * 1800,
                         now,
-                        opus.clone(),
-                    )?;
-                    if sent % 3 == 0 {
-                        match peer.write(
-                            peer.track(Kind::Video).ok_or("missing VP8 track")?,
-                            sent * 1800,
-                            now,
-                            video.clone(),
-                        ) {
-                            Ok(()) => endpoint.sent_video += 1,
-                            Err(Error::Backpressure) => {}
-                            Err(error) => return Err(error.into()),
-                        }
+                        video.clone(),
+                    ) {
+                        Ok(()) => endpoint.sent_video += 1,
+                        Err(Error::Backpressure) => {}
+                        Err(error) => return Err(error.into()),
                     }
                 }
-                sent += 1;
             }
         }
-        if sent == 50
+        if left.sent_audio == 50
+            && right.sent_audio == 50
             && left.audio == 50
             && right.audio == 50
             && left.video == right.sent_video

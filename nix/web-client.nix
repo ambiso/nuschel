@@ -4,6 +4,8 @@
   lib,
   toolchain,
   releaseNotices ? null,
+  # Twemoji images and the picker's data, served under /app/emoji/.
+  emojiAssets ? import ./emoji.nix { inherit pkgs; },
 }:
 let
   native = import ./crate2nix.nix { inherit pkgs toolchain; };
@@ -127,6 +129,7 @@ let
           "sdk"
           "audio-codec"
           "content-codec"
+          "emoji"
         ]);
     };
     npmDepsHash = "sha256-h/RXhIxLqP2oHGnePhMKUdhi/NfX10QEAlASEInQpL8=";
@@ -135,6 +138,8 @@ let
       cp ${wasm}/* src/sdk/
       cp ${audioWasm}/* src/audio-codec/
       cp ${contentWasm}/* src/content-codec/
+      mkdir -p public/emoji
+      cp -R ${emojiAssets}/. public/emoji/
     '';
     npmBuildFlags = [
       "--"

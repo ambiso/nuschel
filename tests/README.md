@@ -9,6 +9,10 @@ The test runs the actual GPUI client under Xvfb against a stock Mumble server,
 with synthetic audio on a private PulseAudio daemon. It never opens the host microphone.
 Screenshots are copied into the test result.
 
+Steps listed in `quarantine.txt` are known to be flaky: they still run, and a
+failure is logged as `QUARANTINED FAIL` with its issue and does not fail the
+check (`quarantine.py`). A feature that relies on a quarantined step needs its own proof.
+
 Flake checks run their VMs inside the Nix daemon. Built drivers run by hand go
 through `tests/vm_driver.py` ([development.md](../docs/development.md#recipes)),
 which places all VM state in a fresh owned disk root and runs
@@ -26,7 +30,10 @@ driver without a guest. Neither proves guest behaviour; a full run's
 `nix build .#checks.x86_64-linux.vm-musicbot` exercises the packaged bot against
 stock Murmur and a local Subsonic fixture. `musicbot.py` checks shared/separate
 audio, channel-subscription playback, seeking, ducking, public comments, history pagination and restart recovery
-with reordered/removed libraries. The module test also checks actual codec child
+with reordered/removed libraries, the remembered-link cookie (redirect, same-origin
+refusals, forgetting), sonic similarity and paths, and the cover cache (no second
+library request, browser caching only for the current library key, covers kept
+across the restart). The module test also checks actual codec child
 PID/network namespaces, role arguments, credential/environment/FD absence and
 address-space bounds. Non-mutating checks under the service UID verify empty
 effective capabilities and unwritable host sysctl/sysrq paths. The fixture uses
@@ -79,7 +86,7 @@ matched frame-time performance. No host clipboard or devices are used.
 | --- | --- |
 | `udp_voice.py` | Encrypted OCB2 UDP voice, forced TCP and mixed relay; jitter and 5% loss with netem; inbound UDP blocked (IPv4 and IPv6) falls back to the TLS tunnel and recovers |
 | `protocol_features.py` | Whisper/shout isolation, channel listening, permissions, user stats, comments and avatars, self-registration, SuperUser administration (registered users, bans, ACL, kick), OpenSSL-made PKCS#12 import (channel links are not yet covered) |
-| `media_live.py` | Live media worker on a private PulseAudio: jitter-buffer continuity, reuse of a system echo canceller with playback routed to its reference, echo modes and overrides, the Settings echo test at -31 dB coupling with and without Nuschl's canceller, clipping detection that leaves system levels untouched |
+| `media_live.py` | Live media worker on a private PulseAudio: jitter-buffer continuity, reuse of a system echo canceller with playback routed to its reference, echo modes and overrides, the Settings echo test at -31 dB coupling with Nuschl's canceller on and off and double talk, in a room on one clock (the speakers reach the microphone 30 ms later through the LADSPA SDK's delay line), clipping detection that leaves system levels untouched |
 | `pipewire_recovery.py` | A private PipeWire + WirePlumber + pipewire-pulse session with virtual nodes only: playback, PipeWire restart with the replacement worker pinned to PipeWire (no ALSA fallback), pipewire-pulse restart, PipeWire echo-cancel reuse without touching session defaults, device lists without other applications' streams, an RNNoise filter-chain behind echo-cancel (both of Nuschl's stages off, playback to the canceller) |
 | `opus_eval.py` | opus-pure against reference libopus: decoder conformance in SILK, Hybrid and CELT, encoder interop both ways, 5,000 hostile packets |
 | `stock_client.py` | The real stock Mumble GUI with a certificate exported by Nuschl; voice in both directions |
@@ -104,7 +111,12 @@ mentions and text-only jumps over AT-SPI, with screenshots. Against a loopback `
 (edits, deletions and their authorisation, typing, direct conversations, with
 `nuschl-cli`) and `conversation_screenshots.py` (the desktop with edits, tombstones,
 the typing line, a direct conversation from server history, keyboard links, and the
-local cache it leaves, in a private headless GNOME Shell). The client SDK without a
+local cache it leaves, in a private headless GNOME Shell) and `emoji_smoke.py
+<binaries> --output DIR` (Twemoji in messages and the composer, checked by pixel
+colours: `™` stays text and `™️` is an image; the picker's search, skin tone,
+Shift+Enter, Shift+click and click insert the expected text, and it is what is sent;
+short codes type emoji; an emoji in a message shows its tooltip and card;
+docs/emoji.md). The client SDK without a
 UI: `with_local_nuschld.py <binaries> sdk_headless.py <binaries> --port PORT` runs
 `crates/client/examples/headless.rs` (three people connect, register, meet in a
 channel, send, receive, edit, and load the server's history through the SDK alone).
@@ -118,6 +130,24 @@ PORT` (or `with_local_murmur.py <mumble-server> tui_loopback.py <binaries> --por
 and one in plain lines: certificate on first use, joining through Ctrl+K, sending and
 receiving, and on nuschld registering, typing, editing, deleting, search, a direct
 conversation and unread counts.
+`tls_drop.py <binaries> --root DIR` loses TLS connections while one loopback
+`nuschld` keeps running. Relays owned by the test sit between it and `nuschl-tui
+--plain` (Ada, who reconnects by herself) or `nuschl-cli` (Cleo, who does not). They
+reset the connection and refuse reconnections, or silently discard traffic one way
+or both, while Bob writes directly. It checks that the reconnection reaches the same
+server process (pid, start time, log) and shows the gap line. It also checks that
+what was said meanwhile appears once, in order, in Ada's reopened timeline, compared
+with a server page. Text typed during the loss is refused while reconnecting, and is
+resent under its idempotency key and stored once after a silent loss. The JSON
+client gives no outcome before it exits. Cleo, started again, pages `after` her last
+seq until `more_after` is false, covering every seq to the head. Negative controls:
+a send retried under its key keeps its seq, but under a new key it is stored twice
+and must fail the exactly-once check; `--control no-drop` must fail the reconnection
+checks. Runs, failed ones too, stay in DIR (`results.json`). The relay discards
+bytes but keeps both sockets healthy, so kernel TCP timeouts and real packet loss
+are not exercised. Against main 32f66817 (2026-11-13) the client never fills a gap in
+an already loaded server-history timeline after reconnecting in process: `/older`
+and reopening do not, a restarted client does. Those checks fail.
 
 The web client on touch: `web_touch.py --site <web-site>/app --relay <nuschl-web-relay>
 --murmur <mumble-server> --chromium <chromium> --playwright <playwright-core>/index.mjs
@@ -162,7 +192,7 @@ the inside (docs/windows-sandbox.md). Cross-build it with the workers
 confinement --no-run`), copy the test executable and the six worker executables
 into one folder in the guest (`windows_vm.py push`, then `Get-NuschlTestFile -Name NAME -OutFile PATH`), and
 run `confinement.exe --workers <folder>` there. It starts itself through
-`nuschl_ipc::host`'s real commands as each worker kind; inside, it must fail to read
+`nuschl_sandbox`'s real commands as each worker kind; inside, it must fail to read
 a file it creates in Documents, list or write the profile, `C:\Users\Public` or the
 user's TEMP, connect to 10.0.2.100:80 (only transfer may), start a process, open the
 test's own process to query or terminate it, commit more memory than its job
@@ -187,6 +217,9 @@ Result on 2026-11-11 (Windows 11 25H2): all checks passed for every worker kind,
 including both transfer directions; the desktop, run in the VM against a stock Murmur
 on host loopback, rendered an image message, stored history and captured from the
 microphone with its workers in AppContainers.
+On 2026-11-14 the confinement checks ran again through `nuschl_sandbox` (revision
+e6076e2a, docs/windows-sandbox.md): all passed for every worker kind, nested and not,
+including both transfer directions.
 
 The VM also checks worker confinement, SQLite/PostgreSQL pagination and the NixOS
 module's hardened database preflight. `vm-server` runs the protocol suites against

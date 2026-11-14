@@ -19,6 +19,72 @@ use nuschl_client::{HistorySource, SessionSecurity, conversation::Entry};
 use nuschl_session::connection::{TextTarget, User};
 use std::{collections::HashMap, rc::Rc};
 
+// Match the existing rail, splitter, icon controls and composer padding.
+// Viewport fitting preserves the saved sidebar preference.
+const RAIL_WIDTH: f32 = 72. + layout::SCROLLBAR_GUTTER;
+const SPLITTER_WIDTH: f32 = 5.;
+const CONTROL_HEIGHT: f32 = 32.;
+const CHANNELS_DIALOG: u8 = 1 << 6;
+const CHANNELS_SHEET_LIST: &str = "channels-sheet-list";
+
+#[derive(Clone, Copy)]
+struct PaneLayout {
+    sidebar: Option<f32>,
+    dense: bool,
+    chrome: Pixels,
+    auxiliary: Pixels,
+    rows: usize,
+}
+
+impl PaneLayout {
+    fn new(size: Size<Pixels>, preferred: f32, line: Pixels, wrap: Pixels) -> Self {
+        let height = f32::from(size.height).max(0.);
+        let line = f32::from(line).max(1.);
+        let wrap = f32::from(wrap).max(0.);
+        let minimum = *nuschl_session::config::SIDEBAR_WIDTH.start();
+        let available = f32::from(size.width) - RAIL_WIDTH - SPLITTER_WIDTH - minimum;
+        // Header, notices, preview and hints share a scroll region at short heights.
+        // The editor and at least one timeline line retain dedicated space.
+        let (input, bottom, gap) = Self::padding(false);
+        let content = CONTROL_HEIGHT.max(line + 8.); // editor's py_1, or an icon
+        let baseline = 52. + CONTROL_HEIGHT + content + input * 2. + 2. + bottom + gap + line;
+        // Stable navigation width lets measured wrapping adjust vertical space.
+        let navigation_fits = height >= baseline && available >= minimum;
+        let dense = height < baseline + wrap;
+        let chrome = if dense { 0. } else { height / 4. };
+        let (input, bottom, gap) = Self::padding(dense);
+        let editor = content + wrap + input * 2. + 2.; // input border
+        let auxiliary = (height / 3.)
+            .max(CONTROL_HEIGHT)
+            .min((height - chrome - editor - bottom - gap - line).max(0.));
+        let padding = input * 2. + 8. + 2. + bottom + gap + wrap;
+        let rows = ((height - chrome - auxiliary - line - padding) / line)
+            .floor()
+            .clamp(1., 10.) as usize;
+        Self {
+            sidebar: navigation_fits.then(|| preferred.min(available)),
+            dense,
+            chrome: px(chrome),
+            auxiliary: px(auxiliary),
+            rows,
+        }
+    }
+
+    /// Input vertical padding, composer bottom padding, and inter-region gap.
+    fn padding(dense: bool) -> (f32, f32, f32) {
+        if dense { (4., 4., 4.) } else { (8., 12., 6.) }
+    }
+}
+
+struct ConversationLayout<'a> {
+    pane: PaneLayout,
+    index: usize,
+    channel: &'a crate::state::ChannelView,
+    topic: &'a str,
+    is_channel: bool,
+    in_this_voice: bool,
+}
+
 impl Render for Desktop {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         #[cfg(feature = "frame-timing")]
@@ -28,6 +94,25 @@ impl Render for Desktop {
         self.ease_voice_toggles(window, cx);
         // Which dialog the last frame showed (see dialogs::modal).
         self.modal_seen.set(self.modal_shown.take());
+        let line = self
+            .composer
+            .read(cx)
+            .line_height()
+            .unwrap_or(window.line_height());
+        let pane = PaneLayout::new(
+            self.body_size.get(),
+            self.sidebar_width(),
+            line,
+            self.composer_wrap.get(),
+        );
+        if pane.rows != self.composer_rows {
+            self.composer_rows = pane.rows;
+            self.composer
+                .update(cx, |input, cx| input.set_auto_grow(1, pane.rows, cx));
+        }
+        if pane.sidebar.is_some() || self.open_dialogs() & !CHANNELS_DIALOG != 0 {
+            self.close_channels();
+        }
         self.keep_dialog_focus(window, cx);
         // What commands since the last frame changed (events apply theirs).
         self.apply_updates(cx);
@@ -39,6 +124,9 @@ impl Render for Desktop {
         self.mark_read();
         self.present_selected();
         let selected = self.selected_indices();
+        if selected.is_none() {
+            self.close_channels();
+        }
         let voice_places = crate::voice::places(self);
         let title = selected
             .map(|(server, channel)| {
@@ -52,13 +140,39 @@ impl Render for Desktop {
             .flex_1()
             .min_h_0()
             .flex()
-            .child(server_rail(self, selected.map(|(server, _)| server), cx))
+            .relative()
+            .when(pane.sidebar.is_some() || selected.is_none(), |body| {
+                body.child(server_rail(self, selected.map(|(server, _)| server), cx))
+            })
             .map(|body| match selected {
                 Some((server, channel)) => body
-                    .child(sidebar(self, server, channel, &voice_places, window, cx))
-                    .child(sidebar_handle(self, cx))
-                    .child(conversation(self, server, channel, window, cx)),
+                    .when_some(pane.sidebar, |body, width| {
+                        body.child(sidebar(
+                            self,
+                            (server, channel),
+                            &voice_places,
+                            width,
+                            false,
+                            window,
+                            cx,
+                        ))
+                        .child(sidebar_handle(self, width, cx))
+                    })
+                    .child(conversation(self, server, channel, pane, window, cx)),
                 None => body.child(dialogs::empty(self, cx)),
+            })
+            .child({
+                let size = self.body_size.clone();
+                canvas(
+                    move |bounds, window, _| {
+                        if size.replace(bounds.size) != bounds.size {
+                            window.on_next_frame(|window, _| window.refresh());
+                        }
+                    },
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .inset_0()
             });
         let content = div()
             .size_full()
@@ -135,6 +249,9 @@ impl Render for Desktop {
             .child(chrome::title_bar(title.into(), window, cx))
             .when_some(update_bar(self, cx), |view, bar| view.child(bar))
             .child(body)
+            .when(self.channels_open, |view| {
+                view.child(channels_sheet(self, &voice_places, window, cx))
+            })
             .when(self.form.is_some(), |view| {
                 view.child(dialogs::server_form(self, cx))
             })
@@ -157,6 +274,9 @@ impl Render for Desktop {
             )
             .when_some(crate::emoji::overlay(self, cx), |view, picker| {
                 view.child(picker)
+            })
+            .when_some(crate::emoji::card(self, window, cx), |view, card| {
+                view.child(card)
             })
             .when_some(crate::viewer::overlay(self, window, cx), |view, viewer| {
                 view.child(viewer)
@@ -406,7 +526,7 @@ fn server_rail(this: &Desktop, selected: Option<usize>, cx: &mut Context<Desktop
         .collect::<Vec<_>>();
     div()
         // Keep the existing 72px tile/decoration lane beside the track gutter.
-        .w(px(72. + layout::SCROLLBAR_GUTTER))
+        .w(px(RAIL_WIDTH))
         .h_full()
         .flex_shrink_0()
         .py_3()
@@ -512,14 +632,13 @@ fn server_rail(this: &Desktop, selected: Option<usize>, cx: &mut Context<Desktop
 
 /// The boundary between channels and conversation: drag it to fit long
 /// channel names, double-click to restore the default width.
-fn sidebar_handle(this: &Desktop, cx: &mut Context<Desktop>) -> AnyElement {
-    let width = this.sidebar_width();
+fn sidebar_handle(this: &Desktop, width: f32, cx: &mut Context<Desktop>) -> AnyElement {
     let active = this.sidebar_drag.is_some();
     div()
         .id("sidebar-resize")
         .role(Role::Splitter)
         .aria_label("Resize channel list")
-        .w(px(5.))
+        .w(px(SPLITTER_WIDTH))
         .h_full()
         .flex_shrink_0()
         .flex()
@@ -554,13 +673,31 @@ fn sidebar_handle(this: &Desktop, cx: &mut Context<Desktop>) -> AnyElement {
 
 fn sidebar(
     this: &Desktop,
-    server_index: usize,
-    selected_channel: usize,
+    selected: (usize, usize),
     voice_places: &[crate::voice::Place],
+    width: f32,
+    sheet: bool,
     window: &mut Window,
     cx: &mut Context<Desktop>,
 ) -> AnyElement {
+    let (server_index, selected_channel) = selected;
     let server = &this.client.servers[server_index];
+    let sheet_owner = sheet.then(|| {
+        let owner = server.id.clone();
+        let generation = server.generation;
+        Rc::new(move |this: &Desktop| {
+            this.channels_open
+                && this.modal_shown.get() == Some("channels-sheet")
+                && this
+                    .selected_indices()
+                    .is_some_and(|(index, _)| index == server_index)
+                && this
+                    .client
+                    .servers
+                    .get(server_index)
+                    .is_some_and(|server| server.id == owner && server.generation == generation)
+        })
+    });
     let voice_channel = server
         .has_mumble_voice()
         .then(|| server.voice_channel())
@@ -666,10 +803,9 @@ fn sidebar(
                 .into_any_element()
         })
         .collect::<Vec<_>>();
-    let width = this.sidebar_width();
     div()
         .w(px(width))
-        .h_full()
+        .when(!sheet, |sidebar| sidebar.h_full())
         .flex_shrink_0()
         .bg(color(SIDEBAR))
         .flex()
@@ -748,9 +884,21 @@ fn sidebar(
         )
         .child(
             div()
-                .flex_1()
-                .min_h_0()
+                .when(!sheet, |tree| tree.flex_1().min_h_0())
+                .when(sheet, |tree| {
+                    tree.h(window.viewport_size().height / 2.).flex_shrink_0()
+                })
                 .relative()
+                .when_some(sheet_owner.clone(), |frame, current| {
+                    frame.capture_any_mouse_down(cx.listener(
+                        move |this, event: &MouseDownEvent, _, _| {
+                            if event.button == MouseButton::Left && current(this) {
+                                this.cancel_channel_scroll();
+                                this.cancel_modal_scroll();
+                            }
+                        },
+                    ))
+                })
                 .child(
                     div()
                         .id(SharedString::from(format!("channel-tree:{}", server.id)))
@@ -775,6 +923,26 @@ fn sidebar(
                             list.child(div().h_3().flex_shrink_0())
                                 .child(section_label("direct-heading", "DIRECT MESSAGES"))
                                 .children(directs)
+                        })
+                        .when_some(sheet_owner, |tree, current| {
+                            let generation = server.generation;
+                            let handle = this.channel_scroll.clone();
+                            tree.child(layout::capture_scroll(
+                                handle.clone(),
+                                cx.listener(move |this, event, window, cx| {
+                                    if !current(this) {
+                                        cx.stop_propagation();
+                                        return;
+                                    }
+                                    this.cancel_channel_scroll();
+                                    this.nested.register(
+                                        CHANNELS_SHEET_LIST,
+                                        generation,
+                                        handle.clone(),
+                                    );
+                                    this.scroll_modal(Some(CHANNELS_SHEET_LIST), event, window, cx);
+                                }),
+                            ))
                         }),
                 )
                 .child(
@@ -811,6 +979,70 @@ fn sidebar(
         )
         .child(user_panel(this, server, voice_places, cx))
         .into_any_element()
+}
+
+fn channels_sheet(
+    this: &Desktop,
+    voice_places: &[crate::voice::Place],
+    window: &mut Window,
+    cx: &mut Context<Desktop>,
+) -> AnyElement {
+    let Some((server, channel)) = this.selected_indices() else {
+        return div().into_any_element();
+    };
+    let width = f32::from(window.viewport_size().width) * 0.94;
+    let sidebar_width = (width - RAIL_WIDTH - layout::SCROLLBAR_GUTTER - 2.).max(0.);
+    let content = div()
+        .flex()
+        .flex_col()
+        .child(
+            layout::row()
+                .p_2()
+                .child(
+                    layout::flexible()
+                        .child(layout::label("channels-title", "Channels and servers")),
+                )
+                .child(icon_button(
+                    "close-channels",
+                    "x",
+                    "Close channels",
+                    TEXT_MUTED,
+                    None,
+                    |this, _, cx| {
+                        this.close_channels();
+                        cx.notify();
+                    },
+                    cx,
+                )),
+        )
+        .child(
+            div()
+                .flex()
+                .items_start()
+                .child(
+                    div()
+                        .h(window.viewport_size().height * 0.70)
+                        .child(server_rail(this, Some(server), cx)),
+                )
+                .child(sidebar(
+                    this,
+                    (server, channel),
+                    voice_places,
+                    sidebar_width,
+                    true,
+                    window,
+                    cx,
+                )),
+        );
+    dialogs::modal(
+        this,
+        "channels-sheet",
+        "Channels and servers",
+        width,
+        content.into_any_element(),
+        cx,
+        Desktop::close_channels,
+    )
 }
 
 fn section_label(id: &'static str, label: &'static str) -> AnyElement {
@@ -1078,7 +1310,13 @@ fn user_row(
             "{full_name}{}{}{}{}",
             if friend.is_some() { ", friend" } else { "" },
             if talking { ", talking" } else { "" },
-            if muted { ", muted" } else { "" },
+            if user.suppressed {
+                ", can't speak here"
+            } else if muted {
+                ", muted"
+            } else {
+                ""
+            },
             if deafened { ", deafened" } else { "" }
         ))
         .when(full_name != name, |row| {
@@ -1148,22 +1386,23 @@ fn user_row(
                     .child(icon("star", 14., color(WARNING))),
             )
         })
-        .when(muted, |row| {
+        .when(user.suppressed, |row| {
+            // No Speak permission in this channel: its own mark.
             row.child(
                 div()
-                    .text_color(color(if user.muted || user.suppressed {
-                        DANGER
-                    } else {
-                        TEXT_FAINT
-                    }))
+                    .id(("cant-speak", session as usize))
+                    .tooltip(|_, cx| cx.new(|_| Tooltip("Can't speak here".into())).into())
+                    .child(icon("mic-lock", 14., color(DANGER))),
+            )
+        })
+        .when(muted && !user.suppressed, |row| {
+            row.child(
+                div()
+                    .text_color(color(if user.muted { DANGER } else { TEXT_FAINT }))
                     .child(icon(
                         "mic-off",
                         14.,
-                        color(if user.muted || user.suppressed {
-                            DANGER
-                        } else {
-                            TEXT_FAINT
-                        }),
+                        color(if user.muted { DANGER } else { TEXT_FAINT }),
                     )),
             )
         })
@@ -1510,6 +1749,11 @@ impl Desktop {
             | u8::from(self.prompt.is_some()) << 3
             | u8::from(self.finder.is_open()) << 4
             | u8::from(self.second_server.is_some()) << 5
+            | if self.channels_open {
+                CHANNELS_DIALOG
+            } else {
+                0
+            }
     }
 
     pub fn dialog_open(&self) -> bool {
@@ -1519,6 +1763,7 @@ impl Desktop {
             || self.prompt.is_some()
             || self.finder.is_open()
             || self.second_server.is_some()
+            || self.channels_open
     }
 
     /// While a dialog is open, keyboard focus stays inside it, so nothing
@@ -1573,13 +1818,17 @@ impl Desktop {
 /// the available pane width. Toolbar actions never live outside the viewport.
 fn conversation_header(
     this: &Desktop,
-    index: usize,
-    channel: &crate::state::ChannelView,
-    topic: &str,
-    is_channel: bool,
-    in_this_voice: bool,
+    layout: &ConversationLayout<'_>,
     cx: &mut Context<Desktop>,
 ) -> AnyElement {
+    let ConversationLayout {
+        index,
+        channel,
+        topic,
+        is_channel,
+        in_this_voice,
+        pane,
+    } = *layout;
     let server = &this.client.servers[index];
     let connected = server.status == Status::Connected;
     let context = div()
@@ -1618,6 +1867,18 @@ fn conversation_header(
         .flex_wrap()
         .items_center()
         .gap_1()
+        .when(pane.sidebar.is_none(), |controls| {
+            controls.child(styled_button(
+                "open-channels",
+                "Channels",
+                Tone::Secondary,
+                |this, _, cx| {
+                    this.channels_open = true;
+                    cx.notify();
+                },
+                cx,
+            ))
+        })
         .when(
             connected
                 && server.has_mumble_voice()
@@ -1706,6 +1967,7 @@ fn conversation(
     this: &Desktop,
     index: usize,
     channel_index: usize,
+    pane: PaneLayout,
     window: &mut Window,
     cx: &mut Context<Desktop>,
 ) -> AnyElement {
@@ -1923,6 +2185,14 @@ fn conversation(
     } else {
         channel.topic.clone()
     };
+    let context = ConversationLayout {
+        pane,
+        index,
+        channel,
+        topic: &topic,
+        is_channel,
+        in_this_voice,
+    };
     let dragged = this.dragged_files.clone();
     div()
         .flex_1()
@@ -1941,23 +2211,32 @@ fn conversation(
             true
         })
         .drag_over::<ExternalPaths>(|style, _, _, _| style.bg(color(HOVER)))
-        .child(conversation_header(
-            this,
-            index,
-            channel,
-            &topic,
-            is_channel,
-            in_this_voice,
-            cx,
-        ))
-        .child(conversation_notices(this, index, window, cx))
+        .when(!pane.dense, |view| {
+            view.child(
+                layout::scroll_region(
+                    "conversation-context",
+                    "Conversation controls",
+                    pane.chrome,
+                    window,
+                    cx,
+                )
+                .flex_shrink_0()
+                .child(conversation_header(this, &context, cx))
+                .child(conversation_notices(this, index, window, cx)),
+            )
+        })
         .map(|view| match crate::search::panel(this, cx) {
             Some(panel) => view.child(panel),
             None => view.child(
                 div()
                     .relative()
                     .flex_1()
-                    .min_h_0()
+                    .min_h(
+                        this.composer
+                            .read(cx)
+                            .line_height()
+                            .unwrap_or(window.line_height()),
+                    )
                     .flex()
                     .flex_col()
                     .child(anchor.keeper(&this.scroll, !this.client.focus.following, older))
@@ -2051,7 +2330,7 @@ fn conversation(
                     .when_some(jump_pill(this, channel, cx), |view, pill| view.child(pill)),
             ),
         })
-        .child(composer(this, server, channel, window, cx))
+        .child(composer(this, server, &context, window, cx))
         .child(file_drop(this, cx))
         .into_any_element()
 }
@@ -2882,6 +3161,12 @@ fn message_row(
             hovered.filter(|hovered| hovered.deceptive && this.menu.is_none()),
             |row, hovered| row.child(link_target(hovered)),
         )
+        .when_some(
+            this.text.hovered_emoji.as_ref().filter(|hovered| {
+                hovered.message == serial && this.menu.is_none() && this.emoji_card.is_none()
+            }),
+            |row, hovered| row.child(crate::emoji::tooltip(hovered)),
+        )
         .on_mouse_down(
             MouseButton::Right,
             cx.listener(move |this, event: &MouseDownEvent, _, cx| {
@@ -3149,10 +3434,16 @@ fn link_target(hovered: &HoveredLink) -> impl IntoElement {
 fn composer(
     this: &Desktop,
     server: &ServerView,
-    channel: &crate::state::ChannelView,
-    window: &Window,
+    context: &ConversationLayout<'_>,
+    window: &mut Window,
     cx: &mut Context<Desktop>,
 ) -> AnyElement {
+    let channel = context.channel;
+    let pane = context.pane;
+    let (input_padding, bottom, gap) = PaneLayout::padding(pane.dense);
+    let text_height = Rc::new(std::cell::Cell::new(px(0.)));
+    let observed_text = text_height.clone();
+    let wrap = this.composer_wrap.clone();
     let channel_name = channel.name.clone();
     // The link the keyboard is on in the timeline (where it really leads),
     // or who is typing here, takes the place of the composer's target: the
@@ -3176,50 +3467,20 @@ fn composer(
         })
         .map(|(_, note)| note.clone());
     let attachments = this.attachments();
-    div()
-        .px_4()
-        .pb_3()
+    let details = div()
+        .w_full()
+        .min_w_0()
         .flex()
         .flex_col()
         .gap(px(6.))
-        // Ahead of the text input's own paste, which ignores images.
-        .capture_action(
-            cx.listener(|this, _: &gpui_kit::base::input::Paste, _, cx| {
-                let Some(item) = cx.read_from_clipboard() else {
-                    return;
-                };
-                if item.text().is_some_and(|text| !text.is_empty()) {
-                    return;
-                }
-                let image = item.into_entries().find_map(|entry| match entry {
-                    ClipboardEntry::Image(image) => Some(image),
-                    _ => None,
-                });
-                if let Some(image) = image {
-                    cx.stop_propagation();
-                    this.paste_image(image.id, image.bytes, cx);
-                }
-            }),
-        )
-        // Esc ends an edit, or in an empty composer lets go of its attachments.
-        .capture_action(
-            cx.listener(|this, _: &gpui_kit::base::input::Escape, window, cx| {
-                if this.cancel_edit(window, cx)
-                    || this.composer.read(cx).value().is_empty() && this.clear_attachments()
-                {
-                    cx.stop_propagation();
-                    cx.notify();
-                }
-            }),
-        )
-        // Up in an empty composer edits our last message (Nuschl servers).
-        .capture_action(
-            cx.listener(|this, _: &gpui_kit::base::input::MoveUp, window, cx| {
-                if this.edit_last(window, cx) {
-                    cx.stop_propagation();
-                    cx.notify();
-                }
-            }),
+        .when(pane.dense, |details| {
+            details
+                .child(conversation_header(this, context, cx))
+                .child(conversation_notices(this, context.index, window, cx))
+        })
+        .when_some(
+            crate::link_preview::composer(this, cx),
+            |composer, preview| composer.child(preview),
         )
         .when(this.editing.is_some(), |composer| {
             composer.child(
@@ -3294,44 +3555,6 @@ fn composer(
             )
         })
         .child(
-            div()
-                .pl_1()
-                .pr_2()
-                .py_2()
-                .rounded(px(10.))
-                .bg(color(INPUT))
-                .border_1()
-                .border_color(color(BORDER_STRONG))
-                .flex()
-                .items_end()
-                .gap_2()
-                .child(icon_button(
-                    "attach-files",
-                    "paperclip",
-                    "Attach images or files",
-                    TEXT_MUTED,
-                    None,
-                    |this, window, cx| this.choose_files(window, cx),
-                    cx,
-                ))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .py_1()
-                        .child(Textarea::new(&this.composer)),
-                )
-                .child(icon_button(
-                    "send-message",
-                    "send",
-                    if this.sending() { "Sending…" } else { "Send" },
-                    ACCENT_HOVER,
-                    None,
-                    |this, window, cx| this.send_message(window, cx),
-                    cx,
-                )),
-        )
-        .child(
             layout::row()
                 .px_1()
                 .text_xs()
@@ -3379,6 +3602,175 @@ fn composer(
                         "Local history off"
                     },
                 )),
+        );
+    div()
+        .min_w_0()
+        .flex_shrink_0()
+        .px(px(if pane.dense { 8. } else { 16. }))
+        .pb(px(bottom))
+        .flex()
+        .flex_col()
+        .gap(px(gap))
+        // Ahead of the text input's own paste, which ignores images.
+        .capture_action(
+            cx.listener(|this, _: &gpui_kit::base::input::Paste, _, cx| {
+                let Some(item) = cx.read_from_clipboard() else {
+                    return;
+                };
+                if item.text().is_some_and(|text| !text.is_empty()) {
+                    this.link_preview.pasted = true;
+                    return;
+                }
+                let image = item.into_entries().find_map(|entry| match entry {
+                    ClipboardEntry::Image(image) => Some(image),
+                    _ => None,
+                });
+                if let Some(image) = image {
+                    cx.stop_propagation();
+                    this.paste_image(image.id, image.bytes, cx);
+                }
+            }),
+        )
+        // While short codes list their emoji (emoji/shortcodes.rs), Up and
+        // Down choose one, Enter or Tab types it and Esc closes the list.
+        .capture_action(
+            cx.listener(|this, _: &gpui_kit::base::input::MoveDown, window, cx| {
+                if this.shortcode_key(crate::emoji::ShortcodeKey::Down, window, cx) {
+                    cx.stop_propagation();
+                }
+            }),
+        )
+        .capture_action(
+            cx.listener(|this, action: &gpui_kit::base::input::Enter, window, cx| {
+                if !action.secondary
+                    && !action.shift
+                    && this.shortcode_key(crate::emoji::ShortcodeKey::Accept, window, cx)
+                {
+                    cx.stop_propagation();
+                }
+            }),
+        )
+        .capture_action(cx.listener(
+            |this, _: &gpui_kit::base::input::IndentInline, window, cx| {
+                if this.shortcode_key(crate::emoji::ShortcodeKey::Accept, window, cx) {
+                    cx.stop_propagation();
+                }
+            },
+        ))
+        // Esc ends an edit, or in an empty composer lets go of its attachments.
+        .capture_action(
+            cx.listener(|this, _: &gpui_kit::base::input::Escape, window, cx| {
+                if this.shortcode_key(crate::emoji::ShortcodeKey::Close, window, cx) {
+                    cx.stop_propagation();
+                    return;
+                }
+                if this.cancel_edit(window, cx)
+                    || this.composer.read(cx).value().is_empty() && this.clear_attachments()
+                {
+                    cx.stop_propagation();
+                    cx.notify();
+                }
+            }),
+        )
+        // Up in an empty composer edits our last message (Nuschl servers).
+        .capture_action(
+            cx.listener(|this, _: &gpui_kit::base::input::MoveUp, window, cx| {
+                if this.shortcode_key(crate::emoji::ShortcodeKey::Up, window, cx) {
+                    cx.stop_propagation();
+                    return;
+                }
+                if this.edit_last(window, cx) {
+                    cx.stop_propagation();
+                    cx.notify();
+                }
+            }),
+        )
+        .child(
+            layout::scroll_region(
+                "composer-details",
+                "Message details and controls",
+                pane.auxiliary,
+                window,
+                cx,
+            )
+            .flex_shrink_0()
+            .child(details),
+        )
+        .child(
+            div()
+                .relative()
+                .when_some(crate::emoji::shortcode_list(this, cx), |input, list| {
+                    input.child(list)
+                })
+                .pl_1()
+                .pr_2()
+                .py(px(input_padding))
+                .rounded(px(10.))
+                .bg(color(INPUT))
+                .border_1()
+                .border_color(color(BORDER_STRONG))
+                .flex()
+                .flex_wrap()
+                .items_end()
+                .gap_2()
+                .child(icon_button(
+                    "attach-files",
+                    "paperclip",
+                    "Attach images or files",
+                    TEXT_MUTED,
+                    None,
+                    |this, window, cx| this.choose_files(window, cx),
+                    cx,
+                ))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(CONTROL_HEIGHT))
+                        .py_1()
+                        .on_children_prepainted(move |bounds, _, _| {
+                            if let Some(text) = bounds.first() {
+                                observed_text.set(text.size.height + px(8.));
+                            }
+                        })
+                        .child(Textarea::new(&this.composer)),
+                )
+                .child(icon_button(
+                    "emoji-picker-button",
+                    "smile",
+                    "Emoji, stickers and GIFs (Ctrl+.)",
+                    TEXT_MUTED,
+                    this.emoji.is_some().then_some(ACCENT),
+                    |this, window, cx| this.toggle_emoji(window, cx),
+                    cx,
+                ))
+                .child(icon_button(
+                    "send-message",
+                    "send",
+                    if this.sending() { "Sending…" } else { "Send" },
+                    ACCENT_HOVER,
+                    None,
+                    |this, window, cx| this.send_message(window, cx),
+                    cx,
+                ))
+                .child(
+                    canvas(
+                        move |bounds, window, _| {
+                            // Measure the actual row, including any wrapped controls,
+                            // against the laid-out editor. Conservatively keep any
+                            // border rounding in the reservation as well.
+                            let extra = (bounds.size.height
+                                - px(input_padding * 2.)
+                                - text_height.get().max(px(CONTROL_HEIGHT)))
+                            .max(px(0.));
+                            if wrap.replace(extra) != extra {
+                                window.on_next_frame(|window, _| window.refresh());
+                            }
+                        },
+                        |_, _, _, _| {},
+                    )
+                    .absolute()
+                    .inset_0(),
+                ),
         )
         .into_any_element()
 }
@@ -3852,4 +4244,70 @@ fn copy_code_button(
             icon("copy", 14., color(TEXT_FAINT))
         })
         .into_any_element()
+}
+
+#[cfg(test)]
+mod viewport_tests {
+    use super::{CONTROL_HEIGHT, PaneLayout, RAIL_WIDTH, SPLITTER_WIDTH};
+    use gpui_kit::{px, size};
+
+    #[test]
+    fn viewport_preserves_editor_timeline_and_pane_preference() {
+        // Representative body sizes for minimum/300%, 900x800/200% and a
+        // normal window, with small/default/large font line heights.
+        for (width, height) in [(286., 125.), (450., 354.), (1280., 754.)] {
+            for line in [18., 24., 36.] {
+                let pane = PaneLayout::new(size(px(width), px(height)), 560., px(line), px(0.));
+                let (input, bottom, gap) = PaneLayout::padding(pane.dense);
+                let editor = CONTROL_HEIGHT.max(pane.rows as f32 * line + 8.) + input * 2. + 2.;
+                let occupied = f32::from(pane.chrome + pane.auxiliary) + editor + bottom + gap;
+                assert!(
+                    height - occupied >= line - 0.01,
+                    "{width}x{height} line {line}"
+                );
+                assert!((1..=10).contains(&pane.rows));
+                assert!(pane.sidebar.is_none_or(|sidebar| sidebar >= 200.
+                    && sidebar + RAIL_WIDTH + SPLITTER_WIDTH + 200. <= width));
+            }
+        }
+        let compact = PaneLayout::new(size(px(450.), px(354.)), 560., px(24.), px(0.));
+        assert!(compact.sidebar.is_none());
+        assert!(!compact.dense);
+        // Full 54px image + card padding/border at the original 200% scene.
+        assert!(compact.auxiliary >= px(72.));
+        assert_eq!(
+            PaneLayout::new(size(px(1000.), px(754.)), 560., px(24.), px(0.)).sidebar,
+            Some(560.)
+        );
+        assert_eq!(
+            PaneLayout::new(size(px(600.), px(754.)), 560., px(24.), px(0.)).sidebar,
+            Some(311.)
+        );
+    }
+
+    #[test]
+    fn measured_wrap_reserves_height_in_the_minimum_inline_chat_pane() {
+        let viewport = size(px(600.), px(354.));
+        let wrapped = PaneLayout::new(viewport, 560., px(24.), px(40.));
+        assert_eq!(wrapped.sidebar, Some(311.)); // exactly 200px remains for chat
+        let remaining = |pane: PaneLayout| {
+            let (input, bottom, gap) = PaneLayout::padding(pane.dense);
+            let editor = (pane.rows as f32 * 24. + 8.).max(CONTROL_HEIGHT) + input * 2. + 2. + 40.;
+            354. - f32::from(pane.chrome + pane.auxiliary) - editor - bottom - gap
+        };
+        assert!(remaining(wrapped) >= 24.);
+        // The uncharged-wrap control demonstrates the timeline's space requirement.
+        assert!(remaining(PaneLayout::new(viewport, 560., px(24.), px(0.))) < 24.);
+    }
+
+    #[test]
+    fn wrap_reservation_preserves_navigation_at_the_height_threshold() {
+        let viewport = size(px(600.), px(200.));
+        let single = PaneLayout::new(viewport, 560., px(24.), px(0.));
+        let wrapped = PaneLayout::new(viewport, 560., px(24.), px(40.));
+        assert_eq!(single.sidebar, Some(311.));
+        assert_eq!(wrapped.sidebar, single.sidebar);
+        assert!(!single.dense && wrapped.dense);
+        assert_ne!(single.auxiliary, wrapped.auxiliary);
+    }
 }

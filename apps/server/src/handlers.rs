@@ -11,7 +11,7 @@ use crate::{
 };
 use bytes::Bytes;
 use nuschl_ipc::server::ServerStorageRequest as Storage;
-use nuschl_protocol::{ControlFrame, control as proto, kind};
+use nuschl_protocol::{ControlFrame, control as proto, kind, plugin};
 use proto::permission_denied::DenyType;
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -27,9 +27,6 @@ const MAX_GROUP_MEMBERS: usize = 8192;
 const MAX_NAME_BYTES: usize = 512;
 const MAX_BANS: usize = 65_536;
 const MAX_VOICE_TARGET_ENTRIES: usize = 512;
-/// Plugin data limits (Mumble's `PluginMessage::MAX_DATA_LENGTH`, `MAX_DATA_ID_LENGTH`).
-const MAX_PLUGIN_DATA: usize = 1000;
-const MAX_PLUGIN_DATA_ID: usize = 100;
 
 fn decode<M: prost::Message + Default>(payload: &Bytes) -> Option<M> {
     M::decode(payload.clone()).ok()
@@ -204,11 +201,7 @@ impl State {
                     self.request_blob(session, message);
                 }
             }
-            kind::PLUGIN_DATA_TRANSMISSION => {
-                if let Some(message) = decode(&frame.payload) {
-                    self.plugin_data(session, message);
-                }
-            }
+            kind::PLUGIN_DATA_TRANSMISSION => self.plugin_data(session, &frame.payload),
             // Server-to-client messages and context actions (no RPC interface).
             kind::REJECT
             | kind::SERVER_SYNC
@@ -1387,30 +1380,52 @@ impl State {
         }
     }
 
-    fn plugin_data(&mut self, source: u32, mut message: proto::PluginDataTransmission) {
+    /// Murmur's `msgPluginDataTransmission` (`nuschl_protocol::plugin` has
+    /// its semantics). Every attempt is charged once to the sender's plugin
+    /// bucket before the message is read, so the lock is never spent decoding
+    /// what the bucket refuses; what the decoder refuses is dropped after
+    /// that charge. The message is re-encoded with the real sender and no
+    /// receivers, so unknown fields are not forwarded. An end-to-end server
+    /// forwards none: it carries nothing in plaintext between clients.
+    fn plugin_data(&mut self, source: u32, payload: &[u8]) {
+        if self.end_to_end() {
+            return;
+        }
         let Some(user) = self.users.get_mut(&source) else {
             return;
         };
         if user.plugin_rate.limited(Instant::now()) {
             return;
         }
-        let (Some(data), Some(data_id)) = (&message.data, &message.data_id) else {
+        let budget = usize::try_from(self.settings.config.max_users)
+            .ok()
+            .and_then(|users| users.checked_add(plugin::RECEIVER_SLACK))
+            .unwrap_or(usize::MAX);
+        let Ok(message) = plugin::PluginData::decode(payload, budget) else {
             return;
         };
-        if data.len() > MAX_PLUGIN_DATA || data_id.len() > MAX_PLUGIN_DATA_ID {
+        // Murmur's own limit: more than 20 receivers beyond the users connected.
+        if self
+            .users
+            .len()
+            .checked_add(plugin::RECEIVER_SLACK)
+            .is_some_and(|limit| message.receivers.len() > limit)
+        {
             return;
         }
-        if message.receiver_sessions.len() > self.users.len() + 20 {
-            return;
+        let receivers: BTreeSet<u32> = message.receivers.iter().copied().collect();
+        let forwarded = plugin::PluginData {
+            sender: Some(source),
+            receivers: Vec::new(),
+            payload: message.payload,
         }
-        message.sender_session = Some(source);
-        let receivers: BTreeSet<u32> = std::mem::take(&mut message.receiver_sessions)
-            .into_iter()
-            .collect();
-        let Some(frame) = nuschl_protocol::encode_control(kind::PLUGIN_DATA_TRANSMISSION, &message)
+        .into_message();
+        let Some(frame) =
+            nuschl_protocol::encode_control(kind::PLUGIN_DATA_TRANSMISSION, &forwarded)
         else {
             return;
         };
+        // Users exist only once authenticated; unknown receivers are skipped.
         for receiver in receivers {
             if let Some(user) = self.users.get(&receiver) {
                 user.link.send(frame.clone());
@@ -2377,4 +2392,160 @@ pub fn bounded_tokens(tokens: &[String]) -> Vec<[u8; 32]> {
 /// What stock clients are told about retention (docs/extension.md §9).
 pub fn retention_text(retention: nuschl_ipc::server::Retention) -> String {
     crate::retention::notice(retention, false)
+}
+
+#[cfg(test)]
+mod plugin_tests {
+    use super::*;
+    use crate::{
+        auth::new_user,
+        config::Config,
+        state::{ClientInfo, Counters, Link, Peer},
+        storage::StorageHandle,
+    };
+    use nuschl_protocol::crypt::CryptState;
+    use prost::Message as _;
+    use std::{net::SocketAddr, sync::Arc};
+    use tokio::sync::mpsc::UnboundedReceiver;
+
+    fn state() -> State {
+        let settings = Config::default().settings().unwrap();
+        let mut state = State::new(
+            Arc::new(settings),
+            StorageHandle::detached(),
+            Arc::new(Counters::default()),
+        );
+        state.initialise_root();
+        state
+    }
+
+    fn join(state: &mut State) -> (u32, UnboundedReceiver<Bytes>) {
+        let session = state.allocate_session().unwrap();
+        let (link, frames, _) = Link::new(1 << 20);
+        let peer = Peer {
+            address: SocketAddr::from(([10, 0, 0, session as u8], 50_000)),
+            certificates: Vec::new(),
+            certificate_hash: None,
+            strong: false,
+            negotiation: Default::default(),
+            info: ClientInfo::default(),
+            link,
+        };
+        let (crypt, _) = CryptState::generate_server([session as u8; 48]);
+        let config = state.settings.config.clone();
+        let user = new_user(
+            &config,
+            session,
+            format!("user{session}"),
+            None,
+            &peer,
+            &proto::Authenticate::default(),
+            crypt,
+            Instant::now(),
+        );
+        state.users.insert(session, user);
+        (session, frames)
+    }
+
+    fn body(
+        sender: Option<u32>,
+        receivers: Vec<u32>,
+        data: Option<&[u8]>,
+        id: Option<&str>,
+    ) -> Bytes {
+        proto::PluginDataTransmission {
+            sender_session: sender,
+            receiver_sessions: receivers,
+            data: data.map(<[u8]>::to_vec),
+            data_id: id.map(str::to_owned),
+        }
+        .encode_to_vec()
+        .into()
+    }
+
+    fn received(frames: &mut UnboundedReceiver<Bytes>) -> Vec<proto::PluginDataTransmission> {
+        std::iter::from_fn(|| frames.try_recv().ok())
+            .filter(|frame| frame[..2] == kind::PLUGIN_DATA_TRANSMISSION.to_be_bytes())
+            .map(|frame| proto::PluginDataTransmission::decode(&frame[6..]).unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn plugin_data_is_forwarded_as_murmur_forwards_it() {
+        let mut state = state();
+        let (a, mut a_frames) = join(&mut state);
+        let (b, mut b_frames) = join(&mut state);
+        let (c, mut c_frames) = join(&mut state);
+        let payload = body(
+            Some(4242),
+            vec![b, b, c, a, 9999],
+            Some(b"\x00\x01"),
+            Some("game"),
+        );
+        state.plugin_data(a, &payload);
+        for frames in [&mut a_frames, &mut b_frames, &mut c_frames] {
+            let [message] = received(frames).try_into().unwrap();
+            assert_eq!(message.sender_session, Some(a), "the real sender");
+            assert!(message.receiver_sessions.is_empty(), "receivers cleared");
+            assert_eq!(message.data.as_deref(), Some(&b"\x00\x01"[..]));
+            assert_eq!(message.data_id.as_deref(), Some("game"));
+        }
+        // Present but empty fields are forwarded; missing ones are not.
+        state.plugin_data(a, &body(None, vec![b], Some(b""), Some("")));
+        let [empty] = received(&mut b_frames).try_into().unwrap();
+        assert_eq!(
+            (empty.data, empty.data_id),
+            (Some(vec![]), Some(String::new()))
+        );
+        state.plugin_data(a, &body(None, vec![b], None, Some("id")));
+        state.plugin_data(a, &body(None, vec![b], Some(b"x"), None));
+        assert!(received(&mut b_frames).is_empty());
+    }
+
+    #[test]
+    fn murmurs_receiver_limit_counts_the_users_connected() {
+        let mut state = state();
+        let (a, _) = join(&mut state);
+        let (b, mut b_frames) = join(&mut state);
+        // Two users: up to 22 receivers, duplicates and unknown ones included.
+        let mut receivers = vec![b; 21];
+        receivers.push(9999);
+        state.plugin_data(a, &body(None, receivers.clone(), Some(b"x"), Some("id")));
+        assert_eq!(received(&mut b_frames).len(), 1);
+        receivers.push(b);
+        state.plugin_data(a, &body(None, receivers, Some(b"x"), Some("id")));
+        assert!(received(&mut b_frames).is_empty());
+    }
+
+    #[test]
+    fn every_attempt_is_charged_once_before_it_is_read() {
+        let mut state = state();
+        let (a, _) = join(&mut state);
+        let (b, mut b_frames) = join(&mut state);
+        let valid = body(None, vec![b], Some(b"x"), Some("id"));
+        // The default bucket (burst 15) admits exactly 15 valid messages, so
+        // an accepted one is charged once, not twice.
+        for _ in 0..16 {
+            state.plugin_data(a, &valid);
+        }
+        assert_eq!(received(&mut b_frames).len(), 15);
+        // A fresh sender spends its burst on garbage: charged though unread.
+        let (c, _) = join(&mut state);
+        for _ in 0..15 {
+            state.plugin_data(c, &[0xff, 0xff]);
+        }
+        state.plugin_data(c, &valid);
+        assert!(received(&mut b_frames).is_empty());
+    }
+
+    #[test]
+    fn an_end_to_end_server_forwards_no_plugin_data() {
+        let mut state = state();
+        let (a, _) = join(&mut state);
+        let (b, mut b_frames) = join(&mut state);
+        state.mls = Some(crate::mls::MlsHandle::detached(Default::default()));
+        assert!(state.end_to_end());
+        state.plugin_data(a, &body(None, vec![b], Some(b"x"), Some("id")));
+        assert!(received(&mut b_frames).is_empty());
+    }
 }

@@ -22,8 +22,8 @@ exports it as PKCS#12.
   fingerprint and the server's policy (`mumble://…?fp=sha256:…&policy=nuschl`), which
   pins them before the first connection.
 - Server passwords stay in memory for the connection attempt only.
-- Lost connections reconnect with backoff, rejoin your channel with its mute state,
-  and mark the gap in the timeline.
+- Lost connections reconnect with backoff, rejoin your channel muted, and mark the
+  gap in the timeline.
 - Unread messages outside the visible part of the server rail or channel list show
   an **↑ unread** or **↓ unread** button, red when they include mentions. Click it
   to open the nearest unread conversation in that direction. It browses text and
@@ -110,8 +110,20 @@ The design and its measurements: [architecture.md](architecture.md#audio-configu
 - Links in welcome cards, channel descriptions and user comments support clicking,
   Tab/Shift+Tab and Enter, and screen-reader activation. They use the same URL
   policy as message links; rendering a document does not fetch its links.
+- **Settings → Link previews** controls sender-side previews on Linux, initially
+  Direct. A ready preview shows the actual domain and available title, description
+  and image. **Remove link preview** keeps it out of this message. Legacy Mumble
+  servers carry the card and text in one compatible message. Receivers fetch nothing.
 - Long messages collapse by measured height behind **Show more**.
-- Ctrl+. or Ctrl+; opens an emoji picker.
+- Emoji are drawn with Twemoji's images, in messages, the composer and everywhere
+  else; `™` stays text and `™️` is the emoji ([emoji.md](emoji.md)). The smiley
+  button beside the composer, or Ctrl+. or Ctrl+;, opens the picker: Emoji, with
+  Stickers and GIFs to come, a search (by words or by an emoji: ❤️ lists every
+  heart), category tabs, and a skin tone. A click inserts at the cursor
+  and closes it; Shift+click inserts and keeps it open. Short codes type emoji
+  too: `:hea` lists matching emoji above the composer (Enter or Tab types one), and
+  `:heart:` becomes ❤️ as its closing colon is typed. An emoji in a message names
+  itself on hover, and a click shows a card with it larger, its name and its code.
 
 ### Markdown
 

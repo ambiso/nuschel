@@ -109,7 +109,9 @@ pkgs.testers.runNixOSTest {
     # Encrypted UDP with forced TCP, a lossy network and blocked inbound UDP (root for tc/iptables).
     client.succeed("${pkgs.python3}/bin/python3 ${../tests}/udp_voice.py ${nuschl}/bin --host server --opus-library ${pkgs.libopus}/lib/libopus.so --netem --block-udp")
     client.succeed("su - tester -c '${pkgs.python3}/bin/python3 ${../tests}/protocol_features.py ${nuschl}/bin --host server --opus-library ${pkgs.libopus}/lib/libopus.so --openssl ${pkgs.openssl.bin}/bin/openssl'")
-    client.succeed("su - tester -c '${pkgs.python3}/bin/python3 ${../tests}/media_live.py ${nuschl}/bin --pulse-bin ${pkgs.pulseaudio}/bin --opus-library ${pkgs.libopus}/lib/libopus.so'")
+    # The echo test's room delays the speakers with the LADSPA SDK's example delay line.
+    # print() puts every attempt's lines in the test log; the driver logs the output of failed commands.
+    print(client.succeed("su - tester -c '${pkgs.python3}/bin/python3 ${../tests}/media_live.py ${nuschl}/bin --pulse-bin ${pkgs.pulseaudio}/bin --opus-library ${pkgs.libopus}/lib/libopus.so --delay-plugin ${pkgs.ladspa-sdk}/lib/ladspa/delay.so'"))
     # Private PipeWire session (virtual nodes only): restarts, host pinning, echo-cancel reuse.
     client.succeed("su - tester -c '${pkgs.python3}/bin/python3 ${../tests}/pipewire_recovery.py ${nuschl}/bin --pipewire ${pkgs.pipewire} --wireplumber ${pkgs.wireplumber} --dbus-daemon ${pkgs.dbus}/bin/dbus-daemon --opus-library ${pkgs.libopus}/lib/libopus.so --output /tmp/nuschl-pipewire-artifacts'")
     client.copy_from_machine("/tmp/nuschl-pipewire-artifacts", "pipewire")
@@ -122,7 +124,7 @@ pkgs.testers.runNixOSTest {
         client.copy_from_machine("/tmp/nuschl-recovery-artifacts", "recovery")
     # Screen-reader view over AT-SPI: names and roles, and operating Mute without a pointer.
     try:
-        client.succeed("su - tester -c '${pkgs.dbus}/bin/dbus-run-session -- xvfb-run -a -s \"-screen 0 1280x800x24\" ${pkgs.python3}/bin/python3 ${../tests}/accessibility.py ${nuschl}/bin --murmur ${pkgs.murmur}/bin/mumble-server --at-spi ${pkgs.at-spi2-core} --output /tmp/nuschl-a11y-artifacts'")
+        client.succeed("su - tester -c '${pkgs.dbus}/bin/dbus-run-session -- xvfb-run -a -s \"-screen 0 1280x800x24\" ${pkgs.python3}/bin/python3 ${../tests}/accessibility.py ${nuschl}/bin --murmur ${pkgs.murmur}/bin/mumble-server --at-spi ${pkgs.at-spi2-core} --pulse-bin ${pkgs.pulseaudio}/bin --output /tmp/nuschl-a11y-artifacts'")
     finally:
         client.copy_from_machine("/tmp/nuschl-a11y-artifacts", "accessibility")
     # Older stock servers use the legacy UDP packet format.

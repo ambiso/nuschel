@@ -101,11 +101,22 @@ fn invalid_schema_and_static_settings_are_rejected() {
             "audio.volume",
         ),
         (
+            CONFIG.replace("[web]", "[web]\ncover_cache_mib = 4097"),
+            "web.cover_cache_mib",
+        ),
+        (
             CONFIG.replace("127.0.0.1:8474", "not-a-socket"),
             "socket address",
         ),
         (
             CONFIG.replace("https://library.example.org", "https://"),
+            "subsonic library Home: url",
+        ),
+        (
+            CONFIG.replace(
+                "https://library.example.org",
+                "https://bot:secret@library.example.org",
+            ),
             "subsonic library Home: url",
         ),
         (

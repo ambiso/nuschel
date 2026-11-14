@@ -24,11 +24,12 @@ use nuschl_protocol::nuschl::{
     kind,
     v1::{self, error::Code},
 };
+use nuschl_sandbox::{Role, Worker};
 use prost::Message as _;
-use std::{path::PathBuf, process::Stdio, sync::Arc, time::Duration};
+use std::{path::PathBuf, sync::Arc, time::Duration};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
-    process::{Child, ChildStdin, ChildStdout, Command},
+    process::Command,
     sync::{mpsc, oneshot},
     time::timeout,
 };
@@ -58,20 +59,16 @@ pub struct CryptoHandle {
     jobs: mpsc::Sender<Job>,
 }
 
-struct Running {
-    child: Child,
-    input: ChildStdin,
-    output: ChildStdout,
-    _containment: nuschl_ipc::host::Containment,
-}
-
 impl CryptoHandle {
-    /// The worker in its sandbox (`nuschl_ipc::host::crypto_sandbox_command`), on
+    /// The worker in its sandbox (`nuschl_sandbox::Role::Crypto`), on
     /// `directory`, which is created owner-only.
     pub fn start(executable: PathBuf, directory: PathBuf) -> Self {
         Self::start_with(Box::new(move || {
             create_private_directory(&directory)?;
-            nuschl_ipc::host::crypto_sandbox_command(&executable, &directory)
+            let role = Role::Crypto {
+                directory: &directory,
+            };
+            nuschl_sandbox::command(&executable, role)
                 .map_err(|error| std::io::Error::other(error.to_string()))
         }))
     }
@@ -106,11 +103,11 @@ fn create_private_directory(directory: &std::path::Path) -> std::io::Result<()> 
 }
 
 async fn supervise(spawn: Arc<Spawn>, mut jobs: mpsc::Receiver<Job>) {
-    let mut running: Option<Running> = None;
+    let mut running: Option<Worker> = None;
     let mut next_id = 0_u64;
     while let Some(job) = jobs.recv().await {
         if running.is_none() {
-            match start(&spawn) {
+            match start(&spawn).await {
                 Ok(worker) => running = Some(worker),
                 Err(error) => {
                     let _ = job.reply.send(Err(error));
@@ -138,28 +135,13 @@ async fn supervise(spawn: Arc<Spawn>, mut jobs: mpsc::Receiver<Job>) {
     }
 }
 
-fn start(spawn: &Spawn) -> Result<Running, Error> {
-    let mut child = spawn()?
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .kill_on_drop(true)
-        .spawn()?;
-    let containment =
-        nuschl_ipc::host::contain(&child).map_err(|e| Error::Worker(e.to_string()))?;
-    let (Some(input), Some(output)) = (child.stdin.take(), child.stdout.take()) else {
-        return Err(Error::Worker("crypto worker pipes missing".into()));
-    };
-    Ok(Running {
-        child,
-        input,
-        output,
-        _containment: containment,
-    })
+async fn start(spawn: &Spawn) -> Result<Worker, Error> {
+    let worker = nuschl_sandbox::spawn(spawn()?).await;
+    worker.map_err(|e| Error::Worker(e.to_string()))
 }
 
 async fn exchange(
-    worker: &mut Running,
+    worker: &mut Worker,
     id: u64,
     request: &CryptoRequest,
 ) -> Result<CryptoResponse, Error> {

@@ -5,7 +5,7 @@
 
 use std::io;
 
-use nuschl_ipc::windows_sandbox::{FILE_HANDLE_FLAG, Policy};
+use nuschl_sandbox::windows_policy::{FILE_HANDLE_FLAG, Policy};
 use windows_sys::Win32::Foundation::HANDLE;
 
 use crate::{

@@ -502,7 +502,7 @@ fn encode(
 }
 
 async fn serve(mut jobs: mpsc::Receiver<Job>, replies: mpsc::Sender<Reply>) {
-    let executable = nuschl_session::workers::sibling("nuschl-math-worker");
+    let executable = nuschl_sandbox::sibling("nuschl-math-worker");
     let mut worker = executable.ok().map(MathWorker::new);
     loop {
         let job = match tokio::time::timeout(IDLE, jobs.recv()).await {

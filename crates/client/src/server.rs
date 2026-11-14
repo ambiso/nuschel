@@ -17,6 +17,11 @@ use nuschl_core::bookmark::ServerBookmark;
 use nuschl_protocol::nuschl::v1;
 use std::collections::{BTreeMap, BTreeSet};
 
+/// Why an Unmute stays muted (#199).
+pub(crate) const CANT_SPEAK_HERE: &str = "You can't speak here.";
+pub(crate) const NO_BANDWIDTH: &str = "No bandwidth for voice here.";
+pub(crate) const NOT_CONNECTED: &str = "Not connected.";
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Status {
     Disconnected,
@@ -97,6 +102,57 @@ impl AudioHealth {
     }
 }
 
+/// The last durably scoped history scan, distinct from live message maxima
+/// and from the timeline's detached-search cursor.
+#[derive(Clone, Debug)]
+pub(crate) struct HistoryProgress {
+    pub conversation: [u8; 16],
+    pub through: i64,
+    pub needed: bool,
+    pub ready_epoch: Option<u64>,
+    pub request: Option<crate::HistoryTicket>,
+    pub response_end: Option<i64>,
+    pub target_head: Option<i64>,
+    pub batch_start: i64,
+    pub resume_at_ms: Option<u64>,
+    pub pages: u8,
+    pub batch_bytes: usize,
+    pub started_ms: Option<u64>,
+    pub paused: bool,
+}
+impl HistoryProgress {
+    pub fn new(conversation: [u8; 16], through: i64, epoch: u64) -> Self {
+        Self {
+            conversation,
+            through,
+            needed: false,
+            ready_epoch: Some(epoch),
+            request: None,
+            response_end: None,
+            target_head: None,
+            batch_start: through,
+            resume_at_ms: None,
+            pages: 0,
+            batch_bytes: 0,
+            started_ms: None,
+            paused: false,
+        }
+    }
+    pub fn disconnected(&mut self) {
+        self.needed = true;
+        self.ready_epoch = None;
+        self.request = None;
+        self.response_end = None;
+        self.target_head = None;
+        self.batch_start = self.through;
+        self.resume_at_ms = None;
+        self.pages = 0;
+        self.batch_bytes = 0;
+        self.started_ms = None;
+        self.paused = false;
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct ServerState {
     pub id: String,
@@ -114,6 +170,9 @@ pub struct ServerState {
     pub status: Status,
     /// The connection attempt events belong to; older ones' are dropped.
     pub generation: u64,
+    /// History requests of a retired transport cannot update its successor.
+    pub(crate) page_epoch: u64,
+    pub(crate) history_progress: BTreeMap<u32, HistoryProgress>,
     pub peer_sha256: Option<String>,
     pub own_session: Option<u32>,
     pub users: BTreeMap<u32, User>,
@@ -199,6 +258,28 @@ impl ServerState {
             .any(|capability| capability == "e2ee/1")
     }
 
+    /// Why the server stops us from speaking here, if it does: it
+    /// suppressed us (no Speak permission in the channel), muted or deafened
+    /// us, or its bandwidth limit leaves no room for voice.
+    pub(crate) fn speech_blocked(&self) -> Option<&'static str> {
+        if self
+            .own_session
+            .and_then(|session| self.users.get(&session))
+            .is_some_and(|own| own.suppressed || own.muted || own.deafened)
+        {
+            Some(CANT_SPEAK_HERE)
+        } else if self
+            .limits
+            .as_ref()
+            .and_then(|limits| limits.max_bandwidth)
+            .is_some_and(|bandwidth| nuschl_core::audio::voice_bitrate(bandwidth) == 0)
+        {
+            Some(NO_BANDWIDTH)
+        } else {
+            None
+        }
+    }
+
     /// A saved server, offline, with its cached channels to browse.
     pub fn new(bookmark: ServerBookmark) -> Self {
         let mut channels = bookmark
@@ -228,6 +309,8 @@ impl ServerState {
             channels,
             status: Status::Disconnected,
             generation: 0,
+            page_epoch: 0,
+            history_progress: BTreeMap::new(),
             peer_sha256: None,
             own_session: None,
             users: BTreeMap::new(),
@@ -490,9 +573,19 @@ impl ServerState {
     /// Our message was acknowledged as `seq` (or refused): returns whether a
     /// timeline shows it yet.
     pub fn settle_pending(&mut self, key: [u8; 16], seq: Option<u64>) -> bool {
-        self.channels
-            .iter_mut()
-            .any(|channel| channel.timeline.settle(key, seq))
+        let archive = self.history_source == HistorySource::ServerArchive;
+        self.channels.iter_mut().any(|channel| {
+            if !channel.timeline.settle(key, seq) {
+                return false;
+            }
+            if archive
+                && channel.conversation.is_some()
+                && !matches!(channel.target, TextTarget::Direct(_))
+            {
+                channel.timeline.order_archive();
+            }
+            true
+        })
     }
 
     /// Text still waiting for the rate limit when the connection ends is
