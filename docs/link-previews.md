@@ -169,29 +169,26 @@ budget or omit the preview rather than increasing that limit or truncating text.
    received-message code can initiate a fetch implicitly.
 2. **Portable model:** `crates/core/src/preview.rs` holds the versioned preview value
    with provider, actual URL, title, description and embedded image.
-3. **Atomic compatible-server contract (remaining):** the optional preview fields on
-   send/message/edit and bounded conversions in `nuschl_protocol::nuschl::preview`
-   are implemented. They retain literal text and the existing combined 64 KiB body
-   limit. No endpoint advertises `preview/1` yet: SQLite/Postgres and local-history
-   persistence, idempotency, live delivery and SDK handling must land together.
-   Delete erases text and preview; editing without a preview removes the old one.
-   `ChatAck.edits` carries a committed revision when present. Absence represents
-   an unknown revision. Storage and timeline ordering must use authoritative edit counts
-   when available, since timestamps cannot order edits in the same millisecond.
+3. **Future compatible-server contract:** negotiated `preview/1` must keep typed
+   text and card atomic through persistence, idempotency, live delivery, history,
+   edits and deletion. Authoritative committed revisions must order updates.
+   The current legacy path uses the established Mumble schema and existing local
+   history. The internal core preview value is rendered into one compatible HTML
+   message. `preview/1` remains unadvertised; its wire and storage integration is
+   follow-up work in [#11](https://github.com/ambiso/nuschl/issues/11).
 4. **MLS (remaining):** protect the entire structured body and archive record. A new authenticated
    application-body kind/version must not cause older clients to display raw JSON.
    Until group capability is authenticated, send text only. No cleartext preview
    field is added alongside ciphertext.
 5. **Existing content worker:** bounded Open Graph extraction, source-image
    preparation and received-card rendering. Image decoding and HTML parsing remain
-   outside the frontend. New IPC definitions avoid the inference supervisor's owned
-   files.
+   outside the frontend.
 6. **Native fetch supervisor/worker:** isolated HTTP response parsing with no home,
    credentials or new network connections in the worker. The supervisor validates
    DNS and establishes the one approved direct connection/proxy tunnel. A bounded
    duplex transport over inherited IPC pipes lets the worker exchange bytes only
-   with that connection; redirects return to supervisor policy. This reuses worker
-   framing/containment rather than adding a general plugin framework.
+   with that connection; redirects return to supervisor policy. Versioned preview
+   requests use the existing worker framing and containment.
 7. **SDK and native UI:** frozen composer/conversation/certificate/generation/policy tickets,
    debounced sender work, removal suppression, preview-aware atomic sends and
    acknowledgment handling; global settings and a sender card. Existing receiving

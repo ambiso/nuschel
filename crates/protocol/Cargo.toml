@@ -11,7 +11,6 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
-nuschl-core.workspace = true
 aes = "0.8"
 bytes = "1.12.1"
 prost = "0.14.4"
