@@ -113,7 +113,10 @@ function libraryIndex(text) {
  * Parses a location hash into a route object:
  * `{ view: "queue" | "channels" | "history" }`, `{ view: "albums", library, list }`,
  * `{ view: "artists" | "playlists", library }`,
- * `{ view: "album" | "artist" | "playlist", library, id, namespace? }`, `{ view: "search", q }`.
+ * `{ view: "album" | "artist" | "playlist" | "song" | "similar", library, id, namespace? }`,
+ * `{ view: "path", library, from, to, namespace? }`, `{ view: "search", q }`.
+ * A shared link (`library_key=`, see shareRoute) adds `sharedLibrary: key` to
+ * library routes instead of a namespace; adoptSharedRoute resolves it.
  * Unknown hashes give the queue view.
  */
 export function parseRoute(hash) {
@@ -122,29 +125,38 @@ export function parseRoute(hash) {
   const path = question < 0 ? text : text.slice(0, question);
   const params = new URLSearchParams(question < 0 ? "" : text.slice(question + 1));
   const parts = path.split("/").filter((part) => part !== "");
-  const [view, library, id] = parts;
+  const [view, library, id, to] = parts;
   let decoded;
+  let decodedTo;
   try {
     decoded = id === undefined ? undefined : decodeURIComponent(id);
+    decodedTo = to === undefined ? undefined : decodeURIComponent(to);
   } catch {
     return { view: "queue" };
   }
+  const shared = params.has("library_key") ? { sharedLibrary: params.get("library_key") } : null;
+  const namespace = shared ?? (params.has("namespace") ? { namespace: params.get("namespace") } : {});
   switch (view) {
     case "channels":
     case "history":
       return { view };
     case "albums": {
       const list = params.get("list");
-      return { view, library: libraryIndex(params.get("library")), list: LIST_NAMES.has(list) ? list : "newest" };
+      return { view, library: libraryIndex(params.get("library")), list: LIST_NAMES.has(list) ? list : "newest", ...shared };
     }
     case "artists":
     case "playlists":
-      return { view, library: libraryIndex(params.get("library")) };
+      return { view, library: libraryIndex(params.get("library")), ...shared };
     case "album":
     case "artist":
     case "playlist":
+    case "song":
+    case "similar":
       if (decoded === undefined || parts.length !== 3) return { view: "queue" };
-      return { view, library: libraryIndex(library), id: decoded, ...(params.has("namespace") ? { namespace: params.get("namespace") } : {}) };
+      return { view, library: libraryIndex(library), id: decoded, ...namespace };
+    case "path":
+      if (decodedTo === undefined || parts.length !== 4) return { view: "queue" };
+      return { view, library: libraryIndex(library), from: decoded, to: decodedTo, ...namespace };
     case "search":
       return { view, q: params.get("q") ?? "" };
     default:
@@ -167,12 +179,20 @@ export function buildRoute(route) {
     case "album":
     case "artist":
     case "playlist":
-      return `#/${route.view}/${route.library ?? 0}/${encodeURIComponent(route.id)}${route.namespace == null ? "" : `?${new URLSearchParams({ namespace: route.namespace })}`}`;
+    case "song":
+    case "similar":
+      return `#/${route.view}/${route.library ?? 0}/${encodeURIComponent(route.id)}${namespaceQuery(route)}`;
+    case "path":
+      return `#/path/${route.library ?? 0}/${encodeURIComponent(route.from)}/${encodeURIComponent(route.to)}${namespaceQuery(route)}`;
     case "search":
       return `#/search?${new URLSearchParams({ q: route.q ?? "" })}`;
     default:
       return "#/queue";
   }
+}
+
+function namespaceQuery(route) {
+  return route.namespace == null ? "" : `?${new URLSearchParams({ namespace: route.namespace })}`;
 }
 
 /** The browse view to show for `route` in another library. */
@@ -187,13 +207,17 @@ export function routeForLibrary(route, library) {
     case "playlist":
       return { view: "playlists", library };
     case "album":
+    case "song":
       return { view: "albums", library, list: "newest" };
+    case "similar":
+    case "path":
+      return { view: "queue" };
     default:
       return route;
   }
 }
 
-/** Keep a selected library by name only when that name is unambiguous in both namespaces. */
+/** Keep a selected library by key (`library_keys`) only when that key is unambiguous in both namespaces. */
 export function libraryForNamespace(previous, current, index) {
   const name = previous[index];
   if (name === undefined || previous.indexOf(name) !== previous.lastIndexOf(name)) return 0;
@@ -201,18 +225,88 @@ export function libraryForNamespace(previous, current, index) {
   return next >= 0 && next === current.lastIndexOf(name) ? next : 0;
 }
 
+const DETAIL_VIEWS = new Set(["album", "artist", "playlist", "song", "similar", "path"]);
+
 /** Detail IDs in an unproved or expired namespace must return to their safe list. */
 export function routeForNamespace(route, library, namespace) {
-  if (["album", "artist", "playlist"].includes(route.view) && (route.library !== library || !namespace || route.namespace !== namespace)) {
+  if (DETAIL_VIEWS.has(route.view) && (route.library !== library || !namespace || route.namespace !== namespace)) {
     return routeForLibrary(route, library);
   }
   return typeof route.library === "number" && route.library !== library ? { ...route, library } : route;
+}
+
+/** The index of `key` in `keys`, or -1 when it is missing or ambiguous. */
+function uniqueLibraryIndex(keys, key) {
+  const index = keys.indexOf(key);
+  return index >= 0 && index === keys.lastIndexOf(key) ? index : -1;
+}
+
+/**
+ * The hash for sharing `route` with other viewers: no namespace, and a route
+ * with a library carries its key (`library_key=`, from the state's
+ * `library_keys`) because each viewer's indexes may differ. The key changes
+ * with the library's name or URL, so an old link never sends its item ID to a
+ * different backend. Null when the library index is invalid or its key is
+ * shared with another library.
+ */
+export function shareRoute(route, libraryKeys) {
+  const { namespace: _namespace, sharedLibrary: _shared, ...rest } = route;
+  const hash = buildRoute(rest);
+  if (typeof rest.library !== "number") return hash;
+  const key = libraryKeys[rest.library];
+  if (key === undefined || uniqueLibraryIndex(libraryKeys, key) !== rest.library) return null;
+  return `${hash}${hash.includes("?") ? "&" : "?"}${new URLSearchParams({ library_key: key })}`;
+}
+
+/** The address bar hash for `route`: the share format, or (ambiguous library key) the route without namespace. */
+export function addressRoute(route, libraryKeys) {
+  const { namespace: _namespace, sharedLibrary: _shared, ...rest } = route;
+  return shareRoute(rest, libraryKeys) ?? buildRoute(rest);
+}
+
+/**
+ * The page's public root directory, without query or fragment. Defence in
+ * depth: a legacy `/u/<token>/...` page path is cut at its first `/u/`.
+ */
+export function shareRoot(href) {
+  const url = new URL(href);
+  const legacy = /^(.*?\/)u\/[^/]+(?:\/.*)?$/.exec(url.pathname);
+  return `${url.origin}${legacy ? legacy[1] : url.pathname.replace(/[^/]*$/, "")}`;
+}
+
+/** The page URL for `route` that works for every viewer with their own link, or null when it cannot be shared. */
+export function shareUrl(href, route, libraryKeys) {
+  const hash = shareRoute(route, libraryKeys);
+  return hash === null ? null : `${shareRoot(href)}${hash}`;
+}
+
+/**
+ * Resolves a shared route's library key in this viewer's libraries once
+ * `namespace` exists. A missing, unknown or duplicated key falls back to the
+ * first library's safe list.
+ */
+export function adoptSharedRoute(route, libraryKeys, namespace) {
+  if (route.sharedLibrary == null || !namespace) return route;
+  const { sharedLibrary, ...rest } = route;
+  const library = uniqueLibraryIndex(libraryKeys, sharedLibrary);
+  if (library < 0) return routeForLibrary(rest, 0);
+  return DETAIL_VIEWS.has(rest.view) ? { ...rest, library, namespace } : { ...rest, library };
 }
 
 /** The shared Add/drag boundary: a captured namespace and a currently valid library index. */
 export function browseItemIsCurrent(item, namespace, libraryCount) {
   return typeof namespace === "string" && namespace !== "" && item?.namespace === namespace
     && Number.isInteger(item.library) && item.library >= 0 && item.library < libraryCount;
+}
+
+/** An OpenSubsonic similarity (0..1) as an integer percent, or null when the server gave none. */
+export function similarityPercent(value) {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 1 ? Math.round(value * 100) : null;
+}
+
+/** The now-playing track id a sonic path to `song` can start from, or null when there is no such path. */
+export function sonicPathStart(playing, song) {
+  return playing && song && playing.library === song.library && typeof playing.id === "string" && playing.id !== "" && playing.id !== song.id ? playing.id : null;
 }
 
 /**
@@ -244,7 +338,11 @@ export function debounce(fn, ms) {
   return debounced;
 }
 
-/** localStorage key for the selected queue; the token is part of the path, so different links do not collide. */
+/**
+ * localStorage key for the selected queue, per page path (normally the bot's
+ * public root). The path carries no token, so the choice belongs to this
+ * browser and root and outlives a change of remembered link.
+ */
 export function queueStorageKey(pathname) {
   return `nuschl-musicbot:queue:${pathname}`;
 }

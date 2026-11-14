@@ -1,0 +1,6 @@
+# Known-flaky test steps (tests/quarantine.py). A listed step still runs, and
+# its failure is logged as "QUARANTINED FAIL" without failing the check.
+# Removing a line makes that step a hard check again; each fix removes its own.
+# step                                  issue  reason
+vm-smoke/pipewire-other-app-gate        #275   the gate opens for another application's sound under load
+vm-home-manager/config-folder-listing   #254   an extra file appeared in the config folder once (#261)

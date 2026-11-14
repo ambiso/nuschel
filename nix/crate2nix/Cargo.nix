@@ -303,6 +303,16 @@ rec {
       # File a bug if you depend on any for non-debug work!
       debug = internal.debugCrate { inherit packageId; };
     };
+    "nuschl-sandbox" = rec {
+      packageId = "nuschl-sandbox";
+      build = internal.buildRustCrateWithFeatures {
+        packageId = "nuschl-sandbox";
+      };
+
+      # Debug support which might change between releases.
+      # File a bug if you depend on any for non-debug work!
+      debug = internal.debugCrate { inherit packageId; };
+    };
     "nuschl-sandbox-windows" = rec {
       packageId = "nuschl-sandbox-windows";
       build = internal.buildRustCrateWithFeatures {
@@ -23134,6 +23144,10 @@ rec {
             packageId = "nuschl-protocol";
           }
           {
+            name = "nuschl-sandbox";
+            packageId = "nuschl-sandbox";
+          }
+          {
             name = "nuschl-session";
             packageId = "nuschl-session";
           }
@@ -23236,6 +23250,10 @@ rec {
             packageId = "nuschl-protocol";
           }
           {
+            name = "nuschl-sandbox";
+            packageId = "nuschl-sandbox";
+          }
+          {
             name = "nuschl-session";
             packageId = "nuschl-session";
           }
@@ -23291,6 +23309,11 @@ rec {
             packageId = "nuschl-protocol";
           }
           {
+            name = "nuschl-sandbox";
+            packageId = "nuschl-sandbox";
+            optional = true;
+          }
+          {
             name = "nuschl-session";
             packageId = "nuschl-session";
             optional = true;
@@ -23325,7 +23348,7 @@ rec {
         ];
         features = {
           "default" = [ "native" ];
-          "native" = [ "dep:nuschl-ipc" "dep:nuschl-session" "dep:tokio" "nuschl-core/uuid" ];
+          "native" = [ "dep:nuschl-ipc" "dep:nuschl-sandbox" "dep:nuschl-session" "dep:tokio" "nuschl-core/uuid" ];
         };
         resolvedDefaultFeatures = [ "default" "native" ];
       };
@@ -23682,6 +23705,10 @@ rec {
             packageId = "nuschl-protocol";
           }
           {
+            name = "nuschl-sandbox";
+            packageId = "nuschl-sandbox";
+          }
+          {
             name = "nuschl-session";
             packageId = "nuschl-session";
           }
@@ -23865,6 +23892,10 @@ rec {
             packageId = "nuschl-core";
           }
           {
+            name = "nuschl-sandbox";
+            packageId = "nuschl-sandbox";
+          }
+          {
             name = "serde";
             packageId = "serde";
             features = [ "derive" ];
@@ -23881,11 +23912,6 @@ rec {
             name = "tokio";
             packageId = "tokio";
             features = [ "io-util" "macros" "process" "time" "rt" "sync" ];
-          }
-          {
-            name = "win32job";
-            packageId = "win32job";
-            target = { target, features }: (target."windows" or false);
           }
         ];
 
@@ -24435,6 +24461,30 @@ rec {
         ];
 
       };
+      "nuschl-sandbox" = rec {
+        crateName = "nuschl-sandbox";
+        version = "0.1.0";
+        edition = "2024";
+        src = lib.cleanSourceWith { filter = sourceFilter;  src = ../../crates/sandbox; };
+        libName = "nuschl_sandbox";
+        dependencies = [
+          {
+            name = "thiserror";
+            packageId = "thiserror 2.0.21";
+          }
+          {
+            name = "tokio";
+            packageId = "tokio";
+            features = [ "process" "time" ];
+          }
+          {
+            name = "win32job";
+            packageId = "win32job";
+            target = { target, features }: (target."windows" or false);
+          }
+        ];
+
+      };
       "nuschl-sandbox-windows" = rec {
         crateName = "nuschl-sandbox-windows";
         version = "0.1.0";
@@ -24443,8 +24493,8 @@ rec {
         libName = "nuschl_sandbox_windows";
         dependencies = [
           {
-            name = "nuschl-ipc";
-            packageId = "nuschl-ipc";
+            name = "nuschl-sandbox";
+            packageId = "nuschl-sandbox";
           }
           {
             name = "windows-sys";
@@ -24461,6 +24511,10 @@ rec {
           {
             name = "nuschl-core";
             packageId = "nuschl-core";
+          }
+          {
+            name = "nuschl-ipc";
+            packageId = "nuschl-ipc";
           }
           {
             name = "serde";
@@ -24514,6 +24568,10 @@ rec {
           {
             name = "nuschl-protocol";
             packageId = "nuschl-protocol";
+          }
+          {
+            name = "nuschl-sandbox";
+            packageId = "nuschl-sandbox";
           }
           {
             name = "p12-keystore";
@@ -24782,6 +24840,10 @@ rec {
             packageId = "nuschl-ipc";
           }
           {
+            name = "nuschl-sandbox";
+            packageId = "nuschl-sandbox";
+          }
+          {
             name = "nuschl-session";
             packageId = "nuschl-session";
           }
@@ -24822,8 +24884,8 @@ rec {
             optional = true;
           }
           {
-            name = "nuschl-ipc";
-            packageId = "nuschl-ipc";
+            name = "nuschl-sandbox";
+            packageId = "nuschl-sandbox";
             optional = true;
           }
           {
@@ -24873,7 +24935,7 @@ rec {
           }
         ];
         features = {
-          "client" = [ "dep:cap-std" "dep:ureq" "dep:nuschl-ipc" "dep:tokio" ];
+          "client" = [ "dep:cap-std" "dep:ureq" "dep:nuschl-sandbox" "dep:tokio" ];
           "default" = [ "client" ];
         };
         resolvedDefaultFeatures = [ "client" "default" ];

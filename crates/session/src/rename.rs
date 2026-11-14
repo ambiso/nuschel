@@ -194,7 +194,7 @@ fn canonical_worker_path(path: &Path) -> io::Result<std::path::PathBuf> {
 
 #[cfg(all(windows, not(test)))]
 fn retire_windows(old: Option<&Layout>, new: &Layout) -> io::Result<()> {
-    use nuschl_ipc::windows_sandbox::scoped_profile;
+    use nuschl_sandbox::windows_policy::scoped_profile;
     fn retire_legacy_profile(name: &str, directories: &[std::path::PathBuf]) -> io::Result<()> {
         use std::{
             os::windows::process::CommandExt,
@@ -203,7 +203,7 @@ fn retire_windows(old: Option<&Layout>, new: &Layout) -> io::Result<()> {
         // The unsafe Win32 adapter remains in a short-lived launch-stage process,
         // just as it does when starting a sandbox. No unsafe dependency enters
         // the session library or desktop. These arguments are local paths/names.
-        let worker = crate::workers::sibling("nuschl-storage-worker")?;
+        let worker = nuschl_sandbox::sibling("nuschl-storage-worker")?;
         let mut command = Command::new(worker);
         command
             .arg("--retire-nuschel-profile")

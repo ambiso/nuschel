@@ -119,7 +119,11 @@ fn main() {
         }) => ("accepted", width, height),
         Ok(_) => panic!("worker authority/shape escaped validation"),
         Err(nuschl_ipc::host::Error::Frame(nuschl_ipc::Error::TooLarge)) => ("too_large", 0, 0),
-        Err(nuschl_ipc::host::Error::MissingSandboxHelper(_)) => ("missing_helper", 0, 0),
+        Err(error @ nuschl_ipc::host::Error::Sandbox(_))
+            if error.to_string().starts_with("required sandbox helper") =>
+        {
+            ("missing_helper", 0, 0)
+        }
         Err(nuschl_ipc::host::Error::Timeout) => ("timeout", 0, 0),
         Err(_) => ("rejected", 0, 0),
     };

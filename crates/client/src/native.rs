@@ -30,7 +30,7 @@ use nuschl_session::{
         SessionEvent, TextTarget,
     },
     model::RejectKind,
-    workers::{self, Media, Storage},
+    workers::{Media, Storage},
 };
 use std::{collections::BTreeMap, path::PathBuf};
 use tokio::{
@@ -996,7 +996,7 @@ impl Driver {
         let crypto = {
             let _runtime = handle.enter();
             nuschl_session::identity::CryptoHandle::start(
-                nuschl_session::workers::sibling("nuschl-crypto-worker")
+                nuschl_sandbox::sibling("nuschl-crypto-worker")
                     .unwrap_or_else(|_| "nuschl-crypto-worker".into()),
                 profile.keys_dir().to_owned(),
             )
@@ -2625,7 +2625,7 @@ async fn queue_change(
 /// The content worker next to this executable, looked up once.
 pub fn content_worker() -> Option<&'static std::path::Path> {
     static WORKER: std::sync::LazyLock<Option<PathBuf>> =
-        std::sync::LazyLock::new(|| workers::sibling("nuschl-content-worker").ok());
+        std::sync::LazyLock::new(|| nuschl_sandbox::sibling("nuschl-content-worker").ok());
     WORKER.as_deref()
 }
 

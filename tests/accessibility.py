@@ -392,6 +392,11 @@ class AccessibilityTest:
         cancel.call("Action", "DoAction", "i", "0")
         eventually(lambda: any(name == "Record Toggle mute shortcut" for _, _, _, name in snapshot(nuschl)),
                    "cancelling did not restore the Record button", timeout=10)
+        # Like the pointer and keys, a screen reader cannot press a button behind the dialog.
+        self.find(snapshot(nuschl), "push button", "Server settings").call("Action", "DoAction", "i", "0")
+        time.sleep(1)
+        assert not any(role == "dialog" and name == "Add or connect to a Mumble server"
+                       for _, _, role, name in snapshot(nuschl)), "Server settings acted behind Settings"
         self.find(snapshot(nuschl), "push button", "Done").call("Action", "DoAction", "i", "0")
         eventually(lambda: not any(name == "Done" for _, _, _, name in snapshot(nuschl)),
                    "Settings did not close", timeout=10)

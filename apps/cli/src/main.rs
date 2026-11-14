@@ -525,7 +525,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             .clone()
             .ok_or("--offline needs --identity-dir")?;
         let crypto = CryptoHandle::start(
-            nuschl_session::workers::sibling("nuschl-crypto-worker")
+            nuschl_sandbox::sibling("nuschl-crypto-worker")
                 .unwrap_or_else(|_| "nuschl-crypto-worker".into()),
             directory,
         );
@@ -581,7 +581,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         },
         crypto: args.identity_dir.clone().map(|directory| IdentitySetup {
             crypto: CryptoHandle::start(
-                nuschl_session::workers::sibling("nuschl-crypto-worker")
+                nuschl_sandbox::sibling("nuschl-crypto-worker")
                     .unwrap_or_else(|_| "nuschl-crypto-worker".into()),
                 directory,
             ),

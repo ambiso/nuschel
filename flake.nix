@@ -689,6 +689,14 @@
               pkgs.util-linux
             ];
           };
+          # The launch commands each role gets; their builder needs the helpers on PATH.
+          sandbox-unit = crates.project.workspaceMembers."nuschl-sandbox".build.override {
+            runTests = true;
+            testInputs = [
+              pkgs.bubblewrap
+              pkgs.util-linux
+            ];
+          };
           # exchange.rs has its own main (harness=false); the unit-test leaf
           # alone compiles it under libtest and reports zero tests.
           ipc-exchange = import ./nix/ipc-exchange-check.nix {
@@ -704,6 +712,7 @@
           # Scoped unit-test leaves over the cached per-crate graph (no Cargo target).
           desktop-unit = crates.project.workspaceMembers."nuschl".build.override { runTests = true; };
           core-unit = crates.project.workspaceMembers."nuschl-core".build.override { runTests = true; };
+          server-unit = crates.project.workspaceMembers."nuschld".build.override { runTests = true; };
           media-unit = crates.project.workspaceMembers."nuschl-media-worker".build.override {
             runTests = true;
           };
