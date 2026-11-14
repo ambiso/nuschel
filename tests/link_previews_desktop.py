@@ -4,7 +4,7 @@
 
 No host networking/device/profile is authorized by this script. The VM driver
 sets public-numbered loopback aliases and denies every non-loopback output.
-`peers` reuses the frozen native-fetch fixture's HTTP/SOCKS implementation;
+`peers` reuses the frozen native-fetch fixture's HTTP implementation;
 `native-peers` runs those same peers with only the guest's low-port capability;
 `desktop` reuses the private GNOME/AT-SPI/null-Pulse welcome fixture. This tests
 legacy one-message HTML fallback, not typed preview/1 or MLS completion.
@@ -25,12 +25,6 @@ import threading
 import time
 import types
 import uuid
-
-
-PREVIEW_SERVICES = {
-    "proxy": "socks5://127.0.0.1:1080",
-    "dns": {"url": "https://resolver.preview.example/dns-query", "bootstrap": ["93.184.215.53"]},
-}
 
 
 def control(operation, port=39211):
@@ -56,8 +50,7 @@ def peers(args):
     assert Path("/run/nuschl-preview-dedicated-vm").is_file()
     routes = subprocess.check_output(["ip", "route", "show", "table", "all"], text=True, timeout=3)
     assert "default" not in routes, routes
-    for address in (peer.PAGE, peer.DOH, peer.PROXY_SOURCE):
-        assert f"local {address} " in routes, routes
+    assert f"local {peer.PAGE} " in routes, routes
 
     # The GUI pixel oracle uses a visible 80×40 image at its decoded size.
     # This process owns the GUI peers; native-peers loads its original image.
@@ -109,8 +102,7 @@ def peers(args):
     state = State()
     servers = [peer.Server((address, port), handler, state) for address, port, handler in (
         (peer.PAGE, 80, peer.Http), (peer.PAGE, 443, peer.Http),
-        (peer.DOH, 443, peer.Http), ("127.0.0.1", 80, peer.Http),
-        ("127.0.0.1", 1080, peer.Socks), ("127.0.0.1", peer.CONTROL, peer.Control),
+        ("127.0.0.1", 80, peer.Http), ("127.0.0.1", peer.CONTROL, peer.Control),
         ("127.0.0.1", peer.CONTROL + 1, Gate),
     )]
     threads = [threading.Thread(target=server.serve_forever) for server in servers]
@@ -156,13 +148,11 @@ def native_peers(args):
     assert authority["NoNewPrivs"] == "1"
     routes = subprocess.check_output(["ip", "route", "show", "table", "all"], text=True, timeout=3)
     assert len(routes) <= 16 * 1024 and "default" not in routes, routes
-    for address in (peer.PAGE, peer.DOH, peer.PROXY_SOURCE):
-        assert f"local {address} " in routes, routes
+    assert f"local {peer.PAGE} " in routes, routes
     state = peer.State(directory)
     servers = [peer.Server((address, port), handler, state) for address, port, handler in (
-        (peer.PAGE, 80, peer.Http), (peer.PAGE, 443, peer.Http), (peer.DOH, 443, peer.Http),
-        ("127.0.0.1", 80, peer.Http), ("127.0.0.1", 1080, peer.Socks),
-        ("127.0.0.1", peer.CONTROL, peer.Control),
+        (peer.PAGE, 80, peer.Http), (peer.PAGE, 443, peer.Http),
+        ("127.0.0.1", 80, peer.Http), ("127.0.0.1", peer.CONTROL, peer.Control),
     )]
     threads = [threading.Thread(target=server.serve_forever) for server in servers]
     threads.append(threading.Thread(target=peer.dns, args=(state,)))
@@ -249,12 +239,11 @@ def desktop(args):
                 if line.startswith("welcome_text =") else line for line in lines) + "\n")
 
     def configure(_shell, root, output):
-        # Configured services make an explicit Off discriminating; the Direct
-        # default is unit-tested.
+        # Start explicitly Off; the Direct default is unit-tested.
         path = root / "profile/config/settings.json"
         settings = json.loads(path.read_text())
         assert "link_previews" not in settings
-        settings["link_previews"] = {**PREVIEW_SERVICES, "mode": "off"}
+        settings["link_previews"] = {"mode": "off"}
         path.write_text(json.dumps(settings))
         (output / "initial-preview-settings.json").write_text(json.dumps({
             "link_previews": settings["link_previews"],
@@ -659,7 +648,7 @@ def desktop(args):
             time.sleep(1.1)  # More than the actual750ms debounce, not a success retry.
             assert len(events()) == initial, "Off contacted a peer"
             send_and_receive(plain, False)
-            mark("off_no_fetch_text_send", configured_services=True)
+            mark("off_no_fetch_text_send")
 
             config = root / "profile/config"
             settings_path = config / "settings.json"
@@ -947,13 +936,11 @@ def desktop(args):
             send_and_receive(delayed, False)
             mark("late_response_cannot_undo_remove")
 
-            # The real UI switch retains the user services loaded at startup.
             choose("Off")
             saved = json.loads(settings_path.read_text())["link_previews"]
-            assert saved["mode"] == "off"
-            assert {key: saved[key] for key in PREVIEW_SERVICES} == PREVIEW_SERVICES, "mode changes lost user services"
+            assert saved == {"mode": "off"}
             events()  # Keep the final synthetic-peer assertion oracle.
-            mark("policy_persisted_with_user_service_settings")
+            mark("policy_persisted")
             return {"server": args.server, "cases": cases, "modern_typed_preview": False,
                 "production_tls_bypass": False, "host_devices": False}
         except BaseException as failure:

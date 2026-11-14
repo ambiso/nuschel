@@ -91,8 +91,10 @@ impl Hub {
     }
 
     pub(super) fn fetch(&self, settings: Settings, ticket: FetchTicket) -> Result<(), Unavailable> {
-        // In particular Off/incomplete-proxy performs no helper lookup or I/O.
-        settings.route().map_err(|_| Unavailable::Proxy)?;
+        // Off performs no helper lookup or I/O.
+        if !settings.fetches() {
+            return Err(Unavailable::Off);
+        }
         if self.control.is_closed() {
             return Err(Unavailable::Network);
         }

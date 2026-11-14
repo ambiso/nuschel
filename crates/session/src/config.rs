@@ -405,21 +405,6 @@ fn preview_settings_default(settings: &nuschl_link_preview::policy::Settings) ->
     *settings == nuschl_link_preview::policy::Settings::default()
 }
 
-fn valid_preview_proxy(settings: &nuschl_link_preview::policy::Settings) -> bool {
-    settings.proxy.as_ref().is_none_or(|proxy| {
-        proxy.len() <= nuschl_link_preview::policy::MAX_URL_BYTES
-            && nuschl_link_preview::policy::Proxy::parse(proxy).is_ok()
-    })
-}
-
-fn valid_preview_dns(settings: &nuschl_link_preview::policy::Settings) -> bool {
-    settings.dns.as_ref().is_none_or(|dns| {
-        dns.url.len() <= nuschl_link_preview::policy::MAX_URL_BYTES
-            && dns.bootstrap.len() <= 4
-            && nuschl_link_preview::policy::ProxiedDns::parse(dns).is_ok()
-    })
-}
-
 pub const SIDEBAR_WIDTH: std::ops::RangeInclusive<f32> = 200.0..=560.0;
 impl Default for ClientSettings {
     fn default() -> Self {
@@ -459,12 +444,6 @@ impl Default for ClientSettings {
 impl ClientSettings {
     pub fn sanitized(mut self) -> Self {
         self.audio = self.audio.sanitized();
-        if !valid_preview_proxy(&self.link_previews) {
-            self.link_previews.proxy = None;
-        }
-        if !valid_preview_dns(&self.link_previews) {
-            self.link_previews.dns = None;
-        }
         self.voice_bitrate = nuschl_core::bitrate::requested_voice_bitrate(self.voice_bitrate);
         self.appearance = self.appearance.sanitized();
         self.user_volumes
@@ -1532,13 +1511,6 @@ impl Profile {
         settings: &ClientSettings,
         managed: &ManagedSettings,
     ) -> io::Result<()> {
-        if !valid_preview_proxy(&settings.link_previews)
-            || !valid_preview_dns(&settings.link_previews)
-        {
-            return Err(io::Error::other(
-                "configure valid bounded link preview services",
-            ));
-        }
         let bytes = serde_json::to_vec_pretty(&managed.unmanaged(settings)?)?;
         if bytes.len() as u64 > MAX_SETTINGS_FILE {
             return Err(io::Error::other("settings exceed 1 MiB"));
@@ -3749,19 +3721,8 @@ mod tests {
         assert_eq!(profile.load().settings.voice_bitrate, 192_000);
         std::fs::remove_dir_all(root).unwrap();
     }
-    fn preview_services() -> nuschl_link_preview::policy::Settings {
-        nuschl_link_preview::policy::Settings {
-            mode: nuschl_link_preview::policy::Mode::ProxyRequired,
-            proxy: Some("socks5://127.0.0.1:9050".into()),
-            dns: Some(nuschl_link_preview::policy::DnsSettings {
-                url: "https://resolver.example/dns-query".into(),
-                bootstrap: vec!["192.0.2.53".parse().unwrap()],
-            }),
-        }
-    }
-
     #[test]
-    fn previews_use_settings_and_keep_services_across_modes_and_other_saves() {
+    fn previews_use_settings_and_keep_their_mode_across_other_saves() {
         use nuschl_link_preview::policy::Mode;
 
         let root = tempfile::tempdir_in(".").unwrap();
@@ -3781,25 +3742,16 @@ mod tests {
             .unwrap();
         }
         assert_eq!(profile.load().settings.link_previews.mode, Mode::Direct);
-        settings.link_previews = preview_services();
-        let services = settings.link_previews.clone();
-        for mode in [
-            Mode::ProxyRequired,
-            Mode::Off,
-            Mode::Direct,
-            Mode::ProxyRequired,
-        ] {
+        for mode in [Mode::Off, Mode::Direct, Mode::Off] {
             settings.link_previews.mode = mode;
             settings.notifications = !settings.notifications;
             profile
                 .save_settings(&settings, &ManagedSettings::default())
                 .unwrap();
-            let loaded = profile.load().settings;
-            assert_eq!(loaded, settings);
-            assert_eq!(loaded.link_previews.proxy, services.proxy);
-            assert_eq!(loaded.link_previews.dns, services.dns);
+            assert_eq!(profile.load().settings, settings);
             let saved: Value = serde_json::from_str(&read(&profile, "settings.json")).unwrap();
-            assert!(saved.get("link_previews").is_some());
+            // The default is omitted when saving.
+            assert_eq!(saved.get("link_previews").is_some(), mode == Mode::Off);
         }
         for name in obsolete {
             assert_eq!(
@@ -3810,7 +3762,7 @@ mod tests {
     }
 
     #[test]
-    fn preview_routes_are_user_owned_while_other_managed_settings_apply() {
+    fn preview_mode_is_user_owned_while_other_managed_settings_apply() {
         use nuschl_link_preview::policy::Mode;
 
         let root = tempfile::tempdir_in(".").unwrap();
@@ -3830,52 +3782,11 @@ mod tests {
         let (mut settings, keys) = profile.load_settings(&malformed).unwrap();
         assert!(settings.relay_only);
         assert_eq!(settings.link_previews.mode, Mode::Direct);
-        settings.link_previews = preview_services();
+        settings.link_previews.mode = Mode::Off;
         profile.save_settings(&settings, &keys).unwrap();
         assert_eq!(
             profile.load_settings(&malformed).unwrap().0.link_previews,
             settings.link_previews
-        );
-    }
-
-    #[test]
-    fn invalid_services_keep_proxy_required_and_errors_exclude_route_data() {
-        use nuschl_link_preview::policy::{Error, Mode};
-
-        let root = tempfile::tempdir_in(".").unwrap();
-        let profile = Profile::open(Some(root.path().to_owned())).unwrap();
-        let mut settings = ClientSettings {
-            link_previews: preview_services(),
-            ..ClientSettings::default()
-        };
-        for proxy in [
-            "socks5://private-route.example:9050".to_owned(),
-            "x".repeat(2049),
-        ] {
-            settings.link_previews.proxy = Some(proxy);
-            let error = profile
-                .save_settings(&settings, &ManagedSettings::default())
-                .unwrap_err();
-            assert_eq!(
-                error.to_string(),
-                "configure valid bounded link preview services"
-            );
-            let clean = settings.clone().sanitized();
-            assert_eq!(clean.link_previews.mode, Mode::ProxyRequired);
-            assert_eq!(clean.link_previews.route(), Err(Error::MissingProxy));
-        }
-        settings.link_previews = preview_services();
-        settings.link_previews.dns.as_mut().unwrap().bootstrap =
-            vec!["192.0.2.53".parse().unwrap(); 5];
-        let clean = settings.sanitized();
-        assert_eq!(clean.link_previews.mode, Mode::ProxyRequired);
-        assert_eq!(clean.link_previews.route(), Err(Error::MissingDns));
-        profile
-            .save_settings(&clean, &ManagedSettings::default())
-            .unwrap();
-        assert_eq!(
-            profile.load().settings.link_previews.route(),
-            Err(Error::MissingDns)
         );
     }
 
@@ -3891,19 +3802,6 @@ mod tests {
         assert!(!profile.config_dir.join(VOICE_QUALITY_FILE).exists());
         settings.voice_bitrate = 96_000;
         settings.share_web_host = "x".repeat(MAX_SETTINGS_FILE as usize);
-        assert!(
-            profile
-                .save_settings(&settings, &ManagedSettings::default())
-                .is_err()
-        );
-        assert_eq!(
-            fs::read(profile.config_dir.join(SETTINGS_FILE)).unwrap(),
-            previous
-        );
-        assert!(!profile.config_dir.join(VOICE_QUALITY_FILE).exists());
-        settings.share_web_host.clear();
-        settings.link_previews = preview_services();
-        settings.link_previews.proxy = Some("private-route".into());
         assert!(
             profile
                 .save_settings(&settings, &ManagedSettings::default())

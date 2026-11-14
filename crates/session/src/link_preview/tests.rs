@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! Ignored, serialized real-network fixture. Never enabled in a production lib.
 use super::*;
-use nuschl_link_preview::policy::{DnsSettings, Mode};
+use nuschl_link_preview::policy::Mode;
 use rustls::pki_types::CertificateDer;
 use serde_json::{Value, json};
 use std::{
@@ -101,20 +101,7 @@ fn fixture_cert(directory: &Path) -> CertificateDer<'static> {
     ca.der().clone()
 }
 fn direct() -> Settings {
-    Settings {
-        mode: Mode::Direct,
-        ..Settings::default()
-    }
-}
-fn proxy() -> Settings {
-    Settings {
-        mode: Mode::ProxyRequired,
-        proxy: Some("socks5://127.0.0.1:1080".into()),
-        dns: Some(DnsSettings {
-            url: "https://resolver.preview.example.org/dns-query".into(),
-            bootstrap: vec!["93.184.215.53".parse().unwrap()],
-        }),
-    }
+    Settings { mode: Mode::Direct }
 }
 async fn request(worker: &Path, settings: Settings, url: &str) -> Result<Card, Unavailable> {
     let (_sender, cancel) = watch::channel(false);
@@ -291,19 +278,7 @@ async fn actual_fetch_privacy() {
     assert!(
         request(
             &worker,
-            Settings::default(),
-            "http://off.preview.example.org/text"
-        )
-        .await
-        .is_err()
-    );
-    assert!(
-        request(
-            &worker,
-            Settings {
-                mode: Mode::ProxyRequired,
-                ..Settings::default()
-            },
+            Settings { mode: Mode::Off },
             "http://off.preview.example.org/text"
         )
         .await
@@ -311,7 +286,7 @@ async fn actual_fetch_privacy() {
     );
     assert_eq!(admissions(), before);
     assert_eq!(events(), peers);
-    checked!("Off and incomplete ProxyRequired perform zero DNS/socket/child/offline admission");
+    checked!("Off performs zero DNS/socket/child/offline admission");
 
     actual_stream_quota(&worker, false).await;
     actual_stream_quota(&worker, true).await;
@@ -408,65 +383,6 @@ async fn actual_fetch_privacy() {
     );
     checked!("Test CA still requires valid certificate hostname");
 
-    let start = events().len();
-    let before = admissions();
-    assert!(
-        request(&worker, proxy(), "http://proxied.preview.example.org/text")
-            .await
-            .is_ok()
-    );
-    assert_eq!(
-        admissions()[0],
-        before[0],
-        "ProxyRequired called system DNS"
-    );
-    let observed = events();
-    let observed = &observed[start..];
-    assert_eq!(observed.iter().filter(|e| e["kind"] == "doh").count(), 2);
-    assert!(
-        observed
-            .iter()
-            .filter(|e| e["kind"] == "http")
-            .all(|e| e["peer"] == "93.184.215.99")
-    );
-    assert!(
-        observed
-            .iter()
-            .filter(|e| e["kind"] == "socks")
-            .all(|e| e["family"] == 1 || e["family"] == 4)
-    );
-    checked!(
-        "ProxyRequired numeric SOCKS carries DoH bootstrap and target; no system lookup/direct fallback"
-    );
-    for name in ["mixed.preview.example.org", "private.preview.example.org"] {
-        let start = events().len();
-        assert_eq!(
-            request(&worker, proxy(), &format!("http://{name}/text"))
-                .await
-                .unwrap_err(),
-            Unavailable::Address
-        );
-        assert!(
-            events()[start..]
-                .iter()
-                .filter(|e| e["kind"] == "socks")
-                .all(|e| e["destination"] == "93.184.215.53")
-        );
-    }
-    let mut unavailable_proxy = proxy();
-    unavailable_proxy.proxy = Some("socks5://127.0.0.1:1081".into());
-    let before = admissions();
-    assert!(
-        request(
-            &worker,
-            unavailable_proxy,
-            "http://failed.preview.example.org/text"
-        )
-        .await
-        .is_err()
-    );
-    assert_eq!(admissions()[0], before[0]);
-    checked!("Proxy DNS private/mixed and unavailable proxy fail closed without direct fallback");
     *TEST_ROOT.lock().unwrap() = None;
 
     let (cancel, receiver) = watch::channel(false);

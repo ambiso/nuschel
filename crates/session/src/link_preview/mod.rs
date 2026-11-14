@@ -27,22 +27,17 @@ pub const LOGICAL_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_CONNECTIONS: usize = 16;
 const MAX_RAW_BYTES: usize = 4 * 1024 * 1024;
 
-/// One process-wide pipeline and no wait queue. Off/incomplete settings do not
-/// acquire credit, create a task, resolve a name, open a socket or start a child.
+/// One process-wide pipeline and no wait queue. Off does not acquire credit,
+/// create a task, resolve a name, open a socket or start a child.
 pub async fn fetch(
     executable: PathBuf,
     settings: Settings,
     target: Target,
     cancel: watch::Receiver<bool>,
 ) -> Result<Card, Unavailable> {
-    let route = settings.route().map_err(|error| match error {
-        nuschl_link_preview::policy::Error::Address => Unavailable::Address,
-        nuschl_link_preview::policy::Error::MissingProxy
-        | nuschl_link_preview::policy::Error::MissingDns
-        | nuschl_link_preview::policy::Error::Proxy
-        | nuschl_link_preview::policy::Error::Dns => Unavailable::Proxy,
-        _ => Unavailable::Network,
-    })?;
+    if !settings.fetches() {
+        return Err(Unavailable::Off);
+    }
     let cancel = Arc::new(Cancel {
         external: cancel,
         local: AtomicBool::new(false),
@@ -79,8 +74,7 @@ pub async fn fetch(
             raw: 0,
             redirects: 0,
         };
-        let result =
-            supervise::pipeline(&executable, &route, &target, &actor_cancel, &mut budget).await;
+        let result = supervise::pipeline(&executable, &target, &actor_cancel, &mut budget).await;
         // All child retirement is complete before this task relinquishes credit.
         let result = if actor_cancel.is_cancelled() && result.is_ok() {
             Err(Unavailable::Network)

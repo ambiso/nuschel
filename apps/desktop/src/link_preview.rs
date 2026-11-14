@@ -48,10 +48,7 @@ pub struct ComposerPreview {
 }
 
 pub(crate) fn off() -> Settings {
-    Settings {
-        mode: Mode::Off,
-        ..Settings::default()
-    }
+    Settings { mode: Mode::Off }
 }
 
 impl Desktop {
@@ -277,10 +274,6 @@ pub fn composer(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement>
 
 pub fn settings(this: &Desktop, cx: &mut Context<Desktop>) -> AnyElement {
     let mode = this.settings.link_previews.mode;
-    let problem = (mode == Mode::ProxyRequired)
-        .then(|| this.settings.link_previews.route().err())
-        .flatten()
-        .map(|error| format!("{error}; link previews stay off until the route is complete."));
     let active_mode = if cfg!(target_os = "linux") {
         this.client.link_preview_settings().mode
     } else {
@@ -289,7 +282,6 @@ pub fn settings(this: &Desktop, cx: &mut Context<Desktop>) -> AnyElement {
     let effective = match active_mode {
         Mode::Off => "Off",
         Mode::Direct => "Direct",
-        Mode::ProxyRequired => "Proxy required",
     };
     let effective = format!("Active policy: {effective}.");
     div().flex().flex_col().gap_2()
@@ -303,7 +295,6 @@ pub fn settings(this: &Desktop, cx: &mut Context<Desktop>) -> AnyElement {
         .when(!cfg!(target_os = "linux"), |settings| settings.child(div().text_sm().child(text!("Link previews are not available on this platform yet.").with_id("link-preview-platform-unavailable"))))
         .child(div().text_xs().text_color(color(TEXT_MUTED)).child(text!("Off makes no requests. Direct contacts the website. Receivers never fetch previews.").with_id("link-preview-privacy")))
         .child(div().text_xs().text_color(color(TEXT_MUTED)).child(text!(effective).with_id("link-preview-effective-policy")))
-        .when_some(problem, |settings, problem| settings.child(div().text_xs().text_color(color(TEXT_MUTED)).child(text!(problem).with_id("link-preview-policy-status"))))
         .into_any_element()
 }
 

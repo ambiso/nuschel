@@ -194,8 +194,8 @@ impl<K: Clone + Eq> DraftPreviews<K> {
         self.policy
     }
 
-    /// A new fetch policy: previews are enabled only when it yields a route
-    /// (Off and incomplete proxy settings do not). The request in flight is
+    /// A new fetch policy: previews are enabled only when it fetches (Off
+    /// does not). The request in flight is
     /// cancelled, results and cards are dropped, removals are kept.
     pub fn set_policy(&mut self, settings: &Settings) -> Vec<Effect<K>> {
         if self.exhausted {
@@ -206,7 +206,7 @@ impl<K: Clone + Eq> DraftPreviews<K> {
             return Vec::new();
         };
         self.policy = next;
-        self.enabled = settings.route().is_ok();
+        self.enabled = settings.fetches();
         self.cache.clear();
         let effects = self.cancel_in_flight().into_iter().collect();
         for (_, state) in &mut self.drafts {
@@ -658,15 +658,12 @@ fn candidate(text: &str, candidate: Option<&str>) -> Option<Target> {
 mod tests {
     use super::*;
     use crate::card::tests::card;
-    use crate::policy::{DnsSettings, Mode};
+    use crate::policy::Mode;
 
     type Previews = DraftPreviews<u32>;
 
     fn direct() -> Settings {
-        Settings {
-            mode: Mode::Direct,
-            ..Settings::default()
-        }
+        Settings { mode: Mode::Direct }
     }
 
     fn enabled() -> Previews {
@@ -863,53 +860,21 @@ mod tests {
     }
 
     #[test]
-    fn off_or_incomplete_proxy_settings_start_nothing() {
+    fn off_starts_nothing_and_direct_fetches() {
         let mut previews = Previews::new();
         let text = format!("see {URL} ");
         assert!(previews.update(draft(&1, &text, Some(URL)), 0).is_empty());
         assert_eq!(previews.status(&1), Status::Disabled);
-        for settings in [
-            Settings {
-                mode: Mode::Off,
-                ..Settings::default()
-            },
-            Settings {
-                mode: Mode::ProxyRequired,
-                ..Settings::default()
-            },
-            Settings {
-                mode: Mode::ProxyRequired,
-                proxy: Some("socks5://127.0.0.1:9050".into()),
-                dns: None,
-            },
-            Settings {
-                mode: Mode::ProxyRequired,
-                proxy: Some("socks5h://127.0.0.1:9050".into()),
-                dns: Some(DnsSettings {
-                    url: "https://dns.example/dns-query".into(),
-                    bootstrap: vec!["192.0.2.53".parse().unwrap()],
-                }),
-            },
-        ] {
-            previews.set_policy(&settings);
-            assert!(previews.update(draft(&1, &text, Some(URL)), 0).is_empty());
-            assert!(
-                previews
-                    .update(draft(&1, &format!("{text}x"), Some(URL)), 0)
-                    .is_empty()
-            );
-            assert_eq!(previews.status(&1), Status::Disabled);
-            assert_eq!(previews.for_send(draft(&1, &text, Some(URL))), None);
-        }
-        // A complete proxy configuration enables previews.
-        previews.set_policy(&Settings {
-            mode: Mode::ProxyRequired,
-            proxy: Some("socks5://127.0.0.1:9050".into()),
-            dns: Some(DnsSettings {
-                url: "https://dns.example/dns-query".into(),
-                bootstrap: vec!["192.0.2.53".parse().unwrap()],
-            }),
-        });
+        previews.set_policy(&Settings { mode: Mode::Off });
+        assert!(previews.update(draft(&1, &text, Some(URL)), 0).is_empty());
+        assert!(
+            previews
+                .update(draft(&1, &format!("{text}x"), Some(URL)), 0)
+                .is_empty()
+        );
+        assert_eq!(previews.status(&1), Status::Disabled);
+        assert_eq!(previews.for_send(draft(&1, &text, Some(URL))), None);
+        previews.set_policy(&direct());
         assert_eq!(
             fetched(&previews.update(draft(&1, &text, Some(URL)), 0)).len(),
             1
@@ -1158,10 +1123,7 @@ mod tests {
         assert!(previews.update(draft(&2, &text, Some(URL)), 0).is_empty());
         assert_eq!(previews.status(&2), Status::Removed);
         // Off: nothing pending, nothing sent.
-        let effects = previews.set_policy(&Settings {
-            mode: Mode::Off,
-            ..Settings::default()
-        });
+        let effects = previews.set_policy(&Settings { mode: Mode::Off });
         assert_eq!(cancelled(&effects).len(), 1);
         assert!(previews.update(draft(&1, &text, Some(URL)), 0).is_empty());
         assert_eq!(previews.status(&1), Status::Disabled);

@@ -21,7 +21,6 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import select
 import shutil
 import socket
 import socketserver
@@ -35,8 +34,6 @@ import urllib.parse
 import zlib
 
 PAGE = "93.184.215.14"
-DOH = "93.184.215.53"
-PROXY_SOURCE = "93.184.215.99"
 CONTROL = 39211
 MAX_EVENTS = 4096
 def png_chunk(kind, body):
@@ -145,18 +142,6 @@ class Http(socketserver.BaseRequestHandler):
             self.server.state.event("http", destination=self.server.server_address[0], peer=self.client_address[0], host=host, path=parsed.path)
             if self.server.server_address[0] == "127.0.0.1":
                 reply(stream, b"private honeypot")
-            elif self.server.server_address[0] == DOH:
-                query = urllib.parse.parse_qs(parsed.query, strict_parsing=True)
-                name, kind = query["name"][0], int(query["type"][0])
-                assert len(name) <= 253 and kind in (1, 28)
-                self.server.state.event("doh", name=name, record=kind, peer=self.client_address[0])
-                addresses = [PAGE] if kind == 1 else []
-                if name.startswith("mixed.") and kind == 1:
-                    addresses += ["127.0.0.1"]
-                if name.startswith("private.") and kind == 1:
-                    addresses = ["127.0.0.1"]
-                body = dict(Status=0, Question=[dict(name=name, type=kind)], Answer=[dict(name=name, type=kind, data=ip) for ip in addresses])
-                reply(stream, json.dumps(body).encode(), mime="application/dns-json")
             elif parsed.path == "/redirect":
                 reply(stream, status="302 Found", extra=b"Location: /page\r\n")
             elif parsed.path == "/private-redirect":
@@ -194,36 +179,6 @@ class Http(socketserver.BaseRequestHandler):
                 reply(stream, body.encode())
             else:
                 reply(stream, status="404 Not Found")
-
-
-class Socks(socketserver.BaseRequestHandler):
-    def handle(self):
-        self.request.settimeout(6)
-        assert exact(self.request, 3) == b"\x05\x01\x00"
-        self.request.sendall(b"\x05\x00")
-        version, operation, reserved, family = exact(self.request, 4)
-        assert (version, operation, reserved) == (5, 1, 0)
-        # Hostname ATYP is a test failure, never a fixture-side DNS lookup.
-        assert family in (1, 4)
-        address = socket.inet_ntop(socket.AF_INET if family == 1 else socket.AF_INET6, exact(self.request, 4 if family == 1 else 16))
-        port = struct.unpack("!H", exact(self.request, 2))[0]
-        self.server.state.event("socks", destination=address, port=port, family=family)
-        assert address in (PAGE, DOH) and port in (80, 443)
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as upstream:
-            upstream.settimeout(6)
-            upstream.bind((PROXY_SOURCE, 0))
-            upstream.connect((address, port))
-            self.request.sendall(b"\x05\x00\x00\x01\x00\x00\x00\x00\x00\x00")
-            sockets = [self.request, upstream]
-            deadline = time.monotonic() + 8
-            while time.monotonic() < deadline:
-                ready, _, _ = select.select(sockets, [], [], 0.2)
-                for source in ready:
-                    data = source.recv(16384)
-                    if not data:
-                        return
-                    (upstream if source is self.request else self.request).sendall(data)
-            raise TimeoutError("fixture SOCKS lifetime")
 
 
 class Control(socketserver.BaseRequestHandler):
@@ -292,14 +247,13 @@ def serve(args):
     def ip(*arguments):
         subprocess.run([str(args.ip), *arguments], check=True, stdin=subprocess.DEVNULL, timeout=2)
     ip("link", "set", "lo", "up")
-    for address in (PAGE, DOH, PROXY_SOURCE):
-        ip("address", "add", address + "/32", "dev", "lo")
+    ip("address", "add", PAGE + "/32", "dev", "lo")
     routes = subprocess.check_output([str(args.ip), "route", "show", "table", "all"], text=True, timeout=2)
     assert "default" not in routes and " dev " not in routes.replace(" dev lo", " local-loopback"), routes
     state = State(directory)
     services = [Server((address, port), handler, state) for address, port, handler in (
-        (PAGE, 80, Http), (PAGE, 443, Http), (DOH, 443, Http),
-        ("127.0.0.1", 80, Http), ("127.0.0.1", 1080, Socks), ("127.0.0.1", CONTROL, Control))]
+        (PAGE, 80, Http), (PAGE, 443, Http),
+        ("127.0.0.1", 80, Http), ("127.0.0.1", CONTROL, Control))]
     threads = [threading.Thread(target=server.serve_forever) for server in services]
     threads.append(threading.Thread(target=dns, args=(state,)))
     for thread in threads:

@@ -71,15 +71,6 @@ already started in Direct mode can finish after cancellation; no new lookup or
 connection is admitted for that revoked job. Displaying a carried preview does not
 itself fetch anything, including when this sender-side policy is Off.
 
-Initial standard-proxy support is SOCKS5 with numeric, validated target addresses.
-Opaque SOCKS5h/CONNECT hostname resolution alone cannot prove that the proxy did not
-resolve a public-looking name to a private address. Instead, target DNS is queried
-through the configured proxy using an explicitly configured DNS-over-HTTPS endpoint
-and bootstrap addresses; public answers are validated and pinned for the actual
-tunnel. The original hostname remains the HTTP Host/TLS verification identity.
-There is no implicit third-party resolver. A configured local proxy/resolver is an
-explicit service exception, not permission for page-controlled private destinations.
-
 Private, loopback, link-local, multicast, unspecified and other special-purpose
 target ranges are denied. The same rule applies after every redirect and to every
 image address. Numeric shorthand, mapped IPv4, alternate ports, credentials in URLs,
@@ -87,7 +78,7 @@ local names and redirect scheme changes must not bypass it. Tests use explicit
 private fixture allowances unavailable to normal remote metadata.
 
 No request carries browser cookies, authorization, referrer or ambient proxy
-environment settings. Proxy failures never fall through to direct access.
+environment settings.
 
 ## Provider contract
 
@@ -117,7 +108,7 @@ Proposed initial limits:
 | Message previews | One |
 | Retained drafts | 64, at most 1 MiB of draft text in total |
 | Cached results | 16, at most 1 MiB; success expires after 10 minutes, failure after 2 |
-| Settings | Existing 1 MiB file limit; proxy/resolver strings at most 2 KiB; at most four bootstrap addresses; atomic owner-only saves |
+| Settings | Existing 1 MiB file limit; atomic owner-only saves |
 
 The legacy projection may shorten the displayed title and description to 200 and
 300 UTF-16 units. It preserves the entire original message text, obeys the server's
@@ -152,7 +143,7 @@ budget or omit the preview rather than increasing that limit or truncating text.
    outside the frontend.
 6. **Native fetch supervisor/worker:** isolated HTTP response parsing with no home,
    credentials or new network connections in the worker. The supervisor validates
-   DNS and establishes the one approved direct connection/proxy tunnel. A bounded
+   DNS and establishes the one approved direct connection. A bounded
    duplex transport over inherited IPC pipes lets the worker exchange bytes only
    with that connection; redirects return to supervisor policy. Versioned preview
    requests use the existing worker framing and containment.
@@ -170,9 +161,9 @@ frontend under the existing OS-binding exception.
 
 `checks.x86_64-linux.preview-worker` exercises the actual confined worker protocol,
 including cancellation and process retirement. `checks.x86_64-linux.vm-link-previews`
-runs synthetic HTTP/proxy/DNS peers and the packaged desktop in a software-rendered
+runs synthetic HTTP/DNS peers and the packaged desktop in a software-rendered
 Linux VM against stock Murmur and a compatible Nuschl server. It checks sender-only
-fetching, Off/proxy failure behavior, one-message delivery to an independent native
+fetching, Off behavior, one-message delivery to an independent native
 recipient, removal and late results, and compact/zoomed composer and recipient layouts.
 
 The `legacy-preview` scene in `tests/web_broker.browser.mjs` checks a real browser
@@ -185,15 +176,15 @@ physical Windows/macOS/iOS/Safari behavior or kernel-wide browser egress contain
 Browser codec/content workers retain the browser isolation limitations described
 in the architecture documentation. Final required CI remains a separate merge gate.
 
-All HTTP, proxy, DNS, TLS and image fixtures use owned synthetic peers. No tests
+All HTTP, DNS, TLS and image fixtures use owned synthetic peers. No tests
 fetch public sites. The complete feature's requirements include the following;
 typed-history and MLS cases remain deferred with their implementation:
 
-- Off/incomplete ProxyRequired starts no DNS, socket or worker; changing policy and
+- Off starts no DNS, socket or worker; changing policy and
   dismissing a card reject late replies. Failed previews preserve text sending.
-- Recorded proxy/DNS fixtures prove every HTML/image/redirect/DNS request follows
+- Recorded DNS fixtures prove every HTML/image/redirect/DNS request follows
   policy, numeric target pinning survives rebinding, forbidden addresses are refused
-  and neither ambient proxy settings nor a failed proxy cause direct access.
+  and ambient proxy settings are ignored.
 - Bounds cover headers, bodies, redirect loops, malformed HTML, duplicate metadata,
   invalid URLs, oversized images, decompression and decoder rejection.
 - Compatible and legacy servers carry one logical message. History, retries, edits
